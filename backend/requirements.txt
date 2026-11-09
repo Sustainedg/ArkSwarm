@@ -7,3 +7,5 @@ httpx==0.28.1
 cryptography==44.0.0
 python-dotenv==1.0.1
 aiosqlite==0.20.0
+# 技能（SKILL.md）的 YAML frontmatter 解析；uvicorn[standard] 已间接带入，这里显式锁定
+pyyaml==6.0.3

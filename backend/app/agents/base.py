@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any, AsyncIterator, ClassVar, Iterable, Sequence
 
 from .events import AgentEvent, EventType
+from .skills import SkillMount, SkillSpec
 
 
 class FieldType(str, Enum):
@@ -74,6 +75,8 @@ class Capabilities:
     mcp: bool = False
     permission_modes: bool = False
     working_directory: bool = False
+    #: 是否支持技能（声明即表示适配器实现了 discover_skills/skill_mount）
+    skills: bool = False
 
     def to_dict(self) -> dict[str, bool]:
         return {
@@ -84,6 +87,7 @@ class Capabilities:
             "mcp": self.mcp,
             "permission_modes": self.permission_modes,
             "working_directory": self.working_directory,
+            "skills": self.skills,
         }
 
 
@@ -132,6 +136,10 @@ class AgentContext:
     #: 对话记录；注入给无法在服务端续接会话的智能体
     history: list[dict[str, str]] = field(default_factory=list)
     prompt: str = ""
+    #: 角色分配到的技能（框架按绑定智能体的类型过滤后注入）
+    skills: list[SkillSpec] = field(default_factory=list)
+    #: 框架物化好的技能主目录；适配器据此设置内核的配置目录环境变量
+    skill_home_dir: str | None = None
 
     def option(self, key: str, default: Any = None) -> Any:
         value = self.options.get(key, default)
@@ -288,6 +296,24 @@ class AgentDefinition(ABC):
 
     async def probe_api(self, ctx: AgentContext) -> tuple[bool, str]:
         return True, "该适配器未提供探测实现"
+
+    # -- 技能 ----------------------------------------------------------------
+
+    def discover_skills(self) -> list[SkillSpec]:
+        """交给平台统一编目的技能（只读扫描本机文件系统）。
+
+        默认没有技能；据有技能目录的内核（Claude Code、Codex）覆盖此钩子。
+        实现必须是尽力而为的：目录不存在、权限不足、frontmatter 损坏都不允许抛错。
+        """
+        return []
+
+    def skill_mount(self, ctx: AgentContext) -> SkillMount | None:
+        """声明「把角色分配到的技能物化到哪里」；返回 ``None`` 表示该内核不支持技能。
+
+        适配器负责声明自己内核的隔离方式（配置目录、需要携带的配置文件、
+        需要关闭的内核自带技能）；框架只按声明执行，不关心具体是哪个内核。
+        """
+        return None
 
 
 class AgentRun:

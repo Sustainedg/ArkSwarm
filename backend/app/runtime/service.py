@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -11,12 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..agents import AgentContext, AgentDefinition, EventType, get_agent
-from ..agents.events import AgentEvent, error, run_finished
+from ..agents.events import AgentEvent, error, log, run_finished
 from ..models import AgentInstance, Conversation, Message, Role
 from ..security import decrypt
 from ..settings import get_settings
 from .manager import ActiveRun, registry
 from .runner import stream_run
+from .skills import prepare_skill_home
 
 MAX_HISTORY_MESSAGES = 24
 MAX_HISTORY_CHARS = 40_000
@@ -33,6 +34,8 @@ class PreparedRun:
     run: ActiveRun
     user_message: Message
     assistant_message: Message
+    #: 技能物化过程中的说明/告警，运行开始时以 log 事件暴露
+    skill_warnings: list[str] = field(default_factory=list)
 
 
 class ConfigurationError(Exception):
@@ -152,6 +155,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
 
     history = _clip_history(list(existing))
     ctx = build_context(definition, agent, role, conversation, payload.content, history, workspace)
+    skill_warnings = await prepare_skill_home(session, definition, agent, role, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -181,6 +185,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
         run=run,
         user_message=user_message,
         assistant_message=assistant_message,
+        skill_warnings=skill_warnings,
     )
 
 
@@ -204,6 +209,9 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
     extra: dict[str, Any] = {}
     status = "complete"
     error_text: str | None = None
+
+    for warning in prepared.skill_warnings:
+        yield log(f"技能：{warning}", "warn")
 
     try:
         async for event in stream_run(prepared.definition, prepared.ctx, prepared.run):
@@ -293,6 +301,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     ).scalars().all()
     history = _clip_history(list(history_rows))
     ctx = build_context(definition, agent, role, conversation, last_user.content, history, workspace)
+    skill_warnings = await prepare_skill_home(session, definition, agent, role, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -316,6 +325,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         run=run,
         user_message=last_user,
         assistant_message=assistant_message,
+        skill_warnings=skill_warnings,
     )
 
 

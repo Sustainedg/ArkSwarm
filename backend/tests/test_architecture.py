@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents import all_agents, known_ids
+from app.agents import AgentContext, all_agents, known_ids
 from app.agents.base import FieldType, Runtime
 from app.agents.events import EventType
 
@@ -159,3 +159,31 @@ def test_framework_layers_do_not_hardcode_agent_ids():
             if f'"{agent_id}"' in text or f"'{agent_id}'" in text:
                 offenders.append(f"{path.name} 出现了硬编码的智能体 id：{agent_id}")
     assert offenders == [], "\n".join(offenders)
+
+
+#: 技能根与内核隔离变量的具体知识只应存在于适配器里（AGENTS.md 铁律 1/2）
+KERNEL_SKILL_MARKERS = (".claude/skills", ".codex/skills", "CODEX_HOME", "CLAUDE_CONFIG_DIR")
+
+
+def test_framework_layers_do_not_hardcode_kernel_skills():
+    """框架层不得知道「哪个内核把技能放在哪」（那是适配器的知识）。"""
+    offenders: list[str] = []
+    framework_files = list((APP_DIR / "api").glob("*.py"))
+    framework_files += list((APP_DIR / "runtime").glob("*.py"))
+    for path in sorted(framework_files):
+        text = path.read_text(encoding="utf-8")
+        for marker in KERNEL_SKILL_MARKERS:
+            if marker in text:
+                offenders.append(f"{path.name} 出现了硬编码的内核技能标识：{marker}")
+    assert offenders == [], "\n".join(offenders)
+
+
+def test_skill_capable_adapters_declare_a_mount():
+    """声明了 skills 能力的适配器必须声明物化方式，否则「仅分配」无处落地。"""
+    ctx = AgentContext(agent_id="probe", agent_name="probe")
+    for definition in all_agents():
+        if not definition.capabilities.skills:
+            continue
+        assert definition.skill_mount(ctx) is not None, (
+            f"{definition.id} 声明了 skills 能力，但没有实现 skill_mount()"
+        )

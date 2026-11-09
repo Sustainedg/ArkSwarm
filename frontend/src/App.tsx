@@ -4,11 +4,13 @@ import { api } from './lib/api'
 import { ChatPage } from './pages/ChatPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { RolesPage } from './pages/RolesPage'
+import { SkillsPage } from './pages/SkillsPage'
 import { SettingsPage } from './pages/SettingsPage'
 
 const NAV = [
   { to: '/chat', icon: '💬', label: '对话' },
   { to: '/roles', icon: '🎭', label: '角色' },
+  { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/agents', icon: '⚙️', label: '智能体配置' },
   { to: '/settings', icon: '📊', label: '系统' },
 ]
@@ -55,6 +57,7 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
           <Route path="/roles" element={<RolesPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

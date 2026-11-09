@@ -21,6 +21,8 @@ export interface Capabilities {
   mcp: boolean
   permission_modes: boolean
   working_directory: boolean
+  /** 该内核是否支持技能（技能来自各内核自己的技能目录，由平台统一编目） */
+  skills: boolean
 }
 
 export interface Availability {
@@ -73,6 +75,14 @@ export interface AgentInstance {
   availability?: Availability | null
 }
 
+export interface RoleSkillBrief {
+  id: string
+  name: string
+  type_id: string
+  source_kind: string
+  available: boolean
+}
+
 export interface Role {
   id: string
   name: string
@@ -86,6 +96,46 @@ export interface Role {
   updated_at: string
   agent_name?: string | null
   agent_type_id?: string | null
+  /** 该角色分配到的技能（技能只能通过分配获得） */
+  skill_ids: string[]
+  skills: RoleSkillBrief[]
+}
+
+export interface Skill {
+  id: string
+  type_id: string
+  type_name?: string | null
+  slug: string
+  name: string
+  description: string
+  source_kind: string
+  source_label: string
+  version?: string | null
+  author?: string | null
+  when_to_use?: string | null
+  available: boolean
+  total_bytes: number
+  file_count: number
+  note?: string | null
+  used_by_roles: number
+}
+
+export interface SkillDetail extends Skill {
+  path: string
+  fingerprint: string
+  allowed_tools: string[]
+  files: { path: string; size: number }[]
+  meta: Record<string, unknown>
+  body: string
+  body_truncated: boolean
+  roles: { id: string; name: string; avatar: string }[]
+}
+
+export interface SkillRescanResult {
+  added: number
+  updated: number
+  missing: number
+  total: number
 }
 
 export interface Conversation {

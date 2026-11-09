@@ -32,12 +32,22 @@ class Settings(BaseSettings):
         return (self.workspace_dir or (self.data_dir / "workspaces")).resolve()
 
     @property
+    def agent_homes_root(self) -> Path:
+        """每个对话一份的内核隔离配置目录（技能「严格仅分配」就物化在这里）。
+
+        放在数据目录里而不是临时目录：内核的会话记录也写在自己的配置目录下，
+        每次运行都换目录会导致多轮对话无法续接。
+        """
+        return (self.data_dir / "agent-homes").resolve()
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspaces_root.mkdir(parents=True, exist_ok=True)
+        self.agent_homes_root.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

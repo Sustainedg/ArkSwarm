@@ -1,5 +1,6 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, Conversation, Message, Overview, Role, TestResult,
+  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, Conversation, Message, Overview, Role,
+  Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -44,6 +45,28 @@ export const api = {
   deleteAgent: (id: string) => request<void>(`/api/agents/${id}`, { method: 'DELETE' }),
   duplicateAgent: (id: string) => request<AgentInstance>(`/api/agents/${id}/duplicate`, { method: 'POST' }),
   testAgent: (id: string) => request<TestResult>(`/api/agents/${id}/test`, { method: 'POST' }),
+
+  listSkills: (params?: {
+    type_id?: string
+    source_kind?: string
+    q?: string
+    available?: boolean
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.type_id) search.set('type_id', params.type_id)
+    if (params?.source_kind) search.set('source_kind', params.source_kind)
+    if (params?.q) search.set('q', params.q)
+    if (params?.available !== undefined) search.set('available', String(params.available))
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<{ items: Skill[] }>(`/api/skills${suffix}`).then((r) => r.items)
+  },
+  getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
+  rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
+  setRoleSkills: (roleId: string, skillIds: string[]) =>
+    request<Role>(`/api/roles/${roleId}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify({ skill_ids: skillIds }),
+    }),
 
   listRoles: () => request<{ items: Role[] }>('/api/roles').then((r) => r.items),
   createRole: (body: unknown) => request<Role>('/api/roles', { method: 'POST', body: JSON.stringify(body) }),

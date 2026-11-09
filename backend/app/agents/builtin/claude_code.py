@@ -29,11 +29,27 @@ from ..events import (
     usage,
 )
 from ..registry import register_agent
+from ..skills import SkillMount, SkillSpec, scan_skill_root
 from .util import as_list, flatten_content, truthy
 
 
 #: Claude Code 自己的系统级配置文件，按顺序合并（后者覆盖前者）。
 _SYSTEM_SETTINGS_FILES = ("settings.json", "settings.local.json")
+
+#: Claude Code 自带的内置插件（它们携带 bundled 技能），严格模式下必须显式关闭。
+_BUILTIN_PLUGIN_IDS = ("cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin")
+
+#: ``disableBundledSkills`` 关不掉、需要逐个用 ``skillOverrides`` 关闭的内置技能。
+_RESIDUAL_BUNDLED_SKILLS = ("doctor",)
+
+#: 插件市场目录的扫描深度：plugins/<市场>/plugins/<插件>/skills/<技能>。
+_PLUGIN_SKILL_DEPTH = 8
+
+
+def config_dir(home: str | Path | None = None) -> Path:
+    """Claude Code 的配置目录（默认 ``~/.claude``）。"""
+    base = Path(home).expanduser() if home else Path.home()
+    return base / ".claude"
 
 
 def read_system_settings(home: str | Path | None = None) -> dict[str, Any]:
@@ -83,6 +99,7 @@ class ClaudeCodeAgent(AgentDefinition):
         mcp=True,
         permission_modes=True,
         working_directory=True,
+        skills=True,
     )
     config_fields = (
         ConfigField(
@@ -164,6 +181,42 @@ class ClaudeCodeAgent(AgentDefinition):
             defaults["api_key"] = api_key
         return defaults
 
+    def discover_skills(self) -> list[SkillSpec]:
+        """扫描 Claude Code 的技能根：个人技能 + 插件市场里的插件技能。"""
+        root = config_dir()
+        specs = scan_skill_root(root / "skills", type_id=self.id, source_kind="user")
+        specs += scan_skill_root(
+            root / "plugins", type_id=self.id, source_kind="plugin", max_depth=_PLUGIN_SKILL_DEPTH
+        )
+        return specs
+
+    def skill_mount(self, ctx: AgentContext) -> SkillMount:
+        """严格仅分配：只让内核看到角色分配到的技能。
+
+        做法是把运行环境指向一个隔离的配置目录（只放分配到的技能 + 本机
+        ``settings*.json``），并关闭内核自带的 bundled 技能与内置插件。
+        """
+        notes: list[str] = []
+        if ctx.workspace_dir:
+            extra = Path(ctx.workspace_dir) / ".claude" / "skills"
+            if extra.is_dir() and any(extra.iterdir()):
+                notes.append(
+                    f"工作目录自带的 {extra} 会被内核额外加载，这些技能不在角色分配范围内"
+                )
+        root = config_dir()
+        return SkillMount(
+            home_name="claude-home",
+            carry=[(str(root / name), name) for name in _SYSTEM_SETTINGS_FILES],
+            patch={
+                "settings.json": {
+                    "enabledPlugins": {plugin_id: False for plugin_id in _BUILTIN_PLUGIN_IDS},
+                    "disableBundledSkills": True,
+                    "skillOverrides": {slug: "off" for slug in _RESIDUAL_BUNDLED_SKILLS},
+                }
+            },
+            notes=notes,
+        )
+
     # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
@@ -211,6 +264,10 @@ class ClaudeCodeAgent(AgentDefinition):
         self._apply_auth_style(env, ctx)
         env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         env.setdefault("CI", "1")
+        if ctx.skill_home_dir:
+            # 严格仅分配：内核只从隔离配置目录里的 skills/ 读取技能。
+            env["CLAUDE_CONFIG_DIR"] = ctx.skill_home_dir
+            env.setdefault("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS", "1")
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=ctx.prompt)
 
     def _apply_auth_style(self, env: dict[str, str], ctx: AgentContext) -> None:
@@ -263,8 +320,17 @@ class ClaudeCodeAgent(AgentDefinition):
             if subtype == "init":
                 run.state["model"] = payload.get("model")
                 tools = payload.get("tools") or []
+                # 内核只认「平台注入到配置目录里的技能」，把这一轮真实加载到的技能回显出来，
+                # 用户才能确认「角色分配」是否生效。
+                skills = [str(name) for name in (payload.get("skills") or [])]
+                run.state["skills"] = skills
                 if tools:
-                    yield log(f"会话已就绪 · 模型 {payload.get('model')} · {len(tools)} 个工具")
+                    preview = "、".join(skills[:8]) + ("…" if len(skills) > 8 else "")
+                    detail = f"（{preview}）" if preview else ""
+                    yield log(
+                        f"会话已就绪 · 模型 {payload.get('model')} · {len(tools)} 个工具"
+                        f" · 技能 {len(skills)} 个{detail}"
+                    )
 
     def _from_stream_event(self, event: dict[str, Any], run: AgentRun) -> Iterable[AgentEvent]:
         if event.get("type") != "content_block_delta":

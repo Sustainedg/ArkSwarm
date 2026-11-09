@@ -76,6 +76,16 @@ class RoleUpdate(BaseModel):
     parameters: dict[str, Any] | None = None
 
 
+class RoleSkillBrief(BaseModel):
+    """角色卡片上展示的技能摘要。"""
+
+    id: str
+    name: str
+    type_id: str
+    source_kind: str
+    available: bool = True
+
+
 class RoleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -91,6 +101,56 @@ class RoleRead(BaseModel):
     updated_at: datetime
     agent_name: str | None = None
     agent_type_id: str | None = None
+    #: 该角色分配到的技能（技能只能通过分配获得）
+    skill_ids: list[str] = Field(default_factory=list)
+    skills: list[RoleSkillBrief] = Field(default_factory=list)
+
+
+class RoleSkillsUpdate(BaseModel):
+    """整表替换角色的技能分配。"""
+
+    skill_ids: list[str] = Field(default_factory=list)
+
+
+class SkillRead(BaseModel):
+    """技能列表项。"""
+
+    id: str
+    type_id: str
+    type_name: str | None = None
+    slug: str
+    name: str
+    description: str = ""
+    source_kind: str
+    source_label: str = ""
+    version: str | None = None
+    author: str | None = None
+    when_to_use: str | None = None
+    available: bool = True
+    total_bytes: int = 0
+    file_count: int = 0
+    note: str | None = None
+    used_by_roles: int = 0
+
+
+class SkillDetail(SkillRead):
+    """技能详情：完整描述、元数据、文件清单，以及引用了它的角色。"""
+
+    path: str = ""
+    fingerprint: str = ""
+    allowed_tools: list[str] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
+    body: str = ""
+    body_truncated: bool = False
+    roles: list[dict[str, str]] = Field(default_factory=list)
+
+
+class SkillRescanResult(BaseModel):
+    added: int = 0
+    updated: int = 0
+    missing: int = 0
+    total: int = 0
 
 
 class ConversationCreate(BaseModel):

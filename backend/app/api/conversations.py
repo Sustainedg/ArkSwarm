@@ -6,13 +6,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..db import SessionLocal, get_session
 from ..models import AgentInstance, Conversation, Message, Role
 from ..runtime import registry
+from ..runtime import skills as skill_service
 from ..runtime.service import (
     ConfigurationError,
     consume_run,
@@ -116,12 +117,13 @@ async def delete_conversation(conversation_id: str, session: AsyncSession = Depe
     if conversation is None:
         raise HTTPException(status_code=404, detail="对话不存在")
     registry.cancel_for_conversation(conversation_id)
-    for message in (
-        await session.execute(select(Message).where(Message.conversation_id == conversation_id))
-    ).scalars().all():
-        await session.delete(message)
+    # 用单条 DELETE 显式清空消息（保留「删对话必须清消息」的不变量），比逐行
+    # session.delete 少一层往返，也避开 SQLite 驱动对 executemany 行数统计为 0 的误导性告警。
+    await session.execute(delete(Message).where(Message.conversation_id == conversation_id))
     await session.delete(conversation)
     await session.commit()
+    # 该对话的内核隔离配置目录（含分配技能的副本）一并清掉。
+    skill_service.cleanup_conversation(conversation_id)
     return Response(status_code=204)
 
 

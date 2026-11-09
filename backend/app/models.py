@@ -1,10 +1,12 @@
 """数据库结构。
 
-产品的三个核心概念：
+产品的核心概念：
 
 * :class:`AgentInstance` —— 一个**配置好的**智能体（类型 + 网关 + 密钥 + 模型）。
 * :class:`Role`          —— 角色，从若干智能体实例中挑一个绑定。
 * :class:`Conversation`  —— 对话，绑定某个角色并记住智能体侧的会话 ID。
+* :class:`Skill`         —— 从各智能体内核扫描出来的技能（统一编目）。
+* :class:`RoleSkill`     —— 角色与技能的分配关系（角色能用的技能只能来自这里）。
 """
 from __future__ import annotations
 
@@ -54,6 +56,60 @@ class Role(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
 
+
+
+class Skill(SQLModel, table=True):
+    """从各智能体内核的技能根扫描出来的技能。
+
+    ``id`` 是稳定标识 ``<type_id>:<slug>``：技能目录暂时消失时只把 ``available``
+    置为 False，不删行，这样历史分配关系不会断。
+    """
+
+    __tablename__ = "skills"
+
+    id: str = Field(sa_column=Column(String(200), primary_key=True))
+    type_id: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    slug: str = Field(sa_column=Column(String(120), nullable=False))
+    name: str = Field(sa_column=Column(String(160), nullable=False))
+    description: str = Field(default="", sa_column=Column(Text, nullable=False))
+    source_kind: str = Field(default="user", sa_column=Column(String(32), nullable=False))
+    path: str = Field(default="", sa_column=Column(String(1000), nullable=False))
+    fingerprint: str = Field(default="", sa_column=Column(String(64), nullable=False))
+    version: str | None = Field(default=None, sa_column=Column(String(80)))
+    author: str | None = Field(default=None, sa_column=Column(String(160)))
+    when_to_use: str | None = Field(default=None, sa_column=Column(Text))
+    allowed_tools: list[str] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False, default=list)
+    )
+    files: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False, default=list)
+    )
+    total_bytes: int = Field(default=0)
+    meta: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
+    available: bool = Field(default=True)
+    note: str | None = Field(default=None, sa_column=Column(String(400)))
+    discovered_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
+    )
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+
+
+class RoleSkill(SQLModel, table=True):
+    """角色 → 技能的分配关系。角色实际可用的技能只能来自这张表。"""
+
+    __tablename__ = "role_skills"
+
+    role_id: str = Field(
+        sa_column=Column(String(64), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    )
+    skill_id: str = Field(
+        sa_column=Column(
+            String(200), ForeignKey("skills.id", ondelete="RESTRICT"), primary_key=True
+        )
+    )
+    position: int = Field(default=0)
 
 
 class Conversation(SQLModel, table=True):

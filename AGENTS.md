@@ -21,7 +21,8 @@
 | 端口/部署 | 监听 `0.0.0.0:8010`，由 PyPanel 服务 `e0c0620a5786` 托管（`scripts/serve.sh`） |
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
-| 真实数据 | `backend/data/`（SQLite + 工作目录）**含用户真实对话**，受 `.gitignore` 忽略 |
+| 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
+| 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过角色分配生效**（`role_skills`） |
 
 ---
 
@@ -30,7 +31,8 @@
 1. **新增智能体只能走适配器。** 在 `agents/builtin/` 新增模块并 `@register_agent`。
    禁止在 `runtime/`、`api/`、前端里为某个具体 `type_id` 写分支。
 2. **适配器是叶子节点。** 适配器**禁止** `import` 任何 `app.api.*`、`app.runtime.*`、`app.db.*`、`app.models`。
-   它只能依赖 `agents/base.py`、`agents/events.py`、`agents/builtin/util.py`、标准库与 `httpx`。
+   它只能依赖 `agents/base.py`、`agents/events.py`、`agents/skills.py`、`agents/builtin/util.py`、
+   标准库与 `httpx`。
 3. **适配器无状态、不碰数据库。** 一次运行所需的一切都从 `AgentContext` 取；解析过程的状态放进 `AgentRun.state`。
 4. **所有可配置项必须声明为 `ConfigField`。** 禁止在 React 里为某个智能体硬编码表单字段。
 5. **事件协议是框架与适配器之间唯一的方言。** 新增事件类型必须**同时**改：
@@ -48,6 +50,10 @@
     禁止 `except Exception: pass` 静默吞掉。
 12. **不要新增依赖**（后端 `requirements*.txt`、前端 `package.json`），除非任务确实需要；
     新增必须说明理由并与现有版本风格一致（精确版本号）。
+13. **角色能用的技能只能来自分配。** 技能的权威来源是 `role_skills` 表；运行时必须「严格仅分配」——
+    把分配到的技能物化进该内核的隔离配置目录，不允许把本机个人/插件技能顺手带进一次运行。
+    某个内核把技能放在哪、怎么隔离，是**适配器**的知识（`discover_skills()` / `skill_mount()`）；
+    框架层禁止硬编码技能目录或内核配置变量。
 
 ---
 
@@ -64,10 +70,10 @@
  │ api/            路由、请求校验(Pydantic)、SSE 封装、HTTP 状态码    │
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
- │                 manager=运行表(注册/取消/追踪)                     │
+ │                 manager=运行表(注册/取消/追踪) · skills=技能编目/分配/物化 │
  ├───────────────────────────────────────────────────────────────────┤
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
- │                 registry(注册) · builtin/*(各智能体实现)           │
+ │                 registry(注册) · skills(技能契约) · builtin/*(实现) │
  ├───────────────────────────────────────────────────────────────────┤
  │ models/db · schemas · settings · security · bootstrap              │
  └───────────────────────────────────────────────────────────────────┘
@@ -81,9 +87,10 @@
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
 | `agents/builtin/*` | 怎么调用某个智能体、怎么把它的输出翻译成事件 | 存储、HTTP、UI、取消（框架统一做） |
-| `agents/base.py` `events.py` `registry.py` | 契约与协议（改动影响面最大，慎改） | 具体产品逻辑 |
+| `agents/base.py` `events.py` `registry.py` `skills.py` | 契约与协议（改动影响面最大，慎改） | 具体产品逻辑 |
 | `runtime/runner.py` | 起子进程/发 HTTP、读流、超时、取消、脱敏 | 业务规则 |
 | `runtime/service.py` | 载入 对话→角色→智能体→适配器、能力决策、历史回放、落库 | 具体命令拼装 |
+| `runtime/skills.py` | 技能统一编目、角色分配、物化进内核隔离目录 | 哪个内核把技能放哪（那是适配器的事） |
 | `api/*` | 参数校验、状态码、把 service 的结果转成响应/SSE | 业务决策（尽量薄） |
 | `models.py` `schemas.py` | 表结构与请求/响应契约 | 编排逻辑 |
 | 前端 | 展示与交互 | 任何智能体特异逻辑 |
@@ -146,6 +153,17 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 
 ---
 
+### 3.7 技能契约（`agents/skills.py`）
+- `SkillSpec`：一个技能的只读描述（`type_id` / `slug` / `name` / `description` / `source_kind` / `path` /
+  `fingerprint` / `files` …），`id` 固定为 `<type_id>:<slug>`。
+- `SkillMount`：适配器声明的**物化计划**（`home_name`、`skills_subdir`、`carry` 要携带的配置文件、
+  `patch` 配置文件补丁、`notes` 用户提示）。框架只按这份声明执行，不认识具体内核。
+- 适配器钩子：`discover_skills()`（只读扫描本内核的技能根，尽力而为、不得抛错）与
+  `skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）。
+- `AgentContext.skills` / `AgentContext.skill_home_dir`：框架注入的「本次运行生效的技能」与
+  「物化好的隔离目录」，适配器在 `build_invocation()` 里据此设置自己的配置目录环境变量。
+- 声明了 `Capabilities.skills=True` 的适配器**必须**实现 `skill_mount()`（有架构守卫测试）。
+
 ## 4. 扩展手册（照着做，别自创路径）
 
 ### 4.1 接入新的 CLI 智能体（例：Aider）
@@ -169,7 +187,15 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ### 4.5 新增规范化事件
 按铁律 5，四处 + 文档同步；同时更新 `docs/architecture.md` 的事件表。
 
-### 4.6 新增前端页面
+### 4.6 让某个适配器支持技能
+1. `capabilities` 里声明 `skills=True`。
+2. 实现 `discover_skills()`：用 `agents/skills.py` 的 `scan_skill_root()` 扫描本内核的技能根，
+   标注来源（`user` / `project` / `plugin` / `system`），**只读、不得抛错**。
+3. 实现 `skill_mount(ctx)`：声明隔离目录名、需要携带的配置文件、要关闭的内核自带技能，
+   并在 `build_invocation()` 里把 `ctx.skill_home_dir` 写进对应环境变量（如 `CLAUDE_CONFIG_DIR`）。
+4. 加测试：参考 `backend/tests/test_skills.py`（解析、物化、隔离变量）。
+
+### 4.7 新增前端页面
 `src/pages/XxxPage.tsx`，在 `src/App.tsx` 的 `Routes` 与 `NAV` 注册；类型加在 `src/lib/types.ts`，
 接口调用加在 `src/lib/api.ts`。样式写进 `src/index.css`，沿用既有 class 命名（`card`/`btn`/`pill`/`banner`…）。
 
@@ -238,6 +264,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 事件协议/持久化 | 端到端跑一次真实对话（SSE 事件齐全、消息落库正确） |
 | 数据库结构 | 用**现有** `backend/data/magenta.db` 启动验证旧数据可读，不得重置 |
 | 新增适配器 | `/api/agent-types` 能看到、表单可渲染、连通性测试可用 |
+| 技能（编目/分配/物化） | `pytest` 覆盖解析与物化；端到端跑一次真实对话确认技能生效、未分配的不出现 |
 
 重启托管服务：
 ```bash
@@ -253,6 +280,8 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | --- | --- |
 | `agents/base.py` 契约 | 全部 6 个内置适配器 + `custom_cli` + 测试 |
 | `agents/events.py` | `runtime/service.consume_run`、前端 `applyEvent` + `types.ts`、`docs/architecture.md` |
+| `agents/skills.py` / 技能契约 | 全部声明 `skills=True` 的适配器 + `runtime/skills.py` + `tests/test_skills.py` |
+| `runtime/skills.py` | 角色分配接口、`service.prepare_run` 的物化步骤、前端技能页与角色弹窗 |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
@@ -271,6 +300,9 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 - ❌ 新增事件类型却漏改 `consume_run` 或 `applyEvent`（界面直接看不到）。
 - ❌ 新增可配置项却只在后端读、忘了声明 `ConfigField`（界面上无法配置）。
 - ❌ 用"清空/重建数据库"来解决 schema 变更。
+- ❌ 在框架层硬编码某个内核的技能目录或配置变量（应通过 `discover_skills()` / `skill_mount()` 声明）。
+- ❌ 让角色用到未分配的技能（把本机个人/插件技能顺手带进一次运行）。
+- ❌ 把技能目录删了就顺手删 `skills` 记录（应只把 `available` 置 False，保住角色分配）。
 - ❌ 前端改完不 build、不重启就宣称完成。
 - ❌ 静默吞异常，或把错误只打到 stdout 不产出 `error` 事件。
 - ❌ 引入 UI 框架/状态管理库/新依赖来解决一个 CSS 或几行状态能解决的问题。

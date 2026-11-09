@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..base import (
@@ -26,7 +28,20 @@ from ..events import (
     usage,
 )
 from ..registry import register_agent
+from ..skills import SkillMount, SkillSpec, scan_skill_root
 from .util import as_list, flatten_content, truthy
+
+
+#: Codex 的登录态与配置文件名；隔离运行时要一并带过去，否则会丢登录或丢自定义供应商。
+_CARRY_FILES = ("config.toml", "auth.json")
+
+
+def codex_home() -> Path:
+    """Codex 的配置目录（``CODEX_HOME`` 优先，其次 ``~/.codex``）。"""
+    override = os.environ.get("CODEX_HOME")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".codex"
 
 
 @register_agent
@@ -53,6 +68,7 @@ class CodexAgent(AgentDefinition):
         mcp=True,
         permission_modes=True,
         working_directory=True,
+        skills=True,
     )
     config_fields = (
         ConfigField(
@@ -123,6 +139,22 @@ class CodexAgent(AgentDefinition):
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
+    def discover_skills(self) -> list[SkillSpec]:
+        """扫描 Codex 的技能根：``$CODEX_HOME/skills``（含 ``.system`` 系统技能）。"""
+        root = codex_home() / "skills"
+        specs = scan_skill_root(root, type_id=self.id, source_kind="user")
+        specs += scan_skill_root(root / ".system", type_id=self.id, source_kind="system")
+        return specs
+
+    def skill_mount(self, ctx: AgentContext) -> SkillMount:
+        """严格仅分配：把运行环境指向只含「角色分配到的技能」的隔离 ``CODEX_HOME``。
+
+        ``config.toml`` 与登录态（``auth.json``）会被带过去，避免丢登录或丢自定义供应商。
+        """
+        root = codex_home()
+        carry = [(str(root / name), name) for name in _CARRY_FILES if (root / name).is_file()]
+        return SkillMount(home_name="codex-home", carry=carry)
+
     # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
@@ -159,6 +191,9 @@ class CodexAgent(AgentDefinition):
 
         env = self.effective_env(ctx)
         env.setdefault("CODEX_DISABLE_TELEMETRY", "1")
+        if ctx.skill_home_dir:
+            # 严格仅分配：Codex 只从隔离 CODEX_HOME 的 skills/ 读取技能。
+            env["CODEX_HOME"] = ctx.skill_home_dir
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=prompt)
 
     def _config_overrides(self, ctx: AgentContext) -> dict[str, str]:

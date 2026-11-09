@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
-import type { AgentInstance, Role } from '../lib/types'
+import type { AgentInstance, AgentType, Role, Skill } from '../lib/types'
 
 const AVATARS = ['🛠️', '🧪', '🔎', '🐳', '🔗', '🎨', '📚', '🧠', '⚡', '🛰️', '🧭', '🦾']
 const PROMPT_TEMPLATES: { label: string; body: string }[] = [
@@ -22,15 +22,24 @@ const PROMPT_TEMPLATES: { label: string; body: string }[] = [
 export function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([])
   const [agents, setAgents] = useState<AgentInstance[]>([])
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Role | null>(null)
   const [creating, setCreating] = useState(false)
 
   const reload = async () => {
     try {
-      const [roleList, agentList] = await Promise.all([api.listRoles(), api.listAgents()])
+      const [roleList, agentList, skillList, typeList] = await Promise.all([
+        api.listRoles(),
+        api.listAgents(),
+        api.listSkills(),
+        api.agentTypes(),
+      ])
       setRoles(roleList)
       setAgents(agentList)
+      setSkills(skillList)
+      setAgentTypes(typeList)
       setError(null)
     } catch (e) {
       setError(describe(e))
@@ -83,6 +92,9 @@ export function RolesPage() {
                 <div className="chips">
                   <span className="pill brand">{role.agent_name}</span>
                   <span className="pill mono-sm">{role.agent_type_id}</span>
+                  {role.skills.length > 0 && (
+                    <span className="pill ok">🧩 {role.skills.length} 个技能</span>
+                  )}
                 </div>
                 <div className="bubble-body" style={{ maxHeight: 96, overflow: 'hidden', fontSize: 12.5 }}>
                   {role.system_prompt || '（未设置系统提示词）'}
@@ -125,6 +137,8 @@ export function RolesPage() {
         <RoleModal
           role={editing}
           agents={agents}
+          skills={skills}
+          agentTypes={agentTypes}
           onClose={() => {
             setCreating(false)
             setEditing(null)
@@ -143,11 +157,15 @@ export function RolesPage() {
 function RoleModal({
   role,
   agents,
+  skills,
+  agentTypes,
   onClose,
   onSaved,
 }: {
   role: Role | null
   agents: AgentInstance[]
+  skills: Skill[]
+  agentTypes: AgentType[]
   onClose: () => void
   onSaved: () => void
 }) {
@@ -157,6 +175,7 @@ function RoleModal({
   const [agentId, setAgentId] = useState(role?.agent_id ?? agents[0]?.id ?? '')
   const [systemPrompt, setSystemPrompt] = useState(role?.system_prompt ?? '')
   const [workspace, setWorkspace] = useState(role?.workspace_dir ?? '')
+  const [skillIds, setSkillIds] = useState<string[]>(role?.skill_ids ?? [])
   const [modelOverride, setModelOverride] = useState(String((role?.parameters?.model as string) ?? ''))
   const [gatewayOverride, setGatewayOverride] = useState(String((role?.parameters?.gateway_url as string) ?? ''))
   const [saving, setSaving] = useState(false)
@@ -182,8 +201,9 @@ function RoleModal({
       parameters,
     }
     try {
-      if (role) await api.updateRole(role.id, payload)
-      else await api.createRole(payload)
+      // 技能分配紧随角色保存：技能只能通过分配获得，未分配即为不生效。
+      const saved = role ? await api.updateRole(role.id, payload) : await api.createRole(payload)
+      await api.setRoleSkills(saved.id, skillIds)
       onSaved()
     } catch (e) {
       setError(describe(e))
@@ -193,6 +213,14 @@ function RoleModal({
   }
 
   const selected = agents.find((a) => a.id === agentId)
+  const selectedType = agentTypes.find((type) => type.id === selected?.type_id)
+  const supportsSkills = selectedType?.capabilities.skills ?? false
+  const matchingSkills = skills.filter((skill) => skill.type_id === selected?.type_id)
+  const otherSkills = skills.filter((skill) => skill.type_id !== selected?.type_id)
+  const toggleSkill = (skillId: string) =>
+    setSkillIds((current) =>
+      current.includes(skillId) ? current.filter((id) => id !== skillId) : [...current, skillId],
+    )
 
   return (
     <Modal
@@ -236,7 +264,21 @@ function RoleModal({
 
         <div className="field span-2">
           <label className="field-label">绑定智能体</label>
-          <select className="select" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+          <select
+            className="select"
+            value={agentId}
+            onChange={(e) => {
+              const next = e.target.value
+              setAgentId(next)
+              const agent = agents.find((a) => a.id === next)
+              const nextType = agentTypes.find((type) => type.id === agent?.type_id)
+              setSkillIds((current) =>
+                current.filter(
+                  (id) => skills.find((skill) => skill.id === id)?.type_id === nextType?.id,
+                ),
+              )
+            }}
+          >
             {agents.map((agent) => (
               <option key={agent.id} value={agent.id}>
                 {agent.name} · {agent.type_name ?? agent.type_id}
@@ -298,6 +340,49 @@ function RoleModal({
           <span className="field-help">
             智能体将以该目录为工作目录运行。留空时，后端会为每个对话分配 <code className="mono-sm">data/workspaces/&lt;对话 ID&gt;</code>。
           </span>
+        </div>
+
+        <div className="field span-2">
+          <label className="field-label">
+            技能
+            <span className="dim small" style={{ marginLeft: 'auto' }}>
+              已分配 {skillIds.length} 个
+            </span>
+          </label>
+          {!supportsSkills ? (
+            <div className="banner info">该智能体的内核不支持技能，这个角色不会加载任何技能。</div>
+          ) : matchingSkills.length === 0 ? (
+            <div className="banner info">
+              还没有属于「{selectedType?.name ?? selected?.type_id}」的技能。请到「技能」页重新扫描，或换一个支持技能的内核。
+            </div>
+          ) : (
+            <div className="skill-picker">
+              {matchingSkills.map((skill) => (
+                <label key={skill.id} className="skill-option">
+                  <input
+                    type="checkbox"
+                    checked={skillIds.includes(skill.id)}
+                    onChange={() => toggleSkill(skill.id)}
+                  />
+                  <span className="skill-option-body">
+                    <span className="skill-option-name">
+                      {skill.name}
+                      {!skill.available && <span className="pill err">目录已消失</span>}
+                    </span>
+                    <span className="dim small">{skill.description || '（无描述）'}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <span className="field-help">
+            角色能用的技能只能来自这里的分配：未勾选的技能不会被该角色加载。改绑到其它类型的智能体时，不匹配的技能会被自动移除。
+          </span>
+          {otherSkills.length > 0 && (
+            <span className="field-help">
+              另有 {otherSkills.length} 个技能来自其它智能体内核，与本角色不匹配，无法选择。
+            </span>
+          )}
         </div>
 
         <div className="field">

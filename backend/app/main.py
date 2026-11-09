@@ -15,6 +15,7 @@ from .agents import all_agents
 from .api import api_router
 from .bootstrap import seed_if_empty
 from .db import SessionLocal, init_db
+from .runtime import skills as skill_service
 from .settings import get_settings
 
 logger = logging.getLogger("magenta")
@@ -23,12 +24,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
+async def _scan_skills(session) -> None:
+    """启动时把各内核的技能同步进统一目录；失败不影响服务启动。"""
+    try:
+        result = await skill_service.rescan(session)
+        summary = (
+            f"技能编目完成：新增 {result['added']}、更新 {result['updated']}、"
+            f"目录已消失 {result['missing']}、共 {result['total']}"
+        )
+        logger.info("%s", summary)
+    except Exception:  # noqa: BLE001 - 界面里还有「重新扫描」按钮可以重试
+        logger.warning("技能编目失败，可在「技能」页点击重新扫描重试", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session, all_agents())
+        await _scan_skills(session)
     logger.info("%s %s 已就绪 — 数据目录 %s", settings.app_name, __version__, settings.data_dir)
     yield
 
