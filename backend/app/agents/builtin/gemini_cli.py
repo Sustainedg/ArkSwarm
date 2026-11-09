@@ -1,4 +1,4 @@
-"""Google Gemini CLI adapter."""
+"""Google Gemini CLI 适配器。"""
 from __future__ import annotations
 
 import json
@@ -37,8 +37,8 @@ class GeminiCliAgent(AgentDefinition):
     name = "Gemini CLI"
     vendor = "Google"
     description = (
-        "Google's Gemini CLI agent. Streaming JSONL, checkpointed sessions and "
-        "a `GEMINI_SYSTEM_MD` hook for persona injection."
+        "Google 的 Gemini CLI 智能体。输出流式 JSONL，支持会话检查点续接，"
+        "并可通过 GEMINI_SYSTEM_MD 注入人格。"
     )
     runtime = Runtime.CLI
     executable = "gemini"
@@ -59,36 +59,36 @@ class GeminiCliAgent(AgentDefinition):
     config_fields = (
         ConfigField(
             "approval_mode",
-            "Approval mode",
+            "审批模式",
             FieldType.SELECT,
             default="yolo",
             options=[
-                {"value": "yolo", "label": "yolo (auto-approve tools)"},
-                {"value": "auto_edit", "label": "auto_edit"},
-                {"value": "default", "label": "default (ask)"},
+                {"value": "yolo", "label": "yolo · 自动批准所有工具调用"},
+                {"value": "auto_edit", "label": "auto_edit · 自动应用文件编辑"},
+                {"value": "default", "label": "default · 每次询问"},
             ],
         ),
         ConfigField(
             "system_prompt_mode",
-            "Persona injection",
+            "人格注入方式",
             FieldType.SELECT,
             default="system_file",
             options=[
-                {"value": "system_file", "label": "GEMINI_SYSTEM_MD system file"},
-                {"value": "prepend", "label": "Prepend to the prompt"},
+                {"value": "system_file", "label": "写入 GEMINI_SYSTEM_MD 系统提示词文件"},
+                {"value": "prepend", "label": "拼接到提示词最前面"},
             ],
         ),
-        ConfigField("sandbox", "Sandbox", FieldType.BOOLEAN, default=False, advanced=True),
+        ConfigField("sandbox", "启用沙箱", FieldType.BOOLEAN, default=False, advanced=True),
         ConfigField(
             "extensions",
-            "Extensions",
+            "扩展插件",
             FieldType.STRING_LIST,
             advanced=True,
-            placeholder="e.g. gemini-cli-extensions/mcp-toolbox",
+            placeholder="例如 gemini-cli-extensions/mcp-toolbox",
         ),
-        ConfigField("include_dirs", "Extra workspace dirs", FieldType.STRING_LIST, advanced=True),
-        ConfigField("extra_args", "Extra CLI args", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "Extra environment", FieldType.KEYVALUE, advanced=True),
+        ConfigField("include_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
+        ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
+        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- invocation ----------------------------------------------------------
@@ -121,7 +121,7 @@ class GeminiCliAgent(AgentDefinition):
         env = self.effective_env(ctx)
         files: dict[str, str] = {}
 
-        # Gemini CLI injects personas through a system markdown file.
+        # Gemini CLI 通过一个系统提示词 markdown 文件注入人格。
         if ctx.system_prompt:
             if (options.get("system_prompt_mode") or "system_file") == "prepend":
                 prompt = f"{ctx.system_prompt}\n\n---\n\n{prompt}"
@@ -129,7 +129,7 @@ class GeminiCliAgent(AgentDefinition):
                 files[".magenta/system.md"] = ctx.system_prompt
                 env["GEMINI_SYSTEM_MD"] = "{{RUN_DIR}}/.magenta/system.md"
 
-        # `-p` keeps the prompt out of argv so large contexts cannot overflow it.
+        # 用 -p 让提示词走 stdin，避免长上下文把参数长度撑爆。
         argv += ["-p", ""]
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=prompt, files=files)
 
@@ -158,7 +158,7 @@ class GeminiCliAgent(AgentDefinition):
                 run.state["session"] = sid
                 yield session(sid)
             if payload.get("model"):
-                yield log(f"gemini ready · model={payload['model']}")
+                yield log(f"Gemini 已就绪 · 模型 {payload['model']}")
             return
 
         if kind == "message":

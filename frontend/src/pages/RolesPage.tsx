@@ -47,7 +47,7 @@ export function RolesPage() {
         <div>
           <h1 className="page-title">角色</h1>
           <p className="page-desc">
-            角色 = 一个人格设定（系统提示词）+ 一个已配置的 Agent。同一个 Agent 可以驱动多个不同角色。
+            角色 = 一个人格设定（系统提示词）+ 一个已配置的智能体。同一个智能体可以驱动多个不同角色。
           </p>
         </div>
         <div className="spacer" />
@@ -59,7 +59,7 @@ export function RolesPage() {
       <div className="page-body stack">
         {error && <div className="banner err">{error}</div>}
         {agents.length === 0 && (
-          <div className="banner info">请先在「Agent 配置」页创建至少一个 Agent，然后再回来创建角色。</div>
+          <div className="banner info">请先在「智能体配置」页创建至少一个智能体，然后再回来创建角色。</div>
         )}
 
         {roles.length === 0 ? (
@@ -164,7 +164,7 @@ function RoleModal({
 
   const save = async () => {
     if (!name.trim()) return setError('请填写角色名称')
-    if (!agentId) return setError('请选择要绑定的 Agent')
+    if (!agentId) return setError('请选择要绑定的智能体')
     setSaving(true)
     setError(null)
 
@@ -235,7 +235,7 @@ function RoleModal({
         </div>
 
         <div className="field span-2">
-          <label className="field-label">绑定 Agent</label>
+          <label className="field-label">绑定智能体</label>
           <select className="select" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
             {agents.map((agent) => (
               <option key={agent.id} value={agent.id}>
@@ -246,8 +246,8 @@ function RoleModal({
           </select>
           {selected && (
             <span className="field-help">
-              Gateway：{selected.gateway_url ?? '默认'} · 模型：{selected.model ?? '默认'}
-              {selected.availability && !selected.availability.installed ? ' · ⚠️ 该 agent 运行时未安装' : ''}
+              网关：{selected.gateway_url ?? '默认'} · 模型：{selected.model ?? '默认'}
+              {selected.availability && !selected.availability.installed ? ' · ⚠️ 该智能体的运行时未安装' : ''}
             </span>
           )}
         </div>
@@ -296,7 +296,7 @@ function RoleModal({
             placeholder="留空则使用每个对话独立的沙箱目录"
           />
           <span className="field-help">
-            Agent 会以该目录为 cwd 运行。留空时后端为每个对话分配 <code className="mono-sm">data/workspaces/&lt;对话 ID&gt;</code>。
+            智能体将以该目录为工作目录运行。留空时，后端会为每个对话分配 <code className="mono-sm">data/workspaces/&lt;对话 ID&gt;</code>。
           </span>
         </div>
 
@@ -305,7 +305,7 @@ function RoleModal({
           <input className="input mono" value={modelOverride} onChange={(e) => setModelOverride(e.target.value)} placeholder="例如 opus / deepseek-reasoner" />
         </div>
         <div className="field">
-          <label className="field-label">覆盖 Gateway（可选）</label>
+          <label className="field-label">覆盖网关（可选）</label>
           <input className="input mono" value={gatewayOverride} onChange={(e) => setGatewayOverride(e.target.value)} placeholder="仅本角色生效" />
         </div>
       </div>

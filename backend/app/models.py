@@ -1,10 +1,10 @@
-"""Database schema.
+"""数据库结构。
 
-Three concepts drive the product:
+产品的三个核心概念：
 
-* :class:`AgentInstance` — a *configured* agent (type + gateway + key + model).
-* :class:`Role`          — a persona that picks one agent instance.
-* :class:`Conversation`  — a chat bound to a role, remembering the agent session.
+* :class:`AgentInstance` —— 一个**配置好的** agent（类型 + Gateway + Key + 模型）。
+* :class:`Role`          —— 角色，从若干 agent 实例中挑一个绑定。
+* :class:`Conversation`  —— 对话，绑定某个角色并记住 agent 侧的会话 ID。
 """
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ class Conversation(SQLModel, table=True):
     __tablename__ = "conversations"
 
     id: str = Field(default_factory=new_id, primary_key=True)
-    title: str = Field(default="New conversation", sa_column=Column(String(200), nullable=False))
+    title: str = Field(default="新对话", sa_column=Column(String(200), nullable=False))
     role_id: str = Field(sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True))
     #: snapshot of the agent used at creation time; history must stay reproducible
     agent_id: str = Field(sa_column=Column(String(64), ForeignKey("agent_instances.id", ondelete="RESTRICT"), nullable=False, index=True))

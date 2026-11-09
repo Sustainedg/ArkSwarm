@@ -1,4 +1,4 @@
-"""FastAPI entrypoint."""
+"""FastAPI 应用入口。"""
 from __future__ import annotations
 
 import logging
@@ -28,15 +28,15 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session)
-    logger.info("%s v%s ready — data dir %s", settings.app_name, __version__, settings.data_dir)
+    logger.info("%s %s 已就绪 — 数据目录 %s", settings.app_name, __version__, settings.data_dir)
     yield
 
 
 app = FastAPI(
-    title="Magenta Agents",
+    title="Magenta Agents 多智能体控制台",
     version=__version__,
-    description="Multi-agent chat console: configure Claude Code, Codex, Gemini CLI, "
-                "DeepSeek harnesses and more, then bind them to personas.",
+    description="多智能体对话控制台：把 Claude Code、Codex、Gemini CLI、DeepSeek 等 "
+                "agent 配置成实例，再绑定到角色上进行对话。",
     lifespan=lifespan,
 )
 
@@ -54,7 +54,7 @@ app.include_router(api_router)
 
 @app.exception_handler(Exception)
 async def unhandled(request, exc):  # pragma: no cover - safety net
-    logger.exception("unhandled error on %s", request.url.path)
+    logger.exception("未捕获的异常：%s", request.url.path)
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 

@@ -1,10 +1,10 @@
 # Magenta Agents · 多智能体对话控制台
 
-一个用于**管理并对话各种 CLI / API 型 agent** 的网站。把 Claude Code、Codex、Gemini CLI、
-DeepSeek 等 agent 注册成可配置的实例（自定义 Gateway + API Key + 模型），再给它们套上
+一个用于**管理并对话各种 CLI / API 型智能体**的网站。把 Claude Code、Codex、Gemini CLI、
+DeepSeek 等智能体注册成可配置的实例（自定义网关 + API 密钥 + 模型），再给它们套上
 **角色（人格）**，就能像聊天一样使用。
 
-> 设计重点：**新 agent 是插件，不是改动**。加一个文件即可接入新 agent；前端表单、SSE 流、
+> 设计重点：**新智能体是插件，不是改动**。加一个文件即可接入新智能体；前端表单、SSE 流、
 > 会话记忆、权限与权限模式全部由框架统一处理。
 
 ---
@@ -13,14 +13,14 @@ DeepSeek 等 agent 注册成可配置的实例（自定义 Gateway + API Key + �
 
 | 概念 | 说明 | 存储 |
 | --- | --- | --- |
-| **Agent Type** | 内置适配器（`claude-code` / `codex` / `gemini-cli` / `deepseek-harness` / `openai-harness` / `custom-cli`），声明能力位与配置项 schema | 代码（插件注册表） |
-| **Agent** | 一种类型的**实例**：名称 + Gateway + API Key + 模型 + 适配器选项 | `agent_instances` |
-| **Role** | 角色：头像 + 系统提示词 + 绑定某个 Agent（可覆盖模型 / Gateway） | `roles` |
-| **Conversation** | 一次对话：绑定角色，记住 agent 侧 session id 与工作目录 | `conversations` |
-| **Message** | 一轮消息，含工具调用 / 推理过程 / token 用量 | `messages` |
+| **智能体类型** | 内置适配器（`claude-code` / `codex` / `gemini-cli` / `deepseek-harness` / `openai-harness` / `custom-cli`），声明能力位与配置项 schema | 代码（插件注册表） |
+| **智能体实例** | 一种类型的**实例**：名称 + 网关 + API 密钥 + 模型 + 适配器选项 | `agent_instances` |
+| **角色** | 头像 + 系统提示词 + 绑定某个智能体（可覆盖模型 / 网关） | `roles` |
+| **对话** | 一次对话：绑定角色，记住智能体侧会话 id 与工作目录 | `conversations` |
+| **消息** | 一轮消息，含工具调用 / 推理过程 / token 用量 | `messages` |
 
-关系：`Agent Type → Agent 实例 → Role → Conversation`。
-多个角色可以复用同一个 Agent；一个 Agent 可以承载多个角色。
+关系：`智能体类型 → 智能体实例 → 角色 → 对话`。
+多个角色可以复用同一个智能体；一个智能体可以承载多个角色。
 
 ---
 
@@ -41,18 +41,18 @@ FastAPI  ── api/          agents · roles · conversations · runs · system
 1. **`AgentDefinition`** — 声明式元数据：`capabilities`（是否支持会话续接、原生人格、
    工具、MCP、权限模式…）、`config_fields`（可配置项 schema）、凭据环境变量约定、
    可选的可执行文件（用于探测是否安装）。
-2. **`Invocation` / `parse_line`** — CLI 型 agent：把运行请求编译成 `argv + env + stdin`，
+2. **`Invocation` / `parse_line`** — CLI 型智能体：把运行请求编译成 `argv + env + stdin`，
    再把 stdout 的每一行翻译成**规范化事件**。
-3. **`async stream()`** — API 型 agent：在进程内直接产出规范化事件（内置工具循环）。
+3. **`async stream()`** — API 型智能体：在进程内直接产出规范化事件（内置工具循环）。
 
-规范化事件协议（前端与持久化只认这一套，与 agent 无关）：
+规范化事件协议（前端与持久化只认这一套，与具体智能体无关）：
 
 ```
 run.started   message.delta   thinking.delta   tool.call   tool.result
 usage         session         log              error       run.finished
 ```
 
-因此新增一个 agent **不需要**碰前端、流式传输、数据库或权限逻辑。
+因此新增一个智能体 **不需要**碰前端、流式传输、数据库或权限逻辑。
 
 ### 已内置的适配器
 
@@ -63,7 +63,7 @@ usage         session         log              error       run.finished
 | `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ `GEMINI_SYSTEM_MD` | 自动把人格写入运行期临时文件 |
 | `deepseek-harness` | 进程内 API | 由平台回放上下文 | ✅ | 内置工具循环，默认走 DeepSeek |
 | `openai-harness` | 进程内 API | 同上 | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama… |
-| `custom-cli` | CLI 任意命令 | 可声明 | ➖ | **零代码**接入私有 CLI agent |
+| `custom-cli` | CLI 任意命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体 |
 
 ---
 
@@ -104,7 +104,7 @@ PyPanel 会给子进程注入**面板自己的** `HOME`（`…/pypanel/data/home
 HOME=/root
 ```
 
-否则会出现 `Not logged in · Please run /login`。若你改用「在网页里填 Gateway + API Key」的方式，
+否则会出现 `Not logged in · Please run /login`。若你改用「在网页里填网关 + API 密钥」的方式，
 这一点不影响；只有依赖环境里既存凭据（ambient credentials）时才需要。
 
 改了前端代码后需要重新构建，面板里的「重启」不会自动 build：
@@ -115,19 +115,19 @@ cd /vol1/1000/同步库/python/项目/Bot
 curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart -H "X-API-Key: <你的 Key>"
 ```
 
-首次启动会自动播种：为当前机器上**已安装**的 agent 类型各创建一个默认实例，并配套一个起始角色。
-数据落在 `backend/data/`（SQLite + 每个对话独立的 workspace）。
+首次启动会自动播种：为当前机器上**已安装**的智能体类型各创建一个默认实例，并配套一个起始角色。
+数据落在 `backend/data/`（SQLite + 每个对话独立的工作目录）。
 
 ### 用起来的三步
 
-1. **Agent 配置** → 新建 Agent，选择类型（例如 Claude Code），填自定义 Gateway 与 API Key，
+1. **智能体配置** → 新建智能体，选择类型（例如 Claude Code），填自定义网关与 API 密钥，
    按需调整适配器选项（权限模式、鉴权头风格、沙箱模式…），点「连通性测试」。
-2. **角色** → 新建角色，选头像、写系统提示词、绑定上一步的 Agent。
+2. **角色** → 新建角色，选头像、写系统提示词、绑定上一步的智能体。
 3. **对话** → 新建对话选择角色，开始聊天；工具调用、推理过程、token 用量都会实时展开。
 
 ---
 
-## 接入一个新的 Agent
+## 接入一个新的智能体
 
 ### 方式 A：写一个适配器（推荐，能力完整）
 
@@ -141,7 +141,7 @@ from ..registry import register_agent
 @register_agent
 class AcmeAgent(AgentDefinition):
     id = "acme"
-    name = "Acme Agent"
+    name = "Acme 智能体"
     vendor = "Acme"
     runtime = Runtime.CLI
     executable = "acme"
@@ -172,12 +172,12 @@ class AcmeAgent(AgentDefinition):
         if payload.get("text"):    yield text_delta(payload["text"])
 ```
 
-重启后即可在「Agent 配置」里看到它，表单由 `config_fields` 自动生成。
+重启后即可在「智能体配置」里看到它，表单由 `config_fields` 自动生成。
 
-**API 型 agent** 改为实现 `async def stream(self, ctx)`；参考 `openai_harness.py`，
+**API 型智能体** 改为实现 `async def stream(self, ctx)`；参考 `openai_harness.py`，
 它把「模型 + 工具循环 + 流式输出」打包成了一个可复用的 harness。
 
-### 方式 B：Custom CLI（零代码）
+### 方式 B：自定义 CLI（零代码）
 
 用内置的 `custom-cli` 适配器声明一个任意命令：
 
@@ -207,15 +207,15 @@ class AcmeAgent(AgentDefinition):
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/agent-types` | 所有适配器及其 config schema、安装状态 |
-| GET/POST | `/api/agents` | 列出 / 创建 Agent 实例 |
+| GET/POST | `/api/agents` | 列出 / 创建智能体实例 |
 | PATCH/DELETE | `/api/agents/{id}` | 更新 / 删除（被角色引用时返回 409） |
 | POST | `/api/agents/{id}/test` | 连通性探测（适配器 / 运行时 / 网关三段检查） |
 | GET/POST | `/api/roles` | 角色管理 |
 | GET/POST | `/api/conversations` | 对话管理 |
 | POST | `/api/conversations/{id}/messages` | **SSE** 发送消息并流式接收回复 |
 | POST | `/api/conversations/{id}/regenerate` | 重跑最后一轮 |
-| POST | `/api/conversations/{id}/cancel` | 中断正在运行的 agent |
-| POST | `/api/conversations/{id}/session/reset` | 丢弃 agent 侧会话记忆 |
+| POST | `/api/conversations/{id}/cancel` | 中断正在运行的智能体 |
+| POST | `/api/conversations/{id}/session/reset` | 丢弃智能体侧会话记忆 |
 | GET | `/api/system/overview` · `/api/runs` | 运行状态与实时任务 |
 
 交互式文档：`http://127.0.0.1:8000/docs`
@@ -224,11 +224,11 @@ class AcmeAgent(AgentDefinition):
 
 ## 安全与运维
 
-- API Key 使用 **Fernet 加密**后落库，接口只回传掩码（`sk-a…9f2c`），永不回传明文；
+- API 密钥使用 **Fernet 加密**后落库，接口只回传掩码（`sk-a…9f2c`），永不回传明文；
   密钥来自 `MAGENTA_SECRET_KEY`，未设置时自动生成 `data/secret.key`（0600）。
 - 命令行日志会**自动脱敏**所有出现在 env 中的凭据。
-- `Runtime.API` 型 agent 的工具被限制在工作目录内，`../` 逃逸与越界路径会被拒绝。
-- 单个 agent turn 默认 3600s 超时；可随时取消（进程会被 kill，消息标记为 `interrupted`）。
+- `Runtime.API` 型智能体的工具被限制在工作目录内，`../` 逃逸与越界路径会被拒绝。
+- 单轮智能体运行默认 3600 秒超时；可随时取消（进程会被 kill，消息标记为 `interrupted`）。
 - `permission_mode=bypassPermissions` / `danger-full-access` 等无人值守模式请只在沙箱里使用。
 
 ---

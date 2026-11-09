@@ -1,4 +1,4 @@
-"""Request/response models for the HTTP API."""
+"""HTTP 接口的请求体与响应体模型。"""
 from __future__ import annotations
 
 from datetime import datetime

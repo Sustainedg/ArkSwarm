@@ -2,7 +2,7 @@
 
 ## 1. 分层的目标
 
-这个系统要长期承接「越来越多 agent」。因此把**易变**的部分（各种 agent 的调用方式与输出格式）
+这个系统要长期承接「越来越多智能体」。因此把**易变**的部分（各种智能体的调用方式与输出格式）
 压缩到一个极薄的插件层，把**稳定**的部分（流式传输、会话记忆、持久化、UI 表单、取消与超时）
 全部沉淀到框架里。
 
@@ -24,7 +24,7 @@
  │    └─ service.prepare_run()
  │         ├─ 载入 Conversation → Role → AgentInstance → AgentDefinition
  │         ├─ capability 决策：
- │         │    支持 session  → 只发本轮 prompt，靠 agent 自己的记忆续接
+ │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接
  │         │    不支持 session → 回放数据库里的最近 N 轮（transcript）
  │         │    无原生人格   → 把 system prompt 折进 prompt
  │         ├─ 落库 user message + 占位 assistant message(status=streaming)
@@ -60,7 +60,7 @@
 | `tool.call` | `name`, `call_id`, `payload.input` | 工具调用 |
 | `tool.result` | `call_id`, `payload.output`, `payload.is_error` | 工具结果 |
 | `usage` | 任意数值 | token / 费用 / 耗时 |
-| `session` | `payload.session_id` | agent 侧会话 id，落库以支持多轮 |
+| `session` | `payload.session_id` | 智能体侧会话 id，落库以支持多轮 |
 | `log` | `text`, `payload.level` | 命令回显、诊断信息 |
 | `error` | `text` | 可展示的错误 |
 | `run.finished` | `payload.status` ∈ ok/error/cancelled | 终态 |
@@ -84,11 +84,11 @@ class AgentDefinition(ABC):
     async def stream(ctx) -> AsyncIterator[Event]# API：进程内直接产事件
 ```
 
-`capabilities` 决定了平台在框架层面**如何**照顾这个 agent：
+`capabilities` 决定了平台在框架层面**如何**照顾这个智能体：
 
 - `sessions=True` → 平台把 `session_id` 存到对话上，下一轮只发增量。
 - `native_system_prompt=False` → 平台把人格折进 prompt（或按适配器自己的方式注入）。
-- `working_directory=True` → 为每个对话分配独立 workspace 作为 cwd。
+- `working_directory=True` → 为每个对话分配独立工作目录作为 cwd。
 - `permission_modes / mcp / tools` → 供前端展示能力徽标，并按需渲染对应配置项。
 
 `resume_supported(ctx)` 是可选钩子：Codex 老版本没有 `exec resume`，适配器可以在
@@ -105,17 +105,17 @@ messages(id, conversation_id→conversations, role, content, parts JSON, usage J
 
 设计取舍：
 
-- **Conversation 快照 `agent_id`**：之后即便角色改绑别的 agent，历史对话仍可复现。
-- **`parts` 用 JSON**：工具调用/结果/推理的形态随 agent 变化，无需为每种 agent 建表。
-- **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个 agent 可以让不同角色走不同模型。
-- **外键用 `ON DELETE RESTRICT`**：删除被引用的 agent/角色会被拒绝（409），避免历史断裂；
+- **对话快照 `agent_id`**：之后即便角色改绑别的智能体，历史对话仍可复现。
+- **`parts` 用 JSON**：工具调用/结果/推理的形态随智能体变化，无需为每种智能体建表。
+- **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个智能体可以让不同角色走不同模型。
+- **外键用 `ON DELETE RESTRICT`**：删除被引用的智能体/角色会被拒绝（409），避免历史断裂；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
 ## 6. 扩展点
 
 | 想做的事 | 需要改的地方 |
 | --- | --- |
-| 接入新 CLI agent | 在 `agents/builtin/` 加一个模块 |
+| 接入新 CLI 智能体 | 在 `agents/builtin/` 加一个模块 |
 | 接入新模型供应商（无官方 CLI） | 复用 `openai_harness.py` 的基类，加一个子类声明默认网关/模型 |
 | 零代码接入私有 CLI | 用 `custom-cli` 适配器填命令 + JSON 取值路径 |
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |

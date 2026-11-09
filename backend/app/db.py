@@ -1,4 +1,4 @@
-"""Async SQLite engine + session helpers."""
+"""异步 SQLite 引擎与会话工具。"""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -21,7 +21,7 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 
 @event.listens_for(engine.sync_engine, "connect")
 def _sqlite_pragmas(dbapi_connection, _record) -> None:
-    """SQLite needs this to enforce the ON DELETE CASCADE rules."""
+    """SQLite 需要开启它，ON DELETE CASCADE 才会真正生效。"""
     if _settings.sqlalchemy_url.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")

@@ -1,9 +1,9 @@
-"""In-process agent harness for any OpenAI-compatible chat endpoint.
+"""面向任意 OpenAI 兼容对话端点的进程内 agent 内核。
 
 This is the adapter family that covers model providers without an official CLI:
 DeepSeek, Kimi, GLM, Qwen, OpenRouter, vLLM/Ollama, ...
-The "harness" is the agent loop itself — streaming completions plus a sandboxed
-tool loop — so a plain chat model behaves like a coding agent.
+所谓「内核」就是 agent 循环本身：流式补全 + 沙箱化工具循环，
+让一个普通的对话模型表现得像一个编码 agent。
 """
 from __future__ import annotations
 
@@ -54,47 +54,47 @@ class OpenAIHarnessBase(AgentDefinition):
     config_fields = (
         ConfigField(
             "max_steps",
-            "Max agent steps",
+            "单轮最大步数",
             FieldType.NUMBER,
             default=DEFAULT_MAX_STEPS,
-            help="Upper bound on tool-calling round trips per user turn.",
+            help="一轮用户消息内，最多允许多少次「调用工具 → 再推理」的往返。",
         ),
-        ConfigField("allow_shell", "Enable shell tool", FieldType.BOOLEAN, default=True),
+        ConfigField("allow_shell", "启用 shell 工具", FieldType.BOOLEAN, default=True),
         ConfigField(
             "shell_timeout",
-            "Shell timeout (s)",
+            "shell 超时（秒）",
             FieldType.NUMBER,
             default=120,
             advanced=True,
         ),
         ConfigField(
             "temperature",
-            "Temperature",
+            "采样温度",
             FieldType.NUMBER,
             default=0.3,
             advanced=True,
         ),
-        ConfigField("max_tokens", "Max output tokens", FieldType.NUMBER, advanced=True),
+        ConfigField("max_tokens", "最大输出 token 数", FieldType.NUMBER, advanced=True),
         ConfigField(
             "extra_headers",
-            "Extra HTTP headers",
+            "额外 HTTP 请求头",
             FieldType.KEYVALUE,
             advanced=True,
-            help="Useful for gateways that require routing headers.",
+            help="部分网关需要特定路由请求头时使用。",
         ),
         ConfigField(
             "extra_body",
-            "Extra request body",
+            "额外请求体字段",
             FieldType.KEYVALUE,
             advanced=True,
         ),
     )
 
     def availability(self) -> Availability:
-        return Availability(True, detail="in-process (no local executable)")
+        return Availability(True, detail="进程内运行，无需本地可执行文件")
 
     def create_client(self) -> httpx.AsyncClient:
-        """Overridable so tests (and custom transports) can inject an httpx client."""
+        """可被子类覆盖，便于测试或自定义传输层注入 httpx 客户端。"""
         return httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=20.0))
 
     # -- HTTP ----------------------------------------------------------------
@@ -102,7 +102,7 @@ class OpenAIHarnessBase(AgentDefinition):
     def chat_completions_url(self, ctx: AgentContext) -> str:
         base = (ctx.gateway_url or self.default_gateway or "").rstrip("/")
         if not base:
-            raise RuntimeError("gateway URL is required for API agents")
+            raise RuntimeError("进程内 API 型智能体必须填写网关地址")
         if base.endswith("/chat/completions"):
             return base
         return f"{base}/chat/completions"
@@ -172,10 +172,10 @@ class OpenAIHarnessBase(AgentDefinition):
                         yield event
                 except httpx.HTTPStatusError as exc:
                     body = exc.response.text[:500]
-                    yield error(f"gateway returned {exc.response.status_code}: {body}")
+                    yield error(f"网关返回 {exc.response.status_code}：{body}")
                     return
                 except httpx.HTTPError as exc:
-                    yield error(f"gateway request failed: {exc}")
+                    yield error(f"网关请求失败：{exc}")
                     return
 
                 calls = collected["tool_calls"]
@@ -258,7 +258,7 @@ class OpenAIHarnessBase(AgentDefinition):
             except ToolError as exc:
                 output, is_error = str(exc), True
             except TypeError as exc:
-                output, is_error = f"bad arguments: {exc}", True
+                output, is_error = f"工具入参不合法：{exc}", True
             yield tool_result(call["id"], output, is_error)
             messages.append(
                 {
@@ -276,21 +276,21 @@ class OpenAIHarnessBase(AgentDefinition):
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(models_url, headers=self.http_headers(ctx))
             if response.status_code < 400:
-                return True, f"gateway reachable ({response.status_code})"
-            return False, f"gateway responded {response.status_code}: {response.text[:200]}"
+                return True, f"网关可达（HTTP {response.status_code}）"
+            return False, f"网关返回 {response.status_code}：{response.text[:200]}"
         except httpx.HTTPError as exc:
-            return False, f"cannot reach gateway: {exc}"
+            return False, f"无法连接网关：{exc}"
 
-    # unused for API agents, kept so the base contract stays satisfied
+    # API 型 agent 用不到，仅为满足基类契约而保留
     def build_invocation(self, ctx: AgentContext) -> Invocation:  # pragma: no cover
-        raise NotImplementedError("API harness agents do not spawn processes")
+        raise NotImplementedError("进程内 API 型智能体不启动子进程")
 
     def parse_line(self, line: str, run: AgentRun) -> Iterable[AgentEvent]:  # pragma: no cover
         return ()
 
 
 def _merge_tool_call(bucket: list[dict[str, Any]], chunk: dict[str, Any]) -> None:
-    """OpenAI streams tool calls in fragments keyed by index."""
+    """OpenAI 会按 index 分片下发工具调用，这里做合并。"""
     index = chunk.get("index", 0)
     while len(bucket) <= index:
         bucket.append({"id": "", "name": "", "arguments": ""})
@@ -307,11 +307,11 @@ def _merge_tool_call(bucket: list[dict[str, Any]], chunk: dict[str, Any]) -> Non
 @register_agent
 class OpenAICompatibleHarness(OpenAIHarnessBase):
     id = "openai-harness"
-    name = "OpenAI-compatible harness"
-    vendor = "Generic"
+    name = "OpenAI 兼容内核"
+    vendor = "通用"
     description = (
-        "Any OpenAI-compatible /chat/completions endpoint driven by a built-in "
-        "tool loop. Covers OpenRouter, vLLM, Ollama, Kimi, GLM and friends."
+        "任意兼容 /chat/completions 的端点，由内置工具循环驱动。"
+        "覆盖 OpenRouter、vLLM、Ollama、Kimi、GLM 等。"
     )
     api_key_env = "OPENAI_API_KEY"
     base_url_env = "OPENAI_BASE_URL"
@@ -322,11 +322,11 @@ class OpenAICompatibleHarness(OpenAIHarnessBase):
 @register_agent
 class DeepSeekHarness(OpenAIHarnessBase):
     id = "deepseek-harness"
-    name = "DeepSeek harness"
+    name = "DeepSeek 内核"
     vendor = "DeepSeek"
     description = (
-        "DeepSeek chat/reasoner models wrapped in the shared tool loop. Shows how "
-        "a new model provider becomes an agent without any new plumbing."
+        "把 DeepSeek 的 chat / reasoner 模型套进共享工具循环。"
+        "也是「新增一个模型供应商只需加一个子类」的范例。"
     )
     api_key_env = "DEEPSEEK_API_KEY"
     base_url_env = "DEEPSEEK_BASE_URL"
@@ -336,12 +336,12 @@ class DeepSeekHarness(OpenAIHarnessBase):
     config_fields = OpenAIHarnessBase.config_fields + (
         ConfigField(
             "model_family",
-            "Model family",
+            "模型族",
             FieldType.SELECT,
             default="deepseek-chat",
             options=[
-                {"value": "deepseek-chat", "label": "deepseek-chat (V3)"},
-                {"value": "deepseek-reasoner", "label": "deepseek-reasoner (R1)"},
+                {"value": "deepseek-chat", "label": "deepseek-chat · 通用对话（V3）"},
+                {"value": "deepseek-reasoner", "label": "deepseek-reasoner · 深度推理（R1）"},
             ],
         ),
     )

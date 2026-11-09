@@ -76,7 +76,11 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: 0 6px 18px rgba(217, 79, 208, 0.4);
   display: grid; place-items: center; font-size: 15px;
 }
-.brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.02em; }
+.brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 6px; }
+.brand-version {
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 20px;
+  background: var(--brand-soft); color: #f0a9ea; border: 1px solid rgba(217, 79, 208, 0.35);
+}
 .brand-sub { font-size: 11px; color: var(--text-dim); }
 
 .nav-link {

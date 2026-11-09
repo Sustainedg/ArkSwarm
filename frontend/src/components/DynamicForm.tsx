@@ -7,7 +7,7 @@ interface Props {
   onChange: (next: Record<string, unknown>) => void
 }
 
-/** Renders an agent's `config_fields` schema — no per-agent frontend code needed. */
+/** 依据智能体的 `config_fields` schema 渲染表单 —— 新增智能体无需改动前端代码。 */
 export function DynamicForm({ fields, value, onChange }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const basics = fields.filter((f) => !f.advanced)

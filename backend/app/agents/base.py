@@ -1,9 +1,8 @@
-"""The contract every agent integration implements.
+"""每个 agent 集成都要实现的契约。
 
-Adding a brand new agent (Gemini CLI, DeepSeek harness, Aider, ...) means
-dropping one module in ``app/agents/builtin`` that defines a subclass of
-:class:`AgentDefinition` and decorating it with :func:`register_agent`.
-Nothing else in the codebase needs to change.
+接入一个全新的 agent（Gemini CLI、DeepSeek 内核、Aider…），只需在
+``app/agents/builtin`` 下新增一个模块，定义 :class:`AgentDefinition` 的子类
+并用 :func:`register_agent` 装饰即可，代码库其他部分无需改动。
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ class FieldType(str, Enum):
 
 
 class Runtime(str, Enum):
-    """How the adapter talks to the agent."""
+    """适配器与智能体的通信方式。"""
 
     CLI = "cli"  # spawns a subprocess
     API = "api"  # in-process HTTP calls against an OpenAI-ish endpoint
@@ -37,7 +36,7 @@ class Runtime(str, Enum):
 
 @dataclass(slots=True)
 class ConfigField:
-    """Declarative description of one user-editable setting.
+    """一个可由用户编辑的配置项的声明式描述。
 
     The UI renders these generically, so a new agent ships its own form without
     any frontend work.
@@ -101,7 +100,7 @@ class Availability:
 
 @dataclass(slots=True)
 class Invocation:
-    """A fully resolved process launch (or HTTP target) description."""
+    """一次运行所需的完整启动描述（子进程或 HTTP 目标）。"""
 
     argv: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
@@ -115,7 +114,7 @@ class Invocation:
 
 @dataclass(slots=True)
 class AgentContext:
-    """Everything an adapter needs to build a run, resolved from the database."""
+    """从数据库解析出的、适配器构建一次运行所需的全部上下文。"""
 
     agent_id: str
     agent_name: str
@@ -141,7 +140,7 @@ class AgentContext:
 
 
 class AgentDefinition(ABC):
-    """Static description + runtime behaviour of one agent integration."""
+    """单个智能体集成的静态描述与运行行为。"""
 
     id: ClassVar[str]
     name: ClassVar[str]
@@ -150,7 +149,7 @@ class AgentDefinition(ABC):
     runtime: ClassVar[Runtime] = Runtime.CLI
     capabilities: ClassVar[Capabilities] = Capabilities()
     config_fields: ClassVar[Sequence[ConfigField]] = ()
-    #: env var names used for the standard "bring your own gateway" preset
+    #: 按「自带网关 / 自带密钥」约定使用的环境变量名
     api_key_env: ClassVar[str | None] = None
     base_url_env: ClassVar[str | None] = None
     default_gateway: ClassVar[str | None] = None
@@ -184,10 +183,10 @@ class AgentDefinition(ABC):
 
     def availability(self) -> Availability:
         if not self.executable:
-            return Availability(True, detail="in-process")
+            return Availability(True, detail="进程内运行，无需本地可执行文件")
         path = shutil.which(self.executable)
         if not path:
-            return Availability(False, detail=f"`{self.executable}` not found on PATH")
+            return Availability(False, detail=f"未在 PATH 中找到 `{self.executable}`")
         return Availability(True, version=self._probe_version(path), detail=path)
 
     def _probe_version(self, path: str) -> str | None:
@@ -203,7 +202,7 @@ class AgentDefinition(ABC):
         return {f.key: f for f in self.config_fields}
 
     def coerce_options(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Validate/coerce a user supplied options blob against config_fields."""
+        """按 config_fields 校验并规整用户提交的 options。"""
         coerced: dict[str, Any] = {}
         for field_ in self.config_fields:
             if field_.key in raw:
@@ -221,7 +220,7 @@ class AgentDefinition(ABC):
         return coerced
 
     def effective_env(self, ctx: AgentContext) -> dict[str, str]:
-        """Env vars for the BYO-gateway/api-key convention, plus user extras."""
+        """按「自带网关 / 自带 API 密钥」约定生成环境变量，并叠加用户自定义项。"""
         env: dict[str, str] = {}
         if self.base_url_env and ctx.gateway_url:
             env[self.base_url_env] = ctx.gateway_url
@@ -235,47 +234,45 @@ class AgentDefinition(ABC):
 
     @abstractmethod
     def build_invocation(self, ctx: AgentContext) -> Invocation:
-        """Resolve a run request into a concrete launch description."""
+        """把一次运行请求解析成具体的启动描述。"""
 
     @abstractmethod
     def parse_line(self, line: str, ctx: AgentContext) -> Iterable[AgentEvent]:
-        """Translate one raw output line into zero or more normalized events.
+        """把一行原始输出翻译成零个或多个规范化事件。
 
-        Adapters are stateful objects created per-run (see :meth:`create_run`),
-        so ``parse_line`` may keep counters on ``self``.
+        解析状态统一放在 ``run.state`` 这个字典里，因此适配器本身保持无状态。
         """
 
     def create_run(self, ctx: AgentContext) -> "AgentRun":
         return AgentRun(self, ctx)
 
     async def stream(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
-        """In-process execution path used by ``Runtime.API`` adapters."""
+        """``Runtime.API`` 型适配器使用的进程内执行入口。"""
         raise NotImplementedError(f"{self.id} does not implement an in-process stream")
         yield  # pragma: no cover - makes this an async generator
 
     async def probe(self, ctx: AgentContext) -> tuple[bool, str]:
-        """Cheap connectivity/auth check surfaced by the "Test" button."""
+        """给「连通性测试」按钮用的轻量探测：检查运行环境、凭据与连通性。"""
         if self.runtime is Runtime.CLI:
             availability = self.availability()
             if not availability.installed:
-                return False, availability.detail or "executable missing"
+                return False, availability.detail or "缺少可执行文件"
             if not ctx.api_key and not self.api_key_env:
-                return True, "CLI present (no API key required)"
+                return True, "CLI 已就绪（该适配器无需 API Key）"
             if not ctx.api_key:
-                return True, "CLI present (using ambient credentials)"
-            return True, f"configuration looks valid ({availability.version or 'cli'})"
+                return True, "CLI 已就绪（使用环境中的默认凭据）"
+            return True, f"配置校验通过（{availability.version or '本地 CLI'}）"
         return await self.probe_api(ctx)
 
     async def probe_api(self, ctx: AgentContext) -> tuple[bool, str]:
-        return True, "no probe implemented"
+        return True, "该适配器未提供探测实现"
 
 
 class AgentRun:
-    """Binds a stateless :class:`AgentDefinition` to one live execution.
+    """把无状态的 :class:`AgentDefinition` 绑定到一次具体运行上。
 
-    ``state`` is a scratch dict owned by the run, which lets adapters keep
-    parsing state (dedupe flags, tool-call bookkeeping, ...) without any global
-    mutable structures.
+    ``state`` 是本次运行私有的临时字典，适配器可以在里面保存解析状态
+    （去重标记、工具调用记账等），无需任何全局可变结构。
     """
 
     def __init__(self, definition: AgentDefinition, ctx: AgentContext) -> None:
@@ -307,5 +304,5 @@ class AgentRun:
             self.tool_calls.append({"id": event.call_id, "name": event.name, **(event.payload or {})})
 
     def finish(self) -> Iterable[AgentEvent]:
-        """Hook for adapters that must flush trailing events."""
+        """给需要在结束时补发事件的适配器使用的钩子。"""
         return ()

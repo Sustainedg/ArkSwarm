@@ -1,4 +1,4 @@
-"""Tracks in-flight runs so they can be listed, cancelled and reaped."""
+"""跟踪正在运行的任务，以便列出、取消与回收。"""
 from __future__ import annotations
 
 import asyncio

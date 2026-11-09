@@ -1,4 +1,4 @@
-"""Small shared helpers for the built-in adapters."""
+"""内置适配器共用的小工具函数。"""
 from __future__ import annotations
 
 import json

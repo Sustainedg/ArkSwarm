@@ -1,4 +1,4 @@
-"""Server-sent-events plumbing."""
+"""Server-Sent Events（SSE）的底层封装。"""
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +20,7 @@ def format_comment(text: str) -> str:
 
 
 async def sse_stream(source: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
-    """Wrap an event source, adding heartbeats so proxies keep the socket open."""
+    """包装事件源，并插入心跳，避免反向代理断开长连接。"""
     iterator = source.__aiter__()
     while True:
         try:

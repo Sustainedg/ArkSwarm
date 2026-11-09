@@ -1,4 +1,4 @@
-"""User-defined CLI agent — new agents without writing code.
+"""用户自定义 CLI agent —— 不写代码也能接入新 agent。
 
 Users describe how to invoke an arbitrary command-line agent (Aider, a home-grown
 DeepSeek harness binary, an internal tool, ...) and how to read its output. This
@@ -29,15 +29,15 @@ from .util import as_list, flatten_content, truthy
 @register_agent
 class CustomCliAgent(AgentDefinition):
     id = "custom-cli"
-    name = "Custom CLI"
-    vendor = "Custom"
+    name = "自定义 CLI"
+    vendor = "自定义"
     description = (
-        "Declarative adapter: point it at any CLI agent, describe its arguments "
-        "and output shape, and it becomes a first-class role option."
+        "声明式适配器：指向任意命令行 agent，描述它的参数与输出结构，"
+        "它就能成为可绑定给角色的一等公民。"
     )
     runtime = Runtime.CLI
     executable = None  # resolved per instance
-    auto_provision = False  # a template: nothing to seed until a command is set
+    auto_provision = False  # 这是模板：未填写命令前不参与播种
     api_key_env = None
     base_url_env = None
     capabilities = Capabilities(
@@ -50,103 +50,103 @@ class CustomCliAgent(AgentDefinition):
     config_fields = (
         ConfigField(
             "command",
-            "Executable",
+            "可执行命令",
             FieldType.STRING,
             required=True,
             placeholder="aider / my-agent / /opt/bin/deepseek",
-            help="Resolved with PATH lookup, exactly like a shell would.",
+            help="按 PATH 查找，与 shell 的行为一致。",
         ),
         ConfigField(
             "args",
-            "Arguments",
+            "启动参数",
             FieldType.STRING_LIST,
             placeholder="--model {model} --message {prompt}",
-            help="Placeholders: {prompt} {model} {gateway} {api_key} {workspace} {session}",
+            help="可用占位符：{prompt} {model} {gateway} {api_key} {workspace} {session}",
         ),
         ConfigField(
             "prompt_mode",
-            "Prompt delivery",
+            "提示词传递方式",
             FieldType.SELECT,
             default="stdin",
             options=[
-                {"value": "stdin", "label": "stdin (safest)"},
-                {"value": "arg", "label": "positional / via {prompt}"},
+                {"value": "stdin", "label": "通过标准输入（最稳妥）"},
+                {"value": "arg", "label": "作为命令行参数（配合 {prompt}）"},
             ],
         ),
         ConfigField(
             "output_format",
-            "Output format",
+            "输出格式",
             FieldType.SELECT,
             default="text",
             options=[
-                {"value": "jsonl", "label": "JSON Lines"},
-                {"value": "text", "label": "Plain text stream"},
+                {"value": "jsonl", "label": "JSON Lines（每行一个 JSON）"},
+                {"value": "text", "label": "纯文本流"},
             ],
         ),
         ConfigField(
             "text_path",
-            "JSON path to message text",
+            "正文的 JSON 路径",
             FieldType.STRING,
             placeholder="item.text / message.content / delta",
             advanced=True,
         ),
         ConfigField(
             "delta_mode",
-            "Treat text path as delta",
+            "该路径是增量文本",
             FieldType.BOOLEAN,
             default=True,
             advanced=True,
-            help="Off = each JSON line carries the full message so far.",
+            help="关闭后表示每行 JSON 携带的是「截至目前」的完整文本。",
         ),
         ConfigField(
             "session_path",
-            "JSON path to session id",
+            "会话 ID 的 JSON 路径",
             FieldType.STRING,
             placeholder="session_id / thread.id",
             advanced=True,
-            help="Enables multi-turn once a session id is observed.",
+            help="一旦能取到会话 ID，就会自动启用多轮对话。",
         ),
         ConfigField(
             "tool_path",
-            "JSON path to a tool name",
+            "工具名的 JSON 路径",
             FieldType.STRING,
             placeholder="tool_call.name",
             advanced=True,
         ),
         ConfigField(
             "tool_result_path",
-            "JSON path to tool output",
+            "工具输出的 JSON 路径",
             FieldType.STRING,
             placeholder="tool_call.output",
             advanced=True,
         ),
         ConfigField(
             "usage_path",
-            "JSON path to token usage",
+            "用量统计的 JSON 路径",
             FieldType.STRING,
             placeholder="usage",
             advanced=True,
         ),
-        ConfigField("api_key_env", "API key env var", FieldType.STRING, advanced=True,
+        ConfigField("api_key_env", "API 密钥环境变量名", FieldType.STRING, advanced=True,
                     placeholder="DEEPSEEK_API_KEY"),
-        ConfigField("gateway_env", "Gateway env var", FieldType.STRING, advanced=True,
+        ConfigField("gateway_env", "网关环境变量名", FieldType.STRING, advanced=True,
                     placeholder="DEEPSEEK_BASE_URL"),
-        ConfigField("env", "Extra environment", FieldType.KEYVALUE, advanced=True),
+        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- introspection -------------------------------------------------------
 
     def availability(self) -> Availability:
-        return Availability(True, detail="resolved from the instance `command` option")
+        return Availability(True, detail="由实例上的「可执行命令」决定")
 
     async def probe(self, ctx: AgentContext) -> tuple[bool, str]:
         command = str(ctx.option("command") or "")
         if not command:
-            return False, "no `command` configured"
+            return False, "尚未填写「可执行命令」"
         path = shutil.which(command) or (command if "/" in command else None)
         if not path:
-            return False, f"`{command}` not found on PATH"
-        return True, f"resolved to {path}"
+            return False, f"未在 PATH 中找到 `{command}`"
+        return True, f"解析到 {path}"
 
     # -- invocation ----------------------------------------------------------
 
@@ -165,7 +165,7 @@ class CustomCliAgent(AgentDefinition):
     def build_invocation(self, ctx: AgentContext) -> Invocation:
         command = str(ctx.option("command") or "").strip()
         if not command:
-            raise ValueError("custom-cli agent needs a `command` option")
+            raise ValueError("自定义 CLI 智能体必须填写「可执行命令」")
 
         values = self._placeholders(ctx)
         raw_args = as_list(ctx.option("args") or [])
@@ -278,7 +278,7 @@ class CustomCliAgent(AgentDefinition):
 
 def _safe_format(template: str, values: dict[str, str]) -> str:
     class _Keep(dict):
-        def __missing__(self, key: str) -> str:  # leave unknown placeholders intact
+        def __missing__(self, key: str) -> str:  # 保留未知占位符原样
             return "{" + key + "}"
 
     try:

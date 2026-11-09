@@ -1,4 +1,4 @@
-"""Application settings, resolved from env / .env with sane local defaults."""
+"""应用配置：从环境变量 / .env 读取，并提供可用的本地默认值。"""
 from __future__ import annotations
 
 from functools import lru_cache

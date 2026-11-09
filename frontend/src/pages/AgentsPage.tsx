@@ -58,9 +58,9 @@ export function AgentsPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">Agent 配置</h1>
+          <h1 className="page-title">智能体配置</h1>
           <p className="page-desc">
-            每个 Agent 是「适配器类型 + 自定义 Gateway + API Key + 模型」的一个实例，可被多个角色复用。
+            每个智能体都是「适配器类型 + 自定义网关 + API 密钥 + 模型」的一个实例，可被多个角色复用。
           </p>
         </div>
         <div className="spacer" />
@@ -68,7 +68,7 @@ export function AgentsPage() {
           {loading ? <span className="spin">◌</span> : '↻'} 刷新
         </button>
         <button className="btn primary" onClick={() => setCreating(true)}>
-          + 新建 Agent
+          + 新建智能体
         </button>
       </header>
 
@@ -76,16 +76,16 @@ export function AgentsPage() {
         {error && <div className="banner err">{error}</div>}
 
         <div className="banner info">
-          支持的适配器：{types.map((t) => t.name).join(' · ')}。新增一种 agent 只需在后端放入一个适配器模块，
-          或直接用「Custom CLI」声明式接入。
+          支持的适配器：{types.map((t) => t.name).join(' · ')}。新增一种智能体只需在后端放入一个适配器模块，
+          或直接用「自定义 CLI」声明式接入。
         </div>
 
         {agents.length === 0 && !loading ? (
           <div className="empty">
             <div className="empty-icon">⚙️</div>
-            <p>还没有配置任何 Agent。</p>
+            <p>还没有配置任何智能体。</p>
             <p className="dim small" style={{ marginTop: 6 }}>
-              点击「新建 Agent」选择 Claude Code / Codex / Gemini CLI / DeepSeek 等类型。
+              点击「新建智能体」选择 Claude Code / Codex / Gemini CLI / DeepSeek 等类型。
             </p>
           </div>
         ) : (
@@ -104,7 +104,7 @@ export function AgentsPage() {
                     </div>
                     <div className="card-actions">
                       <span className={`pill ${agent.runtime === 'api' ? 'brand' : ''}`}>
-                        {agent.runtime === 'api' ? 'API' : 'CLI'}
+                        {agent.runtime === 'api' ? '进程内 API' : '本地 CLI'}
                       </span>
                     </div>
                   </div>
@@ -126,12 +126,12 @@ export function AgentsPage() {
                     {agent.api_key_set ? (
                       <span className="pill">🔑 {agent.api_key_preview}</span>
                     ) : (
-                      <span className="pill warn">无 API Key</span>
+                      <span className="pill warn">未配置 API 密钥</span>
                     )}
                   </div>
 
                   <dl className="kv">
-                    <dt>Gateway</dt>
+                    <dt>网关</dt>
                     <dd title={agent.gateway_url ?? ''}>{agent.gateway_url ?? '—'}</dd>
                     <dt>模型</dt>
                     <dd>{agent.model ?? '—'}</dd>
@@ -250,7 +250,7 @@ function AgentModal({
   }
 
   const save = async () => {
-    if (!selected) return setError('请先选择 Agent 类型')
+    if (!selected) return setError('请先选择智能体类型')
     if (!name.trim()) return setError('请填写名称')
     setSaving(true)
     setError(null)
@@ -279,7 +279,7 @@ function AgentModal({
   return (
     <Modal
       wide
-      title={agent ? `编辑 Agent · ${agent.name}` : '新建 Agent'}
+      title={agent ? `编辑智能体 · ${agent.name}` : '新建智能体'}
       onClose={onClose}
       footer={
         <>
@@ -316,7 +316,7 @@ function AgentModal({
               </div>
               <div className="chips">
                 <span className={`pill ${type.runtime === 'api' ? 'brand' : ''}`}>
-                  {type.runtime === 'api' ? 'API' : 'CLI'}
+                  {type.runtime === 'api' ? '进程内 API' : '本地 CLI'}
                 </span>
                 {type.availability.installed ? (
                   <span className="pill ok">可用</span>
@@ -336,7 +336,7 @@ function AgentModal({
           <div className="form-grid">
             <div className="field">
               <label className="field-label">名称</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 Claude Code (公司网关)" />
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 Claude Code（公司网关）" />
             </div>
             <div className="field">
               <label className="field-label">模型</label>
@@ -349,7 +349,7 @@ function AgentModal({
             </div>
             <div className="field span-2">
               <label className="field-label">
-                Gateway 地址
+                网关地址
                 {selected.base_url_env && <span className="mono-sm dim">→ {selected.base_url_env}</span>}
               </label>
               <input
@@ -364,7 +364,7 @@ function AgentModal({
             </div>
             <div className="field span-2">
               <label className="field-label">
-                API Key
+                API 密钥
                 {selected.api_key_env && <span className="mono-sm dim">→ {selected.api_key_env}</span>}
               </label>
               <div className="secret-row">
@@ -377,7 +377,7 @@ function AgentModal({
                   placeholder={agent?.api_key_set ? `已保存 ${agent.api_key_preview ?? ''} · 留空则不修改` : 'sk-...'}
                 />
               </div>
-              <span className="field-help">Key 使用 Fernet 加密存储，接口只返回掩码，不会回传明文。</span>
+              <span className="field-help">密钥使用 Fernet 加密存储，接口只返回掩码，绝不会回传明文。</span>
             </div>
             <div className="field span-2">
               <label className="field-label">备注</label>

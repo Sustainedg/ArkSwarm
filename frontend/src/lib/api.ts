@@ -24,7 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await response.json()
       detail = typeof body?.detail === 'string' ? body.detail : JSON.stringify(body?.detail ?? body)
     } catch {
-      /* body was not json */
+      /* 响应体不是 JSON */
     }
     throw new ApiError(response.status, detail)
   }
@@ -65,8 +65,9 @@ export const api = {
 }
 
 /**
- * POST + Server-Sent-Events. `EventSource` cannot send a body, so we read the
- * stream manually and hand every parsed event to `onEvent`.
+ * 用 POST 发起 Server-Sent Events 请求。
+ * 原生 `EventSource` 无法携带请求体，因此这里手动读取流，
+ * 把每个解析出的事件交给 `onEvent`。
  */
 export async function streamPost(
   path: string,
@@ -86,7 +87,7 @@ export async function streamPost(
       const parsed = await response.json()
       detail = typeof parsed?.detail === 'string' ? parsed.detail : detail
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
     throw new ApiError(response.status, detail)
   }
@@ -111,7 +112,7 @@ export async function streamPost(
         try {
           onEvent(JSON.parse(data) as AgentEvent)
         } catch {
-          /* heartbeat or partial frame */
+          /* 心跳或半包数据 */
         }
       }
       boundary = buffer.indexOf('\n\n')

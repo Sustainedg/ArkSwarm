@@ -41,7 +41,7 @@ async def list_roles(session: AsyncSession = Depends(get_session)) -> dict:
 async def create_role(payload: RoleCreate, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await session.get(AgentInstance, payload.agent_id)
     if agent is None:
-        raise HTTPException(status_code=422, detail="agent_id does not exist")
+        raise HTTPException(status_code=422, detail="指定的 agent_id 不存在")
     role = Role(**payload.model_dump())
     session.add(role)
     await session.commit()
@@ -53,7 +53,7 @@ async def create_role(payload: RoleCreate, session: AsyncSession = Depends(get_s
 async def get_role(role_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     role = await session.get(Role, role_id)
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="角色不存在")
     return (await _to_read(role, session)).model_dump()
 
 
@@ -63,10 +63,10 @@ async def update_role(
 ) -> dict:
     role = await session.get(Role, role_id)
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="角色不存在")
     data = payload.model_dump(exclude_unset=True)
     if data.get("agent_id") and await session.get(AgentInstance, data["agent_id"]) is None:
-        raise HTTPException(status_code=422, detail="agent_id does not exist")
+        raise HTTPException(status_code=422, detail="指定的 agent_id 不存在")
     for field, value in data.items():
         if value is not None:
             setattr(role, field, value)
@@ -81,12 +81,12 @@ async def update_role(
 async def delete_role(role_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     role = await session.get(Role, role_id)
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="角色不存在")
     in_use = (
         await session.execute(select(Conversation).where(Conversation.role_id == role_id))
     ).scalars().all()
     if in_use:
-        raise HTTPException(status_code=409, detail=f"role is used by {len(in_use)} conversation(s)")
+        raise HTTPException(status_code=409, detail=f"该角色正被 {len(in_use)} 个对话使用")
     await session.delete(role)
     await session.commit()
     return Response(status_code=204)
@@ -96,9 +96,9 @@ async def delete_role(role_id: str, session: AsyncSession = Depends(get_session)
 async def duplicate_role(role_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     role = await session.get(Role, role_id)
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="角色不存在")
     clone = Role(
-        name=f"{role.name} copy",
+        name=f"{role.name} 副本",
         avatar=role.avatar,
         tagline=role.tagline,
         system_prompt=role.system_prompt,

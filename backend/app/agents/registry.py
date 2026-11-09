@@ -1,7 +1,7 @@
-"""Agent plugin registry.
+"""agent 插件注册表。
 
-Built-in adapters live in ``app/agents/builtin`` and are auto-imported on first
-use, so adding a file there is the entire integration step.
+内置适配器放在 ``app/agents/builtin``，首次使用时自动导入，
+因此「新增一个文件」就是全部的接入步骤。
 """
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ _loaded = False
 
 
 def register_agent(cls: type[AgentDefinition]) -> type[AgentDefinition]:
-    """Class decorator used by every adapter module."""
+    """每个适配器模块都会用到的类装饰器。"""
     if not getattr(cls, "id", None):
-        raise ValueError(f"{cls.__name__} must declare an `id`")
+        raise ValueError(f"{cls.__name__} 必须声明 `id`")
     _REGISTRY[cls.id] = cls()
     return cls
 
@@ -44,8 +44,8 @@ def get_agent(agent_type_id: str) -> AgentDefinition:
     try:
         return _REGISTRY[agent_type_id]
     except KeyError as exc:
-        known = ", ".join(sorted(_REGISTRY)) or "<none>"
-        raise KeyError(f"unknown agent type '{agent_type_id}' (known: {known})") from exc
+        known = "、".join(sorted(_REGISTRY)) or "（无）"
+        raise KeyError(f"未知的智能体类型「{agent_type_id}」（已注册：{known}）") from exc
 
 
 def known_ids() -> Iterable[str]:

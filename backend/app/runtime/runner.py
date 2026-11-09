@@ -1,4 +1,4 @@
-"""Execution layer: turns an :class:`Invocation` or an API harness into events."""
+"""执行层：把 :class:`Invocation` 或 API 内核转换成规范化的 AgentEvent。"""
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +20,7 @@ async def stream_run(
     ctx: AgentContext,
     run: ActiveRun,
 ) -> AsyncIterator[AgentEvent]:
-    """Dispatch to the CLI or API execution path."""
+    """按 runtime 分发到 CLI 或 API 的执行路径。"""
     yield run_started(run.id)
     if definition.runtime is Runtime.API:
         async for event in definition.stream(ctx):
@@ -42,7 +42,7 @@ async def stream_cli_run(
     try:
         invocation = agent_run.build_invocation()
     except Exception as exc:  # noqa: BLE001 - surface config errors to the user
-        yield error(f"could not build the command: {exc}")
+        yield error(f"无法构建启动命令：{exc}")
         yield run_finished("error")
         return
 
@@ -60,7 +60,7 @@ async def stream_cli_run(
 
     executable = shutil.which(invocation.argv[0]) if invocation.argv else None
     if executable is None:
-        yield log(f"launching {invocation.argv[0]}", "info")
+        yield log(f"正在启动 {invocation.argv[0]}", "info")
     preview = " ".join(_redact(invocation.argv, env))
     if len(preview) > 400:
         preview = preview[:400] + " …"
@@ -76,11 +76,11 @@ async def stream_cli_run(
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError:
-        yield error(f"`{invocation.argv[0]}` is not installed or not on PATH")
+        yield error(f"`{invocation.argv[0]}` 未安装或不在 PATH 中")
         yield run_finished("error")
         return
     except PermissionError as exc:
-        yield error(f"cannot execute `{invocation.argv[0]}`: {exc}")
+        yield error(f"无法执行 `{invocation.argv[0]}`：{exc}")
         yield run_finished("error")
         return
 
@@ -118,7 +118,7 @@ async def stream_cli_run(
                 break
             if asyncio.get_event_loop().time() > deadline:
                 process.kill()
-                yield error(f"run exceeded the {settings.run_timeout_seconds}s timeout")
+                yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
                 break
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), timeout=1.0)

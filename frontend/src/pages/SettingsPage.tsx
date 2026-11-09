@@ -49,7 +49,7 @@ export function SettingsPage() {
         )}
 
         <section className="stack">
-          <h2 className="card-section-title">正在运行的 Agent</h2>
+          <h2 className="card-section-title">正在运行的智能体</h2>
           {overview && overview.active_runs.length > 0 ? (
             <div className="grid">
               {overview.active_runs.map((run) => (
@@ -85,7 +85,7 @@ export function SettingsPage() {
                     </div>
                   </div>
                   <span className={`pill ${type.runtime === 'api' ? 'brand' : ''}`} style={{ marginLeft: 'auto' }}>
-                    {type.runtime === 'api' ? 'API 进程内' : 'CLI 子进程'}
+                    {type.runtime === 'api' ? '进程内 API' : '本地 CLI 子进程'}
                   </span>
                 </div>
                 <p className="small muted" style={{ lineHeight: 1.55 }}>
@@ -125,7 +125,7 @@ export function SettingsPage() {
         </section>
 
         <section className="stack">
-          <h2 className="card-section-title">如何接入一个新的 Agent</h2>
+          <h2 className="card-section-title">如何接入一个新的智能体</h2>
           <div className="card">
             <ol style={{ paddingLeft: 18, lineHeight: 1.9, fontSize: 13 }} className="muted">
               <li>
@@ -133,13 +133,13 @@ export function SettingsPage() {
                 <code className="mono-sm">AgentDefinition</code>，用 <code className="mono-sm">@register_agent</code> 装饰。
               </li>
               <li>
-                CLI 型：实现 <code className="mono-sm">build_invocation()</code> 与{' '}
-                <code className="mono-sm">parse_line()</code>；API 型：实现{' '}
+                本地 CLI 型：实现 <code className="mono-sm">build_invocation()</code> 与{' '}
+                <code className="mono-sm">parse_line()</code>；进程内 API 型：实现{' '}
                 <code className="mono-sm">async stream()</code>。
               </li>
               <li>用 config_fields 声明可配置项 —— 前端表单会自动生成，无需改前端。</li>
               <li>
-                想完全不写代码？直接用「Custom CLI」适配器：填命令、参数模板与 JSON 取值路径即可。
+                想完全不写代码？直接用「自定义 CLI」适配器：填命令、参数模板与 JSON 取值路径即可。
               </li>
             </ol>
           </div>

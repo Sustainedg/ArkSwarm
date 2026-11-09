@@ -65,7 +65,7 @@ async def test_agent_crud_masks_secrets(client: httpx.AsyncClient):
 
     listed = (await client.get("/api/agents")).json()["items"]
     assert len(listed) == 1
-    assert listed[0]["type_name"] == "Custom CLI"
+    assert listed[0]["type_name"] == "自定义 CLI"
 
     patched = await client.patch(f"/api/agents/{agent['id']}", json={"name": "Renamed"})
     assert patched.json()["name"] == "Renamed"
@@ -86,7 +86,7 @@ async def test_agent_delete_blocked_while_a_role_uses_it(client: httpx.AsyncClie
     )
     response = await client.delete(f"/api/agents/{agent['id']}")
     assert response.status_code == 409
-    assert "used by role" in response.json()["detail"]
+    assert "正被以下角色使用" in response.json()["detail"]
 
 
 async def test_agent_types_expose_config_schema_and_availability(client: httpx.AsyncClient):
@@ -165,7 +165,7 @@ async def test_configuration_error_returns_409(client: httpx.AsyncClient):
         f"/api/conversations/{conversation['id']}/messages", json={"content": "hi"}
     )
     assert response.status_code == 409
-    assert "disabled" in response.json()["detail"]
+    assert "已停用" in response.json()["detail"]
 
 
 async def test_missing_executable_reports_a_clean_error(client: httpx.AsyncClient):
@@ -176,7 +176,7 @@ async def test_missing_executable_reports_a_clean_error(client: httpx.AsyncClien
         "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "hi"}
     ) as response:
         events = await read_sse(response)
-    assert any(e["type"] == "error" and "not installed" in (e.get("text") or "") for e in events)
+    assert any(e["type"] == "error" and "未安装" in (e.get("text") or "") for e in events)
     assert events[-2]["type"] == "run.finished"
     assert events[-2]["payload"]["status"] == "error"
 
@@ -185,7 +185,7 @@ async def test_probe_endpoint_reports_missing_binary(client: httpx.AsyncClient):
     bad = await make_agent(client, options={"command": "nope-not-here-98765"})
     result = (await client.post(f"/api/agents/{bad['id']}/test")).json()
     assert result["ok"] is False
-    assert any("not found" in c["detail"] for c in result["checks"] if not c["ok"])
+    assert any("未在 PATH 中找到" in c["detail"] for c in result["checks"] if not c["ok"])
 
 
 async def test_role_and_conversation_guards(client: httpx.AsyncClient):

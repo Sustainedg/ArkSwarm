@@ -1,8 +1,7 @@
-"""A minimal, sandboxed tool set for in-process (API) harness agents.
+"""给进程内（API 型）内核 agent 使用的最小沙箱工具集。
 
-The CLI agents bring their own tools; a pure-API model has none, so the harness
-supplies a small workspace-confined kit. Everything is resolved against the
-workspace root, so a model can never escape it with `../`.
+CLI 型 agent 自带工具，纯 API 的模型没有，所以由内核提供一套受限工具。
+所有路径都相对工作目录解析，模型无法用 `../` 逃出去。
 """
 from __future__ import annotations
 
@@ -20,10 +19,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "Run a shell command inside the workspace and return combined output.",
+            "description": "在工作目录内执行一条 shell 命令，返回合并后的输出。",
             "parameters": {
                 "type": "object",
-                "properties": {"command": {"type": "string", "description": "Shell command"}},
+                "properties": {"command": {"type": "string", "description": "要执行的 shell 命令"}},
                 "required": ["command"],
             },
         },
@@ -32,13 +31,13 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read a UTF-8 text file relative to the workspace root.",
+            "description": "读取工作目录下某个 UTF-8 文本文件的内容。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "start_line": {"type": "integer", "description": "1-based, optional"},
-                    "max_lines": {"type": "integer", "description": "default 400"},
+                    "start_line": {"type": "integer", "description": "起始行号，从 1 开始，可省略"},
+                    "max_lines": {"type": "integer", "description": "最多读取的行数，默认 400"},
                 },
                 "required": ["path"],
             },
@@ -48,7 +47,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Create or overwrite a text file relative to the workspace root.",
+            "description": "在工作目录下创建或覆盖一个文本文件。",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -60,7 +59,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_dir",
-            "description": "List entries of a directory relative to the workspace root.",
+            "description": "列出工作目录下某个子目录的条目。",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "default '.'"}},
@@ -84,19 +83,19 @@ class WorkspaceTools:
 
     def _resolve(self, raw: str) -> Path:
         if not raw:
-            raise ToolError("path is required")
+            raise ToolError("必须提供路径")
         candidate = (self.root / raw).resolve() if not os.path.isabs(raw) else Path(raw).resolve()
         if candidate != self.root and self.root not in candidate.parents:
-            raise ToolError(f"path escapes the workspace: {raw}")
+            raise ToolError(f"路径越出了工作目录：{raw}")
         return candidate
 
     # -- tools ---------------------------------------------------------------
 
     async def run_shell(self, command: str) -> str:
         if not self.allow_shell:
-            raise ToolError("shell access is disabled for this agent")
+            raise ToolError("该智能体已禁用 shell 访问")
         if not command:
-            raise ToolError("command is required")
+            raise ToolError("必须提供命令")
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(self.root),
@@ -107,47 +106,47 @@ class WorkspaceTools:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            raise ToolError(f"command timed out after {self.timeout}s") from None
+            raise ToolError(f"命令执行超过 {self.timeout} 秒，已被终止") from None
         output = stdout.decode("utf-8", "replace")
-        return _truncate(f"$ {command}\n{output}\n[exit {proc.returncode}]")
+        return _truncate(f"$ {command}\n{output}\n[退出码 {proc.returncode}]")
 
     async def read_file(self, path: str, start_line: int = 1, max_lines: int = 400) -> str:
         target = self._resolve(path)
         if not target.is_file():
-            raise ToolError(f"not a file: {path}")
+            raise ToolError(f"不是文件：{path}")
         text = target.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         start = max(1, int(start_line or 1))
         chunk = lines[start - 1 : start - 1 + max(1, int(max_lines or 400))]
         numbered = "\n".join(f"{start + i:>5} | {line}" for i, line in enumerate(chunk))
-        return _truncate(numbered or "(empty file)")
+        return _truncate(numbered or "（空文件）")
 
     async def write_file(self, path: str, content: str) -> str:
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content or "", encoding="utf-8")
-        return f"wrote {len(content or '')} bytes to {path}"
+        return f"已写入 {path}（{len(content or '')} 字节）"
 
     async def list_dir(self, path: str = ".") -> str:
         target = self._resolve(path or ".")
         if not target.is_dir():
-            raise ToolError(f"not a directory: {path}")
+            raise ToolError(f"不是目录：{path}")
         rows = []
         for entry in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name)):
-            rows.append(f"{'dir ' if entry.is_dir() else 'file'}  {entry.name}")
-        return _truncate("\n".join(rows) or "(empty)")
+            rows.append(f"{'目录' if entry.is_dir() else '文件'}  {entry.name}")
+        return _truncate("\n".join(rows) or "（空目录）")
 
     async def call(self, name: str, arguments: dict[str, Any]) -> str:
         handler = getattr(self, name, None)
         if handler is None or name not in {s["function"]["name"] for s in TOOL_SPECS}:
-            raise ToolError(f"unknown tool: {name}")
+            raise ToolError(f"未知工具：{name}")
         return await handler(**arguments)
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT) -> str:
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n… (truncated {len(text) - limit} chars)"
+    return text[:limit] + f"\n…（已截断 {len(text) - limit} 个字符）"
 
 
 def shell_quote(value: str) -> str:

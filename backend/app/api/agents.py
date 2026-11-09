@@ -78,7 +78,7 @@ async def create_agent(payload: AgentCreate, session: AsyncSession = Depends(get
 async def get_agent_instance(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await session.get(AgentInstance, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=404, detail="智能体不存在")
     return to_read(agent).model_dump()
 
 
@@ -88,7 +88,7 @@ async def update_agent(
 ) -> dict:
     agent = await session.get(AgentInstance, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=404, detail="智能体不存在")
 
     data = payload.model_dump(exclude_unset=True)
     if "api_key" in data:
@@ -113,11 +113,11 @@ async def update_agent(
 async def delete_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     agent = await session.get(AgentInstance, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=404, detail="智能体不存在")
     in_use = (await session.execute(select(Role).where(Role.agent_id == agent_id))).scalars().all()
     if in_use:
         names = ", ".join(r.name for r in in_use)
-        raise HTTPException(status_code=409, detail=f"agent is used by role(s): {names}")
+        raise HTTPException(status_code=409, detail=f"该智能体正被以下角色使用：{names}")
     await session.delete(agent)
     await session.commit()
     return Response(status_code=204)
@@ -127,15 +127,17 @@ async def delete_agent(agent_id: str, session: AsyncSession = Depends(get_sessio
 async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await session.get(AgentInstance, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=404, detail="智能体不存在")
     try:
         definition = get_agent(agent.type_id)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
     availability = definition.availability()
-    checks = [{"name": "adapter", "ok": True, "detail": f"{definition.name} ({definition.runtime.value})"},
-              {"name": "runtime", "ok": availability.installed, "detail": availability.detail}]
+    checks = [
+        {"name": "适配器", "ok": True, "detail": f"{definition.name}（{definition.runtime.value}）"},
+        {"name": "运行环境", "ok": availability.installed, "detail": availability.detail},
+    ]
 
     ctx = AgentContext(
         agent_id=agent.id,
@@ -148,7 +150,7 @@ async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)
         prompt="ping",
     )
     ok, message = await definition.probe(ctx)
-    checks.append({"name": "connectivity", "ok": ok, "detail": message})
+    checks.append({"name": "连通性", "ok": ok, "detail": message})
     return AgentTestResult(ok=all(c["ok"] for c in checks), message=message, checks=checks).model_dump()
 
 
@@ -156,9 +158,9 @@ async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)
 async def duplicate_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await session.get(AgentInstance, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=404, detail="智能体不存在")
     clone = AgentInstance(
-        name=f"{agent.name} copy",
+        name=f"{agent.name} 副本",
         type_id=agent.type_id,
         description=agent.description,
         gateway_url=agent.gateway_url,

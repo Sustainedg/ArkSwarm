@@ -1,4 +1,4 @@
-"""First-run seeding so the UI is never an empty shell."""
+"""首次启动播种，避免界面空空如也。"""
 from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,33 +11,33 @@ from .settings import get_settings
 STARTER_PERSONAS = {
     "claude-code": (
         "🛠️",
-        "Senior engineer",
-        "You are a meticulous senior software engineer. Inspect the repository before "
-        "changing anything, explain trade-offs briefly, and prefer minimal, tested diffs.",
+        "资深工程师",
+        "你是一名严谨的资深软件工程师。动手前先通读仓库，简要说明取舍，"
+        "优先给出最小且经过验证的改动。",
     ),
     "codex": (
         "🧪",
-        "Pair programmer",
-        "You are a pragmatic pair programmer. Keep changes small and reviewable, run the "
-        "relevant tests after every edit, and summarise what changed.",
+        "结对编程搭子",
+        "你是务实的结对编程伙伴。每次改动尽量小而可评审，改完立刻运行相关测试，"
+        "并总结改了什么。",
     ),
     "gemini-cli": (
         "🔎",
-        "Research assistant",
-        "You are a research-oriented assistant. Gather evidence first, cite the files you "
-        "read, and separate findings from speculation.",
+        "调研助手",
+        "你是研究型助手。先收集证据，引用你读过的文件路径，"
+        "并明确区分「已验证的事实」与「推测」。",
     ),
     "deepseek-harness": (
         "🐳",
-        "DeepSeek analyst",
-        "You are a systematic analyst. Break the task into steps, use the shell tools to "
-        "verify assumptions, and report results concisely.",
+        "DeepSeek 分析员",
+        "你是有条理的分析员。把任务拆成步骤，用 shell 工具验证假设，"
+        "并简明地汇报结论。",
     ),
     "openai-harness": (
         "🔗",
-        "Gateway generalist",
-        "You are a general-purpose assistant connected through a custom gateway. Be precise "
-        "and ask for clarification when the request is ambiguous.",
+        "网关通用助手",
+        "你是通过自定义网关接入的通用助手。回答要精确，"
+        "遇到含糊的需求先请求澄清。",
     ),
 }
 
@@ -57,7 +57,7 @@ async def seed_if_empty(session: AsyncSession) -> None:
         if not definition.auto_provision or not definition.availability().installed:
             continue
         agent = AgentInstance(
-            name=f"{definition.name} (default)",
+            name=f"{definition.name}（默认）",
             type_id=definition.id,
             description=definition.description,
             gateway_url=definition.default_gateway,
@@ -76,10 +76,11 @@ async def seed_if_empty(session: AsyncSession) -> None:
 
     for agent in created:
         avatar, name, prompt = STARTER_PERSONAS.get(
-            agent.type_id, ("🤖", f"{agent.name} assistant", "You are a helpful assistant.")
+            agent.type_id, ("🤖", f"{agent.name} 助手", "你是一个乐于助人的助手。")
         )
         session.add(
-            Role(name=name, avatar=avatar, tagline=f"Powered by {agent.name}",
+            Role(name=name, avatar=avatar,
+                 tagline=f"由 {agent.name.removesuffix('（默认）')} 驱动",
                  system_prompt=prompt, agent_id=agent.id)
         )
     await session.commit()

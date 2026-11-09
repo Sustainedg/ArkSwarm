@@ -69,7 +69,7 @@ async def create_conversation(
 ) -> dict:
     role = await session.get(Role, payload.role_id)
     if role is None:
-        raise HTTPException(status_code=422, detail="role_id does not exist")
+        raise HTTPException(status_code=422, detail="指定的 role_id 不存在")
     conversation = new_conversation(role, payload.title, payload.workspace_dir)
     session.add(conversation)
     await session.commit()
@@ -81,7 +81,7 @@ async def create_conversation(
 async def get_conversation(conversation_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail="conversation not found")
+        raise HTTPException(status_code=404, detail="对话不存在")
     messages = (
         await session.execute(
             select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
@@ -100,7 +100,7 @@ async def update_conversation(
 ) -> dict:
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail="conversation not found")
+        raise HTTPException(status_code=404, detail="对话不存在")
     for field, value in payload.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(conversation, field, value)
@@ -115,7 +115,7 @@ async def update_conversation(
 async def delete_conversation(conversation_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail="conversation not found")
+        raise HTTPException(status_code=404, detail="对话不存在")
     registry.cancel_for_conversation(conversation_id)
     for message in (
         await session.execute(select(Message).where(Message.conversation_id == conversation_id))
@@ -130,7 +130,7 @@ async def delete_conversation(conversation_id: str, session: AsyncSession = Depe
 async def reset_session(conversation_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail="conversation not found")
+        raise HTTPException(status_code=404, detail="对话不存在")
     conversation.session_id = None
     session.add(conversation)
     await session.commit()

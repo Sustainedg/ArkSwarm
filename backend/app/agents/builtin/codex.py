@@ -1,4 +1,4 @@
-"""OpenAI Codex CLI adapter."""
+"""OpenAI Codex CLI 适配器。"""
 from __future__ import annotations
 
 import json
@@ -37,8 +37,8 @@ class CodexAgent(AgentDefinition):
     name = "Codex CLI"
     vendor = "OpenAI"
     description = (
-        "OpenAI's Codex coding agent. Speaks JSONL over `codex exec --json`, "
-        "supports sandbox modes, approval policies and thread resumption."
+        "OpenAI 的 Codex 编码智能体。通过 codex exec --json 输出 JSONL，"
+        "支持沙箱模式、审批策略与线程续接。"
     )
     runtime = Runtime.CLI
     executable = "codex"
@@ -59,57 +59,70 @@ class CodexAgent(AgentDefinition):
     config_fields = (
         ConfigField(
             "sandbox_mode",
-            "Sandbox",
+            "沙箱模式",
             FieldType.SELECT,
             default="workspace-write",
-            options=[{"value": m, "label": m} for m in SANDBOX_MODES],
+            options=[
+                {"value": "read-only", "label": "read-only · 只读"},
+                {"value": "workspace-write", "label": "workspace-write · 可写工作区"},
+                {"value": "danger-full-access", "label": "danger-full-access · 完全访问（危险）"},
+            ],
         ),
         ConfigField(
             "full_auto",
-            "Full auto (no approvals)",
+            "全自动（不询问）",
             FieldType.BOOLEAN,
             default=False,
-            help="Equivalent to `--full-auto`: writes inside the sandbox without asking.",
+            help="等价于 --full-auto：在沙箱范围内直接写入，不再逐步征求同意。",
         ),
         ConfigField(
             "provider_name",
-            "Custom provider name",
+            "自定义供应商名称",
             FieldType.STRING,
             advanced=True,
-            placeholder="e.g. deepseek, openrouter",
-            help="When set, Codex is pointed at your gateway through a named model_provider.",
+            placeholder="例如 deepseek、openrouter",
+            help="填写后，Codex 会通过一个具名 model_provider 指向你填的网关。",
         ),
         ConfigField(
             "wire_api",
-            "Provider wire API",
+            "供应商接口协议",
             FieldType.SELECT,
             default="chat",
-            options=[{"value": "chat", "label": "chat"}, {"value": "responses", "label": "responses"}],
+            options=[
+                {"value": "chat", "label": "chat · /chat/completions"},
+                {"value": "responses", "label": "responses · /responses"},
+            ],
             advanced=True,
         ),
         ConfigField(
             "resume_style",
-            "Multi-turn strategy",
+            "多轮对话策略",
             FieldType.SELECT,
             default="subcommand",
             options=[
-                {"value": "subcommand", "label": "codex exec resume <thread> (recommended)"},
-                {"value": "transcript", "label": "Replay full transcript each turn"},
-                {"value": "none", "label": "Single turn only"},
+                {"value": "subcommand", "label": "codex exec resume <thread>（推荐）"},
+                {"value": "transcript", "label": "每轮重放完整对话记录"},
+                {"value": "none", "label": "仅单轮，不带上下文"},
             ],
-            help="Older Codex builds lack `exec resume` — pick transcript for those.",
+            help="旧版 Codex 没有 exec resume，这类版本请选「每轮重放完整对话记录」。",
         ),
         ConfigField(
             "reasoning_effort",
-            "Reasoning effort",
+            "推理强度",
             FieldType.SELECT,
             default="",
-            options=[{"value": v, "label": v or "default"} for v in ("", "minimal", "low", "medium", "high")],
+            options=[
+                {"value": "", "label": "跟随默认"},
+                {"value": "minimal", "label": "minimal · 最小"},
+                {"value": "low", "label": "low · 低"},
+                {"value": "medium", "label": "medium · 中"},
+                {"value": "high", "label": "high · 高"},
+            ],
             advanced=True,
         ),
-        ConfigField("add_dirs", "Extra workspace dirs", FieldType.STRING_LIST, advanced=True),
-        ConfigField("extra_args", "Extra CLI args", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "Extra environment", FieldType.KEYVALUE, advanced=True),
+        ConfigField("add_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
+        ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
+        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- invocation ----------------------------------------------------------
@@ -142,7 +155,7 @@ class CodexAgent(AgentDefinition):
 
         argv += [str(a) for a in as_list(options.get("extra_args") or [])]
 
-        # A persona without a native system-prompt flag is folded into the prompt.
+        # Codex 没有系统提示词参数，人格只能折进提示词里。
         if ctx.system_prompt:
             prompt = f"{ctx.system_prompt}\n\n---\n\n{prompt}"
 
@@ -187,7 +200,7 @@ class CodexAgent(AgentDefinition):
         yield from self._dispatch(payload, run)
 
     def _dispatch(self, payload: dict[str, Any], run: AgentRun) -> Iterable[AgentEvent]:
-        if "msg" in payload and isinstance(payload["msg"], dict):  # legacy event shape
+        if "msg" in payload and isinstance(payload["msg"], dict):  # 旧版事件结构
             payload = {**payload["msg"], "type": payload["msg"].get("type")}
 
         kind = payload.get("type")
@@ -209,12 +222,12 @@ class CodexAgent(AgentDefinition):
             return
 
         if kind == "turn.failed":
-            yield error(flatten_content(payload.get("error") or "turn failed"))
+            yield error(flatten_content(payload.get("error") or "本轮执行失败"))
             run.state["is_error"] = True
             return
 
         if kind == "error":
-            yield error(payload.get("message") or "codex error")
+            yield error(payload.get("message") or "Codex 报错")
             run.state["is_error"] = True
             return
 
@@ -228,7 +241,7 @@ class CodexAgent(AgentDefinition):
         item_id = item.get("id")
 
         if item_type == "agent_message":
-            # `item.completed` carries the full text; deltas arrive via `agent_message_delta`.
+            # item.completed 携带完整文本，增量则通过 agent_message_delta 到达。
             if kind == "item.completed" and item.get("text"):
                 if not run.state.get("saw_delta"):
                     yield text_delta(item["text"])

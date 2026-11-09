@@ -1,4 +1,4 @@
-"""Anthropic Claude Code CLI adapter."""
+"""Anthropic Claude Code CLI 适配器。"""
 from __future__ import annotations
 
 import json
@@ -38,8 +38,8 @@ class ClaudeCodeAgent(AgentDefinition):
     name = "Claude Code"
     vendor = "Anthropic"
     description = (
-        "Anthropic's official coding agent. Runs as a CLI subprocess with full "
-        "tool use, session resumption and native system-prompt support."
+        "Anthropic 官方编码智能体。以 CLI 子进程运行，支持完整工具调用、"
+        "会话续接与原生系统提示词。"
     )
     runtime = Runtime.CLI
     executable = "claude"
@@ -60,47 +60,54 @@ class ClaudeCodeAgent(AgentDefinition):
     config_fields = (
         ConfigField(
             "permission_mode",
-            "Permission mode",
+            "权限模式",
             FieldType.SELECT,
             default="acceptEdits",
-            options=[{"value": m, "label": m} for m in PERMISSION_MODES],
-            help="`bypassPermissions` lets the agent act unattended — sandboxes only.",
+            options=[
+                {"value": "acceptEdits", "label": "acceptEdits · 自动接受文件修改"},
+                {"value": "auto", "label": "auto · 自动判断"},
+                {"value": "manual", "label": "manual · 手动确认"},
+                {"value": "plan", "label": "plan · 只做计划不改动"},
+                {"value": "dontAsk", "label": "dontAsk · 不询问，直接拒绝需确认的操作"},
+                {"value": "bypassPermissions", "label": "bypassPermissions · 跳过全部权限检查"},
+            ],
+            help="bypassPermissions 会让 agent 无人值守地执行操作，请只在沙箱环境中使用。",
         ),
         ConfigField(
             "auth_style",
-            "Credential header",
+            "凭据请求头",
             FieldType.SELECT,
             default="auth_token",
             options=[
-                {"value": "auth_token", "label": "Authorization: Bearer (gateways)"},
-                {"value": "api_key", "label": "x-api-key (Anthropic direct)"},
-                {"value": "both", "label": "Send both"},
+                {"value": "auth_token", "label": "Authorization: Bearer（中转网关）"},
+                {"value": "api_key", "label": "x-api-key（直连 Anthropic 官方）"},
+                {"value": "both", "label": "两个请求头都发送"},
             ],
-            help="Use `x-api-key` for api.anthropic.com, Bearer for most proxies.",
+            help="直连 api.anthropic.com 用 x-api-key；绝大多数中转网关用 Bearer。",
         ),
         ConfigField(
             "system_prompt_mode",
-            "Persona injection",
+            "人格注入方式",
             FieldType.SELECT,
             default="append",
             options=[
-                {"value": "append", "label": "Append to Claude Code's prompt"},
-                {"value": "replace", "label": "Replace system prompt"},
+                {"value": "append", "label": "追加到 Claude Code 原有系统提示词之后"},
+                {"value": "replace", "label": "完全替换系统提示词"},
             ],
         ),
-        ConfigField("partial_messages", "Stream partial tokens", FieldType.BOOLEAN, default=True),
+        ConfigField("partial_messages", "逐字流式输出", FieldType.BOOLEAN, default=True),
         ConfigField(
             "allowed_tools",
-            "Allowed tools",
+            "工具白名单",
             FieldType.STRING_LIST,
             advanced=True,
-            placeholder="Bash(git *) Edit Read",
+            placeholder="例如 Bash(git *) Edit Read",
         ),
-        ConfigField("disallowed_tools", "Disallowed tools", FieldType.STRING_LIST, advanced=True),
-        ConfigField("add_dirs", "Extra workspace dirs", FieldType.STRING_LIST, advanced=True),
-        ConfigField("fallback_model", "Fallback model", FieldType.STRING, advanced=True),
-        ConfigField("extra_args", "Extra CLI args", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "Extra environment", FieldType.KEYVALUE, advanced=True),
+        ConfigField("disallowed_tools", "工具黑名单", FieldType.STRING_LIST, advanced=True),
+        ConfigField("add_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
+        ConfigField("fallback_model", "备用模型", FieldType.STRING, advanced=True),
+        ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
+        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- invocation ----------------------------------------------------------
@@ -153,7 +160,7 @@ class ClaudeCodeAgent(AgentDefinition):
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=ctx.prompt)
 
     def _apply_auth_style(self, env: dict[str, str], ctx: AgentContext) -> None:
-        """Translate the generic api_key into the header style the gateway wants."""
+        """把通用的 api_key 转换成本网关期望的请求头写法。"""
         if not ctx.api_key:
             return
         style = ctx.option("auth_style") or "auth_token"
@@ -203,7 +210,7 @@ class ClaudeCodeAgent(AgentDefinition):
                 run.state["model"] = payload.get("model")
                 tools = payload.get("tools") or []
                 if tools:
-                    yield log(f"session ready · model={payload.get('model')} · {len(tools)} tools")
+                    yield log(f"会话已就绪 · 模型 {payload.get('model')} · {len(tools)} 个工具")
 
     def _from_stream_event(self, event: dict[str, Any], run: AgentRun) -> Iterable[AgentEvent]:
         if event.get("type") != "content_block_delta":
@@ -220,7 +227,7 @@ class ClaudeCodeAgent(AgentDefinition):
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "text" and block.get("text"):
-                # Skip the aggregate echo when token deltas already covered it.
+                # 已有逐字增量，不再重复输出整段文本。
                 if not run.state.get("partial"):
                     yield text_delta(block["text"])
             elif block.get("type") == "tool_use":
@@ -239,7 +246,7 @@ class ClaudeCodeAgent(AgentDefinition):
 
     def _from_result(self, payload: dict[str, Any], run: AgentRun) -> Iterable[AgentEvent]:
         if payload.get("usage"):
-            # Anthropic nests some counters; keep only scalars for a tidy UI.
+            # Anthropic 的用量里嵌套了字典，这里只保留数值，界面更干净。
             scalar = {k: v for k, v in payload["usage"].items() if isinstance(v, (int, float))}
             if scalar:
                 yield usage(**scalar)
@@ -249,4 +256,4 @@ class ClaudeCodeAgent(AgentDefinition):
                 run.result[dst] = payload[src]
         run.state["is_error"] = bool(payload.get("is_error"))
         if payload.get("is_error"):
-            yield error(payload.get("result") or "claude reported an error")
+            yield error(payload.get("result") or "Claude Code 报告了一个错误")

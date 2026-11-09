@@ -1,4 +1,4 @@
-"""Turns an HTTP request into a live agent run and persists the outcome."""
+"""把一个 HTTP 请求变成一次真实的 agent 运行，并把结果落库。"""
 from __future__ import annotations
 
 import uuid
@@ -20,7 +20,7 @@ from .runner import stream_run
 
 MAX_HISTORY_MESSAGES = 24
 MAX_HISTORY_CHARS = 40_000
-DEFAULT_TITLE = "New conversation"
+DEFAULT_TITLE = "新对话"
 
 
 @dataclass
@@ -43,7 +43,7 @@ class ConfigurationError(Exception):
 async def _load(session: AsyncSession, model: Any, pk: str) -> Any:
     entity = await session.get(model, pk)
     if entity is None:
-        raise ConfigurationError(f"{model.__name__} {pk} not found")
+        raise ConfigurationError(f"找不到 {model.__name__}：{pk}")
     return entity
 
 
@@ -112,7 +112,7 @@ def _clip_history(rows: list[Message]) -> list[dict[str, str]]:
 
 
 def transcript_prompt(system_prompt: str | None, history: list[dict[str, str]], prompt: str) -> str:
-    """Used by agents with neither a system-prompt flag nor session resume."""
+    """用于既不支持系统提示词参数、也不支持会话续接的 agent。"""
     lines = []
     if system_prompt:
         lines.append(f"[system]\n{system_prompt}")
@@ -128,7 +128,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     role = await _load(session, Role, conversation.role_id)
     agent = await _load(session, AgentInstance, conversation.agent_id)
     if not agent.enabled:
-        raise ConfigurationError(f"agent '{agent.name}' is disabled")
+        raise ConfigurationError(f"智能体「{agent.name}」已停用")
 
     try:
         definition = get_agent(agent.type_id)
@@ -185,7 +185,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
 
 
 async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIterator[AgentEvent]:
-    """Execute the run, yielding events and persisting the final state."""
+    """执行运行、产出事件，并把最终状态写入数据库。"""
     text_parts: list[str] = []
     thinking_parts: list[str] = []
     tool_parts: list[dict[str, Any]] = []
@@ -219,7 +219,7 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
                 prepared.conversation.session_id = event.payload.get("session_id")
                 session.add(prepared.conversation)
             elif event.type is EventType.ERROR:
-                error_text = event.text or "agent error"
+                error_text = event.text or "智能体返回了错误"
             elif event.type is EventType.RUN_FINISHED:
                 extra = dict(event.payload or {})
                 if extra.get("status") in ("error", "cancelled"):
@@ -253,7 +253,7 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
 
 
 async def regenerate_last(session: AsyncSession, conversation_id: str) -> PreparedRun:
-    """Re-run the most recent user turn against the current role configuration."""
+    """用当前角色配置重跑最近一轮用户消息。"""
     conversation = await _load(session, Conversation, conversation_id)
     rows = (
         await session.execute(
@@ -264,7 +264,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     ).scalars().all()
     last_user = next((m for m in rows if m.role == "user"), None)
     if last_user is None:
-        raise ConfigurationError("no user message to regenerate from")
+        raise ConfigurationError("没有可用于重新生成的用户消息")
 
     # drop everything after the last user turn, then replay it
     stale = [m for m in rows if m.created_at >= last_user.created_at and m.role != "user"]

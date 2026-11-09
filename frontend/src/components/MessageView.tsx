@@ -22,7 +22,7 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
       <div className={`avatar${isUser ? ' user' : ''}`}>{isUser ? '🙋' : (avatar ?? '🤖')}</div>
       <div className="bubble" style={{ flex: 1 }}>
         <div className="bubble-head">
-          <span>{isUser ? '你' : 'Agent'}</span>
+          <span>{isUser ? '你' : '智能体'}</span>
           {message.usage && Object.keys(message.usage).length > 0 && (
             <span className="dim">
               {message.usage.output_tokens ? `${message.usage.output_tokens} tok` : ''}
@@ -41,7 +41,7 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
         {thinking.map((part, index) => (
           <details className="tool-card" key={`think-${index}`} open={Boolean(message.streaming)}>
             <summary>
-              <span className="tool-chip">thinking</span>
+              <span className="tool-chip">思考</span>
               <span className="dim">推理过程</span>
             </summary>
             <pre className="thinking" style={{ borderTop: 'none' }}>{part.text}</pre>
@@ -55,7 +55,7 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
             <summary>
-              <span className="tool-chip">log</span>
+              <span className="tool-chip">日志</span>
               <span className="dim">{message.logs.length} 条运行日志</span>
             </summary>
             <pre>{message.logs.join('\n')}</pre>

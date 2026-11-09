@@ -1,4 +1,4 @@
-"""API keys are encrypted at rest and never returned in full by the API."""
+"""API Key 静态加密存储，且接口永不返回明文。"""
 from __future__ import annotations
 
 import base64
@@ -59,7 +59,7 @@ def decrypt(token: str | None) -> str | None:
 
 
 def mask(secret: str | None) -> str | None:
-    """Render a safe preview such as ``sk-…9f2c`` for the UI."""
+    """生成给界面展示的掩码，例如 ``sk-…9f2c``。"""
     if not secret:
         return None
     if len(secret) <= 8:

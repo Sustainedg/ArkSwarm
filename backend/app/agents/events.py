@@ -1,9 +1,8 @@
-"""Normalized event protocol shared by every agent adapter.
+"""所有 agent 适配器共用的规范化事件协议。
 
-Everything an adapter emits is expressed with these types, so the transport
-layer (SSE), the persistence layer and the UI never need to know whether the
-run came from a CLI subprocess (Claude Code, Codex, Gemini CLI, ...) or from an
-in-process API harness (DeepSeek, or any OpenAI-compatible endpoint).
+适配器输出的一切都用这些类型表达，因此传输层（SSE）、持久化层与界面
+都不需要关心这次运行是来自 CLI 子进程（Claude Code、Codex、Gemini CLI…）
+还是来自进程内的 API 内核（DeepSeek 或任意 OpenAI 兼容端点）。
 """
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ class AgentEvent:
         return {k: v for k, v in data.items() if v is not None or k == "payload"}
 
 
-# --- small constructor helpers, keeps adapters terse -------------------------
+# --- 便捷的事件构造器，让适配器代码更简短 -----------------------------
 
 
 def text_delta(text: str) -> AgentEvent:

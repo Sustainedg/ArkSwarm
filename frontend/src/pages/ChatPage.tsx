@@ -93,7 +93,7 @@ export function ChatPage() {
       usage: {},
       status: 'running',
       userText: regenerate ? '' : content,
-      roleName: conversation.role_name ?? 'Agent',
+      roleName: conversation.role_name ?? '智能体',
       avatar: conversation.role_avatar ?? '🤖',
     })
     if (!regenerate) setDraft('')
@@ -122,7 +122,7 @@ export function ChatPage() {
         setLive(null)
         await loadConversations()
       } catch {
-        /* keep the streamed view if the refresh fails */
+        /* 刷新失败时保留流式渲染出来的内容 */
       }
     }
   }
@@ -228,7 +228,7 @@ export function ChatPage() {
                     await openConversation(active.id)
                   }}
                   disabled={busy || !active.session_id}
-                  title="丢弃 agent 侧的会话记忆，下一轮从零开始"
+                  title="丢弃智能体侧的会话记忆，下一轮从零开始"
                 >
                   ⟲ 重置记忆
                 </button>
@@ -258,7 +258,7 @@ export function ChatPage() {
                     <div className="empty-icon">{active.role_avatar}</div>
                     <p>与「{active.role_name}」的对话已就绪</p>
                     <p className="dim small" style={{ marginTop: 6 }}>
-                      Agent：{active.agent_name} · 工作目录：{active.workspace_dir ?? '默认'}
+                      智能体：{active.agent_name} · 工作目录：{active.workspace_dir ?? '默认'}
                     </p>
                   </div>
                 )}
@@ -296,7 +296,7 @@ export function ChatPage() {
                     ref={textareaRef}
                     rows={1}
                     value={draft}
-                    placeholder={busy ? 'Agent 正在工作…' : `发消息给 ${active.role_name}（Enter 发送，Shift+Enter 换行）`}
+                    placeholder={busy ? '智能体正在工作…' : `发消息给 ${active.role_name}（Enter 发送，Shift+Enter 换行）`}
                     onChange={(e) => {
                       setDraft(e.target.value)
                       const node = e.target
@@ -323,7 +323,7 @@ export function ChatPage() {
                 </div>
                 <div className="composer-hint">
                   <span>
-                    {active.agent_name} · {active.session_id ? '续用 agent 会话' : '新 agent 会话'}
+                    {active.agent_name} · {active.session_id ? '续用智能体会话' : '新建智能体会话'}
                   </span>
                   <span>所有输出都会写回工作目录</span>
                 </div>
@@ -352,7 +352,7 @@ export function ChatPage() {
           }
         >
           {roles.length === 0 ? (
-            <div className="banner info">还没有角色。请先到「角色」页创建：角色 = 人格设定 + 绑定的 Agent。</div>
+            <div className="banner info">还没有角色。请先到「角色」页创建：角色 = 人格设定 + 绑定的智能体。</div>
           ) : (
             <div className="stack" style={{ gap: 8 }}>
               {roles.map((role) => (
