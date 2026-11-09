@@ -1,0 +1,20 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+backend/data/
+.env
+
+# node
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+.pytest_cache/
+*.tsbuildinfo
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
