@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from .. import __version__
+from .. import VERSION_HISTORY, __version__
 from ..agents import all_agents
 from ..runtime import registry
 from ..settings import get_settings
@@ -22,6 +22,7 @@ async def overview() -> dict:
     agents = all_agents()
     return {
         "version": __version__,
+        "version_history": [dict(item) for item in VERSION_HISTORY],
         "app_name": settings.app_name,
         "data_dir": str(settings.data_dir),
         "workspaces_root": str(settings.workspaces_root),

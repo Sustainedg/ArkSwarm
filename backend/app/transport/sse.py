@@ -1,4 +1,9 @@
-"""Server-Sent Events（SSE）的底层封装。"""
+"""Server-Sent Events（SSE）的通用传输封装。
+
+这里只认识「事件字典流」，不知道任何业务概念（对话、协作都一样用），
+因此它是传输设施而不是 ``api`` 的一部分：``api/`` 与 ``collab/`` 共用同一份实现，
+避免各写一套导致行为漂移。
+"""
 from __future__ import annotations
 
 import asyncio

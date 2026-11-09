@@ -8,6 +8,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from app import __version__
 from app.db import SessionLocal, engine, init_db
 from app.main import app
 from app.models import Message, SQLModel
@@ -241,3 +242,6 @@ async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):
     overview = (await client.get("/api/system/overview")).json()
     assert overview["agent_types"] == 6
     assert overview["installed_types"] >= 1  # 当前环境中已安装 claude-code
+    assert overview["version"] == __version__
+    assert overview["version_history"][0]["version"] == overview["version"]
+    assert overview["version_history"][0]["highlights"]

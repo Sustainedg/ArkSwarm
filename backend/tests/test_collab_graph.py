@@ -1,0 +1,172 @@
+"""编排图校验：能跑起来的硬约束 + 提醒类的软约束。"""
+from __future__ import annotations
+
+from app.collab import graph as g
+from app.collab.schemas import (
+    BudgetSpec,
+    Duty,
+    EdgeKind,
+    EdgeSpec,
+    GraphSpec,
+    NodeSpec,
+    TicketAction,
+    WorkspaceScope,
+)
+
+ROLES = {"r-ceo", "r-cto", "r-se", "r-qa"}
+
+
+def node(key: str, role: str, duty: Duty, **kw) -> NodeSpec:
+    return NodeSpec(key=key, role_id=role, duty=duty, label=key, **kw)
+
+
+def canonical() -> GraphSpec:
+    """CEO → CTO → SE，SE 提交给 QA，QA 打回 SE：需求里的那条主链。"""
+    return GraphSpec(
+        nodes=[
+            node("ceo", "r-ceo", Duty.COORDINATOR),
+            node("cto", "r-cto", Duty.COORDINATOR),
+            node("se", "r-se", Duty.ENGINEER),
+            node("qa", "r-qa", Duty.REVIEWER),
+        ],
+        edges=[
+            EdgeSpec(from_key="ceo", to_key="cto", kind=EdgeKind.ASSIGN),
+            EdgeSpec(from_key="cto", to_key="se", kind=EdgeKind.ASSIGN),
+            EdgeSpec(from_key="se", to_key="qa", kind=EdgeKind.REVIEW),
+            EdgeSpec(from_key="qa", to_key="se", kind=EdgeKind.REWORK),
+        ],
+    )
+
+
+def codes(result) -> set[str]:
+    return {issue.code for issue in result.errors}
+
+
+def warn_codes(result) -> set[str]:
+    return {issue.code for issue in result.warnings}
+
+
+def test_canonical_flow_is_clean():
+    result = g.validate_graph(canonical(), "ceo", ROLES)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert result.warnings == [], [issue.message for issue in result.warnings]
+
+
+def test_empty_graph_and_missing_entry():
+    assert codes(g.validate_graph(GraphSpec(), "ceo")) == {"graph.empty"}
+    graph = canonical()
+    assert "entry.missing" in codes(g.validate_graph(graph, None))
+    assert "entry.not_found" in codes(g.validate_graph(graph, "nobody"))
+    assert "entry.duty" in codes(g.validate_graph(graph, "se"))
+
+
+def test_orphan_node_and_unreachable_warning():
+    graph = canonical()
+    graph.edges = [e for e in graph.edges if e.to_key != "cto"]
+    result = g.validate_graph(graph, "ceo")
+    assert "node.orphan" in codes(result)
+    assert "node.unreachable" in warn_codes(result)
+
+
+def test_review_edge_requires_rework_back_edge():
+    graph = canonical()
+    graph.edges = [e for e in graph.edges if e.kind is not EdgeKind.REWORK]
+    result = g.validate_graph(graph, "ceo")
+    assert "edge.review_without_rework" in codes(result)
+    assert "node.reviewer_no_rework" in warn_codes(result)
+
+
+def test_rework_edge_requires_review_edge():
+    graph = canonical()
+    graph.edges.append(EdgeSpec(from_key="cto", to_key="se", kind=EdgeKind.REWORK, id="cto-rework"))
+    assert "edge.rework_without_review" in codes(g.validate_graph(graph, "ceo", ROLES))
+
+
+def test_rework_may_go_back_to_an_upper_node():
+    """需求里的那条路径：审查意见交回 CTO，由 CTO 再派给 SE。"""
+    graph = canonical()
+    graph.edges.append(EdgeSpec(from_key="qa", to_key="cto", kind=EdgeKind.REWORK, id="qa-to-cto"))
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert "edge.rework_target_not_submitter" in warn_codes(result)
+    assert "node.multiple_rework_targets" in warn_codes(result)
+    assert g.rework_targets(graph, "qa") == ["cto", "se"]
+
+
+def test_assign_cycle_is_rejected_but_review_loop_is_allowed():
+    graph = canonical()
+    graph.edges.append(EdgeSpec(from_key="se", to_key="cto", kind=EdgeKind.ASSIGN))
+    graph.edges.append(EdgeSpec(from_key="cto", to_key="se", kind=EdgeKind.ASSIGN, id="dup-direction"))
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert "edge.assign_cycle" in codes(result)
+    # review/rework 构成的闭环是必须的，不能被当成环
+    assert g.validate_graph(canonical(), "ceo", ROLES).ok
+
+
+def test_duty_mismatch_dangling_and_self_loop():
+    graph = GraphSpec(
+        nodes=[node("ceo", "r-ceo", Duty.COORDINATOR), node("qa", "r-qa", Duty.REVIEWER)],
+        edges=[
+            EdgeSpec(from_key="ceo", to_key="qa", kind=EdgeKind.REVIEW),  # 协调者不能提交审查
+            EdgeSpec(from_key="qa", to_key="ghost", kind=EdgeKind.REWORK),  # 悬空
+            EdgeSpec(from_key="qa", to_key="qa", kind=EdgeKind.REWORK),  # 自环
+            EdgeSpec(from_key="qa", to_key="ceo", kind=EdgeKind.ASSIGN, id="q2c"),  # 审查者不能派发
+        ],
+    )
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert {"edge.duty_mismatch", "edge.dangling", "edge.self_loop"} <= codes(result)
+
+
+def test_duplicate_keys_ids_self_loop_and_no_engineer():
+    graph = GraphSpec(
+        nodes=[node("ceo", "r-ceo", Duty.COORDINATOR), node("ceo", "r-cto", Duty.COORDINATOR)],
+        edges=[
+            EdgeSpec(from_key="ceo", to_key="ceo", kind=EdgeKind.ASSIGN, id="same"),
+            EdgeSpec(from_key="ceo", to_key="cto", kind=EdgeKind.ASSIGN, id="same"),
+        ],
+    )
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert {"node.duplicate_key", "edge.duplicate_id", "graph.no_engineer"} <= codes(result)
+
+
+def test_unknown_role_is_reported_only_when_roles_are_known():
+    graph = canonical()
+    graph.nodes[3].role_id = "r-deleted"
+    assert "node.role_missing" in codes(g.validate_graph(graph, "ceo", ROLES))
+    # 不注入角色集合时不做这项判断（纯函数不碰数据库）
+    assert "node.role_missing" not in codes(g.validate_graph(graph, "ceo"))
+
+
+def test_write_scope_on_non_engineer_is_only_a_warning():
+    graph = canonical()
+    graph.nodes[3].workspace_scope = WorkspaceScope.WRITE
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert result.ok
+    assert "node.write_on_readonly_duty" in warn_codes(result)
+
+
+def test_helpers_resolve_flow_and_effective_defaults():
+    graph = canonical()
+    assert g.allowed_assignees(graph, "ceo") == ["cto"]
+    assert g.reviewer_of(graph, "se") == "qa"
+    assert g.rework_targets(graph, "qa") == ["se"]
+    assert g.reviewer_of(graph, "ceo") is None
+    assert g.entry_node(graph, "se").duty is Duty.ENGINEER
+
+    ceo = graph.nodes[0]
+    assert g.effective_workspace_scope(ceo) is WorkspaceScope.NONE
+    assert g.effective_workspace_scope(graph.nodes[3]) is WorkspaceScope.READ
+    assert TicketAction.ASK_USER in g.effective_output_contract(ceo)
+    assert g.effective_output_contract(graph.nodes[3]) == (TicketAction.REVIEW, TicketAction.REJECT)
+
+    budget = BudgetSpec(max_rounds_per_ticket=3)
+    assert g.effective_max_rounds(graph.nodes[2], budget) == 3
+    assert g.effective_max_rounds(node("se", "r-se", Duty.ENGINEER, max_rounds=5), budget) == 3
+
+
+def test_storable_round_trip():
+    graph = canonical()
+    data = g.to_storable(graph)
+    assert isinstance(data["nodes"][0]["duty"], str)
+    assert g.from_storable(data) == graph
+    assert g.budget_from_storable({"max_steps": 3}).max_steps == 3

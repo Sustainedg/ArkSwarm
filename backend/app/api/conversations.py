@@ -22,7 +22,7 @@ from ..runtime.service import (
     regenerate_last,
 )
 from ..schemas import ConversationCreate, ConversationRead, ConversationUpdate, MessageRead, SendMessage
-from .sse import sse_stream
+from ..transport.sse import sse_stream
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 

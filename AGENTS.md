@@ -23,6 +23,7 @@
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过角色分配生效**（`role_skills`） |
+| 协作域 | `backend/app/collab/` —— 多角色「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
 
 ---
 
@@ -61,13 +62,16 @@
 
 ```
  ┌ 前端 frontend/src ────────────────────────────────────────────────┐
- │  pages/ (Chat·Agents·Roles·Settings) · components/ (DynamicForm·  │
- │  MessageView·Modal) · lib/ (api·types)                             │
+ │  pages/ (Chat·Collab·Agents·Roles·Skills·Settings) ·              │
+ │  components/ (DynamicForm·MessageView·Modal·CollabCanvas…) ·       │
+ │  lib/ (api·types·agentStream·collabStream)                         │
  │  —— 只认「规范化事件」与 REST，不知道某个智能体长什么样            │
  └──────────────────────────────┬────────────────────────────────────┘
                         REST /api/*   ·   SSE POST /messages
  ┌──────────────────────────────▼────────────────────────────────────┐
  │ api/            路由、请求校验(Pydantic)、SSE 封装、HTTP 状态码    │
+ ├───────────────────────────────────────────────────────────────────┤
+ │ collab/         协作域（旁路）：编排图 · 工单协议 · 串行引擎 · 运行 API │
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
  │                 manager=运行表(注册/取消/追踪) · skills=技能编目/分配/物化 │
@@ -81,6 +85,13 @@
 
 依赖方向**只能自上而下**：`api → runtime → agents`；`api/runtime` 可依赖 `models/db/settings/security`；
 **`agents` 不得反向依赖任何上层**。跨层共享的数据结构定义在叶子层（如 `agents/base.py` 的 `AgentContext`）。
+
+协作域 `collab/` 是**旁路功能**，不在主干上：`api` 只把它当一条子路由挂上去，它在内部经**唯一边界**
+`collab/execution.py` 调用 `runtime.runner`。硬约束（有守卫测试 `tests/test_collab_architecture.py`）：
+`collab/*` 只允许依赖 `agents.events`（事件契约）与 `models/db/settings`，**不得** `import app.api.*`，
+也**不得**绕过 `execution.py` 直接 `import app.runtime.*`；`tickets.py`/`graph.py`/`prompt.py` 必须是
+不碰存储与 HTTP 的纯函数。框架层禁止反向依赖 `collab`。协作事件是自有的 `collab.*` 信封
+（`collab/protocol.py`），**不属于**铁律 5 的适配器事件协议。
 
 各层职责（改代码前先确认你改的是哪一层）：
 
@@ -114,7 +125,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 
 ### 3.1 规范化事件协议（`agents/events.py`）
 `run.started · message.delta · thinking.delta · tool.call · tool.result · usage · session · log · error · run.finished`
-外加传输层自有的 `turn.started`（`api/conversations.py` 发出）与 `stream.closed`（`api/sse.py` 收尾）。
+外加传输层自有的 `turn.started`（`api/conversations.py` 发出）与 `stream.closed`（`transport/sse.py` 收尾）。
 **适配器只能产出前 10 种**；`turn.started`/`stream.closed` 由框架产出，适配器不得越权。
 新增事件类型必须走铁律 5 的四步同步改动。
 
@@ -198,6 +209,12 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ### 4.7 新增前端页面
 `src/pages/XxxPage.tsx`，在 `src/App.tsx` 的 `Routes` 与 `NAV` 注册；类型加在 `src/lib/types.ts`，
 接口调用加在 `src/lib/api.ts`。样式写进 `src/index.css`，沿用既有 class 命名（`card`/`btn`/`pill`/`banner`…）。
+
+### 4.8 扩展协作域
+协作的一切都留在 `backend/app/collab/`：新增动作/状态改 `schemas.py` + `engine.py`（并同步
+`docs/collaboration-design.md`）；纯逻辑放 `tickets.py` / `graph.py` / `prompt.py`（有"必须是纯函数"的
+守卫）；对 `runtime`/`agents` 的调用只能加在 `execution.py`。给协作表加列要同时登记
+`ADDITIVE_COLUMNS`（SQLite 的 `create_all` 不会给旧表补列）。**不要**为了让协作跑通去改适配器或 `runtime/`。
 
 ---
 
@@ -287,6 +304,7 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
+| `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
 
 ---

@@ -51,6 +51,21 @@
 客户端断开连接时，`StreamingResponse` 的生成器被关闭，`guarded()` 捕获
 `CancelledError` 并调用 `registry.cancel(run_id)`，子进程被 kill，消息落地为 `interrupted`。
 
+**协作域**（`app/collab/`，见 `docs/collaboration-design.md`）是第二个编排器：它**不重写执行链路**，
+每一步仍然调用 `runtime.runner.stream_run()`，因此取消、超时、脱敏、`run_timeout_seconds` 全都复用。
+区别只在编排与记忆：
+
+```
+collab.engine.consume_turn()  ── 串行取一张就绪工单
+      └─ collab.execution.prepare_step()   # 全域唯一接触 runtime/agents 的边界
+           ├─ ctx.history = []、ctx.session_id = None   ← 每一步都是全新会话，不共享记忆
+           └─ ctx.prompt = prompt.build_step_prompt(...) # 只含工单字段与 gist 摘要
+      └─ runner.stream_run(ctx) → AgentEvent → 累积 → 解析 work_order → 更新工单 → 交给下一个岗位
+```
+
+协作域使用自有的信封协议 `collab.*`（`app/collab/protocol.py`），与下面的智能体事件协议**分属两层**，
+互不干扰；因此新增协作事件**不需要**改 `agents/events.py` / `consume_run` / `applyEvent`。
+
 ## 3. 规范化事件协议
 
 | 事件 | 载荷 | 用途 |
@@ -67,6 +82,10 @@
 | `run.finished` | `payload.status` ∈ ok/error/cancelled | 终态 |
 
 前端 `applyEvent()` 与后端 `consume_run()` 都只依赖这张表。
+
+> 协作运行另有一层 `collab.*` 信封（`collab.run.started` / `collab.step.started` / `collab.step.event`
+> / `collab.step.finished` / `collab.ticket.created` / `collab.ticket.updated` / `collab.run.status`
+> / `collab.notice`），它包住原始 `AgentEvent` 后发给协作页；**不是**对这张表的扩展。
 
 ## 4. 适配器的契约
 
@@ -144,6 +163,17 @@ skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, pat
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
        available, note)
 role_skills(role_id→roles, skill_id→skills，复合主键 + position)
+
+-- 协作域（独立于对话域，见 docs/collaboration-design.md）
+collab_teams(id, name, description, entry_key, workspace_dir, graph JSON, budget JSON)
+collab_runs(id, team_id→collab_teams, title, goal, status, entry_key, workspace_dir, budget, usage,
+            steps_used, tickets_used, error)
+collab_tickets(id, run_id→collab_runs, parent_ticket_id→collab_tickets, from_role_id→roles,
+               to_role_id→roles, owner_key, holder_key, submitter_key, title, brief JSON, state,
+               round, max_rounds, verdict, review_comment, result JSON, closed_at)
+collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→roles, agent_id→agent_instances,
+             role_key, duty, sequence, action, status, content, gist, parts JSON, usage JSON,
+             error, audit JSON)
 ```
 
 设计取舍：
@@ -156,6 +186,13 @@ role_skills(role_id→roles, skill_id→skills，复合主键 + position)
 - **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个智能体可以让不同角色走不同模型。
 - **技能只增不删**：技能是从文件系统扫描出来的，目录消失只标记 `available=false`，
   因此角色分配（`role_skills`）永远指向真实存在的记录；删除角色时分配关系级联删除。
+- **协作域的分工键**：工单用 `owner_key`（谁拆的谁汇总）、`holder_key`（现在谁握着）、
+  `submitter_key`（最近提交者，打回时默认退回给他）记岗位流转；步骤用 `gist` 存**引擎派生**的
+  一句话摘要 —— 拼下游 prompt 时只读 `gist`、不读 `content`，从数据通路上保证"下游只看工单、
+  看不到上游对话"。岗位用 key 而不是角色 id，是因为角色可以改绑，历史工单仍要能复现。
+- **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以协作域把"后加的
+  可选列"登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`，由 `db.init_db` 用
+  `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐：现有 `magenta.db` 启动后自动对齐，不重建、不丢数据。
 - **外键用 `ON DELETE RESTRICT`**：删除被引用的智能体/角色会被拒绝（409），避免历史断裂；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
@@ -168,7 +205,8 @@ role_skills(role_id→roles, skill_id→skills，复合主键 + position)
 | 零代码接入私有 CLI | 用 `custom-cli` 适配器填命令 + JSON 取值路径 |
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |
 | 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `discover_skills()` 与 `skill_mount()` |
-| 换掉事件传输（SSE→WebSocket） | 只改 `api/sse.py` 与前端 `streamApi` |
+| 新增协作能力（多角色工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
+| 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
 
 ## 8. 已知边界

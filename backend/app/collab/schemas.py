@@ -1,0 +1,297 @@
+"""协作域的请求/响应契约与编排图结构。
+
+这里是「画布上的那张图」的权威定义：节点（角色在协作里的岗位）与有向边（允许的流转）。
+图的问题分两类：
+
+* **结构性错误**（不是合法的 JSON 形状、类型不对）→ Pydantic 直接 422；
+* **语义错误**（少入口、缺回边、成环…）→ ``graph.validate_graph()`` 返回可读的
+  ``errors`` / ``warnings``。保存时不拦截（允许存草稿），发起运行时才拒绝。
+
+请求体一律 ``extra="allow"``：未知键原样保留，便于后续加字段时旧前端不崩。
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Duty(str, Enum):
+    """节点在协作里的岗位。"""
+
+    COORDINATOR = "coordinator"  # 协调者：与用户对话、只派活
+    ENGINEER = "engineer"        # 实施者：真正动手改代码
+    REVIEWER = "reviewer"        # 审查者：只读 + 给审查意见
+
+
+class EdgeKind(str, Enum):
+    """有向边的类型，决定工单能沿哪个方向流转。"""
+
+    ASSIGN = "assign"  # 派发 / 交付
+    REVIEW = "review"  # 提交给审查者
+    REWORK = "rework"  # 审查者打回给实施者（必须与 review 边成对出现）
+
+
+class WorkspaceScope(str, Enum):
+    """节点对团队共享工作目录的权限范围。"""
+
+    NONE = "none"    # 不给工作目录（分配一次性空目录）
+    READ = "read"    # 可读；越权写会被运行前后的指纹审计发现
+    WRITE = "write"  # 可写
+
+
+class TicketAction(str, Enum):
+    """一个节点在一轮里能发起的动作。"""
+
+    DELEGATE = "delegate"   # 派发 / 拆分子工单
+    SUBMIT = "submit"       # 提交实施结果
+    REVIEW = "review"       # 审查并给出结论
+    DONE = "done"           # 确认完成
+    ASK_USER = "ask_user"   # 向用户提问（仅入口节点）
+    REJECT = "reject"       # 否决，终止该分支
+
+
+class DeliveryMode(str, Enum):
+    """``delegate`` 的两种语义：把同一件活交出去，还是拆出别人独立负责的子工单。"""
+
+    HANDOFF = "handoff"  # 转交：本工单换持有者，我继续等结果
+    SPLIT = "split"      # 拆分：新建子工单（我是发起人，等它完成后汇总）
+
+
+class TicketState(str, Enum):
+    OPEN = "open"
+    WORKING = "working"
+    WAITING_CHILDREN = "waiting_children"
+    REVIEW = "review"
+    REWORK = "rework"
+    DONE = "done"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
+
+
+class RunStatus(str, Enum):
+    RUNNING = "running"
+    WAITING_USER = "waiting_user"
+    DONE = "done"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+#: 审查结论的合法取值
+VERDICT_PASS = "pass"
+VERDICT_CHANGES = "changes_requested"
+VERDICTS = (VERDICT_PASS, VERDICT_CHANGES)
+
+
+def _edge_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+class NodeSpec(BaseModel):
+    """协作图上的一个节点 = 某个角色在本次协作里担任的岗位。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    role_id: str = Field(min_length=1, max_length=64)
+    label: str = Field(default="", max_length=120)
+    duty: Duty = Duty.ENGINEER
+    #: 职责说明，追加在角色人格之后
+    instructions: str = ""
+    #: 能力边界（写给人看、也写进 prompt 的约束）
+    capability_scope: str = ""
+    #: 为空表示按 duty 取默认值（协调者 none / 实施者 write / 审查者 read）
+    workspace_scope: WorkspaceScope | None = None
+    #: 为空表示按 duty 取默认动作集合
+    output_contract: list[TicketAction] = Field(default_factory=list)
+    #: 节点级适配器参数覆盖（键必须来自该智能体类型的 config_fields）
+    options_override: dict[str, Any] = Field(default_factory=dict)
+    #: 同一工单在该节点上最多返工几轮；0 表示取团队默认
+    max_rounds: int = Field(default=0, ge=0)
+    x: float = 0
+    y: float = 0
+
+
+class EdgeSpec(BaseModel):
+    """一条有向边：``from_key`` 允许把工单沿 ``kind`` 交给 ``to_key``。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default_factory=_edge_id, min_length=1, max_length=64)
+    from_key: str = Field(min_length=1, max_length=64)
+    to_key: str = Field(min_length=1, max_length=64)
+    kind: EdgeKind = EdgeKind.ASSIGN
+    label: str = Field(default="", max_length=120)
+    #: 这条边额外的返工轮次上限（0 = 不额外限制）：实际上限取「边 / 节点 / 运行时预算」三者最小
+    max_rounds: int = Field(default=0, ge=0)
+
+
+class GraphSpec(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    nodes: list[NodeSpec] = Field(default_factory=list)
+    edges: list[EdgeSpec] = Field(default_factory=list)
+
+
+class BudgetSpec(BaseModel):
+    """一次协作运行的预算上限。任何一项超限都会挂起并明确提示用户。"""
+
+    max_steps: int = Field(default=60, ge=1)
+    max_tickets: int = Field(default=30, ge=1)
+    max_rounds_per_ticket: int = Field(default=3, ge=1)
+    #: 0 表示不限制 token
+    max_tokens: int = Field(default=0, ge=0)
+    timeout_seconds: int = Field(default=3600, ge=30)
+
+
+class GraphIssue(BaseModel):
+    code: str
+    message: str
+    node_key: str | None = None
+    edge_id: str | None = None
+
+
+class GraphValidation(BaseModel):
+    ok: bool = True
+    errors: list[GraphIssue] = Field(default_factory=list)
+    warnings: list[GraphIssue] = Field(default_factory=list)
+
+    @classmethod
+    def build(cls, errors: list[GraphIssue], warnings: list[GraphIssue]) -> GraphValidation:
+        return cls(ok=not errors, errors=errors, warnings=warnings)
+
+
+class TeamCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+    entry_key: str | None = None
+    workspace_dir: str | None = None
+    graph: GraphSpec = Field(default_factory=GraphSpec)
+    budget: BudgetSpec = Field(default_factory=BudgetSpec)
+
+
+class TeamUpdate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = None
+    entry_key: str | None = None
+    workspace_dir: str | None = None
+    #: 整图替换：编辑器保存的就是完整的一张图
+    graph: GraphSpec | None = None
+    budget: BudgetSpec | None = None
+
+
+class TeamRead(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    entry_key: str | None = None
+    workspace_dir: str | None = None
+    graph: GraphSpec
+    budget: BudgetSpec
+    node_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    #: 每次都重新算：编辑器要能在保存前就看到问题
+    validation: GraphValidation = Field(default_factory=GraphValidation)
+
+
+class TeamValidateIn(BaseModel):
+    """只校验不保存；不给图就校验已存的那张。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    entry_key: str | None = None
+    graph: GraphSpec | None = None
+
+
+class RunCreate(BaseModel):
+    """发起一次协作运行；目标本身走 ``/runs/{id}/messages`` 的第一条消息。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    team_id: str = Field(min_length=1, max_length=64)
+    title: str | None = None
+
+
+class RunMessage(BaseModel):
+    content: str = ""
+
+
+class TicketRead(BaseModel):
+    id: str
+    run_id: str
+    parent_ticket_id: str | None = None
+    from_role_id: str | None = None
+    to_role_id: str
+    owner_key: str = ""
+    holder_key: str = ""
+    submitter_key: str = ""
+    title: str
+    brief: dict[str, Any] = Field(default_factory=dict)
+    state: str
+    round: int = 0
+    max_rounds: int = 0
+    verdict: str | None = None
+    review_comment: str | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+
+class StepRead(BaseModel):
+    id: str
+    run_id: str
+    ticket_id: str | None = None
+    #: 用户自己的发言没有角色与智能体
+    role_id: str | None = None
+    agent_id: str | None = None
+    role_name: str | None = None
+    role_key: str = ""
+    duty: str = ""
+    sequence: int = 0
+    action: str = ""
+    status: str
+    content: str = ""
+    #: 引擎派生的结构化摘要（交接给下游的就是它，而不是 content）
+    gist: str = ""
+    parts: list[dict[str, Any]] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    audit: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime
+    finished_at: datetime | None = None
+
+
+class RunRead(BaseModel):
+    id: str
+    team_id: str
+    team_name: str | None = None
+    title: str
+    goal: str = ""
+    status: str
+    entry_key: str | None = None
+    workspace_dir: str | None = None
+    #: 这次运行的预算（界面用来显示「已用 / 上限」）
+    budget: BudgetSpec = Field(default_factory=BudgetSpec)
+    steps_used: int = 0
+    tickets_used: int = 0
+    usage: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    ticket_count: int = 0
+    open_tickets: int = 0
+
+
+class RunDetail(RunRead):
+    tickets: list[TicketRead] = Field(default_factory=list)
+    steps: list[StepRead] = Field(default_factory=list)

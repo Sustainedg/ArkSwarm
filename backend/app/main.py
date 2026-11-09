@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, collab
 from .agents import all_agents
 from .api import api_router
 from .bootstrap import seed_if_empty
@@ -44,6 +44,9 @@ async def lifespan(app: FastAPI):
     async with SessionLocal() as session:
         await seed_if_empty(session, all_agents())
         await _scan_skills(session)
+        recovered = await collab.recover_interrupted(session)
+        if recovered:
+            logger.info("协作：%s 次运行因重启被标记为 interrupted", recovered)
     logger.info("%s %s 已就绪 — 数据目录 %s", settings.app_name, __version__, settings.data_dir)
     yield
 

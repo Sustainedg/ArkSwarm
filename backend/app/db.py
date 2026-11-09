@@ -29,11 +29,32 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:
         cursor.close()
 
 
+def _add_missing_columns(connection, columns_by_table: dict[str, dict[str, str]]) -> None:
+    """给**已存在**的表补齐后加的可选列（幂等）。
+
+    ``create_all`` 只会建缺失的表，不会 ``ALTER`` 旧表；而本地库含真实数据、禁止重建，
+    因此协作域把"后加的可选列"登记在 ``collab.tables.ADDITIVE_COLUMNS``，由这里安全地补上：
+    带默认值、旧行留空，既不丢数据也不改约束。
+    """
+    for table, columns in columns_by_table.items():
+        existing = {
+            row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})").all()
+        }
+        if not existing:  # 表还不存在：create_all 已经按最新结构建好
+            continue
+        for name, ddl in columns.items():
+            if name not in existing:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 async def init_db() -> None:
     from . import models  # noqa: F401 - 注册表结构
+    from .collab import tables as collab_tables  # 协作域的表结构与后加列声明
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        if _settings.sqlalchemy_url.startswith("sqlite"):
+            await conn.run_sync(_add_missing_columns, collab_tables.ADDITIVE_COLUMNS)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

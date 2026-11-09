@@ -112,7 +112,7 @@ POST /api/conversations/{id}/messages
 | `run.finished` | `payload.status ∈ ok/error/cancelled` | 终态 |
 
 框架额外产出两个传输层事件：`turn.started`（`api/conversations.py`，携带 run_id 与消息 id）
-与 `stream.closed`（`api/sse.py`，收尾）。**适配器不允许产出这两个。**
+与 `stream.closed`（`transport/sse.py`，收尾）。**适配器不允许产出这两个。**
 
 新增事件类型 = 改公共协议，必须同步四处：`events.py` → `service.consume_run` → 前端
 `types.ts` + `applyEvent` → `docs/architecture.md`；`test_architecture.py` 会拦住漏改。
@@ -199,7 +199,7 @@ POST /api/conversations/{id}/messages
 ├─ 让界面多展示一种内容（例如"计划"）
 │     → 新增规范化事件（§6.5）
 ├─ 换存储 / 换传输
-│     → 只动 db.py+settings（存储）或 api/sse.py+前端 streamPost（传输）
+│     → 只动 db.py+settings（存储）或 transport/sse.py+前端 streamPost（传输）
 └─ 其它（角色、对话、页面、样式）
       → 按 §2.1 分层表定位到唯一一层，不要在多层同时改
 ```
@@ -296,7 +296,7 @@ class AcmeHarness(OpenAIHarnessBase):
 | 任意 OpenAI 兼容端点 | 已有 `openai_harness.py`（OpenRouter/vLLM/Ollama/Kimi/GLM） | 新供应商 = 一个子类 |
 | 未来的 Aider / Cline / Continue 等 CLI | 无适配器 | 按 §6.1 写模块；或先用 §6.3 |
 | 非 OpenAI 协议的 API（如 Anthropic Messages API） | 复用 `OpenAIHarnessBase` 不合适 | 以 `Runtime.API` 直接实现 `async stream(ctx)`，产出标准事件即可 |
-| 需要"多智能体协作/编排" | 目前一次对话一个智能体 | 在 `runtime/` 新增编排层，**复用** `agents/` 与事件协议，不要改适配器 |
+| 需要"多智能体协作/编排" | 已有独立协作域 `app/collab/`（可视化编排 + 工单协议 + 串行引擎），见 `docs/collaboration-design.md` | 在 `app/collab/` 内扩展；每一步仍复用 `runtime.runner` 与事件协议，不要改适配器，也不要让框架层反向依赖协作域 |
 
 判断标准始终是：**这次改动是否只落在 `agents/builtin/` 一个文件里？** 如果能，就说明架构还健康。
 
@@ -310,6 +310,11 @@ class AcmeHarness(OpenAIHarnessBase):
 - 事件并入状态统一在 `ChatPage.applyEvent`，新增事件类型在这里加一个 `case`。
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
+- **前端依赖只允许这两个**：`react-markdown@10.1.0` 与 `remark-gfm@4.0.1`（精确版本）。理由：各内核的
+  产出以 Markdown 为主（代码块、表格、列表、任务清单），此前用 `white-space: pre-wrap` 直出不可读；
+  手写解析器等于重复造轮子，且转义/边界极易写错。为此新增 `components/MarkdownView.tsx`
+  （统一代码块/表格/列表样式、复用既有 CSS 变量，并显式 `skipHtml` —— 不渲染原始 HTML，避免注入），
+  `MessageView` 的文本段统一经它渲染。**除这两个库外不得再加前端依赖**；确实需要时先在本文件写明理由。
 
 ---
 
