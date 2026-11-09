@@ -260,6 +260,10 @@ frontend/
   改在「协作组」详情页用**表单**编排：岗位是卡片、连线是「从谁到谁」的下拉选择；
   两端的字段语义、默认值与中文标签共用 `lib/collabDraft.ts` 一份，校验一律走服务端
   `POST /api/collab/teams/{id}/validate`。
+- **外壳钉在可视视口上**：`.m-app` 用 `position: fixed; top/right/bottom/left: 0`，而不是
+  `100vh`/`100dvh` 配 `height: 100%` 父链 —— 真机上地址栏与底部工具栏会伸缩，两者高度经常对不齐，
+  底栏就会浮起来留一条缝或被工具栏压住。固定定位跟的是可视视口，刘海与 Home 条交给
+  `env(safe-area-inset-*)`（守卫测试 `test_mobile_shell_is_pinned_to_the_visible_viewport`）。
 - **移动端锁定缩放**：移动端采用「固定外壳」布局（顶栏 + 底部 Tab + 内部滚动区），随手指缩放会
   让外壳错位，因此入口视口写 `maximum-scale=1.0, user-scalable=no`，并用 `mobile.css` 的
   `touch-action: pan-x pan-y` 兜底（iOS Safari 自 iOS 10 起忽略 `user-scalable=no`，只有

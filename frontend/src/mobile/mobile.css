@@ -42,7 +42,9 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body, #root { height: 100%; }
+/* 文档本身不滚动：滚动只发生在内部的 .m-page-body / .m-thread / 弹层里。 */
+html, body { height: 100%; overflow: hidden; }
+#root { height: 100%; }
 
 /* 禁止双指/双击缩放。`user-scalable=no` 在 iOS Safari 上会被忽略，
    `touch-action: pan-x pan-y`（不含 pinch-zoom）才是真正生效的那道闸；
@@ -68,7 +70,14 @@ ul { margin: 0; padding: 0; list-style: none; }
 code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- 外壳：顶栏 + 可滚动内容 + 底部 Tab ---------- */
-.m-app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg); }
+/* 外壳四边贴 0，钉在「可视视口」上。真机上地址栏与底部工具栏会伸缩，`100vh` /
+   `100dvh` 与 `height: 100%` 的父链高度经常对不齐 —— 底栏要么浮在屏幕底部之上
+   留出一条缝，要么被浏览器工具栏压住。`position: fixed` 跟的是可视视口，配合
+   `env(safe-area-inset-*)` 处理刘海与 Home 条，是手机上最稳的做法（同 .m-sheet-backdrop）。 */
+.m-app {
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0;
+  display: flex; flex-direction: column; overflow: hidden; background: var(--bg);
+}
 .m-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 .m-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }

@@ -224,6 +224,9 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **两端通用**：类型加在 `src/lib/types.ts`，接口调用加在 `src/lib/api.ts`；禁止在组件里直接 `fetch`。
 - **移动端必须保持 PWA 可用**：新增页面不得依赖 `/m/` 之外的顶层路由；离线只会命中
   Service Worker 预缓存的外壳，任何新资源都要能从 `/m/` 入口按相对/绝对路径取到。
+- **移动端外壳钉在可视视口上**：`.m-app` 用 `position: fixed` + 四边贴 0，**不要**用
+  `100vh`/`100dvh` 配 `height: 100%` 父链 —— 真机上地址栏与底部工具栏会伸缩，两者高度经常
+  对不齐，底栏就会浮起来留缝或被工具栏压住；`env(safe-area-inset-*)` 负责刘海与 Home 条。
 - **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 底部 Tab + 内部滚动），入口视口写
   `maximum-scale=1.0, user-scalable=no`，并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底
   （iOS Safari 忽略 `user-scalable=no`，只有 `touch-action` 真正生效）。配套约束：移动端输入框字号

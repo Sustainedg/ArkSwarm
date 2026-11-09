@@ -174,3 +174,24 @@ def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
     desktop_html = (FRONTEND / "index.html").read_text(encoding="utf-8")
     assert "user-scalable" not in desktop_html
     assert "maximum-scale" not in desktop_html
+
+
+@needs_frontend
+def test_mobile_shell_is_pinned_to_the_visible_viewport():
+    """外壳必须钉在「可视视口」上，底栏才会真正贴到屏幕底部。
+
+    真机上地址栏与底部工具栏会伸缩：`100vh` / `100dvh` 与 `height: 100%` 的父链高度
+    经常对不齐，底栏要么浮起来留缝、要么被工具栏压住。四边贴 0 的固定定位跟的是可视视口。
+    """
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+
+    app_rule = re.search(r"\.m-app \{([^}]*)\}", css)
+    assert app_rule, "mobile.css 缺少 .m-app 样式"
+    rule = app_rule.group(1)
+    assert "position: fixed" in rule
+    for edge in ("top: 0", "right: 0", "bottom: 0", "left: 0"):
+        assert edge in rule, f".m-app 需要 {edge}（四边贴住可视视口）"
+    assert "100vh" not in rule and "100dvh" not in rule, "外壳不该再用视口高度单位定高"
+
+    html_rule = re.search(r"html, body \{([^}]*)\}", css)
+    assert html_rule and "overflow: hidden" in html_rule.group(1), "文档本身不应滚动"
