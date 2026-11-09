@@ -1,0 +1,161 @@
+"""架构约束测试：把 AGENTS.md 里的分层铁律固化成可执行检查。
+
+这些断言失败通常意味着有人（很可能是 AI）在框架层为某个具体智能体开分支，
+或让适配器反向依赖了上层模块。遇到失败请先读 AGENTS.md §1/§2，再改代码。
+"""
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+import pytest
+
+from app.agents import all_agents, known_ids
+from app.agents.base import FieldType, Runtime
+from app.agents.events import EventType
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+AGENTS_DIR = APP_DIR / "agents"
+BUILTIN_DIR = AGENTS_DIR / "builtin"
+
+#: 适配器（叶子层）不得依赖的上层 / 存储模块
+FORBIDDEN_APP_ROOTS = {
+    "api",
+    "runtime",
+    "db",
+    "models",
+    "schemas",
+    "security",
+    "settings",
+    "bootstrap",
+    "main",
+}
+
+#: 规范化事件协议（AGENTS.md 铁律 5）。改这里就等于改协议，必须四处同步。
+DOCUMENTED_EVENTS = {
+    "run.started",
+    "message.delta",
+    "thinking.delta",
+    "tool.call",
+    "tool.result",
+    "usage",
+    "session",
+    "log",
+    "error",
+    "run.finished",
+}
+
+#: 内置适配器（新增适配器时这里也要加，用于断言注册表完整）
+BUILTIN_IDS = {
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "deepseek-harness",
+    "openai-harness",
+    "custom-cli",
+}
+
+CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _adapter_modules() -> list[Path]:
+    return sorted(
+        [
+            AGENTS_DIR / "base.py",
+            AGENTS_DIR / "events.py",
+            AGENTS_DIR / "registry.py",
+            *BUILTIN_DIR.glob("*.py"),
+        ]
+    )
+
+
+def _package_parts(path: Path) -> list[str]:
+    return list(path.resolve().relative_to(APP_DIR).parts[:-1])
+
+
+def _forbidden_imports(path: Path) -> list[str]:
+    """返回该文件中违反「适配器不得反向依赖上层」的 import 语句。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = _package_parts(path)
+    violations: list[str] = []
+
+    def check_absolute(module: str) -> None:
+        if module == "app" or module.startswith("app."):
+            head = module.split(".")[1] if "." in module else ""
+            if head in FORBIDDEN_APP_ROOTS:
+                violations.append(f"import {module}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                check_absolute(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level == 0:
+                check_absolute(module)
+                continue
+            # 相对导入：level=L 表示在当前包基础上向上回退 L-1 层。
+            base = package[: len(package) - (node.level - 1)]
+            if not base:  # 指到了 app 顶层的兄弟模块（例如 `from ..models import X`）
+                head = module.split(".")[0] if module else ""
+                if head in FORBIDDEN_APP_ROOTS:
+                    violations.append(f"from {'.' * node.level}{module} import ...")
+    return violations
+
+
+@pytest.mark.parametrize("path", _adapter_modules(), ids=lambda p: p.name)
+def test_adapters_do_not_depend_on_upper_layers(path: Path):
+    assert _forbidden_imports(path) == [], (
+        f"{path.name} 反向依赖了上层模块：{_forbidden_imports(path)}。"
+        "适配器只能依赖 agents/*、标准库与 httpx（AGENTS.md 铁律 2）。"
+    )
+
+
+def test_registry_knows_all_builtin_adapters():
+    assert BUILTIN_IDS <= set(known_ids())
+
+
+def test_every_adapter_declares_its_contract():
+    for definition in all_agents():
+        assert definition.id and definition.name, f"{definition.id} 缺少 id/name"
+        assert definition.description, f"{definition.id} 缺少 description"
+        assert isinstance(definition.auto_provision, bool), f"{definition.id}.auto_provision 必须是布尔值"
+        if definition.runtime is Runtime.CLI and definition.auto_provision:
+            assert definition.executable, f"CLI 适配器 {definition.id} 必须声明 executable"
+        keys = [field.key for field in definition.config_fields]
+        assert len(keys) == len(set(keys)), f"{definition.id} 的 config_fields key 重复"
+
+
+def test_config_field_types_are_valid():
+    valid = {member.value for member in FieldType}
+    for definition in all_agents():
+        for field in definition.config_fields:
+            assert field.type.value in valid, f"{definition.id}.{field.key} 的 FieldType 非法"
+
+
+def test_adapter_metadata_and_labels_are_localised():
+    """新增适配器时，name/description/字段 label 必须是中文（AGENTS.md 铁律 7 与 §6）。"""
+    for definition in all_agents():
+        assert CJK.search(definition.description), f"{definition.id} 的 description 必须是中文"
+        for field in definition.config_fields:
+            assert CJK.search(field.label), f"{definition.id}.{field.key} 的 label 必须是中文"
+
+
+def test_event_protocol_matches_the_documented_contract():
+    actual = {member.value for member in EventType}
+    assert actual == DOCUMENTED_EVENTS, (
+        "事件协议发生变化：请在 events.py、runtime/service.consume_run、"
+        "前端 applyEvent + types.ts、docs/architecture.md 四处同步（AGENTS.md 铁律 5）。"
+    )
+
+
+def test_framework_layers_do_not_hardcode_agent_ids():
+    """框架层（api/runtime）不得为具体智能体开分支（AGENTS.md 铁律 1）。"""
+    offenders: list[str] = []
+    for path in sorted(list((APP_DIR / "api").glob("*.py")) + list((APP_DIR / "runtime").glob("*.py"))):
+        text = path.read_text(encoding="utf-8")
+        for agent_id in BUILTIN_IDS:
+            if f'"{agent_id}"' in text or f"'{agent_id}'" in text:
+                offenders.append(f"{path.name} 出现了硬编码的智能体 id：{agent_id}")
+    assert offenders == [], "\n".join(offenders)

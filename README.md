@@ -241,15 +241,23 @@ backend/
   app/runtime/           service（编排/持久化）· runner（执行）· manager（运行表）
   app/api/               路由 · SSE
   app/models.py db.py    数据模型与引擎
-  tests/                 23 个测试：适配器解析、API 契约、harness 工具循环
+  tests/                 适配器解析、API 契约、harness 工具循环、架构守卫
 frontend/
   src/pages/             Chat · Agents · Roles · Settings
   src/components/        DynamicForm（由 schema 生成表单）· MessageView · Modal
+AGENTS.md                ★ 工程约定（AI/人都要遵守的硬约束）
 docs/architecture.md     深挖：一次运行的完整时序、事件协议、扩展点
+docs/ai-coding-standard.md  编码规范详版：分层理由、契约、扩展决策树、自检清单
 ```
+
+## 参与开发
+
+改代码前先读 [`AGENTS.md`](./AGENTS.md)（分层铁律与扩展手册），需要理由与边界时读
+[`docs/ai-coding-standard.md`](./docs/ai-coding-standard.md)。分层约束由
+`backend/tests/test_architecture.py` 自动校验，跑 `./scripts/test.sh` 即可。
 
 ## 校验
 
 ```bash
-./scripts/test.sh     # pytest + 前端 typecheck
+./scripts/test.sh     # pytest（含架构守卫）+ 前端 typecheck
 ```
