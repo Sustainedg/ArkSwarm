@@ -118,7 +118,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 `availability()`、`probe()`/`probe_api()`、`resume_supported(ctx)`（可选钩子）。
 - `parse_line(line, run)` 里**不要吞异常**：解析不了就 `yield log(...)` 或忽略该行，别让整个运行崩掉。
 - 需要"运行结束时补发事件"的适配器，请覆盖 **`AgentRun.finish()`**（基类钩子）。
-  ⚠️ 注意：`custom_cli.py` 里现存的 `finalize()` 是**未被调用的死代码**，不要照抄这个方法名。
+  ⚠️ 注意：不要自创 `finalize()` 之类的方法名，运行层的唯一结尾钩子是 `AgentRun.finish()`。
 
 ### 3.3 `Capabilities` 驱动框架行为（声明即生效，别在别处打补丁）
 `streaming`、`sessions`（服务端可续接→只发本轮 prompt，否则回放 transcript）、

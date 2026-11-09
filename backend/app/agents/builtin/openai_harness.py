@@ -26,7 +26,6 @@ from ..base import (
 from ..events import (
     AgentEvent,
     error,
-    log,
     text_delta,
     thinking_delta,
     tool_call,
@@ -44,7 +43,7 @@ class OpenAIHarnessBase(AgentDefinition):
     executable = None
     capabilities = Capabilities(
         streaming=True,
-        sessions=False,  # transcript is replayed from the database
+        sessions=False,  # 由数据库回放对话记录（transcript）
         native_system_prompt=True,
         tools=True,
         mcp=False,

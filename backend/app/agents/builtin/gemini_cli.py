@@ -20,15 +20,12 @@ from ..events import (
     log,
     session,
     text_delta,
-    thinking_delta,
     tool_call,
     tool_result,
     usage,
 )
 from ..registry import register_agent
 from .util import as_list, flatten_content
-
-APPROVAL_MODES = ["default", "auto_edit", "yolo"]
 
 
 @register_agent

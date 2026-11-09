@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stand-in for a real CLI agent: reads a prompt, emits JSONL on stdout."""
+"""真实 CLI 智能体的替身：读取提示词，并按 JSONL 逐行输出到标准输出。"""
 import json
 import sys
 import time

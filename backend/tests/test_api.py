@@ -69,7 +69,7 @@ async def test_agent_crud_masks_secrets(client: httpx.AsyncClient):
 
     patched = await client.patch(f"/api/agents/{agent['id']}", json={"name": "Renamed"})
     assert patched.json()["name"] == "Renamed"
-    # omitting api_key keeps the stored secret
+    # 省略 api_key 表示保留已存密钥
     assert patched.json()["api_key_set"] is True
 
     cleared = await client.patch(f"/api/agents/{agent['id']}", json={"api_key": ""})
@@ -133,7 +133,7 @@ async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncCl
     kinds_of_parts = [p["kind"] for p in messages[1]["parts"]]
     assert "tool_call" in kinds_of_parts and "tool_result" in kinds_of_parts
 
-    # title auto-derived from the first user turn (agent row still unaffected)
+    # 标题自动取自首条用户消息（智能体记录不受影响）
     assert detail["conversation"]["title"] == "hello world"
     assert detail["conversation"]["session_id"] == "sess-42"
 
@@ -204,4 +204,4 @@ async def test_role_and_conversation_guards(client: httpx.AsyncClient):
 async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):
     overview = (await client.get("/api/system/overview")).json()
     assert overview["agent_types"] == 6
-    assert overview["installed_types"] >= 1  # claude-code is present in this environment
+    assert overview["installed_types"] >= 1  # 当前环境中已安装 claude-code

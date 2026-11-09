@@ -30,7 +30,7 @@ def _sqlite_pragmas(dbapi_connection, _record) -> None:
 
 
 async def init_db() -> None:
-    from . import models  # noqa: F401  (register tables)
+    from . import models  # noqa: F401 - 注册表结构
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)

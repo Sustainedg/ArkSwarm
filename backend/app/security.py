@@ -1,4 +1,4 @@
-"""API Key 静态加密存储，且接口永不返回明文。"""
+"""API 密钥的静态加密存储，且接口永不返回明文。"""
 from __future__ import annotations
 
 import base64
@@ -33,7 +33,7 @@ def _load_key() -> bytes:
         key_file.write_bytes(key)
         try:
             os.chmod(key_file, 0o600)
-        except OSError:  # best effort on exotic filesystems
+        except OSError:  # 某些文件系统不支持改权限时忽略
             pass
         _key_cache = key
     return _key_cache

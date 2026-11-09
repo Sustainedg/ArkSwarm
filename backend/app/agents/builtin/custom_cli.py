@@ -31,11 +31,11 @@ class CustomCliAgent(AgentDefinition):
     name = "自定义 CLI"
     vendor = "自定义"
     description = (
-        "声明式适配器：指向任意命令行 agent，描述它的参数与输出结构，"
+        "声明式适配器：指向任意命令行智能体，描述它的参数与输出结构，"
         "它就能成为可绑定给角色的一等公民。"
     )
     runtime = Runtime.CLI
-    executable = None  # resolved per instance
+    executable = None  # 由实例上的「可执行命令」决定
     auto_provision = False  # 这是模板：未填写命令前不参与播种
     api_key_env = None
     base_url_env = None
@@ -146,6 +146,10 @@ class CustomCliAgent(AgentDefinition):
         if not path:
             return False, f"未在 PATH 中找到 `{command}`"
         return True, f"解析到 {path}"
+
+    def resume_supported(self, ctx: AgentContext) -> bool:
+        # 只有能解析出会话 ID 时才能续接；否则交给框架回放完整对话记录。
+        return bool(ctx.option("session_path"))
 
     # -- 构造启动命令 --------------------------------------------------------
 
@@ -268,11 +272,6 @@ class CustomCliAgent(AgentDefinition):
             else:
                 run.state["full_text"] = text
                 yield text_delta(text)
-
-    def finalize(self, run: AgentRun) -> Iterable[AgentEvent]:
-        if run.state.get("is_error"):
-            return
-        return ()
 
 
 def _safe_format(template: str, values: dict[str, str]) -> str:

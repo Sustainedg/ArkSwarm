@@ -347,8 +347,6 @@ class AcmeHarness(OpenAIHarnessBase):
 
 | 位置 | 问题 | 处理建议 |
 | --- | --- | --- |
-| `agents/builtin/custom_cli.py` | 定义了 `finalize()`，但基类钩子叫 `AgentRun.finish()`，该方法**从未被调用**（死代码） | 要么改名为 `finish()` 并接上，要么删除；改前先确认需要的语义 |
-| `settings.plugin_dir` | 字段已声明，但没有任何代码扫描该目录 | 若要支持"用户自己投放适配器"，在 `registry._autoload()` 里实现并加测试；否则删除该字段 |
 | 无迁移框架 | `init_db()` 用 `metadata.create_all`，无法处理列变更 | 频繁演进 schema 前引入 Alembic |
 | `AgentDefinition.stream` | 基类用 `NotImplementedError`，靠 `Runtime.API` 分支兜底 | 可接受；新增 API 适配器务必实现 `stream()` |
 

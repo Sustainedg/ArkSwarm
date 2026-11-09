@@ -59,7 +59,7 @@ def test_claude_code_stream_parsing_dedupes_partial_text():
     events = [e for line in lines for e in run.feed(json.dumps(line))]
     kinds = [e.type.value for e in events]
     assert kinds.count("session") == 1
-    assert run.emitted_text == "Hello"  # no duplicated aggregate text
+    assert run.emitted_text == "Hello"  # 不应重复输出整段文本
     assert "tool.call" in kinds and "tool.result" in kinds and "usage" in kinds
     assert run.session_id == "s1"
 
@@ -92,7 +92,7 @@ def test_codex_parses_modern_and_legacy_events():
     events = [e for line in lines for e in run.feed(json.dumps(line))]
     types = [e.type.value for e in events]
     assert "session" in types and "tool.call" in types and "tool.result" in types and "usage" in types
-    assert run.emitted_text == "legacy"  # gateway text suppressed when deltas exist
+    assert run.emitted_text == "legacy"  # 已有增量时抑制网关补发的整段文本
     assert run.session_id == "th1"
 
 

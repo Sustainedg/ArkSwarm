@@ -75,12 +75,12 @@ async def test_harness_runs_the_tool_loop_and_streams_text(stub_harness, tmp_pat
     totals = {k: v for e in events if e.type.value == "usage" for k, v in e.payload.items()}
     assert totals == {"prompt_tokens": 7, "completion_tokens": 3}
 
-    # the shell tool really executed inside the workspace
+    # shell 工具确实在工作目录内执行了
     results = [e for e in events if e.type.value == "tool.result"]
     assert "hi" in results[0].payload["output"]
     assert results[0].payload["is_error"] is False
 
-    # second request replays the assistant tool call plus the tool output
+    # 第二次请求会重放助手的工具调用与工具输出
     follow_up = seen[1]["messages"]
     assert follow_up[-2]["role"] == "assistant" and follow_up[-2]["tool_calls"][0]["id"] == "call_1"
     assert follow_up[-1] == {"role": "tool", "tool_call_id": "call_1", "content": results[0].payload["output"]}

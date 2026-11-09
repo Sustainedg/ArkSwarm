@@ -23,11 +23,21 @@ async def stream_run(
     """按 runtime 分发到 CLI 或 API 的执行路径。"""
     yield run_started(run.id)
     if definition.runtime is Runtime.API:
+        settings = get_settings()
+        deadline = asyncio.get_event_loop().time() + settings.run_timeout_seconds
+        timed_out = False
         async for event in definition.stream(ctx):
             if run.cancel_event.is_set():
                 break
+            if asyncio.get_event_loop().time() > deadline:
+                timed_out = True
+                yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
+                break
             yield event
-        yield run_finished("cancelled" if run.cancel_event.is_set() else "ok")
+        if timed_out:
+            yield run_finished("error")
+        else:
+            yield run_finished("cancelled" if run.cancel_event.is_set() else "ok")
         return
     async for event in stream_cli_run(definition, ctx, run):
         yield event
@@ -41,7 +51,7 @@ async def stream_cli_run(
     agent_run: AgentRun = definition.create_run(ctx)
     try:
         invocation = agent_run.build_invocation()
-    except Exception as exc:  # noqa: BLE001 - surface config errors to the user
+    except Exception as exc:  # noqa: BLE001 - 把配置错误显式暴露给用户
         yield error(f"无法构建启动命令：{exc}")
         yield run_finished("error")
         return
@@ -61,7 +71,7 @@ async def stream_cli_run(
     executable = shutil.which(invocation.argv[0]) if invocation.argv else None
     if executable is None:
         yield log(f"正在启动 {invocation.argv[0]}", "info")
-    preview = " ".join(_redact(invocation.argv, env))
+    preview = " ".join(_redact(invocation.argv, env, ctx.api_key))
     if len(preview) > 400:
         preview = preview[:400] + " …"
     yield log(preview, "command")
@@ -159,12 +169,15 @@ async def stream_cli_run(
         )
 
 
-def _redact(argv: list[str], env: dict[str, str]) -> list[str]:
+def _redact(argv: list[str], env: dict[str, str], *extra_secrets: str | None) -> list[str]:
     secrets = {
         value
         for key, value in env.items()
         if value and any(token in key.upper() for token in ("KEY", "TOKEN", "SECRET", "PASSWORD"))
     }
+    # 适配器可能把密钥直接拼进 argv（如 custom-cli 的 {api_key} 占位符），
+    # 此时它不一定出现在 env 里，需要显式补上。
+    secrets.update(value for value in extra_secrets if value)
     out = []
     for part in argv:
         masked = part

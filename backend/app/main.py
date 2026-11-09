@@ -53,7 +53,7 @@ app.include_router(api_router)
 
 
 @app.exception_handler(Exception)
-async def unhandled(request, exc):  # pragma: no cover - safety net
+async def unhandled(request, exc):  # pragma: no cover - 兜底保护
     logger.exception("未捕获的异常：%s", request.url.path)
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 

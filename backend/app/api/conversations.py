@@ -10,7 +10,6 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ..agents.events import EventType
 from ..db import SessionLocal, get_session
 from ..models import AgentInstance, Conversation, Message, Role
 from ..runtime import registry

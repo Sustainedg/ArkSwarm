@@ -1,4 +1,4 @@
-"""Pytest bootstrap: point the app at a throwaway data dir before it is imported."""
+"""pytest 引导：在导入应用之前，先把数据目录指向一个临时目录。"""
 import os
 import sys
 import tempfile

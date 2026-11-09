@@ -29,8 +29,6 @@ from ..events import (
 from ..registry import register_agent
 from .util import as_list, flatten_content, truthy
 
-PERMISSION_MODES = ["acceptEdits", "auto", "manual", "plan", "dontAsk", "bypassPermissions"]
-
 
 @register_agent
 class ClaudeCodeAgent(AgentDefinition):
@@ -71,7 +69,7 @@ class ClaudeCodeAgent(AgentDefinition):
                 {"value": "dontAsk", "label": "dontAsk · 不询问，直接拒绝需确认的操作"},
                 {"value": "bypassPermissions", "label": "bypassPermissions · 跳过全部权限检查"},
             ],
-            help="bypassPermissions 会让 agent 无人值守地执行操作，请只在沙箱环境中使用。",
+            help="bypassPermissions 会让智能体无人值守地执行操作，请只在沙箱环境中使用。",
         ),
         ConfigField(
             "auth_style",

@@ -2,9 +2,9 @@
 
 产品的三个核心概念：
 
-* :class:`AgentInstance` —— 一个**配置好的** agent（类型 + Gateway + Key + 模型）。
-* :class:`Role`          —— 角色，从若干 agent 实例中挑一个绑定。
-* :class:`Conversation`  —— 对话，绑定某个角色并记住 agent 侧的会话 ID。
+* :class:`AgentInstance` —— 一个**配置好的**智能体（类型 + 网关 + 密钥 + 模型）。
+* :class:`Role`          —— 角色，从若干智能体实例中挑一个绑定。
+* :class:`Conversation`  —— 对话，绑定某个角色并记住智能体侧的会话 ID。
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class Message(SQLModel, table=True):
 
     id: str = Field(default_factory=new_id, primary_key=True)
     conversation_id: str = Field(sa_column=Column(String(64), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True))
-    role: str = Field(sa_column=Column(String(16), nullable=False))  # user | assistant | system
+    role: str = Field(sa_column=Column(String(16), nullable=False))  # 取值：user / assistant / system
     content: str = Field(default="", sa_column=Column(Text, nullable=False))
     parts: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON, nullable=False, default=list))
     usage: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict))

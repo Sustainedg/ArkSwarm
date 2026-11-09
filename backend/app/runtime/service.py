@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -33,7 +33,6 @@ class PreparedRun:
     run: ActiveRun
     user_message: Message
     assistant_message: Message
-    ordering: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ConfigurationError(Exception):
@@ -112,7 +111,7 @@ def _clip_history(rows: list[Message]) -> list[dict[str, str]]:
 
 
 def transcript_prompt(system_prompt: str | None, history: list[dict[str, str]], prompt: str) -> str:
-    """用于既不支持系统提示词参数、也不支持会话续接的 agent。"""
+    """用于既不支持系统提示词参数、也不支持会话续接的智能体。"""
     lines = []
     if system_prompt:
         lines.append(f"[system]\n{system_prompt}")
@@ -226,7 +225,7 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
                     status = extra["status"]
 
             yield event
-    except Exception as exc:  # noqa: BLE001 - never let a run kill the stream silently
+    except Exception as exc:  # noqa: BLE001 - 绝不让异常静默地中断整条事件流
         error_text = str(exc)
         status = "error"
         yield error(str(exc))
@@ -248,7 +247,7 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
         session.add(prepared.conversation)
         try:
             await session.commit()
-        except Exception:  # noqa: BLE001 - keep the client stream alive
+        except Exception:  # noqa: BLE001 - 落库失败也要保持客户端事件流不断
             await session.rollback()
 
 

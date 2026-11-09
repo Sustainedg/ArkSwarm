@@ -148,10 +148,3 @@ class SendMessage(BaseModel):
         return value
 
 
-class ConversationDetail(BaseModel):
-    conversation: ConversationRead
-    messages: list[MessageRead]
-
-    @property
-    def summary(self) -> str:  # pragma: no cover - convenience only
-        return f"{self.conversation.title} ({len(self.messages)} messages)"

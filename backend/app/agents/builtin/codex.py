@@ -28,8 +28,6 @@ from ..events import (
 from ..registry import register_agent
 from .util import as_list, flatten_content, truthy
 
-SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"]
-
 
 @register_agent
 class CodexAgent(AgentDefinition):
@@ -231,7 +229,7 @@ class CodexAgent(AgentDefinition):
             run.state["is_error"] = True
             return
 
-        if kind == "agent_message":  # legacy
+        if kind == "agent_message":  # 旧版事件结构
             if payload.get("message"):
                 yield text_delta(payload["message"])
             return

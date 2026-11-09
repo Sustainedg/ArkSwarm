@@ -1,6 +1,6 @@
-"""每个 agent 集成都要实现的契约。
+"""每个智能体集成都要实现的契约。
 
-接入一个全新的 agent（Gemini CLI、DeepSeek 内核、Aider…），只需在
+接入一个全新的智能体（Gemini CLI、DeepSeek 内核、Aider…），只需在
 ``app/agents/builtin`` 下新增一个模块，定义 :class:`AgentDefinition` 的子类
 并用 :func:`register_agent` 装饰即可，代码库其他部分无需改动。
 """
@@ -30,7 +30,7 @@ class FieldType(str, Enum):
 class Runtime(str, Enum):
     """适配器与智能体的通信方式。"""
 
-    CLI = "cli"  # spawns a subprocess
+    CLI = "cli"  # 启动子进程
     API = "api"  # 进程内直接发起 HTTP 调用（OpenAI 兼容端点）
 
 
@@ -194,7 +194,7 @@ class AgentDefinition(ABC):
                 [path, "--version"], capture_output=True, text=True, timeout=8, check=False
             )
             return (out.stdout or out.stderr).strip().splitlines()[0][:80] or None
-        except Exception:  # noqa: BLE001 - availability probing must never raise
+        except Exception:  # noqa: BLE001 - 可用性探测绝不能向调用方抛异常
             return None
 
     def fields_by_key(self) -> dict[str, ConfigField]:
@@ -214,7 +214,7 @@ class AgentDefinition(ABC):
                 value = field_.default
             if value not in (None, "", [], {}):
                 coerced[field_.key] = value
-        for key, value in (raw or {}).items():  # keep unknown keys, forward compatible
+        for key, value in (raw or {}).items():  # 保留未知键，保持前向兼容
             coerced.setdefault(key, value)
         return coerced
 
@@ -247,8 +247,8 @@ class AgentDefinition(ABC):
 
     async def stream(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
         """``Runtime.API`` 型适配器使用的进程内执行入口。"""
-        raise NotImplementedError(f"{self.id} does not implement an in-process stream")
-        yield  # pragma: no cover - makes this an async generator
+        raise NotImplementedError(f"{self.id} 未实现进程内流式接口")
+        yield  # pragma: no cover - 使其成为异步生成器
 
     async def probe(self, ctx: AgentContext) -> tuple[bool, str]:
         """给「连通性测试」按钮用的轻量探测：检查运行环境、凭据与连通性。"""
@@ -257,7 +257,7 @@ class AgentDefinition(ABC):
             if not availability.installed:
                 return False, availability.detail or "缺少可执行文件"
             if not ctx.api_key and not self.api_key_env:
-                return True, "CLI 已就绪（该适配器无需 API Key）"
+                return True, "CLI 已就绪（该适配器无需 API 密钥）"
             if not ctx.api_key:
                 return True, "CLI 已就绪（使用环境中的默认凭据）"
             return True, f"配置校验通过（{availability.version or '本地 CLI'}）"

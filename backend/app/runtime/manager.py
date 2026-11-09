@@ -61,7 +61,7 @@ class RunRegistry:
         if process is not None and process.returncode is None:
             try:
                 process.kill()
-            except ProcessLookupError:  # already gone
+            except ProcessLookupError:  # 进程已经退出
                 pass
         return True
 

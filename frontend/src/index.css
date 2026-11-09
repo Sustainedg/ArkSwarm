@@ -1,5 +1,5 @@
 /* ============================================================
-   Magenta Agents — design tokens + primitives
+   Magenta Agents —— 设计变量与基础原语
    ============================================================ */
 :root {
   --bg: #0b0a12;
@@ -59,7 +59,7 @@ code, pre, .mono { font-family: var(--mono); }
 ::-webkit-scrollbar-thumb:hover { background: #3d3960; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* ---------- layout ---------- */
+/* ---------- 布局 ---------- */
 .app-shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; overflow: hidden; }
 
 .sidebar {
@@ -106,7 +106,7 @@ code, pre, .mono { font-family: var(--mono); }
 .page-header .spacer { flex: 1; }
 .page-body { flex: 1; overflow: auto; padding: 22px 26px 40px; }
 
-/* ---------- chat ---------- */
+/* ---------- 对话 ---------- */
 .chat-shell { display: grid; grid-template-columns: 268px 1fr; flex: 1; min-height: 0; }
 .chat-list { border-right: 1px solid var(--border); overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .chat-item {
@@ -155,7 +155,7 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-hint { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); margin-top: 8px; }
 
-/* ---------- tool cards ---------- */
+/* ---------- 工具卡片 ---------- */
 .tool-card { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); margin-top: 8px; overflow: hidden; }
 .tool-card summary { cursor: pointer; padding: 7px 11px; font-size: 12px; display: flex; gap: 8px; align-items: center; list-style: none; }
 .tool-card summary::-webkit-details-marker { display: none; }
@@ -166,7 +166,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 .event-log { margin-top: 8px; font-size: 11.5px; color: var(--text-dim); font-family: var(--mono); white-space: pre-wrap; }
 
-/* ---------- cards & grids ---------- */
+/* ---------- 卡片与网格 ---------- */
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .card {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -183,7 +183,7 @@ code, pre, .mono { font-family: var(--mono); }
 .kv dt { color: var(--text-dim); }
 .kv dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- primitives ---------- */
+/* ---------- 基础原语 ---------- */
 .btn {
   display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text);
@@ -236,7 +236,7 @@ code, pre, .mono { font-family: var(--mono); }
 .banner.ok { background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.3); color: #86efac; }
 .banner.info { background: var(--accent-soft); border-color: rgba(110, 231, 209, 0.3); color: var(--accent); }
 
-/* ---------- modal ---------- */
+/* ---------- 弹窗 ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(5, 4, 10, 0.72); backdrop-filter: blur(4px); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 20px; z-index: 50; overflow: auto; }
 .modal { background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); width: 100%; max-width: 720px; display: flex; flex-direction: column; max-height: 90vh; }
 .modal.wide { max-width: 860px; }
