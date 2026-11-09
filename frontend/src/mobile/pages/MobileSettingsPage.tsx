@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import type { AgentType, ArchitectureDoc, Overview } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
-import { useInstallController } from '../pwa'
+import { refreshShell, useInstallController } from '../pwa'
 import { describeError, formatDuration } from '../util'
 
 /** 设置与系统信息：智能体入口、运行概览、版本记录、架构文档与安装引导。 */
@@ -154,6 +154,14 @@ export function MobileSettingsPage({ version }: { version: string }) {
                 )}
               </div>
             </div>
+            <button className="m-item" onClick={() => void refreshShell()}>
+              <span style={{ fontSize: 18 }}>♻️</span>
+              <span className="m-item-main">
+                <span className="m-item-title">更新到最新版本</span>
+                <span className="m-item-sub">清掉离线缓存并重新加载（独立应用里没有刷新按钮）</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
             <a className="m-item" href="/">
               <span style={{ fontSize: 18 }}>🖥️</span>
               <span className="m-item-main">

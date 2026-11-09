@@ -6,6 +6,9 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 
+/** 离线缓存的前缀（与 `public/m/sw.js` 里的缓存名保持一致）。 */
+const CACHE_PREFIX = 'magenta-m-'
+
 /** Chromium 专有的安装事件（TS 标准库里没有）。 */
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -20,6 +23,28 @@ export function registerServiceWorker(): void {
       console.warn('移动端 Service Worker 注册失败：', error)
     })
   })
+}
+
+/**
+ * 强制取回最新的应用外壳：注销 Service Worker、清掉离线缓存，然后重新加载。
+ *
+ * 独立应用（已添加到主屏）里没有地址栏也没有刷新按钮，界面卡在旧外壳时只能靠它自救；
+ * 清完重载后入口脚本会重新注册 SW 并预缓存当前版本。
+ */
+export async function refreshShell(): Promise<void> {
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(registrations.map((registration) => registration.unregister()))
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys()
+      await Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX)).map((key) => caches.delete(key)))
+    }
+  } catch (error: unknown) {
+    console.warn('清理离线缓存失败，仍然重新加载：', error)
+  }
+  window.location.reload()
 }
 
 /** 是否已经以「安装后的独立应用」形态运行（而不是浏览器标签页）。 */

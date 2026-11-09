@@ -195,3 +195,23 @@ def test_mobile_shell_is_pinned_to_the_visible_viewport():
 
     html_rule = re.search(r"html, body \{([^}]*)\}", css)
     assert html_rule and "overflow: hidden" in html_rule.group(1), "文档本身不应滚动"
+
+
+@needs_frontend
+def test_mobile_shell_has_a_self_service_refresh():
+    """独立应用（已添加主屏）没有刷新按钮：卡在旧外壳时必须能自助清缓存重载。
+
+    改外壳（入口 HTML / 样式表 / 构建产物）必须把 SW 的缓存名版本 +1，老客户端下次打开才会换掉；
+    设置页的「更新到最新版本」是兜底出口。
+    """
+    sw = (FRONTEND / "public" / "m" / "sw.js").read_text(encoding="utf-8")
+    for name in ("magenta-m-shell-v", "magenta-m-assets-v"):
+        assert name in sw, f"sw.js 的缓存名要带版本号（{name}<n>）"
+
+    pwa = (MOBILE_SRC / "pwa.ts").read_text(encoding="utf-8")
+    assert "export async function refreshShell" in pwa
+    assert "unregister()" in pwa and "caches.keys()" in pwa
+    assert "location.reload()" in pwa
+
+    settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
+    assert "refreshShell" in settings, "设置页要能触发自助刷新"

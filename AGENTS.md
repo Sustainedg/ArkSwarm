@@ -224,6 +224,9 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **两端通用**：类型加在 `src/lib/types.ts`，接口调用加在 `src/lib/api.ts`；禁止在组件里直接 `fetch`。
 - **移动端必须保持 PWA 可用**：新增页面不得依赖 `/m/` 之外的顶层路由；离线只会命中
   Service Worker 预缓存的外壳，任何新资源都要能从 `/m/` 入口按相对/绝对路径取到。
+  **改了外壳（入口 HTML / 样式表 / 构建产物）必须把 `public/m/sw.js` 的缓存名版本 +1**，
+  否则已添加到主屏的独立应用会继续吃旧缓存（它没有刷新按钮；设置页的「更新到最新版本」
+  走 `pwa.ts:refreshShell()` 清缓存重载，是自助出口）。
 - **移动端外壳钉在可视视口上**：`.m-app` 用 `position: fixed` + 四边贴 0，**不要**用
   `100vh`/`100dvh` 配 `height: 100%` 父链 —— 真机上地址栏与底部工具栏会伸缩，两者高度经常
   对不齐，底栏就会浮起来留缝或被工具栏压住；`env(safe-area-inset-*)` 负责刘海与 Home 条。
