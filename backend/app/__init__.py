@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-__version__ = "V0.03"
+__version__ = "V0.04"
 
 #: 版本记录（最新在前）。新增发布时，请同步修改 ``__version__`` 并在此追加一条。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
+    {
+        "version": "V0.04",
+        "date": "2026-11-09",
+        "title": "移动端页面与 PWA",
+        "highlights": (
+            "新增独立移动端链接 /m/：对话、角色、智能体、技能、协作、设置全套页面",
+            "可添加到主屏并以独立应用形态运行，界面离线可用（对话仍需联网）",
+            "Service Worker 只接管 /m/ 作用域，接口与 SSE 长连接一律直连后端",
+            "移动端页面与样式表物理独立，与桌面端互不影响",
+        ),
+    },
     {
         "version": "V0.03",
         "date": "2026-11-09",

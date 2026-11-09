@@ -428,7 +428,8 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 | `DELETE` | `/api/collab/runs/{id}` | 删除运行（级联删工单与步骤消息） |
 
 校验错误用 **422** + 结构化 `detail`（含 `errors[]`，编辑器逐条高亮节点/边）；
-被引用的角色/智能体不可删除沿用现有 **409** 语义。
+角色/智能体的删除是**软删除**（见 `docs/architecture.md` §6）：协作历史里引用的角色/智能体
+不会因为删除而消失，仍未被删除的角色引用智能体时删除智能体返回 **409**。
 
 ---
 
@@ -513,6 +514,12 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
   - 每个 duty 允许的动作集合与出边类型必须相容（如 `reviewer` 不能有 `assign` 出边）；
   - 引用的角色存在且绑定了智能体。
 
+**移动端（`/m/`）同样能编排，只是不画线**：`mobile/pages/MobileCollabTeamPage.tsx` 用表单做同一件事 ——
+岗位是卡片列表（点开底部弹层编辑），连线是「从谁到谁 + 类型」的下拉选择，校验与保存走同一套接口。
+岗位/连线表单在 `mobile/components/CollabNodeForm.tsx` / `CollabEdgeForm.tsx`；字段语义、默认值与
+中文标签与桌面端共用 `lib/collabDraft.ts`（`DUTIES` / `EDGE_KINDS` / `SCOPES` / `ACTIONS` /
+`clampBudget` / 草稿组装），有守卫测试盯着「移动端不得引用画布组件」。
+
 ### 7.4 复用与新增（避免两份流式归约器）
 
 - `frontend/src/lib/agentStream.ts`（**已新增**）：把 `ChatPage.applyEvent` 的纯归约逻辑搬出来（行为不变），
@@ -556,13 +563,14 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
 - **工单 `brief` / `result` 用 JSON**：工单字段（需求/验收/约束/产出）形态会演进，
   与现有 `messages.parts` 同一思路；同时也是"交付载荷"的直接数据源。
 - **`collab_steps.content` + `parts`**：与 `messages` 表同构 → 前端能直接喂给 `MessageView`。
-- **外键 `RESTRICT`（引用角色/智能体）**：沿用现有不变量，删角色/智能体仍返回 409；
+- **外键 `RESTRICT`（引用角色/智能体）**：沿用现有不变量，因此删角色/智能体只能软删除
+  （打 `deleted_at`，从可选列表消失、历史照旧可读），协作表的外键不会被打断；
   删除"运行"是显式操作，级联清理工单与步骤（等价于"删对话必须清消息"的既有惯例）。
 - **`parent_ticket_id` 用 `SET NULL`**：父工单被拒绝/删除时不连带毁掉子工单记录。
 - **零迁移风险**：全部是新增表，`create_all` 会自动建；现有 `data/magenta.db` 直接启动即可（铁律 9）。
 - **后加的可选列怎么补**：SQLite 的 `create_all` **不会给已存在的表加列**。因此协作域把"后加的可选列"
-  登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`，由 `db.init_db` 用
-  `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐 —— 旧行原样保留，不重建库。
+  登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（对话域登记在 `models.py` 的同名常量），
+  由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐 —— 旧行原样保留，不重建库。
   加新列时必须同时登记，否则旧库启动后会报 "no such column"（有测试 `test_collab_migration.py` 守着）。
 
 ---

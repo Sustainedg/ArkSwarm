@@ -30,7 +30,8 @@ DeepSeek 内核之后还会有更多 CLI 与 API 型智能体）。所以架构�
 ### 2.1 分层与职责
 
 ```
-frontend/src        pages · components · lib(api·types)        纯展示 + 交互
+frontend/src        pages · components · lib(api·types)        纯展示 + 交互（桌面端 /）
+frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 + 交互（移动端 /m/）
         │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
@@ -170,9 +171,13 @@ POST /api/conversations/{id}/messages
 
 - 关系链：`AgentInstance → Role → Conversation → Message`。
 - **Conversation 快照 `agent_id`**：历史对话必须可复现，即使角色之后改绑了别的智能体。
-- 外键 `ON DELETE RESTRICT`：被引用的智能体/角色删除返回 409，避免历史断裂。
+- 外键 `ON DELETE RESTRICT`：仍被**未删除**的角色引用的智能体删除返回 409（避免历史断裂）；
+  角色与智能体本身用 `deleted_at` 软删除 —— 被历史引用时只打标记，从可选列表消失但不打断历史。
 - `parts` / `usage` / `parameters` / `options` 用 JSON 列：智能体之间形态差异极大，不为其建表。
 - `Role.parameters` 支持角色级覆盖 `model` / `gateway_url`，让同一智能体可按角色走不同模型。
+
+**后加的可选列**：SQLite 的 `create_all` 不会给已存在的表加列，所以新列要登记在
+`models.py`（对话域）或 `collab/tables.py`（协作域）的 `ADDITIVE_COLUMNS`，由 `db.init_db` 幂等补齐。
 
 **schema 变更规则**（本地库有真实数据）：
 1. 只做**加列/加表**这类向后兼容变更，新列必须有默认值或可空。
@@ -310,6 +315,16 @@ class AcmeHarness(OpenAIHarnessBase):
 - 事件并入状态统一在 `ChatPage.applyEvent`，新增事件类型在这里加一个 `case`。
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
+- **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
+  有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、底部 Tab 与底部弹层。桌面端页面 / 入口 /
+  样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
+  `DynamicForm` / `MessageView` / `MarkdownView` 三个纯展示组件，以及 `lib/agentStream` 里的事件归约。
+- 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
+  `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用
+  `m-` 前缀（`m-tabbar` / `m-sheet` / `m-item` / `m-thread`…）。
+- **PWA 资产只放 `frontend/public/m/`**（`manifest.webmanifest` + `sw.js`）：`scope`/`start_url` 固定
+  `/m/`，`/api/`（含 SSE 长连接）**永不进入缓存**。新增页面要保证断网时应用外壳仍能打开（离线只保证
+  「界面能打开」，对话仍需联网）。
 - **前端依赖只允许这两个**：`react-markdown@10.1.0` 与 `remark-gfm@4.0.1`（精确版本）。理由：各内核的
   产出以 Markdown 为主（代码块、表格、列表、任务清单），此前用 `white-space: pre-wrap` 直出不可读；
   手写解析器等于重复造轮子，且转义/边界极易写错。为此新增 `components/MarkdownView.tsx`
@@ -342,6 +357,8 @@ class AcmeHarness(OpenAIHarnessBase):
 - [ ] 错误是否显式暴露（HTTPException 或 `error` 事件），而不是被吞掉？
 - [ ] 长任务是否响应取消与超时？
 - [ ] 中文规范：界面文案、注释、docstring 是否都是中文？专有名词是否保留？
+- [ ] 移动端改动是否守住了物理隔离（不引用 `src/pages/`、`App.tsx`、`index.css`），且没有把内核专有知识（技能目录、配置文件路径）写进前端？
+- [ ] PWA 相关改动是否仍然**不缓存 `/api/`**（含 SSE）？
 - [ ] `bash scripts/test.sh` 是否全绿？新增能力是否有对应测试？
 - [ ] 前端改动是否 `npm run build` 且重启了服务？
 - [ ] schema 变更是否向后兼容，并在**现有数据库**上验证过？

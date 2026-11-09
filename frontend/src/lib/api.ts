@@ -1,6 +1,6 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabBudget, CollabGraph, CollabRun,
-  CollabRunDetail, CollabTeam, CollabValidation, Conversation, Message, Overview, Role,
+  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabRun, CollabRunDetail, CollabTeam,
+  CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation, Message, Overview, Role,
   Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
 
@@ -94,12 +94,10 @@ export const api = {
   getCollabTeam: (id: string) => request<CollabTeam>(`/api/collab/teams/${id}`),
   createCollabTeam: (body: unknown) =>
     request<CollabTeam>('/api/collab/teams', { method: 'POST', body: JSON.stringify(body) }),
-  saveCollabTeam: (
-    id: string,
-    body: { name?: string; description?: string | null; entry_key?: string | null; workspace_dir?: string | null; graph?: CollabGraph; budget?: CollabBudget },
-  ) => request<CollabTeam>(`/api/collab/teams/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  saveCollabTeam: (id: string, body: CollabTeamUpdate) =>
+    request<CollabTeam>(`/api/collab/teams/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   /** 只校验不保存：编辑器每改一笔就调一次 */
-  validateCollabTeam: (id: string, body: { graph?: CollabGraph; entry_key?: string | null }) =>
+  validateCollabTeam: (id: string, body: CollabTeamValidateIn) =>
     request<CollabValidation>(`/api/collab/teams/${id}/validate`, { method: 'POST', body: JSON.stringify(body) }),
   duplicateCollabTeam: (id: string) =>
     request<CollabTeam>(`/api/collab/teams/${id}/duplicate`, { method: 'POST' }),

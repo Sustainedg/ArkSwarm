@@ -305,6 +305,22 @@ export interface CollabTeam {
   validation: CollabValidation
 }
 
+/** `PUT /api/collab/teams/{id}` 的请求体（对应后端 `TeamUpdate`：整图替换）。 */
+export interface CollabTeamUpdate {
+  name?: string
+  description?: string | null
+  entry_key?: string | null
+  workspace_dir?: string | null
+  graph?: CollabGraph
+  budget?: CollabBudget
+}
+
+/** `POST /api/collab/teams/{id}/validate` 的请求体（对应后端 `TeamValidateIn`）。 */
+export interface CollabTeamValidateIn {
+  graph?: CollabGraph
+  entry_key?: string | null
+}
+
 export type CollabRunStatus = 'running' | 'waiting_user' | 'done' | 'error' | 'cancelled' | 'interrupted'
 
 export type CollabTicketState =

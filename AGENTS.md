@@ -19,6 +19,7 @@
 | API 前缀 | `/api`，路由聚合在 `backend/app/api/__init__.py` |
 | **唯一扩展点** | `backend/app/agents/builtin/`（新增一个模块 + `@register_agent` 即接入新智能体） |
 | 端口/部署 | 监听 `0.0.0.0:8010`，由 PyPanel 服务 `e0c0620a5786` 托管（`scripts/serve.sh`） |
+| 移动端 | **物理独立的第二条链接 `/m/`**：入口 `frontend/m/index.html` + `frontend/src/mobile/`，PWA 资产在 `frontend/public/m/`（manifest + Service Worker） |
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
@@ -63,6 +64,7 @@
 ```
  ┌ 前端 frontend/src ────────────────────────────────────────────────┐
  │  pages/ (Chat·Collab·Agents·Roles·Skills·Settings) ·              │
+ │  mobile/ (独立入口：/m/ 的页面与样式表，PWA) ·                      │
  │  components/ (DynamicForm·MessageView·Modal·CollabCanvas…) ·       │
  │  lib/ (api·types·agentStream·collabStream)                         │
  │  —— 只认「规范化事件」与 REST，不知道某个智能体长什么样            │
@@ -159,7 +161,10 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ### 3.6 领域模型不变量（`models.py`）
 - `AgentInstance`（配置好的智能体）→ `Role`（角色绑定一个智能体）→ `Conversation`（对话绑定一个角色）。
 - **Conversation 快照 `agent_id`**：角色改绑智能体后，历史对话仍按原智能体复现，别改成实时跟随。
-- 外键 `ON DELETE RESTRICT`：被引用的智能体/角色删除返回 **409**，不要为了"方便"改成级联删除。
+- 外键 `ON DELETE RESTRICT`：**不要**为了"方便"改成级联删除。删角色 / 删智能体走**软删除**
+  （写 `deleted_at`，新列登记在 `models.py` 的 `ADDITIVE_COLUMNS`）：实体从所有可选列表消失，
+  但历史对话与协作历史照旧可读（历史对话仍能显示当时的角色名/头像，也仍可继续）。
+  只有仍被**未删除**的角色引用的智能体才返回 **409**。
 - 删除对话需显式清理消息（`api/conversations.py` 已处理）；SQLite 已开 `PRAGMA foreign_keys=ON`。
 
 ---
@@ -207,8 +212,18 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 4. 加测试：参考 `backend/tests/test_skills.py`（解析、物化、隔离变量）。
 
 ### 4.7 新增前端页面
-`src/pages/XxxPage.tsx`，在 `src/App.tsx` 的 `Routes` 与 `NAV` 注册；类型加在 `src/lib/types.ts`，
-接口调用加在 `src/lib/api.ts`。样式写进 `src/index.css`，沿用既有 class 命名（`card`/`btn`/`pill`/`banner`…）。
+- **桌面端**：`src/pages/XxxPage.tsx`，在 `src/App.tsx` 的 `Routes` 与 `NAV` 注册；样式写进
+  `src/index.css`，沿用既有 class 命名（`card`/`btn`/`pill`/`banner`…）。
+- **移动端（`/m/`）**：`src/mobile/pages/MobileXxxPage.tsx`，在 `src/mobile/MobileApp.tsx` 注册路由；
+  样式写进 `src/mobile/mobile.css`。移动端页面**不得**引用 `src/pages/`、`src/App.tsx` 或
+  `src/index.css`（有守卫测试 `tests/test_mobile_web.py`），但可以复用 `src/lib/*` 与
+  `DynamicForm` / `MessageView` / `MarkdownView` 这三个纯展示组件。
+- **两端功能对齐、交互各表**：桌面端有的能力（例如协作组编排）移动端也要能用，但按触屏重做交互 ——
+  移动端**不引用**桌面端的编排画布（`components/CollabCanvas` 等），协作组改用表单式编辑
+  （`mobile/pages/MobileCollabTeamPage.tsx`，与桌面端共用 `lib/collabDraft.ts` 的字段语义）。
+- **两端通用**：类型加在 `src/lib/types.ts`，接口调用加在 `src/lib/api.ts`；禁止在组件里直接 `fetch`。
+- **移动端必须保持 PWA 可用**：新增页面不得依赖 `/m/` 之外的顶层路由；离线只会命中
+  Service Worker 预缓存的外壳，任何新资源都要能从 `/m/` 入口按相对/绝对路径取到。
 
 ### 4.8 扩展协作域
 协作的一切都留在 `backend/app/collab/`：新增动作/状态改 `schemas.py` + `engine.py`（并同步
@@ -278,6 +293,7 @@ curl -s http://127.0.0.1:8010/api/health
 | --- | --- |
 | 后端逻辑/适配器 | `pytest`（新增能力要有新测试） |
 | 前端任意改动 | `tsc --noEmit` + `npm run build` + **重启 PyPanel 服务**后自测页面 |
+| 移动端 / PWA 改动 | 同上，并额外自测 `/m/` 深链可刷新、断网后外壳仍能打开（`pytest tests/test_mobile_web.py`） |
 | 事件协议/持久化 | 端到端跑一次真实对话（SSE 事件齐全、消息落库正确） |
 | 数据库结构 | 用**现有** `backend/data/magenta.db` 启动验证旧数据可读，不得重置 |
 | 新增适配器 | `/api/agent-types` 能看到、表单可渲染、连通性测试可用 |
@@ -304,6 +320,8 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
+| `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
+| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；图标由 `scripts/gen_icons.py` 重新生成 |
 | `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
 

@@ -1,7 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const backend = process.env.MAGENTA_BACKEND ?? 'http://127.0.0.1:8000'
+const entry = (relative: string) => fileURLToPath(new URL(relative, import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
@@ -20,5 +22,13 @@ export default defineConfig({
       },
     },
   },
-  build: { outDir: 'dist', sourcemap: false, chunkSizeWarningLimit: 900 },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      // 多入口：桌面端 `/` 与移动端 `/m/` 是两条物理独立的链接，各自有 HTML 入口。
+      input: { main: entry('index.html'), mobile: entry('m/index.html') },
+    },
+  },
 })

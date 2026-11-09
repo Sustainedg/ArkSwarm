@@ -7,48 +7,11 @@
 import type { ReactNode } from 'react'
 import { DynamicForm } from './DynamicForm'
 import type { CollabSelection } from './CollabCanvas'
+import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, type TeamDraft } from '../lib/collabDraft'
 import type {
-  AgentType, CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode, CollabTicketAction,
+  AgentType, CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
   CollabWorkspaceScope, CollabDuty as Duty, Role,
 } from '../lib/types'
-
-export interface TeamDraft {
-  name: string
-  description: string
-  entry_key: string | null
-  workspace_dir: string
-  budget: CollabBudget
-  nodes: CollabNode[]
-  edges: CollabEdge[]
-}
-
-const DUTIES: { value: Duty; label: string; hint: string }[] = [
-  { value: 'coordinator', label: '协调者', hint: '与用户沟通、拆解与派活，默认拿不到工作目录' },
-  { value: 'engineer', label: '实施者', hint: '动手改代码，默认对共享工作目录可写' },
-  { value: 'reviewer', label: '审查者', hint: '只读检查产出，默认只能给审查意见' },
-]
-
-const EDGE_KINDS: { value: CollabEdgeKind; label: string; hint: string }[] = [
-  { value: 'assign', label: 'assign · 派发', hint: '把工单交给下游（handoff 转交 / split 拆子工单）' },
-  { value: 'review', label: 'review · 审查', hint: '提交给审查者；有 review 边就必须有 rework 回边' },
-  { value: 'rework', label: 'rework · 打回', hint: '审查不通过时退回，可退给实施者，也可交回协调者重新拆解' },
-]
-
-const SCOPES: { value: CollabWorkspaceScope | ''; label: string }[] = [
-  { value: '', label: '按岗位取默认' },
-  { value: 'none', label: '不给工作目录' },
-  { value: 'read', label: '只读' },
-  { value: 'write', label: '可写' },
-]
-
-const ACTIONS: { value: CollabTicketAction; label: string }[] = [
-  { value: 'delegate', label: 'delegate 派发' },
-  { value: 'submit', label: 'submit 提交' },
-  { value: 'review', label: 'review 审查' },
-  { value: 'done', label: 'done 确认完成' },
-  { value: 'ask_user', label: 'ask_user 提问' },
-  { value: 'reject', label: 'reject 否决' },
-]
 
 interface Props {
   draft: TeamDraft

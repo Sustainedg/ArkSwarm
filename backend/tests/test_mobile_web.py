@@ -1,0 +1,148 @@
+"""移动端（`/m/`）与 PWA 的守卫测试。
+
+移动端是一条与桌面端**物理独立**的链接：入口 HTML、页面、样式表、PWA 资产各自独立，
+后端只用一个 SPA 兜底按前缀分派。下面的断言把这条约定固化下来，避免被后续改动悄悄破坏。
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from app.main import resolve_spa_target
+
+REPO = Path(__file__).resolve().parent.parent.parent
+FRONTEND = REPO / "frontend"
+MOBILE_SRC = FRONTEND / "src" / "mobile"
+
+needs_frontend = pytest.mark.skipif(not FRONTEND.is_dir(), reason="未检出前端源码目录")
+
+
+def test_spa_deep_links_split_between_desktop_and_mobile(tmp_path: Path):
+    """`/m/*` 一律回落到移动端入口；其余深链回落桌面端入口。"""
+    (tmp_path / "index.html").write_text("<html>desktop</html>", encoding="utf-8")
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "index.html").write_text("<html>mobile</html>", encoding="utf-8")
+    (tmp_path / "m" / "sw.js").write_text("// service worker", encoding="utf-8")
+    (tmp_path / "icons").mkdir()
+    (tmp_path / "icons" / "icon.svg").write_text("<svg/>", encoding="utf-8")
+
+    desktop = tmp_path / "index.html"
+    mobile = tmp_path / "m" / "index.html"
+
+    assert resolve_spa_target(tmp_path, "") == desktop
+    assert resolve_spa_target(tmp_path, "chat/abc") == desktop
+    assert resolve_spa_target(tmp_path, "roles") == desktop
+
+    assert resolve_spa_target(tmp_path, "m") == mobile
+    assert resolve_spa_target(tmp_path, "m/") == mobile
+    assert resolve_spa_target(tmp_path, "m/chat/abc") == mobile
+    assert resolve_spa_target(tmp_path, "m/collab/runs/xyz") == mobile
+
+    # 静态产物原样返回：Service Worker 与图标不能被当成 SPA 深链。
+    assert resolve_spa_target(tmp_path, "m/sw.js") == tmp_path / "m" / "sw.js"
+    assert resolve_spa_target(tmp_path, "icons/icon.svg") == tmp_path / "icons" / "icon.svg"
+
+
+def test_spa_falls_back_to_desktop_when_mobile_entry_is_missing(tmp_path: Path):
+    """没有构建出移动端入口时（例如旧版本的前端产物），不要 404。"""
+    (tmp_path / "index.html").write_text("<html>desktop</html>", encoding="utf-8")
+    assert resolve_spa_target(tmp_path, "m/chat") == tmp_path / "index.html"
+
+
+@needs_frontend
+def test_mobile_entry_is_physically_separate_from_desktop():
+    """两条链接各有自己的 HTML 入口、页面、样式表，互不引用。"""
+    desktop_html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    mobile_html = (FRONTEND / "m" / "index.html").read_text(encoding="utf-8")
+
+    assert "/src/mobile/main.tsx" in mobile_html
+    assert "/m/manifest.webmanifest" in mobile_html
+    assert "/src/main.tsx" not in mobile_html
+    assert "src/mobile" not in desktop_html
+
+    assert (MOBILE_SRC / "main.tsx").is_file()
+    assert (MOBILE_SRC / "MobileApp.tsx").is_file()
+    assert (MOBILE_SRC / "mobile.css").is_file()
+    # 移动端不加载桌面端的样式表与页面。
+    assert "index.css" not in (MOBILE_SRC / "main.tsx").read_text(encoding="utf-8")
+    assert list(MOBILE_SRC.glob("pages/*.tsx")), "移动端应当有自己的页面目录"
+
+
+@needs_frontend
+def test_mobile_pages_do_not_import_desktop_ui():
+    """移动端只允许复用 `lib/` 与纯展示组件，不得引用桌面端的页面与样式表。"""
+    desktop_ui = {(FRONTEND / "src" / "pages").resolve(), (FRONTEND / "src").resolve()}
+    offenders: list[str] = []
+    for path in sorted(MOBILE_SRC.rglob("*.tsx")):
+        for spec in re.findall(r"from '([^']+)'", path.read_text(encoding="utf-8")):
+            if not spec.startswith("."):
+                continue
+            target = (path.parent / spec).resolve()
+            name = target.name + (target.suffix if target.suffix else "")
+            if target.parent in desktop_ui and target.parent.name == "pages":
+                offenders.append(f"{path.name} 引用了桌面端页面：{spec}")
+            elif target.parent.name == "src" and name in {"App.tsx", "App.ts", "main.tsx", "index.css"}:
+                offenders.append(f"{path.name} 引用了桌面端入口：{spec}")
+    assert offenders == [], "\n".join(offenders)
+
+
+@needs_frontend
+def test_mobile_manifest_scopes_to_the_mobile_link():
+    manifest_path = FRONTEND / "public" / "m" / "manifest.webmanifest"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["scope"] == "/m/"
+    assert manifest["start_url"] == "/m/"
+    assert manifest["display"] == "standalone"
+
+    icons = manifest["icons"]
+    sizes = {icon["sizes"] for icon in icons}
+    purposes = {icon.get("purpose") for icon in icons}
+    assert {"192x192", "512x512"} <= sizes
+    assert "maskable" in purposes
+    for icon in icons:
+        assert (FRONTEND / "public" / icon["src"].lstrip("/")).is_file(), f"图标缺失：{icon['src']}"
+
+
+@needs_frontend
+def test_mobile_service_worker_never_caches_the_api():
+    """接口（含 SSE）必须直连后端：Service Worker 里要有明确的放行分支。"""
+    script = (FRONTEND / "public" / "m" / "sw.js").read_text(encoding="utf-8")
+    assert "self.addEventListener('fetch'" in script
+    assert "'/api/'" in script
+    assert "navigator.serviceWorker" not in script  # 注册放在入口，不写在 SW 里
+
+
+@needs_frontend
+def test_mobile_collab_editor_is_form_based_not_a_canvas():
+    """移动端也能编排协作组，只是不用桌面端的画布连线（手机上拖不准）。"""
+    pages = {path.name for path in (MOBILE_SRC / "pages").glob("*.tsx")}
+    assert "MobileCollabTeamPage.tsx" in pages, "移动端应当有一个协作组编排页"
+    assert "/collab/teams/:teamId" in (MOBILE_SRC / "MobileApp.tsx").read_text(encoding="utf-8")
+
+    desktop_editor = ("CollabCanvas", "CollabSettingsPanel", "NodeInspector")
+    offenders = [
+        f"{path.relative_to(MOBILE_SRC)} → {spec}"
+        for path in sorted(MOBILE_SRC.rglob("*.tsx"))
+        for spec in re.findall(r"from '([^']+)'", path.read_text(encoding="utf-8"))
+        if any(name in spec for name in desktop_editor)
+    ]
+    assert offenders == [], f"移动端不该引用桌面端的编排画布：{offenders}"
+
+
+@needs_frontend
+def test_collab_draft_vocabulary_has_a_single_source():
+    """协作编排的字段语义与默认值只有一份：两端都从 `lib/collabDraft.ts` 取。"""
+    draft = (FRONTEND / "src" / "lib" / "collabDraft.ts").read_text(encoding="utf-8")
+    for symbol in ("DUTIES", "EDGE_KINDS", "SCOPES", "ACTIONS", "DEFAULT_BUDGET", "clampBudget"):
+        assert symbol in draft, f"lib/collabDraft.ts 缺少 {symbol}"
+
+    mobile_page = (MOBILE_SRC / "pages" / "MobileCollabTeamPage.tsx").read_text(encoding="utf-8")
+    assert "lib/collabDraft" in mobile_page
+    for name in ("CollabCanvas.tsx", "CollabSettingsPanel.tsx", "NodeInspector.tsx"):
+        text = (FRONTEND / "src" / "components" / name).read_text(encoding="utf-8")
+        assert "lib/collabDraft" in text
+        for symbol in ("const DUTIES", "const EDGE_KINDS", "const SCOPES", "const ACTIONS"):
+            assert symbol not in text, f"{name} 又复制了一份编排词汇表（{symbol}）"

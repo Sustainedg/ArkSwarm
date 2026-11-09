@@ -155,8 +155,10 @@ class AgentDefinition(ABC):
 ## 6. 数据模型
 
 ```
-agent_instances(id, name, type_id, gateway_url, model, api_key_encrypted, options JSON, enabled)
-roles(id, name, avatar, tagline, system_prompt, agent_id→agent_instances, workspace_dir, parameters JSON)
+agent_instances(id, name, type_id, gateway_url, model, api_key_encrypted, options JSON, enabled,
+                deleted_at)
+roles(id, name, avatar, tagline, system_prompt, agent_id→agent_instances, workspace_dir,
+      parameters JSON, deleted_at)
 conversations(id, title, role_id→roles, agent_id→agent_instances, session_id, workspace_dir, archived)
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
@@ -185,15 +187,20 @@ collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→rol
   旧消息没有内联 `text` 段，前端会用 `content` 合成一段兜底，保持向后兼容。
 - **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个智能体可以让不同角色走不同模型。
 - **技能只增不删**：技能是从文件系统扫描出来的，目录消失只标记 `available=false`，
-  因此角色分配（`role_skills`）永远指向真实存在的记录；删除角色时分配关系级联删除。
+  因此角色分配（`role_skills`）永远指向真实存在的记录；角色被删除时分配关系保留（见下条）。
+- **删除角色/智能体只做软删除**：外键全是 `RESTRICT`，而历史对话与历史工单都引用着角色与智能体，
+  硬删会连历史一起打断。所以 `DELETE /api/roles/{id}`、`DELETE /api/agents/{id}` 只写
+  `deleted_at`：实体从所有可选列表里消失（新建对话、新建角色都拒绝它），
+  但历史对话仍能显示当时的角色名/头像、也仍能继续对话；因此角色删除不再受"有没有历史对话"影响。
 - **协作域的分工键**：工单用 `owner_key`（谁拆的谁汇总）、`holder_key`（现在谁握着）、
   `submitter_key`（最近提交者，打回时默认退回给他）记岗位流转；步骤用 `gist` 存**引擎派生**的
   一句话摘要 —— 拼下游 prompt 时只读 `gist`、不读 `content`，从数据通路上保证"下游只看工单、
   看不到上游对话"。岗位用 key 而不是角色 id，是因为角色可以改绑，历史工单仍要能复现。
-- **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以协作域把"后加的
-  可选列"登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`，由 `db.init_db` 用
-  `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐：现有 `magenta.db` 启动后自动对齐，不重建、不丢数据。
-- **外键用 `ON DELETE RESTRICT`**：删除被引用的智能体/角色会被拒绝（409），避免历史断裂；
+- **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以"后加的可选列"
+  登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）与 `collab/tables.py` 的
+  `ADDITIVE_COLUMNS`（协作域），由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
+  幂等补齐：现有 `magenta.db` 启动后自动对齐，不重建、不丢数据。
+- **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的角色引用的智能体不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
 ## 7. 扩展点
@@ -204,6 +211,7 @@ collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→rol
 | 接入新模型供应商（无官方 CLI） | 复用 `openai_harness.py` 的基类，加一个子类声明默认网关/模型 |
 | 零代码接入私有 CLI | 用 `custom-cli` 适配器填命令 + JSON 取值路径 |
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |
+| 新增移动端页面 | 在 `frontend/src/mobile/` 加页面并在 `MobileApp.tsx` 注册路由（桌面端不受影响） |
 | 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `discover_skills()` 与 `skill_mount()` |
 | 新增协作能力（多角色工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
@@ -220,3 +228,35 @@ collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→rol
   `doctor`）要靠 `skillOverrides` 关闭；工作目录自带的 `.claude/skills` 会被内核直接读取，
   平台只提示、不删除用户文件。
 - 技能目前只支持「查看 + 分配」；编辑、安装与上传留待后续（技能目录仍由各内核自己管理）。
+
+## 9. 移动端与 PWA
+
+移动端不是桌面端的「窄屏适配」，而是**另一条物理独立的链接**：`/m/`。
+
+```
+frontend/
+├── index.html              # 桌面端入口 → /
+├── m/index.html            # 移动端入口 → /m/
+├── public/m/               # 移动端 PWA 资产（manifest + Service Worker）
+├── public/icons/           # 两端口共用的应用图标（由 scripts/gen_icons.py 生成）
+└── src/
+    ├── App.tsx · pages/ · components/ · index.css    # 桌面端
+    └── mobile/                                       # 移动端（独立页面与样式表）
+        ├── main.tsx · MobileApp.tsx · mobile.css
+        ├── components/（底部 Tab · 顶栏 · 底部弹层）
+        └── pages/（对话列表 · 对话 · 角色 · 智能体 · 技能 · 协作 · 设置）
+```
+
+- **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
+  与三个纯展示组件（`DynamicForm` / `MessageView` / `MarkdownView`）；页面、路由、样式表各自独立
+  （移动端用底部弹层替代桌面端的居中 Modal）。
+- **后端只保留一个 SPA 兜底**：`main.py:resolve_spa_target()` 按前缀把深链分派到 `dist/index.html`
+  或 `dist/m/index.html`，其余静态文件原样返回；`/assets` 由两端口共享。
+- **PWA**：`public/m/manifest.webmanifest`（`scope` 与 `start_url` 都是 `/m/`）+
+  `public/m/sw.js`（安装期预缓存入口 HTML 与其引用的构建产物；导航网络优先、离线回落外壳）。
+  Service Worker 的作用域只在 `/m/`，且 `/api/`（含 SSE 长连接）永不缓存、一律直连后端——
+  离线只保证「界面能打开」，对话仍需联网。
+- **移动端的取舍**：协作域不提供可视化画布（连线需要精确拖拽，手机上体验很差），
+  改在「协作组」详情页用**表单**编排：岗位是卡片、连线是「从谁到谁」的下拉选择；
+  两端的字段语义、默认值与中文标签共用 `lib/collabDraft.ts` 一份，校验一律走服务端
+  `POST /api/collab/teams/{id}/validate`。

@@ -5,6 +5,7 @@
  * 拖到另一个节点松手后画出的**三次贝塞尔曲线**；不做折线避让、不做自动布局。
  */
 import { useEffect, useRef, useState } from 'react'
+import { addEdgeToGraph } from '../lib/collabDraft'
 import type { CollabEdge, CollabEdgeKind, CollabIssue, CollabNode, Role } from '../lib/types'
 
 /** 节点卡片的固定尺寸：连线端点按它计算（M2 只做等宽等高卡片） */
@@ -46,10 +47,6 @@ function edgeColor(kind: CollabEdgeKind): string {
   if (kind === 'review') return '#6ee7d1'
   if (kind === 'rework') return '#fbbf24'
   return '#8b86b8'
-}
-
-function newEdgeId(): string {
-  return `e${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -107,7 +104,7 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
           ?.closest('[data-node-key]') as HTMLElement | null
         const targetKey = target?.dataset.nodeKey
         if (targetKey && targetKey !== drag.fromKey) {
-          onChange({ nodes, edges: connect(byKey, edges, drag.fromKey, targetKey) })
+          onChange({ nodes, edges: addEdgeToGraph(nodes, edges, drag.fromKey, targetKey) })
         }
       }
       setDrag(null)
@@ -263,19 +260,3 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
   )
 }
 
-/** 从 from 连一条边到 to；已有同向同类边时不重复添加，边类型按两端岗位推断。 */
-function connect(
-  byKey: Map<string, CollabNode>,
-  edges: CollabEdge[],
-  fromKey: string,
-  toKey: string,
-): CollabEdge[] {
-  const from = byKey.get(fromKey)
-  const to = byKey.get(toKey)
-  const kind: CollabEdgeKind =
-    from?.duty === 'reviewer' ? 'rework' : to?.duty === 'reviewer' ? 'review' : 'assign'
-  if (edges.some((edge) => edge.from_key === fromKey && edge.to_key === toKey && edge.kind === kind)) {
-    return edges
-  }
-  return [...edges, { id: newEdgeId(), from_key: fromKey, to_key: toKey, kind, label: '', max_rounds: 0 }]
-}

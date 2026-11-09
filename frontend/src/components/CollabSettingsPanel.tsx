@@ -7,10 +7,19 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CollabCanvas, type CollabSelection } from './CollabCanvas'
-import { NodeInspector, type TeamDraft } from './NodeInspector'
+import { NodeInspector } from './NodeInspector'
 import { Modal } from './Modal'
 import { api, ApiError } from '../lib/api'
-import type { AgentType, CollabBudget, CollabEdge, CollabIssue, CollabNode, CollabTeam, Role } from '../lib/types'
+import {
+  addNodeToDraft,
+  collabTeamPayload,
+  removeNodeFromDraft,
+  renameNodeInDraft,
+  sanitizeKey,
+  toTeamDraft,
+  type TeamDraft,
+} from '../lib/collabDraft'
+import type { AgentType, CollabEdge, CollabIssue, CollabNode, CollabTeam, Role } from '../lib/types'
 
 interface Props {
   teamId?: string
@@ -19,52 +28,6 @@ interface Props {
   agentTypes: AgentType[]
   onOpenTeam: (teamId: string | null) => void
   onTeamsChanged: () => void | Promise<void>
-}
-
-const DEFAULT_BUDGET: CollabBudget = {
-  max_steps: 60,
-  max_tickets: 30,
-  max_rounds_per_ticket: 3,
-  max_tokens: 0,
-  timeout_seconds: 3600,
-}
-
-/** 后端 BudgetSpec 有 ge 约束：这里按同一套下限夹紧，避免保存时才 422 */
-function clampBudget(budget: CollabBudget): CollabBudget {
-  return {
-    max_steps: Math.max(1, budget.max_steps),
-    max_tickets: Math.max(1, budget.max_tickets),
-    max_rounds_per_ticket: Math.max(1, budget.max_rounds_per_ticket),
-    max_tokens: Math.max(0, budget.max_tokens),
-    timeout_seconds: Math.max(30, budget.timeout_seconds),
-  }
-}
-
-function toDraft(team: CollabTeam): TeamDraft {
-  return {
-    name: team.name,
-    description: team.description ?? '',
-    entry_key: team.entry_key ?? null,
-    workspace_dir: team.workspace_dir ?? '',
-    budget: { ...DEFAULT_BUDGET, ...team.budget },
-    nodes: team.graph.nodes.map((node) => ({ ...node })),
-    // 旧数据里没有 max_rounds，补 0（前端不依赖后端一定回传新字段）
-    edges: team.graph.edges.map((edge) => ({ ...edge, max_rounds: edge.max_rounds ?? 0 })),
-  }
-}
-
-/** 节点 key 必须满足后端的 `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` */
-function sanitizeKey(raw: string): string {
-  const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^[^a-zA-Z0-9]+/, '')
-  return cleaned.slice(0, 64)
-}
-
-function defaultKey(duty: string, taken: Set<string>): string {
-  const base = duty === 'reviewer' ? 'review' : duty === 'coordinator' ? 'lead' : 'dev'
-  if (!taken.has(base)) return base
-  let index = 2
-  while (taken.has(`${base}-${index}`)) index += 1
-  return `${base}-${index}`
 }
 
 export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTeam, onTeamsChanged }: Props) {
@@ -81,7 +44,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
   const loadTeam = useCallback(async (id: string) => {
     try {
       const loaded = await api.getCollabTeam(id)
-      setDraft(toDraft(loaded))
+      setDraft(toTeamDraft(loaded))
       setIssues([...loaded.validation.errors, ...loaded.validation.warnings])
       setDirty(false)
       setSelection(null)
@@ -144,35 +107,13 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
   const renameNode = (oldKey: string, rawKey: string) => {
     const key = sanitizeKey(rawKey)
     if (!key || key === oldKey) return
-    setDraft((prev) =>
-      prev
-        ? {
-            ...prev,
-            entry_key: prev.entry_key === oldKey ? key : prev.entry_key,
-            nodes: prev.nodes.map((node) => (node.key === oldKey ? { ...node, key } : node)),
-            edges: prev.edges.map((edge) => ({
-              ...edge,
-              from_key: edge.from_key === oldKey ? key : edge.from_key,
-              to_key: edge.to_key === oldKey ? key : edge.to_key,
-            })),
-          }
-        : prev,
-    )
+    setDraft((prev) => (prev ? renameNodeInDraft(prev, oldKey, rawKey) : prev))
     setSelection({ kind: 'node', id: key })
     setDirty(true)
   }
 
   const deleteNode = (key: string) => {
-    setDraft((prev) =>
-      prev
-        ? {
-            ...prev,
-            entry_key: prev.entry_key === key ? null : prev.entry_key,
-            nodes: prev.nodes.filter((node) => node.key !== key),
-            edges: prev.edges.filter((edge) => edge.from_key !== key && edge.to_key !== key),
-          }
-        : prev,
-    )
+    setDraft((prev) => (prev ? removeNodeFromDraft(prev, key) : prev))
     setSelection(null)
     setDirty(true)
   }
@@ -185,30 +126,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
 
   /** 从角色抽屉添加一个岗位节点（点选或拖放都会走到这里） */
   const addNode = (role: Role, at?: { x: number; y: number }) => {
-    setDraft((prev) => {
-      if (!prev) return prev
-      const taken = new Set(prev.nodes.map((node) => node.key))
-      const index = prev.nodes.length
-      // 第一个节点默认当入口（协调者），省得用户还得手动指一次
-      const duty = prev.nodes.length === 0 ? 'coordinator' : 'engineer'
-      const key = defaultKey(duty, taken)
-      const node: CollabNode = {
-        key,
-        role_id: role.id,
-        label: role.name,
-        duty,
-        instructions: '',
-        capability_scope: '',
-        workspace_scope: null,
-        output_contract: [],
-        options_override: {},
-        max_rounds: 0,
-        x: at?.x ?? 40 + (index % 4) * 230,
-        y: at?.y ?? 40 + Math.floor(index / 4) * 150,
-      }
-      const entry_key = prev.entry_key ?? (prev.nodes.length === 0 ? key : null)
-      return { ...prev, nodes: [...prev.nodes, node], entry_key }
-    })
+    setDraft((prev) => (prev ? addNodeToDraft(prev, role, at) : prev))
     setDirty(true)
   }
 
@@ -217,15 +135,8 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
     setSaving(true)
     setError(null)
     try {
-      const saved = await api.saveCollabTeam(teamId, {
-        name: draft.name.trim() || '未命名协作组',
-        description: draft.description,
-        entry_key: draft.entry_key,
-        workspace_dir: draft.workspace_dir.trim() || null,
-        graph: { nodes: draft.nodes, edges: draft.edges },
-        budget: clampBudget(draft.budget),
-      })
-      setDraft(toDraft(saved))
+      const saved = await api.saveCollabTeam(teamId, collabTeamPayload(draft))
+      setDraft(toTeamDraft(saved))
       setIssues([...saved.validation.errors, ...saved.validation.warnings])
       setDirty(false)
       await onTeamsChanged()

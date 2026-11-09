@@ -77,12 +77,27 @@ async def unhandled(request, exc):  # pragma: no cover - 兜底保护
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
+def resolve_spa_target(dist: Path, full_path: str) -> Path:
+    """把前端深链解析到真实存在的 HTML 入口。
+
+    桌面端（`/`）与移动端（`/m/`）是两条物理独立的链接，各有自己的构建入口：
+    静态文件（构建产物、manifest、Service Worker）优先原样返回，其余路径回落到
+    对应入口的 index.html，交给前端路由接管。
+    """
+    if full_path:
+        candidate = dist / full_path
+        if candidate.is_file():
+            return candidate
+    if full_path == "m" or full_path.startswith("m/"):
+        mobile_entry = dist / "m" / "index.html"
+        if mobile_entry.is_file():
+            return mobile_entry
+    return dist / "index.html"
+
+
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str) -> FileResponse:
-        candidate = FRONTEND_DIST / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(resolve_spa_target(FRONTEND_DIST, full_path))
