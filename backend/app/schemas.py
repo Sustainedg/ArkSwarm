@@ -23,7 +23,7 @@ class AgentUpdate(BaseModel):
     description: str | None = None
     gateway_url: str | None = None
     model: str | None = None
-    #: omit to keep the stored secret, send "" to clear it
+    #: 省略表示保留已存密钥，传 "" 表示清除
     api_key: str | None = None
     options: dict[str, Any] | None = None
     enabled: bool | None = None
@@ -42,7 +42,7 @@ class AgentRead(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
-    #: derived
+    #: 派生字段
     type_name: str | None = None
     runtime: str | None = None
     api_key_set: bool = False
@@ -138,7 +138,7 @@ class MessageRead(BaseModel):
 
 class SendMessage(BaseModel):
     content: str = Field(min_length=1)
-    #: optional per-turn overrides
+    #: 可选的单轮覆盖项
     workspace_dir: str | None = None
     reset_session: bool = False
 

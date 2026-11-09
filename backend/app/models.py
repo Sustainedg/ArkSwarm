@@ -62,7 +62,7 @@ class Conversation(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     title: str = Field(default="新对话", sa_column=Column(String(200), nullable=False))
     role_id: str = Field(sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True))
-    #: snapshot of the agent used at creation time; history must stay reproducible
+    #: 创建时对智能体做的快照；历史对话必须可复现
     agent_id: str = Field(sa_column=Column(String(64), ForeignKey("agent_instances.id", ondelete="RESTRICT"), nullable=False, index=True))
     session_id: str | None = Field(default=None, sa_column=Column(String(160)))
     workspace_dir: str | None = Field(default=None, sa_column=Column(String(500)))

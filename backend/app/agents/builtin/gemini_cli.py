@@ -91,7 +91,7 @@ class GeminiCliAgent(AgentDefinition):
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
-    # -- invocation ----------------------------------------------------------
+    # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
         options = ctx.options
@@ -133,7 +133,7 @@ class GeminiCliAgent(AgentDefinition):
         argv += ["-p", ""]
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=prompt, files=files)
 
-    # -- parsing -------------------------------------------------------------
+    # -- 解析输出 ------------------------------------------------------------
 
     def parse_line(self, line: str, run: AgentRun) -> Iterable[AgentEvent]:
         line = line.strip()

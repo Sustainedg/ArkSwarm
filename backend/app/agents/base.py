@@ -31,15 +31,14 @@ class Runtime(str, Enum):
     """适配器与智能体的通信方式。"""
 
     CLI = "cli"  # spawns a subprocess
-    API = "api"  # in-process HTTP calls against an OpenAI-ish endpoint
+    API = "api"  # 进程内直接发起 HTTP 调用（OpenAI 兼容端点）
 
 
 @dataclass(slots=True)
 class ConfigField:
     """一个可由用户编辑的配置项的声明式描述。
 
-    The UI renders these generically, so a new agent ships its own form without
-    any frontend work.
+    界面会统一按声明渲染这些字段，因此新增智能体自带表单，无需改动前端。
     """
 
     key: str
@@ -69,7 +68,7 @@ class ConfigField:
 @dataclass(slots=True)
 class Capabilities:
     streaming: bool = True
-    sessions: bool = False          # can resume a server-side session/thread
+    sessions: bool = False          # 能否在服务端续接会话 / 线程
     native_system_prompt: bool = False
     tools: bool = False
     mcp: bool = False
@@ -106,9 +105,9 @@ class Invocation:
     env: dict[str, str] = field(default_factory=dict)
     cwd: str | None = None
     stdin: str | None = None
-    #: files the runner must materialise before launch (relative -> content)
+    #: 运行器在启动前必须写入的文件（相对路径 -> 内容）
     files: dict[str, str] = field(default_factory=dict)
-    #: which stream the adapter expects its event payloads on
+    #: 适配器期望事件载荷出现在哪条流上
     stream: str = "stdout"
 
 
@@ -118,19 +117,19 @@ class AgentContext:
 
     agent_id: str
     agent_name: str
-    #: merged ``options`` blob stored on the agent instance
+    #: 智能体实例上合并后的 options
     options: dict[str, Any] = field(default_factory=dict)
     gateway_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    #: persona
+    #: 人格
     role_name: str | None = None
     system_prompt: str | None = None
-    #: workspace
+    #: 工作目录
     workspace_dir: str | None = None
-    #: multi-turn support
+    #: 多轮会话支持
     session_id: str | None = None
-    #: transcripts, injected for agents that cannot resume server-side
+    #: 对话记录；注入给无法在服务端续接会话的智能体
     history: list[dict[str, str]] = field(default_factory=list)
     prompt: str = ""
 
@@ -155,13 +154,13 @@ class AgentDefinition(ABC):
     default_gateway: ClassVar[str | None] = None
     default_model: ClassVar[str | None] = None
     docs_url: ClassVar[str | None] = None
-    #: the executable that must exist on PATH (CLI adapters only)
+    #: 必须存在于 PATH 中的可执行文件（仅 CLI 适配器）
     executable: ClassVar[str | None] = None
-    #: whether first-run seeding may create an instance of this adapter
-    #: (set False for templates that need user input before they can work)
+    #: 首次启动播种时是否允许为该适配器创建实例
+    #: （需要用户先填写配置才能工作的模板设为 False）
     auto_provision: ClassVar[bool] = True
 
-    # -- introspection -------------------------------------------------------
+    # -- 元数据与自省 --------------------------------------------------------
 
     def descriptor(self) -> dict[str, Any]:
         return {
@@ -230,7 +229,7 @@ class AgentDefinition(ABC):
             env[str(key)] = str(value)
         return env
 
-    # -- runtime -------------------------------------------------------------
+    # -- 运行时 --------------------------------------------------------------
 
     @abstractmethod
     def build_invocation(self, ctx: AgentContext) -> Invocation:

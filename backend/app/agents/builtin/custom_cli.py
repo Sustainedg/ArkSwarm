@@ -1,8 +1,7 @@
-"""用户自定义 CLI agent —— 不写代码也能接入新 agent。
+"""用户自定义 CLI 智能体 —— 不写代码也能接入新智能体。
 
-Users describe how to invoke an arbitrary command-line agent (Aider, a home-grown
-DeepSeek harness binary, an internal tool, ...) and how to read its output. This
-is the declarative escape hatch that keeps the platform open-ended.
+用户描述如何调用任意命令行智能体（Aider、自研的 DeepSeek 内核二进制、
+内部工具……）以及如何解析它的输出。这是保持平台开放性的声明式逃生舱。
 """
 from __future__ import annotations
 
@@ -134,7 +133,7 @@ class CustomCliAgent(AgentDefinition):
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
-    # -- introspection -------------------------------------------------------
+    # -- 元数据与自省 --------------------------------------------------------
 
     def availability(self) -> Availability:
         return Availability(True, detail="由实例上的「可执行命令」决定")
@@ -148,7 +147,7 @@ class CustomCliAgent(AgentDefinition):
             return False, f"未在 PATH 中找到 `{command}`"
         return True, f"解析到 {path}"
 
-    # -- invocation ----------------------------------------------------------
+    # -- 构造启动命令 --------------------------------------------------------
 
     def _placeholders(self, ctx: AgentContext) -> dict[str, str]:
         return {
@@ -188,7 +187,7 @@ class CustomCliAgent(AgentDefinition):
 
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=stdin)
 
-    # -- parsing -------------------------------------------------------------
+    # -- 解析输出 ------------------------------------------------------------
 
     def parse_line(self, line: str, run: AgentRun) -> Iterable[AgentEvent]:
         line = line.rstrip("\n")

@@ -35,7 +35,7 @@ export function AgentsPage() {
   const typeMap = useMemo(() => Object.fromEntries(types.map((t) => [t.id, t])), [types])
 
   const remove = async (agent: AgentInstance) => {
-    if (!confirm(`删除 agent「${agent.name}」？`)) return
+    if (!confirm(`删除智能体「${agent.name}」？`)) return
     try {
       await api.deleteAgent(agent.id)
       await reload()
@@ -359,7 +359,7 @@ function AgentModal({
                 placeholder={selected.default_gateway ?? 'https://your-gateway.example/v1'}
               />
               <span className="field-help">
-                可留空以使用官方地址或环境里的默认凭据。填成中转网关即可统一收口所有 agent 的流量。
+                可留空以使用官方地址或环境里的默认凭据。填成中转网关即可统一收口所有智能体的流量。
               </span>
             </div>
             <div className="field span-2">

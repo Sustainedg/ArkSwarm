@@ -1,4 +1,4 @@
-"""把一个 HTTP 请求变成一次真实的 agent 运行，并把结果落库。"""
+"""把一个 HTTP 请求变成一次真实的智能体运行，并把结果落库。"""
 from __future__ import annotations
 
 import uuid
@@ -66,7 +66,7 @@ def build_context(
     workspace: str,
 ) -> AgentContext:
     options = definition.coerce_options(agent.options or {})
-    # role-level overrides win over the agent defaults
+    # 角色级覆盖优先于智能体实例上的默认值
     options = {**options, **(role.parameters or {})}
     if not options.get("model") and agent.model:
         options["model"] = agent.model
@@ -266,7 +266,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     if last_user is None:
         raise ConfigurationError("没有可用于重新生成的用户消息")
 
-    # drop everything after the last user turn, then replay it
+    # 丢弃最后一轮用户消息之后的内容，然后重新重放这一轮
     stale = [m for m in rows if m.created_at >= last_user.created_at and m.role != "user"]
     for message in stale:
         await session.delete(message)

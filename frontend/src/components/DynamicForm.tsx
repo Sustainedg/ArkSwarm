@@ -155,7 +155,7 @@ function renderControl(field: ConfigField, value: unknown, onChange: (v: unknown
               <input
                 className="input mono"
                 value={key}
-                placeholder="KEY"
+                placeholder="键"
                 onChange={(e) => {
                   const rows = entries.map((row) => [...row] as [string, string])
                   rows[index][0] = e.target.value
@@ -165,7 +165,7 @@ function renderControl(field: ConfigField, value: unknown, onChange: (v: unknown
               <input
                 className="input mono"
                 value={entryValue}
-                placeholder="value"
+                placeholder="值"
                 onChange={(e) => {
                   const rows = entries.map((row) => [...row] as [string, string])
                   rows[index][1] = e.target.value

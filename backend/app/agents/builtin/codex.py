@@ -125,7 +125,7 @@ class CodexAgent(AgentDefinition):
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
-    # -- invocation ----------------------------------------------------------
+    # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
         options = ctx.options
@@ -183,7 +183,7 @@ class CodexAgent(AgentDefinition):
     def resume_supported(self, ctx: AgentContext) -> bool:
         return (ctx.option("resume_style") or "subcommand") == "subcommand"
 
-    # -- parsing -------------------------------------------------------------
+    # -- 解析输出 ------------------------------------------------------------
 
     def parse_line(self, line: str, run: AgentRun) -> Iterable[AgentEvent]:
         line = line.strip()

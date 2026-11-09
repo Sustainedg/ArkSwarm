@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     run_timeout_seconds: int = 3600
     default_agent_type: str = "claude-code"
-    #: directory scanned for user-dropped agent adapter modules
+    #: 扫描用户投放的智能体适配器模块的目录
     plugin_dir: Path | None = None
 
     @property

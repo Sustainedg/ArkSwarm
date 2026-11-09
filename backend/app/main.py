@@ -36,7 +36,7 @@ app = FastAPI(
     title="Magenta Agents 多智能体控制台",
     version=__version__,
     description="多智能体对话控制台：把 Claude Code、Codex、Gemini CLI、DeepSeek 等 "
-                "agent 配置成实例，再绑定到角色上进行对话。",
+                "智能体配置成实例，再绑定到角色上进行对话。",
     lifespan=lifespan,
 )
 

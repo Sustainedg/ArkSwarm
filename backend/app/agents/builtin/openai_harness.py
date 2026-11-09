@@ -1,9 +1,9 @@
-"""面向任意 OpenAI 兼容对话端点的进程内 agent 内核。
+"""面向任意 OpenAI 兼容对话端点的进程内智能体内核。
 
-This is the adapter family that covers model providers without an official CLI:
-DeepSeek, Kimi, GLM, Qwen, OpenRouter, vLLM/Ollama, ...
-所谓「内核」就是 agent 循环本身：流式补全 + 沙箱化工具循环，
-让一个普通的对话模型表现得像一个编码 agent。
+这个适配器家族覆盖了没有官方 CLI 的模型供应商：
+DeepSeek、Kimi、GLM、Qwen、OpenRouter、vLLM/Ollama…
+所谓「内核」就是智能体循环本身：流式补全 + 沙箱化工具循环，
+让一个普通的对话模型表现得像一个编码智能体。
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ class OpenAIHarnessBase(AgentDefinition):
         """可被子类覆盖，便于测试或自定义传输层注入 httpx 客户端。"""
         return httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=20.0))
 
-    # -- HTTP ----------------------------------------------------------------
+    # -- HTTP 请求 -----------------------------------------------------------
 
     def chat_completions_url(self, ctx: AgentContext) -> str:
         base = (ctx.gateway_url or self.default_gateway or "").rstrip("/")
@@ -148,7 +148,7 @@ class OpenAIHarnessBase(AgentDefinition):
             headers[str(key)] = str(value)
         return headers
 
-    # -- agent loop ----------------------------------------------------------
+    # -- 智能体循环 ----------------------------------------------------------
 
     async def stream(self, ctx: AgentContext) -> AsyncIterator[AgentEvent]:
         messages = self.build_messages(ctx)
@@ -281,7 +281,7 @@ class OpenAIHarnessBase(AgentDefinition):
         except httpx.HTTPError as exc:
             return False, f"无法连接网关：{exc}"
 
-    # API 型 agent 用不到，仅为满足基类契约而保留
+    # API 型智能体用不到，仅为满足基类契约而保留
     def build_invocation(self, ctx: AgentContext) -> Invocation:  # pragma: no cover
         raise NotImplementedError("进程内 API 型智能体不启动子进程")
 

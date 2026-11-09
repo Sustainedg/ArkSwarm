@@ -62,7 +62,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "description": "列出工作目录下某个子目录的条目。",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "default '.'"}},
+                "properties": {"path": {"type": "string", "description": "默认 '.'"}},
             },
         },
     },
@@ -79,7 +79,7 @@ class WorkspaceTools:
         self.allow_shell = allow_shell
         self.timeout = timeout
 
-    # -- helpers -------------------------------------------------------------
+    # -- 辅助方法 ------------------------------------------------------------
 
     def _resolve(self, raw: str) -> Path:
         if not raw:
@@ -89,7 +89,7 @@ class WorkspaceTools:
             raise ToolError(f"路径越出了工作目录：{raw}")
         return candidate
 
-    # -- tools ---------------------------------------------------------------
+    # -- 工具实现 ------------------------------------------------------------
 
     async def run_shell(self, command: str) -> str:
         if not self.allow_shell:
