@@ -7,11 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..db import get_session
-from ..models import AgentInstance, Conversation, Role, RoleSkill, Skill
+from ..models import AgentInstance, Role, RoleSkill, Skill
 from ..runtime import skills as skill_service
 from ..schemas import RoleCreate, RoleRead, RoleSkillBrief, RoleSkillsUpdate, RoleUpdate
 
 router = APIRouter(prefix="/roles", tags=["roles"])
+
+
+async def _active_role(role_id: str, session: AsyncSession) -> Role:
+    """取一个**未删除**的角色；软删除过的角色一律按不存在处理。"""
+    role = await session.get(Role, role_id)
+    if role is None or role.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    return role
 
 
 async def _skill_briefs(role_id: str, session: AsyncSession) -> list[RoleSkillBrief]:
@@ -64,14 +72,15 @@ async def _to_read(role: Role, session: AsyncSession) -> RoleRead:
 
 @router.get("")
 async def list_roles(session: AsyncSession = Depends(get_session)) -> dict:
-    rows = (await session.execute(select(Role).order_by(Role.created_at))).scalars().all()
+    statement = select(Role).where(Role.deleted_at.is_(None)).order_by(Role.created_at)
+    rows = (await session.execute(statement)).scalars().all()
     return {"items": [(await _to_read(r, session)).model_dump() for r in rows]}
 
 
 @router.post("", status_code=201)
 async def create_role(payload: RoleCreate, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await session.get(AgentInstance, payload.agent_id)
-    if agent is None:
+    if agent is None or agent.deleted_at is not None:
         raise HTTPException(status_code=422, detail="指定的 agent_id 不存在")
     role = Role(**payload.model_dump())
     session.add(role)
@@ -82,9 +91,7 @@ async def create_role(payload: RoleCreate, session: AsyncSession = Depends(get_s
 
 @router.get("/{role_id}")
 async def get_role(role_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    role = await session.get(Role, role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    role = await _active_role(role_id, session)
     return (await _to_read(role, session)).model_dump()
 
 
@@ -92,12 +99,12 @@ async def get_role(role_id: str, session: AsyncSession = Depends(get_session)) -
 async def update_role(
     role_id: str, payload: RoleUpdate, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    role = await session.get(Role, role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    role = await _active_role(role_id, session)
     data = payload.model_dump(exclude_unset=True)
-    if data.get("agent_id") and await session.get(AgentInstance, data["agent_id"]) is None:
-        raise HTTPException(status_code=422, detail="指定的 agent_id 不存在")
+    if data.get("agent_id"):
+        agent = await session.get(AgentInstance, data["agent_id"])
+        if agent is None or agent.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="指定的 agent_id 不存在")
     for field, value in data.items():
         if value is not None:
             setattr(role, field, value)
@@ -113,15 +120,16 @@ async def update_role(
 
 @router.delete("/{role_id}", status_code=204)
 async def delete_role(role_id: str, session: AsyncSession = Depends(get_session)) -> Response:
-    role = await session.get(Role, role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="角色不存在")
-    in_use = (
-        await session.execute(select(Conversation).where(Conversation.role_id == role_id))
-    ).scalars().all()
-    if in_use:
-        raise HTTPException(status_code=409, detail=f"该角色正被 {len(in_use)} 个对话使用")
-    await session.delete(role)
+    """删除角色。
+
+    角色常被历史引用（对话、协作工单的外键都是 ``RESTRICT``），
+    硬删会连历史一起打断。因此统一做**软删除**：打上 ``deleted_at`` 后
+    角色从所有可选列表里消失，而历史对话仍能显示当时的角色名与头像、也仍可继续对话。
+    """
+    role = await _active_role(role_id, session)
+    role.deleted_at = datetime.now(timezone.utc)
+    role.updated_at = role.deleted_at
+    session.add(role)
     await session.commit()
     return Response(status_code=204)
 
@@ -143,9 +151,7 @@ async def set_role_skills(
     role_id: str, payload: RoleSkillsUpdate, session: AsyncSession = Depends(get_session)
 ) -> dict:
     """整表替换角色分配到的技能（界面已禁止选错类型，这里是服务端兜底）。"""
-    role = await session.get(Role, role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    role = await _active_role(role_id, session)
     agent = await session.get(AgentInstance, role.agent_id)
     if agent is None:
         raise HTTPException(status_code=422, detail="该角色绑定的智能体已不存在")
@@ -158,9 +164,7 @@ async def set_role_skills(
 
 @router.post("/{role_id}/duplicate", status_code=201)
 async def duplicate_role(role_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    role = await session.get(Role, role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    role = await _active_role(role_id, session)
     clone = Role(
         name=f"{role.name} 副本",
         avatar=role.avatar,

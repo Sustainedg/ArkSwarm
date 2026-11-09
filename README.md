@@ -213,9 +213,9 @@ class AcmeAgent(AgentDefinition):
 | --- | --- | --- |
 | GET | `/api/agent-types` | 所有适配器及其 config schema、安装状态 |
 | GET/POST | `/api/agents` | 列出 / 创建智能体实例 |
-| PATCH/DELETE | `/api/agents/{id}` | 更新 / 删除（被角色引用时返回 409） |
+| PATCH/DELETE | `/api/agents/{id}` | 更新 / 删除（仍被未删除的角色引用时返回 409，否则软删除） |
 | POST | `/api/agents/{id}/test` | 连通性探测（适配器 / 运行时 / 网关三段检查） |
-| GET/POST | `/api/roles` | 角色管理 |
+| GET/POST | `/api/roles` | 角色管理（删除为软删除：从列表消失，历史对话保留） |
 | GET/POST | `/api/conversations` | 对话管理 |
 | POST | `/api/conversations/{id}/messages` | **SSE** 发送消息并流式接收回复 |
 | POST | `/api/conversations/{id}/regenerate` | 重跑最后一轮 |

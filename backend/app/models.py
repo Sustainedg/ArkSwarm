@@ -18,6 +18,16 @@ from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
 from sqlmodel import Field, SQLModel
 
 
+#: 对话域**后来新增的可选列**：SQLite 的 ``create_all`` 只建新表、不会给已存在的表补列，
+#: 而本地库（``backend/data/magenta.db``）含真实数据、禁止删库重建 ——
+#: 所以在这里登记一次，由 ``db.init_db`` 幂等补齐（见 ``db._add_missing_columns``）。
+#: 只允许追加「带默认值、旧行可以留空」的列。
+ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
+    "agent_instances": {"deleted_at": "DATETIME"},
+    "roles": {"deleted_at": "DATETIME"},
+}
+
+
 def new_id() -> str:
     return uuid.uuid4().hex
 
@@ -40,6 +50,9 @@ class AgentInstance(SQLModel, table=True):
     enabled: bool = Field(default=True)
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 软删除时间戳：被历史引用（外键 RESTRICT）时只打标记、不真删行；
+    #: 规则见 ``Role.deleted_at``。
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
 
 class Role(SQLModel, table=True):
@@ -55,6 +68,10 @@ class Role(SQLModel, table=True):
     parameters: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 软删除时间戳：删除角色时只打标记（历史对话/协作工单仍引用它，
+    #: 硬删会打断历史）。打了标记的角色从所有可选列表里消失，
+    #: 但历史记录仍能显示当时的角色名与头像。
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
 
 

@@ -49,9 +49,20 @@ def _coerce(definition, options: dict | None) -> dict:
     return definition.coerce_options(options or {})
 
 
+async def _active_agent(agent_id: str, session: AsyncSession) -> AgentInstance:
+    """取一个**未删除**的智能体；软删除过的一律按不存在处理。"""
+    agent = await session.get(AgentInstance, agent_id)
+    if agent is None or agent.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="智能体不存在")
+    return agent
+
+
 @router.get("")
 async def list_agents(session: AsyncSession = Depends(get_session)) -> dict:
-    rows = (await session.execute(select(AgentInstance).order_by(AgentInstance.created_at))).scalars().all()
+    statement = select(AgentInstance).where(AgentInstance.deleted_at.is_(None)).order_by(
+        AgentInstance.created_at
+    )
+    rows = (await session.execute(statement)).scalars().all()
     return {"items": [to_read(a).model_dump() for a in rows]}
 
 
@@ -81,9 +92,7 @@ async def create_agent(payload: AgentCreate, session: AsyncSession = Depends(get
 
 @router.get("/{agent_id}")
 async def get_agent_instance(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    agent = await session.get(AgentInstance, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="智能体不存在")
+    agent = await _active_agent(agent_id, session)
     return to_read(agent).model_dump()
 
 
@@ -91,9 +100,7 @@ async def get_agent_instance(agent_id: str, session: AsyncSession = Depends(get_
 async def update_agent(
     agent_id: str, payload: AgentUpdate, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    agent = await session.get(AgentInstance, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="智能体不存在")
+    agent = await _active_agent(agent_id, session)
 
     data = payload.model_dump(exclude_unset=True)
     if "api_key" in data:
@@ -116,23 +123,33 @@ async def update_agent(
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> Response:
-    agent = await session.get(AgentInstance, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="智能体不存在")
-    in_use = (await session.execute(select(Role).where(Role.agent_id == agent_id))).scalars().all()
+    """删除智能体。
+
+    仍被**未删除**的角色引用时拒绝（409，外键 ``RESTRICT`` 的历史不变量不变）；
+    只被软删除的角色引用时改为软删除自己：否则用户会陷入
+    "角色已删（列表里看不见）、智能体却永远删不掉"的死角。
+    """
+    agent = await _active_agent(agent_id, session)
+    roles = (
+        await session.execute(select(Role).where(Role.agent_id == agent_id))
+    ).scalars().all()
+    in_use = [role for role in roles if role.deleted_at is None]
     if in_use:
-        names = ", ".join(r.name for r in in_use)
+        names = "、".join(r.name for r in in_use)
         raise HTTPException(status_code=409, detail=f"该智能体正被以下角色使用：{names}")
-    await session.delete(agent)
+    if roles:
+        agent.deleted_at = datetime.now(timezone.utc)
+        agent.updated_at = agent.deleted_at
+        session.add(agent)
+    else:
+        await session.delete(agent)
     await session.commit()
     return Response(status_code=204)
 
 
 @router.post("/{agent_id}/test")
 async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    agent = await session.get(AgentInstance, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="智能体不存在")
+    agent = await _active_agent(agent_id, session)
     try:
         definition = get_agent(agent.type_id)
     except KeyError as exc:
@@ -161,9 +178,7 @@ async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)
 
 @router.post("/{agent_id}/duplicate", status_code=201)
 async def duplicate_agent(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    agent = await session.get(AgentInstance, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="智能体不存在")
+    agent = await _active_agent(agent_id, session)
     clone = AgentInstance(
         name=f"{agent.name} 副本",
         type_id=agent.type_id,

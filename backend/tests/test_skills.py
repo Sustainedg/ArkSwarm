@@ -411,6 +411,23 @@ async def test_role_skills_come_only_from_assignment(client: httpx.AsyncClient, 
     assert cleared.json()["skill_ids"] == []
 
 
+async def test_deleted_role_stops_counting_as_a_skill_user(client: httpx.AsyncClient, catalog: Path):
+    """软删除的角色不再算技能的"使用中"角色，但分配关系保留，历史对话仍能复现技能。"""
+    await client.post("/api/skills/rescan")
+    agent = await make_agent(client)
+    role = await make_role(client, agent["id"])
+    await client.put(f"/api/roles/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]})
+    assert (await client.get("/api/skills/custom-cli:alpha")).json()["used_by_roles"] == 1
+
+    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 204
+
+    detail = (await client.get("/api/skills/custom-cli:alpha")).json()
+    assert detail["roles"] == []
+    assert detail["used_by_roles"] == 0
+    async with SessionLocal() as session:
+        assert await skill_service.role_skill_ids(session, role["id"]) == ["custom-cli:alpha"]
+
+
 async def test_role_copies_skills_on_duplicate_and_drops_mismatch_on_rebind(
     client: httpx.AsyncClient, catalog: Path
 ):

@@ -138,19 +138,25 @@ async def get_row(session: AsyncSession, skill_id: str) -> Skill | None:
 
 
 async def usage_counts(session: AsyncSession) -> dict[str, int]:
-    """每个技能被多少个角色使用。"""
+    """每个技能被多少个角色使用（已软删除的角色不再算"使用中"）。"""
+    statement = (
+        select(RoleSkill.skill_id)
+        .join(Role, Role.id == RoleSkill.role_id)
+        .where(Role.deleted_at.is_(None))
+    )
     counts: dict[str, int] = {}
-    for link in (await session.execute(select(RoleSkill))).scalars().all():
-        counts[link.skill_id] = counts.get(link.skill_id, 0) + 1
+    for skill_id in (await session.execute(statement)).scalars().all():
+        counts[skill_id] = counts.get(skill_id, 0) + 1
     return counts
 
 
 async def roles_using(session: AsyncSession, skill_id: str) -> list[Role]:
-    statement = select(RoleSkill).where(RoleSkill.skill_id == skill_id)
-    ids = [link.role_id for link in (await session.execute(statement)).scalars().all()]
-    if not ids:
-        return []
-    statement = select(Role).where(Role.id.in_(ids)).order_by(Role.created_at)
+    statement = (
+        select(Role)
+        .join(RoleSkill, RoleSkill.role_id == Role.id)
+        .where(RoleSkill.skill_id == skill_id, Role.deleted_at.is_(None))
+        .order_by(Role.created_at)
+    )
     return list((await session.execute(statement)).scalars().all())
 
 

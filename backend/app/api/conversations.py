@@ -68,7 +68,7 @@ async def create_conversation(
     payload: ConversationCreate, session: AsyncSession = Depends(get_session)
 ) -> dict:
     role = await session.get(Role, payload.role_id)
-    if role is None:
+    if role is None or role.deleted_at is not None:
         raise HTTPException(status_code=422, detail="指定的 role_id 不存在")
     conversation = new_conversation(role, payload.title, payload.workspace_dir)
     session.add(conversation)

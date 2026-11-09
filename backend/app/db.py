@@ -33,7 +33,8 @@ def _add_missing_columns(connection, columns_by_table: dict[str, dict[str, str]]
     """给**已存在**的表补齐后加的可选列（幂等）。
 
     ``create_all`` 只会建缺失的表，不会 ``ALTER`` 旧表；而本地库含真实数据、禁止重建，
-    因此协作域把"后加的可选列"登记在 ``collab.tables.ADDITIVE_COLUMNS``，由这里安全地补上：
+    因此"后加的可选列"登记在 ``models.ADDITIVE_COLUMNS``（对话域）与
+    ``collab.tables.ADDITIVE_COLUMNS``（协作域），由这里安全地补上：
     带默认值、旧行留空，既不丢数据也不改约束。
     """
     for table, columns in columns_by_table.items():
@@ -48,13 +49,14 @@ def _add_missing_columns(connection, columns_by_table: dict[str, dict[str, str]]
 
 
 async def init_db() -> None:
-    from . import models  # noqa: F401 - 注册表结构
+    from . import models  # 注册表结构，并取用对话域的后加列声明
     from .collab import tables as collab_tables  # 协作域的表结构与后加列声明
 
+    additive_columns = {**models.ADDITIVE_COLUMNS, **collab_tables.ADDITIVE_COLUMNS}
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         if _settings.sqlalchemy_url.startswith("sqlite"):
-            await conn.run_sync(_add_missing_columns, collab_tables.ADDITIVE_COLUMNS)
+            await conn.run_sync(_add_missing_columns, additive_columns)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

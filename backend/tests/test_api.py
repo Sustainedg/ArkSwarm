@@ -230,12 +230,43 @@ async def test_role_and_conversation_guards(client: httpx.AsyncClient):
     role = (await client.post("/api/roles", json={"name": "Solo", "agent_id": agent["id"]})).json()
     conversation = (await client.post("/api/conversations", json={"role_id": role["id"]})).json()
 
-    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 409
     assert (await client.delete(f"/api/conversations/{conversation['id']}")).status_code == 204
     assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 204
 
     missing = await client.post("/api/roles", json={"name": "x", "agent_id": "ghost"})
     assert missing.status_code == 422
+
+
+async def test_role_delete_keeps_its_conversations_readable(client: httpx.AsyncClient):
+    """有历史对话不再阻断删除角色：软删除后角色消失，但历史仍完整可读。"""
+    agent = await make_agent(client)
+    role = (await client.post("/api/roles", json={"name": "Solo", "agent_id": agent["id"]})).json()
+    conversation = (await client.post("/api/conversations", json={"role_id": role["id"]})).json()
+
+    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 204
+
+    assert (await client.get("/api/roles")).json()["items"] == []
+    assert (await client.get(f"/api/roles/{role['id']}")).status_code == 404
+    # 历史对话仍显示当时的角色名与头像（对话快照不因角色删除而失效）
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()["conversation"]
+    assert detail["role_name"] == "Solo"
+    assert detail["role_avatar"] == role["avatar"]
+    # 已删除的角色不能再用来开新对话
+    rejected = await client.post("/api/conversations", json={"role_id": role["id"]})
+    assert rejected.status_code == 422
+    # 重复删除按不存在处理
+    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 404
+
+
+async def test_agent_can_be_deleted_after_its_only_role_was_deleted(client: httpx.AsyncClient):
+    """角色删除后不能把它的智能体永久锁死（否则用户没有任何补救路径）。"""
+    agent = await make_agent(client)
+    role = (await client.post("/api/roles", json={"name": "Solo", "agent_id": agent["id"]})).json()
+
+    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 204
+    assert (await client.delete(f"/api/agents/{agent['id']}")).status_code == 204
+    assert (await client.get("/api/agents")).json()["items"] == []
+    assert (await client.get(f"/api/agents/{agent['id']}")).status_code == 404
 
 
 async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):

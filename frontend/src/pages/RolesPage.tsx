@@ -115,7 +115,7 @@ export function RolesPage() {
                   <button
                     className="btn sm danger"
                     onClick={async () => {
-                      if (!confirm(`删除角色「${role.name}」？`)) return
+                      if (!confirm(`删除角色「${role.name}」？已有对话会保留在历史里。`)) return
                       try {
                         await api.deleteRole(role.id)
                         await reload()
