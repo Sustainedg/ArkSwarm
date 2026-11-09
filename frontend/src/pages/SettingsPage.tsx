@@ -38,6 +38,8 @@ export function SettingsPage() {
     }
   }
 
+  const versionHistory = overview?.version_history ?? []
+
   return (
     <>
       <header className="page-header">
@@ -64,6 +66,36 @@ export function SettingsPage() {
             <Stat label="数据目录" value={overview.data_dir} mono />
             <Stat label="工作目录根" value={overview.workspaces_root} mono />
           </div>
+        )}
+
+        {versionHistory.length > 0 && (
+          <section className="stack">
+            <h2 className="card-section-title">版本记录</h2>
+            <div className="version-timeline">
+              {versionHistory.map((release) => (
+                <article
+                  className={`version-item${release.version === overview?.version ? ' current' : ''}`}
+                  key={release.version}
+                >
+                  <span className="version-marker" />
+                  <div className="version-content">
+                    <div className="version-head">
+                      <span className={`pill${release.version === overview?.version ? ' brand' : ''}`}>
+                        {release.version}
+                      </span>
+                      <span className="version-title">{release.title}</span>
+                      <span className="dim small version-date">{release.date}</span>
+                    </div>
+                    <ul className="version-highlights">
+                      {release.highlights.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         )}
 
         <section className="stack">

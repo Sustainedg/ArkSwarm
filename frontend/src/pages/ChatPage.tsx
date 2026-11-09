@@ -2,18 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
+import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, streamPost } from '../lib/api'
-import type { AgentEvent, Conversation, Message, MessagePart, Role } from '../lib/types'
+import type { Conversation, Message, Role } from '../lib/types'
 import { summarizeUsage } from '../lib/usage'
 
-interface LiveTurn {
-  text: string
-  parts: MessagePart[]
-  logs: string[]
-  usage: Record<string, number>
-  status: 'running' | 'done' | 'error' | 'cancelled'
-  error?: string | null
-  runId?: string
+interface LiveTurn extends AgentStreamState {
   userText: string
   roleName: string
   avatar: string
@@ -88,11 +82,7 @@ export function ChatPage() {
     setError(null)
     setBusy(true)
     setLive({
-      text: '',
-      parts: [],
-      logs: [],
-      usage: {},
-      status: 'running',
+      ...emptyAgentStream(),
       userText: regenerate ? '' : content,
       roleName: conversation.role_name ?? '智能体',
       avatar: conversation.role_avatar ?? '🤖',
@@ -108,7 +98,7 @@ export function ChatPage() {
           ? `/api/conversations/${conversation.id}/regenerate`
           : `/api/conversations/${conversation.id}/messages`,
         regenerate ? {} : { content },
-        (event) => setLive((prev) => (prev ? applyEvent(prev, event) : prev)),
+        (event) => setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev)),
         controller.signal,
       )
     } catch (e) {
@@ -420,66 +410,6 @@ export function ChatPage() {
       )}
     </div>
   )
-}
-
-/** 把增量文本按真实先后顺序并入时间线：与上一段同类则续写，否则另起一段。 */
-function appendDelta(parts: MessagePart[], kind: 'text' | 'thinking', text: string): MessagePart[] {
-  const last = parts[parts.length - 1]
-  if (last && last.kind === kind) {
-    return [...parts.slice(0, -1), { ...last, text: (last.text ?? '') + text }]
-  }
-  return [...parts, { kind, text }]
-}
-
-function applyEvent(turn: LiveTurn, event: AgentEvent): LiveTurn {
-  switch (event.type) {
-    case 'run.started':
-      return { ...turn, runId: event.payload?.run_id as string }
-    case 'message.delta':
-      return {
-        ...turn,
-        text: turn.text + (event.text ?? ''),
-        parts: appendDelta(turn.parts, 'text', event.text ?? ''),
-      }
-    case 'thinking.delta':
-      return { ...turn, parts: appendDelta(turn.parts, 'thinking', event.text ?? '') }
-    case 'tool.call':
-      return {
-        ...turn,
-        parts: [
-          ...turn.parts,
-          { kind: 'tool_call', name: event.name, id: event.call_id, input: (event.payload?.input ?? {}) as Record<string, unknown> },
-        ],
-      }
-    case 'tool.result':
-      return {
-        ...turn,
-        parts: [
-          ...turn.parts,
-          {
-            kind: 'tool_result',
-            id: event.call_id,
-            output: String(event.payload?.output ?? ''),
-            is_error: Boolean(event.payload?.is_error),
-          },
-        ],
-      }
-    case 'usage':
-      return { ...turn, usage: { ...turn.usage, ...(event.payload as Record<string, number>) } }
-    case 'log':
-      return { ...turn, logs: [...turn.logs, event.text ?? ''] }
-    case 'error':
-      return { ...turn, error: event.text ?? '未知错误', status: 'error' }
-    case 'run.finished': {
-      const status = String(event.payload?.status ?? 'ok')
-      return {
-        ...turn,
-        status: status === 'cancelled' ? 'cancelled' : status === 'error' ? 'error' : 'done',
-      }
-    }
-    default:
-      return turn
-  }
 }
 
 function describe(error: unknown): string {

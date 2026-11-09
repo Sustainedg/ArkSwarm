@@ -1,5 +1,6 @@
 import type { MessagePart } from '../lib/types'
 import { summarizeUsage } from '../lib/usage'
+import { MarkdownView } from './MarkdownView'
 
 export interface RenderMessage {
   id: string
@@ -13,7 +14,7 @@ export interface RenderMessage {
   logs?: string[]
 }
 
-export function MessageView({ message, avatar }: { message: RenderMessage; avatar?: string }) {
+export function MessageView({ message, avatar, label }: { message: RenderMessage; avatar?: string; label?: string }) {
   const isUser = message.role === 'user'
   const outputTokens = summarizeUsage([message.usage]).output
 
@@ -38,7 +39,7 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
       <div className={`avatar${isUser ? ' user' : ''}`}>{isUser ? '🙋' : (avatar ?? '🤖')}</div>
       <div className="bubble" style={{ flex: 1 }}>
         <div className="bubble-head">
-          <span>{isUser ? '你' : '智能体'}</span>
+          <span>{isUser ? '你' : (label ?? '智能体')}</span>
           {outputTokens > 0 && <span className="dim">{`${outputTokens.toLocaleString()} tok`}</span>}
           {message.status === 'error' && <span className="pill err">出错</span>}
           {message.status === 'interrupted' && <span className="pill warn">已中断</span>}
@@ -84,7 +85,11 @@ function TimelinePart({ part, active, cursor }: { part: MessagePart; active: boo
     )
   }
   if (part.kind === 'text') {
-    return <div className={`bubble-body${cursor ? ' streaming' : ''}`}>{part.text}</div>
+    return (
+      <div className={`bubble-body${cursor ? ' streaming' : ''}`}>
+        <MarkdownView text={part.text ?? ''} />
+      </div>
+    )
   }
   return <ToolCard part={part} />
 }

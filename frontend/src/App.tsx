@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { api } from './lib/api'
 import { ChatPage } from './pages/ChatPage'
+import { CollabPage } from './pages/CollabPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { RolesPage } from './pages/RolesPage'
 import { SkillsPage } from './pages/SkillsPage'
@@ -9,6 +10,7 @@ import { SettingsPage } from './pages/SettingsPage'
 
 const NAV = [
   { to: '/chat', icon: '💬', label: '对话' },
+  { to: '/collab', icon: '🤝', label: '协作' },
   { to: '/roles', icon: '🎭', label: '角色' },
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/agents', icon: '⚙️', label: '智能体配置' },
@@ -47,7 +49,7 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          配置智能体 → 创建角色 → 开始对话
+          配置智能体 → 创建角色 → 对话 / 协作
           {version && <div style={{ marginTop: 4 }}>版本 {version}</div>}
         </div>
       </aside>
@@ -56,6 +58,10 @@ export default function App() {
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
+          <Route path="/collab" element={<CollabPage />} />
+          <Route path="/collab/settings" element={<CollabPage />} />
+          <Route path="/collab/settings/:teamId" element={<CollabPage />} />
+          <Route path="/collab/runs/:runId" element={<CollabPage />} />
           <Route path="/roles" element={<RolesPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/agents" element={<AgentsPage />} />

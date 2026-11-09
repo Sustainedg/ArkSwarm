@@ -1,5 +1,6 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, Conversation, Message, Overview, Role,
+  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabBudget, CollabGraph, CollabRun,
+  CollabRunDetail, CollabTeam, CollabValidation, Conversation, Message, Overview, Role,
   Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
 
@@ -86,6 +87,37 @@ export const api = {
     request<{ ok: boolean }>(`/api/conversations/${conversationId}/cancel`, { method: 'POST' }),
   resetSession: (conversationId: string) =>
     request<{ ok: boolean }>(`/api/conversations/${conversationId}/session/reset`, { method: 'POST' }),
+
+  // --- 协作域 ---------------------------------------------------------------
+  // 协作组（可视化编排图）
+  listCollabTeams: () => request<{ items: CollabTeam[] }>('/api/collab/teams').then((r) => r.items),
+  getCollabTeam: (id: string) => request<CollabTeam>(`/api/collab/teams/${id}`),
+  createCollabTeam: (body: unknown) =>
+    request<CollabTeam>('/api/collab/teams', { method: 'POST', body: JSON.stringify(body) }),
+  saveCollabTeam: (
+    id: string,
+    body: { name?: string; description?: string | null; entry_key?: string | null; workspace_dir?: string | null; graph?: CollabGraph; budget?: CollabBudget },
+  ) => request<CollabTeam>(`/api/collab/teams/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  /** 只校验不保存：编辑器每改一笔就调一次 */
+  validateCollabTeam: (id: string, body: { graph?: CollabGraph; entry_key?: string | null }) =>
+    request<CollabValidation>(`/api/collab/teams/${id}/validate`, { method: 'POST', body: JSON.stringify(body) }),
+  duplicateCollabTeam: (id: string) =>
+    request<CollabTeam>(`/api/collab/teams/${id}/duplicate`, { method: 'POST' }),
+  deleteCollabTeam: (id: string) => request<void>(`/api/collab/teams/${id}`, { method: 'DELETE' }),
+
+  // 协作运行
+  listCollabRuns: (teamId?: string) => {
+    const suffix = teamId ? `?team_id=${encodeURIComponent(teamId)}` : ''
+    return request<{ items: CollabRun[] }>(`/api/collab/runs${suffix}`).then((r) => r.items)
+  },
+  createCollabRun: (body: { team_id: string; title?: string }) =>
+    request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
+  getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),
+  deleteCollabRun: (id: string) => request<void>(`/api/collab/runs/${id}`, { method: 'DELETE' }),
+  cancelCollabRun: (id: string) =>
+    request<{ ok: boolean; cancelled: boolean }>(`/api/collab/runs/${id}/cancel`, { method: 'POST' }),
+  /** 把某一步所在的工单放回队列（解析失败/中断后修复，随后续跑） */
+  retryCollabStep: (stepId: string) => request<CollabRun>(`/api/collab/steps/${stepId}/retry`, { method: 'POST' }),
 }
 
 /**
@@ -93,10 +125,10 @@ export const api = {
  * 原生 `EventSource` 无法携带请求体，因此这里手动读取流，
  * 把每个解析出的事件交给 `onEvent`。
  */
-export async function streamPost(
+export async function streamPost<T = AgentEvent>(
   path: string,
   body: unknown,
-  onEvent: (event: AgentEvent) => void,
+  onEvent: (event: T) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${BASE}${path}`, {
@@ -134,7 +166,7 @@ export async function streamPost(
         .join('\n')
       if (data) {
         try {
-          onEvent(JSON.parse(data) as AgentEvent)
+          onEvent(JSON.parse(data) as T)
         } catch {
           /* 心跳或半包数据 */
         }
