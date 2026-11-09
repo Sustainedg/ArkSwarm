@@ -242,10 +242,14 @@ function AgentModal({
   const chooseType = (type: AgentType) => {
     setTypeId(type.id)
     if (!agent) {
+      const sys = type.system_defaults
       setName((prev) => prev || type.name)
-      setGateway(type.default_gateway ?? '')
-      setModel(type.default_model ?? '')
-      setOptions(Object.fromEntries(type.config_fields.map((f) => [f.key, f.default])))
+      // 优先读取本机真实配置（如 Claude Code 的 ~/.claude/settings.json），再退回适配器占位值。
+      setGateway(sys?.gateway_url ?? type.default_gateway ?? '')
+      setModel(sys?.model ?? type.default_model ?? '')
+      setOptions(
+        Object.fromEntries(type.config_fields.map((f) => [f.key, sys?.options?.[f.key] ?? f.default])),
+      )
     }
   }
 
@@ -333,6 +337,7 @@ function AgentModal({
 
       {selected && (
         <>
+          <SystemDefaultsHint type={selected} />
           <div className="form-grid">
             <div className="field">
               <label className="field-label">名称</label>
@@ -392,6 +397,22 @@ function AgentModal({
         </>
       )}
     </Modal>
+  )
+}
+
+function SystemDefaultsHint({ type }: { type: AgentType }) {
+  const sys = type.system_defaults
+  if (!sys || (!sys.gateway_url && !sys.model && !sys.api_key_set)) return null
+  const parts = [
+    sys.gateway_url ? `网关 ${sys.gateway_url}` : null,
+    sys.model ? `模型 ${sys.model}` : null,
+    sys.api_key_set ? `凭据 ${sys.api_key_preview ?? '已配置'}` : null,
+  ].filter(Boolean)
+  return (
+    <div className="banner info">
+      已读取该智能体的本机默认配置：{parts.join(' · ')}。
+      <span className="dim"> 新建实例时会自动带上这些值，也可以在此覆盖。</span>
+    </div>
   )
 }
 

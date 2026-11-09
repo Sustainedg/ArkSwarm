@@ -68,11 +68,12 @@ def build_context(
     # 角色级覆盖优先于智能体实例上的默认值
     options = {**options, **(role.parameters or {})}
     if not options.get("model") and agent.model:
-        options["model"] = agent.model
+        options["model"] = definition.resolve_model(agent.model)
 
+    # 未被用户显式修改的网关/模型，回落到适配器读到的本机真实配置。
     model = role.parameters.get("model") if role.parameters else None
-    model = model or agent.model or definition.default_model
-    gateway = (role.parameters or {}).get("gateway_url") or agent.gateway_url or definition.default_gateway
+    model = model or definition.resolve_model(agent.model)
+    gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(agent.gateway_url)
 
     return AgentContext(
         agent_id=agent.id,
@@ -183,11 +184,22 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     )
 
 
+def _merge_part(parts: list[dict[str, Any]], kind: str, text: str) -> None:
+    """把增量文本并入时间线：与上一段同类则续写，否则另起一段。
+
+    这样落库的 ``parts`` 会保留「思考 → 正文 → 工具调用 → 工具结果 → 正文 …」
+    的真实先后顺序，而不是按类型归组。
+    """
+    if parts and parts[-1].get("kind") == kind:
+        parts[-1]["text"] = (parts[-1].get("text") or "") + text
+    else:
+        parts.append({"kind": kind, "text": text})
+
+
 async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIterator[AgentEvent]:
     """执行运行、产出事件，并把最终状态写入数据库。"""
     text_parts: list[str] = []
-    thinking_parts: list[str] = []
-    tool_parts: list[dict[str, Any]] = []
+    parts: list[dict[str, Any]] = []
     usage_totals: dict[str, Any] = {}
     extra: dict[str, Any] = {}
     status = "complete"
@@ -197,14 +209,15 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
         async for event in stream_run(prepared.definition, prepared.ctx, prepared.run):
             if event.type is EventType.MESSAGE_DELTA and event.text:
                 text_parts.append(event.text)
+                _merge_part(parts, "text", event.text)
             elif event.type is EventType.THINKING_DELTA and event.text:
-                thinking_parts.append(event.text)
+                _merge_part(parts, "thinking", event.text)
             elif event.type is EventType.TOOL_CALL:
-                tool_parts.append(
+                parts.append(
                     {"kind": "tool_call", "id": event.call_id, "name": event.name, **(event.payload or {})}
                 )
             elif event.type is EventType.TOOL_RESULT:
-                tool_parts.append(
+                parts.append(
                     {
                         "kind": "tool_result",
                         "id": event.call_id,
@@ -234,10 +247,6 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
         registry.finish(prepared.run, status)
         message = prepared.assistant_message
         message.content = "".join(text_parts)
-        parts: list[dict[str, Any]] = []
-        if thinking_parts:
-            parts.append({"kind": "thinking", "text": "".join(thinking_parts)})
-        parts.extend(tool_parts)
         message.parts = parts
         message.usage = usage_totals
         message.error = error_text

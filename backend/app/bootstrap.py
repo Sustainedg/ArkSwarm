@@ -1,12 +1,16 @@
 """首次启动播种，避免界面空空如也。"""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Sequence
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from .agents import all_agents
 from .models import AgentInstance, Role
 from .settings import get_settings
+
+if TYPE_CHECKING:  # 仅供类型标注：播种由入口组合根传入适配器，避免运行期反向依赖 agents
+    from .agents.base import AgentDefinition
 
 STARTER_PERSONAS = {
     "claude-code": (
@@ -42,7 +46,8 @@ STARTER_PERSONAS = {
 }
 
 
-async def seed_if_empty(session: AsyncSession) -> None:
+async def seed_if_empty(session: AsyncSession, definitions: Sequence[AgentDefinition]) -> None:
+    """按传入的适配器定义播种默认智能体与角色（适配器列表由入口组合根提供）。"""
     settings = get_settings()
     marker = settings.data_dir / ".seeded"
     if marker.exists():
@@ -53,15 +58,16 @@ async def seed_if_empty(session: AsyncSession) -> None:
         return
 
     created: list[AgentInstance] = []
-    for definition in all_agents():
+    for definition in definitions:
         if not definition.auto_provision or not definition.availability().installed:
             continue
+        defaults = definition.system_defaults()
         agent = AgentInstance(
             name=f"{definition.name}（默认）",
             type_id=definition.id,
             description=definition.description,
-            gateway_url=definition.default_gateway,
-            model=definition.default_model,
+            gateway_url=defaults.get("gateway_url") or definition.default_gateway,
+            model=defaults.get("model") or definition.default_model,
             options=definition.coerce_options({}),
             enabled=True,
         )

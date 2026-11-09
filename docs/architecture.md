@@ -78,6 +78,8 @@ class AgentDefinition(ABC):
     def availability() -> Availability          # 依赖 shutil.which + --version
     def coerce_options(raw) -> dict             # 按 config_fields 校验/补默认值
     def effective_env(ctx) -> dict              # 凭据 → 框架约定的环境变量
+    def system_defaults() -> dict               # 读取本机真实配置（网关/模型/凭据）
+    def resolve_gateway/resolve_model(value)    # 「未自定义」时回落到本机真实配置
 
     def build_invocation(ctx) -> Invocation      # CLI：argv/env/cwd/stdin/files
     def parse_line(line, run) -> Iterable[Event] # CLI：逐行解析（run.state 存放解析状态）
@@ -94,6 +96,11 @@ class AgentDefinition(ABC):
 `resume_supported(ctx)` 是可选钩子：Codex 老版本没有 `exec resume`，适配器可以在
 选项里让用户切换成「回放 transcript」，框架会据此走另一条分支。
 
+`system_defaults()` 是可选钩子：需要对齐 CLI 自身系统级配置的适配器可以覆盖它，
+从本机读取真实默认值（Claude Code 读 `~/.claude/settings*.json` 的 `env` 与 `model`，
+进程环境变量优先）。框架在新建智能体、展示配置与构建运行上下文时，会把「仍等于内置
+默认值」的网关/模型视为未自定义，回落到这份真实配置；用户显式填写过的值则保持不变。
+
 ## 5. 数据模型
 
 ```
@@ -106,7 +113,10 @@ messages(id, conversation_id→conversations, role, content, parts JSON, usage J
 设计取舍：
 
 - **对话快照 `agent_id`**：之后即便角色改绑别的智能体，历史对话仍可复现。
-- **`parts` 用 JSON**：工具调用/结果/推理的形态随智能体变化，无需为每种智能体建表。
+- **`parts` 用 JSON**：工具调用/结果/推理的形态随智能体变化，无需为每种智能体建表；
+  它是按真实发生顺序排列的时间线（`thinking` / `text` / `tool_call` / `tool_result`），
+  前端据此原样渲染「思考→正文→工具调用→工具结果→正文…」，不做按类型归组。
+  旧消息没有内联 `text` 段，前端会用 `content` 合成一段兜底，保持向后兼容。
 - **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个智能体可以让不同角色走不同模型。
 - **外键用 `ON DELETE RESTRICT`**：删除被引用的智能体/角色会被拒绝（409），避免历史断裂；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。

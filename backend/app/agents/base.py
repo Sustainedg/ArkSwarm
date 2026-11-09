@@ -197,6 +197,29 @@ class AgentDefinition(ABC):
         except Exception:  # noqa: BLE001 - 可用性探测绝不能向调用方抛异常
             return None
 
+    def system_defaults(self) -> dict[str, Any]:
+        """本机真实配置里的默认值（网关地址 / 模型 / 凭据 / 选项）。
+
+        适配器可以覆盖此钩子，从 CLI 自身的系统级配置（例如 Claude Code 的
+        ``~/.claude/settings.json``）读取真实默认值。框架在「新建智能体」或
+        「字段仍是内置默认值」时用它兜底，从而让界面展示与一次真实运行都对齐
+        本机的真实配置。适配器只允许依赖标准库，因此在这里读文件是安全的。
+        默认返回空字典。
+        """
+        return {}
+
+    def resolve_gateway(self, gateway_url: str | None) -> str | None:
+        """把等于内置默认值的网关视为「未自定义」，回落到本机真实配置。"""
+        if gateway_url and gateway_url != self.default_gateway:
+            return gateway_url
+        return self.system_defaults().get("gateway_url") or gateway_url
+
+    def resolve_model(self, model: str | None) -> str | None:
+        """把等于内置默认值的模型视为「未自定义」，回落到本机真实配置。"""
+        if model and model != self.default_model:
+            return model
+        return self.system_defaults().get("model") or model
+
     def fields_by_key(self) -> dict[str, ConfigField]:
         return {f.key: f for f in self.config_fields}
 

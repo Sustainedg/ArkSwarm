@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from .. import __version__
 from ..agents import all_agents
 from ..runtime import registry
 from ..settings import get_settings
+from .architecture_doc import build_architecture_page
 
 router = APIRouter(tags=["system"])
 
@@ -33,3 +34,15 @@ async def overview() -> dict:
 @router.get("/system/runs")
 async def active_runs() -> dict:
     return {"runs": registry.list()}
+
+
+@router.get("/system/architecture")
+async def architecture() -> dict:
+    """把 ``docs/architecture.md`` 实时渲染成 HTML，供界面「系统架构」按钮展示。
+
+    每次请求都重新读取文档，因此本地更新文档后无需重启或重新构建即可同步。
+    """
+    try:
+        return build_architecture_page()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"未找到架构文档：{exc.filename}") from None

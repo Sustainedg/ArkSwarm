@@ -131,3 +131,62 @@ def test_harness_builds_transcript_messages():
     messages = definition.build_messages(context)
     assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
     assert definition.chat_completions_url(context) == "https://gateway.example/v1/chat/completions"
+
+
+def _write_claude_settings(tmp_path, settings: dict, local: dict | None = None) -> None:
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    if local is not None:
+        (claude_dir / "settings.local.json").write_text(json.dumps(local), encoding="utf-8")
+
+
+def _isolate_anthropic_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_claude_code_reads_real_system_config(monkeypatch, tmp_path):
+    _write_claude_settings(
+        tmp_path,
+        {
+            "env": {
+                "ANTHROPIC_BASE_URL": "http://10.0.0.1:3065",
+                "ANTHROPIC_AUTH_TOKEN": "sk-local-secret",
+                "ANTHROPIC_API_KEY": "",  # 空值应被忽略
+            },
+            "model": "deepseek-v4.1-flash",
+        },
+        local={"env": {"ANTHROPIC_MODEL": "local-model"}},
+    )
+    _isolate_anthropic_env(monkeypatch, tmp_path)
+
+    defaults = get_agent("claude-code").system_defaults()
+    assert defaults["gateway_url"] == "http://10.0.0.1:3065"
+    assert defaults["model"] == "local-model"  # settings.local.json 覆盖 settings.json
+    assert defaults["api_key"] == "sk-local-secret"
+
+
+def test_unmodified_fields_fall_back_to_real_system_config(monkeypatch, tmp_path):
+    _write_claude_settings(
+        tmp_path,
+        {"env": {"ANTHROPIC_BASE_URL": "http://gw.local:1", "ANTHROPIC_MODEL": "real-model"}},
+    )
+    _isolate_anthropic_env(monkeypatch, tmp_path)
+    definition = get_agent("claude-code")
+
+    # 等于内置默认值 / 为空 → 视为未自定义，回落到本机真实配置
+    assert definition.resolve_gateway(definition.default_gateway) == "http://gw.local:1"
+    assert definition.resolve_model(definition.default_model) == "real-model"
+    assert definition.resolve_gateway(None) == "http://gw.local:1"
+    # 显式覆盖的值保持不变
+    assert definition.resolve_gateway("https://mine.example") == "https://mine.example"
+    assert definition.resolve_model("mine-model") == "mine-model"
+
+
+def test_adapters_without_real_config_keep_their_defaults(monkeypatch, tmp_path):
+    _isolate_anthropic_env(monkeypatch, tmp_path)
+    definition = get_agent("codex")
+    assert definition.system_defaults() == {}
+    assert definition.resolve_gateway(definition.default_gateway) == definition.default_gateway

@@ -12,8 +12,10 @@ def emit(payload):
     time.sleep(0.005)
 
 emit({"type": "session", "session_id": session_id})
-for piece in ["Echo: ", prompt[:40], "...", " done"]:
+# 正文 → 工具调用 → 工具结果 → 再正文：用于验证落库后的 parts 仍保持真实先后顺序。
+for piece in ["Echo: ", prompt[:40], "..."]:
     emit({"type": "message", "delta": piece})
 emit({"type": "tool_call", "tool_call": {"id": "t1", "name": "run_shell", "args": {"command": "ls"}}})
 emit({"type": "tool_result", "id": "t1", "output": "a.txt"})
+emit({"type": "message", "delta": " done"})
 emit({"type": "result", "usage": {"input_tokens": 11, "output_tokens": 22}})

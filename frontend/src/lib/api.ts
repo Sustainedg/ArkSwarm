@@ -1,5 +1,5 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, Conversation, Message, Overview, Role, TestResult,
+  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, Conversation, Message, Overview, Role, TestResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -34,6 +34,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overview: () => request<Overview>('/api/system/overview'),
+  architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
   agentTypes: () => request<{ items: AgentType[] }>('/api/agent-types').then((r) => r.items),
 
   listAgents: () => request<{ items: AgentInstance[] }>('/api/agents').then((r) => r.items),

@@ -1,4 +1,5 @@
 import type { MessagePart } from '../lib/types'
+import { summarizeUsage } from '../lib/usage'
 
 export interface RenderMessage {
   id: string
@@ -14,8 +15,23 @@ export interface RenderMessage {
 
 export function MessageView({ message, avatar }: { message: RenderMessage; avatar?: string }) {
   const isUser = message.role === 'user'
-  const thinking = message.parts.filter((p) => p.kind === 'thinking')
-  const tools = message.parts.filter((p) => p.kind !== 'thinking')
+  const outputTokens = summarizeUsage([message.usage]).output
+
+  // 一律按真实时间线渲染：思考 / 正文 / 工具调用与结果保持它们实际发生的先后顺序。
+  // 旧消息只有 content 与工具、思考片段（没有内联正文段），这里把 content 合成一段兜底，
+  // 并保持「思考在前、正文其次、工具在后」。
+  const hasInlineText = message.parts.some((p) => p.kind === 'text')
+  const timeline: MessagePart[] = hasInlineText
+    ? message.parts
+    : [
+        ...message.parts.filter((p) => p.kind === 'thinking'),
+        ...(message.content ? [{ kind: 'text', text: message.content } as MessagePart] : []),
+        ...message.parts.filter((p) => p.kind !== 'thinking' && p.kind !== 'text'),
+      ]
+
+  const lastIndex = timeline.length - 1
+  const showTrailingCursor =
+    Boolean(message.streaming) && (timeline.length === 0 || timeline[lastIndex].kind !== 'text')
 
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
@@ -23,34 +39,21 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
       <div className="bubble" style={{ flex: 1 }}>
         <div className="bubble-head">
           <span>{isUser ? '你' : '智能体'}</span>
-          {message.usage && Object.keys(message.usage).length > 0 && (
-            <span className="dim">
-              {message.usage.output_tokens ? `${message.usage.output_tokens} tok` : ''}
-            </span>
-          )}
+          {outputTokens > 0 && <span className="dim">{`${outputTokens.toLocaleString()} tok`}</span>}
           {message.status === 'error' && <span className="pill err">出错</span>}
           {message.status === 'interrupted' && <span className="pill warn">已中断</span>}
         </div>
 
-        {message.content ? (
-          <div className={`bubble-body${message.streaming ? ' streaming' : ''}`}>{message.content}</div>
-        ) : (
-          message.streaming && <div className="bubble-body streaming" />
-        )}
-
-        {thinking.map((part, index) => (
-          <details className="tool-card" key={`think-${index}`} open={Boolean(message.streaming)}>
-            <summary>
-              <span className="tool-chip">思考</span>
-              <span className="dim">推理过程</span>
-            </summary>
-            <pre className="thinking" style={{ borderTop: 'none' }}>{part.text}</pre>
-          </details>
+        {timeline.map((part, index) => (
+          <TimelinePart
+            key={`${part.kind}-${index}`}
+            part={part}
+            active={Boolean(message.streaming)}
+            cursor={Boolean(message.streaming) && index === lastIndex && part.kind === 'text'}
+          />
         ))}
 
-        {tools.map((part, index) => (
-          <ToolCard key={`tool-${index}`} part={part} />
-        ))}
+        {showTrailingCursor && <div className="bubble-body streaming" />}
 
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
@@ -66,6 +69,24 @@ export function MessageView({ message, avatar }: { message: RenderMessage; avata
       </div>
     </div>
   )
+}
+
+function TimelinePart({ part, active, cursor }: { part: MessagePart; active: boolean; cursor: boolean }) {
+  if (part.kind === 'thinking') {
+    return (
+      <details className="tool-card thinking-card" open={active}>
+        <summary>
+          <span className="tool-chip">思考</span>
+          <span className="dim">推理过程</span>
+        </summary>
+        <pre className="thinking" style={{ borderTop: 'none' }}>{part.text}</pre>
+      </details>
+    )
+  }
+  if (part.kind === 'text') {
+    return <div className={`bubble-body${cursor ? ' streaming' : ''}`}>{part.text}</div>
+  }
+  return <ToolCard part={part} />
 }
 
 function ToolCard({ part }: { part: MessagePart }) {

@@ -29,6 +29,14 @@ export interface Availability {
   detail?: string | null
 }
 
+export interface SystemDefaults {
+  gateway_url?: string | null
+  model?: string | null
+  api_key_set: boolean
+  api_key_preview?: string | null
+  options?: Record<string, unknown>
+}
+
 export interface AgentType {
   id: string
   name: string
@@ -44,6 +52,7 @@ export interface AgentType {
   docs_url?: string | null
   executable?: string | null
   availability: Availability
+  system_defaults?: SystemDefaults
 }
 
 export interface AgentInstance {
@@ -96,7 +105,8 @@ export interface Conversation {
 }
 
 export interface MessagePart {
-  kind: 'thinking' | 'tool_call' | 'tool_result'
+  /** text 为正文片段；与 thinking / 工具事件一起按真实发生顺序排列。 */
+  kind: 'thinking' | 'text' | 'tool_call' | 'tool_result'
   text?: string
   name?: string
   id?: string | null
@@ -141,6 +151,13 @@ export interface Overview {
   agent_types: number
   installed_types: number
   active_runs: { id: string; conversation_id: string; agent_name: string; status: string; elapsed_seconds: number }[]
+}
+
+export interface ArchitectureDoc {
+  /** 后端由 docs/architecture.md 实时渲染出的完整 HTML 页面 */
+  html: string
+  source: string
+  updated_at: string
 }
 
 export interface TestResult {

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..base import (
@@ -28,6 +30,33 @@ from ..events import (
 )
 from ..registry import register_agent
 from .util import as_list, flatten_content, truthy
+
+
+#: Claude Code 自己的系统级配置文件，按顺序合并（后者覆盖前者）。
+_SYSTEM_SETTINGS_FILES = ("settings.json", "settings.local.json")
+
+
+def read_system_settings(home: str | Path | None = None) -> dict[str, Any]:
+    """读取 Claude Code 安装目录下的系统级配置，供界面与运行时对齐真实默认值。"""
+    base = Path(home).expanduser() if home else Path.home()
+    merged: dict[str, Any] = {}
+    merged_env: dict[str, Any] = {}
+    for name in _SYSTEM_SETTINGS_FILES:
+        try:
+            data = json.loads((base / ".claude" / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # 配置文件缺失或损坏时按「未配置」处理：这是尽力而为的元数据读取，
+            # 绝不能因为本机没有 settings.json 就阻断智能体列表或一次真实运行。
+            continue
+        if not isinstance(data, dict):
+            continue
+        # env 需要逐键合并（settings.local.json 通常只覆盖其中几项）。
+        if isinstance(data.get("env"), dict):
+            merged_env.update(data["env"])
+        merged.update({k: v for k, v in data.items() if k != "env"})
+    if merged_env:
+        merged["env"] = merged_env
+    return merged
 
 
 @register_agent
@@ -107,6 +136,33 @@ class ClaudeCodeAgent(AgentDefinition):
         ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
+
+    def system_defaults(self) -> dict[str, Any]:
+        """从 Claude Code 的真实配置（进程环境变量 + ~/.claude/settings*.json）取默认值。
+
+        这样界面里的网关地址、模型与凭据提示就会反映本机真实配置，而不是适配器里
+        写死的占位值；运行时也用同一份配置，避免「界面一套、CLI 另一套」。
+        """
+        settings = read_system_settings()
+        file_env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+        file_env = {str(k): str(v) for k, v in file_env.items() if v not in (None, "")}
+
+        def pick(name: str) -> str | None:
+            # 进程环境变量优先级高于配置文件（与 Claude Code 自身一致）。
+            return os.environ.get(name) or file_env.get(name) or None
+
+        gateway = pick("ANTHROPIC_BASE_URL")
+        model = pick("ANTHROPIC_MODEL") or (str(settings["model"]) if settings.get("model") else None)
+        api_key = pick("ANTHROPIC_AUTH_TOKEN") or pick("ANTHROPIC_API_KEY")
+
+        defaults: dict[str, Any] = {}
+        if gateway:
+            defaults["gateway_url"] = gateway
+        if model:
+            defaults["model"] = model
+        if api_key:
+            defaults["api_key"] = api_key
+        return defaults
 
     # -- 构造启动命令 --------------------------------------------------------
 

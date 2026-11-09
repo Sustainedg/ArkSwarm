@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { api, ApiError, streamPost } from '../lib/api'
 import type { AgentEvent, Conversation, Message, MessagePart, Role } from '../lib/types'
+import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn {
   text: string
@@ -159,7 +160,7 @@ export function ChatPage() {
         id: 'live',
         role: 'assistant',
         content: live.text,
-        parts: [...live.parts.filter((p) => p.kind === 'thinking'), ...live.parts.filter((p) => p.kind !== 'thinking')],
+        parts: live.parts,
         status: live.error ? 'error' : 'streaming',
         error: live.error,
         usage: live.usage,
@@ -167,6 +168,16 @@ export function ChatPage() {
         logs: live.logs,
       }
     : null
+
+  // 整段对话（含正在流式输出的这一轮）累计的 token 消耗。
+  const usageSummary = useMemo(
+    () =>
+      summarizeUsage([
+        ...messages.filter((m) => m.role === 'assistant').map((m) => m.usage),
+        live?.usage,
+      ]),
+    [messages, live?.usage],
+  )
 
   return (
     <div className="chat-shell">
@@ -321,6 +332,42 @@ export function ChatPage() {
                     </button>
                   )}
                 </div>
+                {usageSummary.messages > 0 && (
+                  <div className="usage-bar" title="整段对话累计消耗">
+                    <span className="usage-tag">本对话消耗</span>
+                    <span className="usage-item">
+                      <span className="usage-label">读取</span>
+                      <span className="usage-value">{usageSummary.input.toLocaleString()}</span>
+                      <span className="usage-unit">tok</span>
+                    </span>
+                    <span className="usage-item">
+                      <span className="usage-label">输出</span>
+                      <span className="usage-value">{usageSummary.output.toLocaleString()}</span>
+                      <span className="usage-unit">tok</span>
+                    </span>
+                    <span className="usage-item">
+                      <span className="usage-label">总计</span>
+                      <span className="usage-value">{usageSummary.total.toLocaleString()}</span>
+                      <span className="usage-unit">tok</span>
+                    </span>
+                    <span className="usage-item">
+                      <span className="usage-label">缓存命中</span>
+                      <span className="usage-value">
+                        {usageSummary.cacheRatio === null
+                          ? '—'
+                          : `${Math.round(usageSummary.cacheRatio * 100)}%`}
+                      </span>
+                    </span>
+                    {usageSummary.cacheRead > 0 && (
+                      <span className="usage-item usage-muted">
+                        <span className="usage-label">命中缓存</span>
+                        <span className="usage-value">{usageSummary.cacheRead.toLocaleString()}</span>
+                        <span className="usage-unit">tok</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <div className="composer-hint">
                   <span>
                     {active.agent_name} · {active.session_id ? '续用智能体会话' : '新建智能体会话'}
@@ -375,19 +422,27 @@ export function ChatPage() {
   )
 }
 
+/** 把增量文本按真实先后顺序并入时间线：与上一段同类则续写，否则另起一段。 */
+function appendDelta(parts: MessagePart[], kind: 'text' | 'thinking', text: string): MessagePart[] {
+  const last = parts[parts.length - 1]
+  if (last && last.kind === kind) {
+    return [...parts.slice(0, -1), { ...last, text: (last.text ?? '') + text }]
+  }
+  return [...parts, { kind, text }]
+}
+
 function applyEvent(turn: LiveTurn, event: AgentEvent): LiveTurn {
   switch (event.type) {
     case 'run.started':
       return { ...turn, runId: event.payload?.run_id as string }
     case 'message.delta':
-      return { ...turn, text: turn.text + (event.text ?? '') }
-    case 'thinking.delta': {
-      const parts = [...turn.parts]
-      const index = parts.findIndex((p) => p.kind === 'thinking')
-      if (index === -1) parts.push({ kind: 'thinking', text: event.text ?? '' })
-      else parts[index] = { ...parts[index], text: (parts[index].text ?? '') + (event.text ?? '') }
-      return { ...turn, parts }
-    }
+      return {
+        ...turn,
+        text: turn.text + (event.text ?? ''),
+        parts: appendDelta(turn.parts, 'text', event.text ?? ''),
+      }
+    case 'thinking.delta':
+      return { ...turn, parts: appendDelta(turn.parts, 'thinking', event.text ?? '') }
     case 'tool.call':
       return {
         ...turn,

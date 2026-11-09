@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .agents import all_agents
 from .api import api_router
 from .bootstrap import seed_if_empty
 from .db import SessionLocal, init_db
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     await init_db()
     async with SessionLocal() as session:
-        await seed_if_empty(session)
+        await seed_if_empty(session, all_agents())
     logger.info("%s %s 已就绪 — 数据目录 %s", settings.app_name, __version__, settings.data_dir)
     yield
 

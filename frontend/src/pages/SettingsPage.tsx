@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
+import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
-import type { AgentType, Overview } from '../lib/types'
+import type { AgentType, ArchitectureDoc, Overview } from '../lib/types'
 
 export function SettingsPage() {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [types, setTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [architecture, setArchitecture] = useState<ArchitectureDoc | null>(null)
+  const [archOpen, setArchOpen] = useState(false)
+  const [archError, setArchError] = useState<string | null>(null)
 
   const reload = async () => {
     try {
@@ -23,6 +27,17 @@ export function SettingsPage() {
     return () => clearInterval(timer)
   }, [])
 
+  const openArchitecture = async () => {
+    setArchOpen(true)
+    if (architecture) return
+    setArchError(null)
+    try {
+      setArchitecture(await api.architecture())
+    } catch (e) {
+      setArchError(describe(e))
+    }
+  }
+
   return (
     <>
       <header className="page-header">
@@ -31,6 +46,9 @@ export function SettingsPage() {
           <p className="page-desc">运行时状态、已注册的适配器与扩展点说明。</p>
         </div>
         <div className="spacer" />
+        <button className="btn" onClick={() => void openArchitecture()}>
+          🏛 系统架构
+        </button>
         <button className="btn" onClick={() => void reload()}>
           ↻ 刷新
         </button>
@@ -145,6 +163,35 @@ export function SettingsPage() {
           </div>
         </section>
       </div>
+
+      {archOpen && (
+        <Modal
+          title="系统架构"
+          wide
+          extraClass="arch"
+          onClose={() => setArchOpen(false)}
+          footer={
+            <button className="btn ghost" onClick={() => setArchOpen(false)}>
+              关闭
+            </button>
+          }
+        >
+          <p className="dim small">
+            内容实时渲染自文档 <code className="mono-sm">{architecture?.source ?? 'docs/architecture.md'}</code>
+            ，本地更新文档后重新打开即可看到最新版本。
+          </p>
+          {archError && <div className="banner err">{archError}</div>}
+          {architecture ? (
+            <iframe className="arch-frame" title="系统架构" srcDoc={architecture.html} />
+          ) : (
+            !archError && (
+              <div className="row">
+                <span className="spin">◌</span> 正在生成系统架构…
+              </div>
+            )
+          )}
+        </Modal>
+      )}
     </>
   )
 }

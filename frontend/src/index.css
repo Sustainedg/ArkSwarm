@@ -155,6 +155,20 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-hint { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); margin-top: 8px; }
 
+.usage-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
+  margin-top: 8px; font-size: 11px; color: var(--text-dim);
+}
+.usage-tag {
+  padding: 1px 8px; border-radius: 20px; background: var(--accent-soft); color: var(--accent);
+  font-weight: 600;
+}
+.usage-item { display: inline-flex; align-items: baseline; gap: 4px; }
+.usage-label { color: var(--text-dim); }
+.usage-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-unit { color: var(--text-dim); font-size: 10px; }
+.usage-muted { opacity: 0.75; }
+
 /* ---------- 工具卡片 ---------- */
 .tool-card { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); margin-top: 8px; overflow: hidden; }
 .tool-card summary { cursor: pointer; padding: 7px 11px; font-size: 12px; display: flex; gap: 8px; align-items: center; list-style: none; }
@@ -163,6 +177,11 @@ code, pre, .mono { font-family: var(--mono); }
 .tool-chip { font-size: 10px; padding: 1px 7px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tool-chip.err { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
 .thinking { color: var(--text-muted); font-style: italic; border-left: 2px solid var(--border-strong); padding-left: 12px; white-space: pre-wrap; line-height: 1.6; }
+
+/* 时间线片段之间的间距：思考 / 工具卡片与紧随其后的正文。 */
+.thinking-card { margin-top: 0; }
+.thinking-card + .bubble-body,
+.tool-card + .bubble-body { margin-top: 8px; }
 
 .event-log { margin-top: 8px; font-size: 11.5px; color: var(--text-dim); font-family: var(--mono); white-space: pre-wrap; }
 
@@ -240,6 +259,8 @@ code, pre, .mono { font-family: var(--mono); }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(5, 4, 10, 0.72); backdrop-filter: blur(4px); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 20px; z-index: 50; overflow: auto; }
 .modal { background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); width: 100%; max-width: 720px; display: flex; flex-direction: column; max-height: 90vh; }
 .modal.wide { max-width: 860px; }
+.modal.arch { max-width: 1080px; }
+.arch-frame { width: 100%; height: 74vh; border: 1px solid var(--border); border-radius: var(--radius); background: #0b0a12; }
 .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 22px; border-bottom: 1px solid var(--border); }
 .modal-title { font-size: 16px; }
 .modal-body { padding: 20px 22px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }

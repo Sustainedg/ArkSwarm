@@ -17,8 +17,12 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 def to_read(agent: AgentInstance) -> AgentRead:
     secret = decrypt(agent.api_key_encrypted)
+    gateway_url, model = agent.gateway_url, agent.model
     try:
         definition = get_agent(agent.type_id)
+        # 未被用户显式修改的网关/模型，回落到适配器读到的本机真实配置。
+        gateway_url = definition.resolve_gateway(agent.gateway_url)
+        model = definition.resolve_model(agent.model)
         type_name, runtime, availability = definition.name, definition.runtime.value, definition.availability().to_dict()
     except KeyError:
         type_name, runtime, availability = None, None, None
@@ -27,8 +31,8 @@ def to_read(agent: AgentInstance) -> AgentRead:
         name=agent.name,
         type_id=agent.type_id,
         description=agent.description,
-        gateway_url=agent.gateway_url,
-        model=agent.model,
+        gateway_url=gateway_url,
+        model=model,
         options=agent.options or {},
         enabled=agent.enabled,
         created_at=agent.created_at,
@@ -58,12 +62,13 @@ async def create_agent(payload: AgentCreate, session: AsyncSession = Depends(get
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    defaults = definition.system_defaults()
     agent = AgentInstance(
         name=payload.name,
         type_id=payload.type_id,
         description=payload.description,
-        gateway_url=payload.gateway_url or definition.default_gateway,
-        model=payload.model or definition.default_model,
+        gateway_url=payload.gateway_url or defaults.get("gateway_url") or definition.default_gateway,
+        model=payload.model or defaults.get("model") or definition.default_model,
         api_key_encrypted=encrypt(payload.api_key),
         options=_coerce(definition, payload.options),
         enabled=payload.enabled,
@@ -143,9 +148,9 @@ async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)
         agent_id=agent.id,
         agent_name=agent.name,
         options=definition.coerce_options(agent.options or {}),
-        gateway_url=agent.gateway_url or definition.default_gateway,
+        gateway_url=definition.resolve_gateway(agent.gateway_url),
         api_key=decrypt(agent.api_key_encrypted),
-        model=agent.model or definition.default_model,
+        model=definition.resolve_model(agent.model),
         system_prompt=None,
         prompt="ping",
     )

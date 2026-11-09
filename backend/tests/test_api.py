@@ -98,7 +98,39 @@ async def test_agent_types_expose_config_schema_and_availability(client: httpx.A
     assert claude["runtime"] == "cli"
     assert any(f["key"] == "permission_mode" for f in claude["config_fields"])
     assert claude["capabilities"]["sessions"] is True
+    assert "system_defaults" in claude
     assert by_id["deepseek-harness"]["runtime"] == "api"
+
+
+async def test_agent_types_never_leak_plaintext_secret(client: httpx.AsyncClient, monkeypatch, tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "settings.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-very-secret-token"}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    types = (await client.get("/api/agent-types")).json()["items"]
+    claude = next(t for t in types if t["id"] == "claude-code")
+    assert claude["system_defaults"]["api_key_set"] is True
+    # 凭据只能以掩码形式出现在接口响应里（AGENTS.md 铁律 6）。
+    assert "sk-very-secret-token" not in json.dumps(types)
+    assert claude["system_defaults"]["api_key_preview"].endswith("oken")
+
+
+async def test_system_architecture_endpoint_returns_rendered_docs(client: httpx.AsyncClient):
+    response = await client.get("/api/system/architecture")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "docs/architecture.md"
+    assert data["updated_at"]
+    # 文档被实时渲染成 HTML（标题 / 表格 / 代码块都在），且不返回原始 Markdown。
+    html = data["html"]
+    assert "<h2>1. 分层的目标</h2>" in html
+    assert "<table>" in html and "<pre><code" in html
+    assert "# 架构说明" not in html
 
 
 async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncClient):
@@ -130,8 +162,12 @@ async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncCl
     assert messages[1]["content"] == "Echo: hello world... done"
     assert messages[1]["status"] == "complete"
     assert messages[1]["usage"]["output_tokens"] == 22
-    kinds_of_parts = [p["kind"] for p in messages[1]["parts"]]
-    assert "tool_call" in kinds_of_parts and "tool_result" in kinds_of_parts
+    # parts 保留真实时间线：正文 → 工具调用 → 工具结果 → 正文（AGENTS.md 前端渲染契约）。
+    timeline = messages[1]["parts"]
+    assert [p["kind"] for p in timeline] == ["text", "tool_call", "tool_result", "text"]
+    assert timeline[0]["text"] == "Echo: hello world..."
+    assert timeline[-1]["text"] == " done"
+    assert timeline[1]["name"] == "run_shell" and timeline[2]["output"] == "a.txt"
 
     # 标题自动取自首条用户消息（智能体记录不受影响）
     assert detail["conversation"]["title"] == "hello world"
