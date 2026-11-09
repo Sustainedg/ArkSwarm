@@ -325,6 +325,9 @@ class AcmeHarness(OpenAIHarnessBase):
 - **PWA 资产只放 `frontend/public/m/`**（`manifest.webmanifest` + `sw.js`）：`scope`/`start_url` 固定
   `/m/`，`/api/`（含 SSE 长连接）**永不进入缓存**。新增页面要保证断网时应用外壳仍能打开（离线只保证
   「界面能打开」，对话仍需联网）。
+- **移动端锁定缩放**：它是「固定外壳」的应用形态，入口视口写 `maximum-scale=1.0, user-scalable=no`，
+  并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底（iOS Safari 忽略 `user-scalable=no`）；
+  因此移动端输入框字号必须 ≥ 16px（iOS 聚焦小于 16px 的输入框会强制放大页面）。桌面端不禁用缩放。
 - **前端依赖只允许这两个**：`react-markdown@10.1.0` 与 `remark-gfm@4.0.1`（精确版本）。理由：各内核的
   产出以 Markdown 为主（代码块、表格、列表、任务清单），此前用 `white-space: pre-wrap` 直出不可读；
   手写解析器等于重复造轮子，且转义/边界极易写错。为此新增 `components/MarkdownView.tsx`

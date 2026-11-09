@@ -260,3 +260,8 @@ frontend/
   改在「协作组」详情页用**表单**编排：岗位是卡片、连线是「从谁到谁」的下拉选择；
   两端的字段语义、默认值与中文标签共用 `lib/collabDraft.ts` 一份，校验一律走服务端
   `POST /api/collab/teams/{id}/validate`。
+- **移动端锁定缩放**：移动端采用「固定外壳」布局（顶栏 + 底部 Tab + 内部滚动区），随手指缩放会
+  让外壳错位，因此入口视口写 `maximum-scale=1.0, user-scalable=no`，并用 `mobile.css` 的
+  `touch-action: pan-x pan-y` 兜底（iOS Safari 自 iOS 10 起忽略 `user-scalable=no`，只有
+  `touch-action` 真正生效）。因此移动端输入框字号统一 ≥ 16px —— iOS 聚焦小于 16px 的输入框会
+  强制放大页面。桌面端不禁用缩放（浏览器缩放是它的无障碍能力）。

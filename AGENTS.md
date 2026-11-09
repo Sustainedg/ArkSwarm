@@ -224,6 +224,10 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **两端通用**：类型加在 `src/lib/types.ts`，接口调用加在 `src/lib/api.ts`；禁止在组件里直接 `fetch`。
 - **移动端必须保持 PWA 可用**：新增页面不得依赖 `/m/` 之外的顶层路由；离线只会命中
   Service Worker 预缓存的外壳，任何新资源都要能从 `/m/` 入口按相对/绝对路径取到。
+- **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 底部 Tab + 内部滚动），入口视口写
+  `maximum-scale=1.0, user-scalable=no`，并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底
+  （iOS Safari 忽略 `user-scalable=no`，只有 `touch-action` 真正生效）。配套约束：移动端输入框字号
+  一律 ≥ 16px，否则 iOS 聚焦时会强制放大页面。**桌面端不做此限制**（浏览器缩放是它的无障碍能力）。
 
 ### 4.8 扩展协作域
 协作的一切都留在 `backend/app/collab/`：新增动作/状态改 `schemas.py` + `engine.py`（并同步

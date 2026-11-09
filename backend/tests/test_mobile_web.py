@@ -146,3 +146,31 @@ def test_collab_draft_vocabulary_has_a_single_source():
         assert "lib/collabDraft" in text
         for symbol in ("const DUTIES", "const EDGE_KINDS", "const SCOPES", "const ACTIONS"):
             assert symbol not in text, f"{name} 又复制了一份编排词汇表（{symbol}）"
+
+
+@needs_frontend
+def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
+    """移动端是「固定外壳」的应用形态，锁定缩放；桌面端保持可缩放（浏览器缩放是它的无障碍能力）。"""
+    mobile_html = (FRONTEND / "m" / "index.html").read_text(encoding="utf-8")
+    match = re.search(r'<meta name="viewport" content="([^"]+)"', mobile_html)
+    assert match, "移动端入口缺少 viewport"
+    viewport = {part.strip() for part in match.group(1).split(",")}
+    assert "maximum-scale=1.0" in viewport
+    assert "user-scalable=no" in viewport
+
+    # iOS Safari 会忽略 user-scalable=no，必须靠 touch-action 兜底（允许集里不含 pinch-zoom）。
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    assert "touch-action: pan-x pan-y" in css
+    assert "touch-action: none" not in css
+
+    # 锁定缩放后输入框必须 ≥ 16px：iOS 聚焦 font-size < 16px 的输入框会强制放大页面。
+    for selector in (".input, .select, .textarea", ".m-composer textarea", ".input.mono"):
+        block = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+        assert block, f"mobile.css 缺少 {selector} 样式"
+        size = re.search(r"font-size:\s*(\d+(?:\.\d+)?)px", block.group(1))
+        assert size and float(size.group(1)) >= 16, f"{selector} 字号须 ≥ 16px"
+
+    # 桌面端不禁用缩放。
+    desktop_html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    assert "user-scalable" not in desktop_html
+    assert "maximum-scale" not in desktop_html

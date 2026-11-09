@@ -44,6 +44,11 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body, #root { height: 100%; }
 
+/* 禁止双指/双击缩放。`user-scalable=no` 在 iOS Safari 上会被忽略，
+   `touch-action: pan-x pan-y`（不含 pinch-zoom）才是真正生效的那道闸；
+   横向/纵向滚动依旧可用，纵向滚动由 .m-page-body 与各列表负责。 */
+html, body { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
   font-family: var(--font);
@@ -184,7 +189,9 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .textarea { resize: vertical; min-height: 96px; line-height: 1.6; }
-.input.mono { font-family: var(--mono); font-size: 14px; }
+/* 16px：iOS 聚焦 font-size < 16px 的输入框会强制放大页面（与 user-scalable 无关），
+   移动端既已锁定缩放，输入框就统一 ≥ 16px，避免聚焦瞬间被顶大。 */
+.input.mono { font-family: var(--mono); font-size: 16px; }
 .select { appearance: none; }
 
 .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: var(--text-muted); }
