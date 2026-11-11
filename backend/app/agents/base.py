@@ -102,6 +102,56 @@ class Availability:
 
 
 @dataclass(slots=True)
+class RuntimeProvisioner:
+    """声明「平台如何安装 / 更新 / 卸载这个内核的运行时」。
+
+    这里只描述**命令**，不描述策略：框架负责在受控子进程里执行、逐行流式回显、
+    总超时与脱敏。「用哪个包管理器、装到哪儿、包名叫什么」是**适配器**的知识
+    （与技能目录同理），框架不认识任何具体内核。
+
+    未声明（``None``）表示该运行时不由平台管理：进程内 API 内核无需安装，
+    ``custom-cli`` 这类由用户自备可执行文件的适配器也不该被平台改环境。
+    """
+
+    #: 包管理器标识（npm / pipx / brew / 手动…），仅用于界面展示
+    manager: str
+    #: 包名，用于界面展示与「检查更新」的默认命令
+    package: str | None = None
+    #: 安装 / 更新 / 卸载 / 查询最新版本的完整命令；空列表表示该项不支持
+    install_argv: list[str] = field(default_factory=list)
+    update_argv: list[str] = field(default_factory=list)
+    uninstall_argv: list[str] = field(default_factory=list)
+    latest_argv: list[str] = field(default_factory=list)
+    homepage: str | None = None
+    #: 适配器想提醒用户的事项（例如「本机当前不是用该包管理器装的」）
+    note: str | None = None
+
+    def argv_for(self, action: str) -> list[str]:
+        return {
+            "install": self.install_argv,
+            "update": self.update_argv,
+            "uninstall": self.uninstall_argv,
+        }.get(action, [])
+
+    def supports(self, action: str) -> bool:
+        return bool(self.argv_for(action))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "manager": self.manager,
+            "package": self.package,
+            "homepage": self.homepage,
+            "note": self.note,
+            "commands": {
+                "install": list(self.install_argv),
+                "update": list(self.update_argv),
+                "uninstall": list(self.uninstall_argv),
+                "latest": list(self.latest_argv),
+            },
+        }
+
+
+@dataclass(slots=True)
 class Invocation:
     """一次运行所需的完整启动描述（子进程或 HTTP 目标）。"""
 
@@ -164,6 +214,8 @@ class AgentDefinition(ABC):
     docs_url: ClassVar[str | None] = None
     #: 必须存在于 PATH 中的可执行文件（仅 CLI 适配器）
     executable: ClassVar[str | None] = None
+    #: 该内核的运行时如何安装 / 更新 / 卸载；``None`` 表示不由平台管理
+    provisioner: ClassVar[RuntimeProvisioner | None] = None
     #: 首次启动播种时是否允许为该适配器创建实例
     #: （需要用户先填写配置才能工作的模板设为 False）
     auto_provision: ClassVar[bool] = True
@@ -186,7 +238,26 @@ class AgentDefinition(ABC):
             "docs_url": self.docs_url,
             "executable": self.executable,
             "availability": self.availability().to_dict(),
+            "provisioning": self.provisioning(),
         }
+
+    def provisioning(self) -> dict[str, Any]:
+        """本机真实的安装状态 + 适配器声明的维护方式，供「运行时」页展示。"""
+        availability = self.availability()
+        data: dict[str, Any] = {
+            "supported": self.provisioner is not None,
+            "manager": None,
+            "package": None,
+            "homepage": None,
+            "note": None,
+            "commands": None,
+            "installed": availability.installed,
+            "version": availability.version,
+            "path": availability.detail if availability.installed else None,
+        }
+        if self.provisioner is not None:
+            data.update(self.provisioner.to_dict())
+        return data
 
     def availability(self) -> Availability:
         if not self.executable:

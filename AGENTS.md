@@ -77,6 +77,7 @@
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
  │                 manager=运行表(注册/取消/追踪) · skills=技能编目/分配/物化 │
+ │                 provisioning=运行时(CLI 内核)的安装/更新/卸载执行   │
  ├───────────────────────────────────────────────────────────────────┤
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
  │                 registry(注册) · skills(技能契约) · builtin/*(实现) │
@@ -130,6 +131,9 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 外加传输层自有的 `turn.started`（`api/conversations.py` 发出）与 `stream.closed`（`transport/sse.py` 收尾）。
 **适配器只能产出前 10 种**；`turn.started`/`stream.closed` 由框架产出，适配器不得越权。
 新增事件类型必须走铁律 5 的四步同步改动。
+框架自有的旁路信封**不属于**本协议：协作域是 `collab.*`（`collab/protocol.py`），
+「运行时」页的安装 / 更新 / 卸载是 `provision.*`（`runtime/provisioning.py`）——
+两者只在各自的页面内部消费，由框架层产出，不参与铁律 5 的四处同步。
 
 ### 3.2 `AgentDefinition` 契约（新增适配器要实现/声明）
 必需：`id`、`name`、`runtime`、`build_invocation()`、`parse_line()`（CLI）或 `stream()`（API）。
@@ -243,6 +247,14 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 守卫）；对 `runtime`/`agents` 的调用只能加在 `execution.py`。给协作表加列要同时登记
 `ADDITIVE_COLUMNS`（SQLite 的 `create_all` 不会给旧表补列）。**不要**为了让协作跑通去改适配器或 `runtime/`。
 
+### 4.9 让运行时可由平台安装 / 更新 / 卸载
+1. 在适配器声明 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…,
+   update_argv=…, uninstall_argv=…, latest_argv=…)` —— 命令（用哪个包管理器、包名、装到哪）是
+   **适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
+2. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
+3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
+   界面会标成「进程内 / 自备」。
+
 ---
 
 ## 5. 编码风格
@@ -329,6 +341,8 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | `runtime/skills.py` | 角色分配接口、`service.prepare_run` 的物化步骤、前端技能页与角色弹窗 |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
+| `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封、超时、取消、脱敏 |
+| 新增「运行时可由平台安装 / 更新」 | 适配器的 `provisioner`（`RuntimeProvisioner`）+ `docs/architecture.md` §4.1 |
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |

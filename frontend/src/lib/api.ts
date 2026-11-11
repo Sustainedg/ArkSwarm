@@ -1,7 +1,7 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabChatMessage, CollabRun, CollabRunDetail,
-  CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation, Message,
-  Overview, Role, Skill, SkillDetail, SkillRescanResult, TestResult,
+  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, CollabChatMessage, CollabRun,
+  CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
+  Message, Overview, ProvisionEvent, Role, RuntimeLatest, Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -20,18 +20,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
+  const body = await readBody(response)
   if (!response.ok) {
-    let detail = response.statusText
-    try {
-      const body = await response.json()
-      detail = typeof body?.detail === 'string' ? body.detail : JSON.stringify(body?.detail ?? body)
-    } catch {
-      /* 响应体不是 JSON */
-    }
-    throw new ApiError(response.status, detail)
+    throw new ApiError(response.status, describeBody(response, body))
   }
-  if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  if (response.status === 204 || !body.text.trim()) return undefined as T
+  if (!body.isJson) throw new ApiError(response.status, describeBody(response, body))
+  return body.data as T
+}
+
+interface ResponseBody {
+  /** 原始响应文本（空响应体就是空串） */
+  text: string
+  /** 解析后的 JSON；不是 JSON 时忽略 */
+  data: unknown
+  isJson: boolean
+}
+
+/**
+ * 先把响应体读成文本，再自己 `JSON.parse`。
+ *
+ * 不直接调 `response.json()`：它对「空响应体 / 非 JSON」在 WebKit 上抛的是
+ * "The string did not match the expected pattern."，Chromium 上是另一种说法 ——
+ * 一句与业务无关的浏览器方言，用户与开发者都无从下手（见 main.py 的 `/api/` 404 说明）。
+ */
+async function readBody(response: Response): Promise<ResponseBody> {
+  const text = await response.text()
+  if (!text.trim()) return { text, data: undefined, isJson: false }
+  try {
+    return { text, data: JSON.parse(text), isJson: true }
+  } catch {
+    return { text, data: undefined, isJson: false }
+  }
+}
+
+/** 把一次响应翻译成能直接展示的中文：接口自己报的 `detail` 优先，其次说清楚「拿到的不是 JSON」。 */
+function describeBody(response: Response, body: ResponseBody): string {
+  if (body.isJson) {
+    const detail = (body.data as { detail?: unknown } | null)?.detail
+    if (typeof detail === 'string') return detail
+    return JSON.stringify(detail ?? body.data)
+  }
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || '未知类型'
+  const reason = body.text.trim() ? '返回的是 HTML 等非 JSON 内容' : '响应体是空的'
+  return (
+    `接口没有返回 JSON（HTTP ${response.status}，Content-Type: ${contentType}，${reason}）。` +
+    '通常是接口不存在，或反向代理 / 静态兜底没有把 /api 转发到后端。'
+  )
 }
 
 export const api = {
@@ -46,6 +81,18 @@ export const api = {
   deleteAgent: (id: string) => request<void>(`/api/agents/${id}`, { method: 'DELETE' }),
   duplicateAgent: (id: string) => request<AgentInstance>(`/api/agents/${id}/duplicate`, { method: 'POST' }),
   testAgent: (id: string) => request<TestResult>(`/api/agents/${id}/test`, { method: 'POST' }),
+
+  // --- 运行时（各 CLI 内核的安装 / 更新 / 卸载）-----------------------------
+  listRuntimes: () => request<{ items: AgentRuntime[] }>('/api/runtimes').then((r) => r.items),
+  checkRuntimeLatest: (typeId: string) =>
+    request<RuntimeLatest>(`/api/runtimes/${typeId}/check`, { method: 'POST' }),
+  /** 安装 / 更新不改动已有配置，直接发起；卸载是破坏性操作，必须带 confirm（服务端会再校验一次）。 */
+  installRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
+    streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/install`, {}, onEvent, signal),
+  updateRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
+    streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/update`, {}, onEvent, signal),
+  uninstallRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
+    streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/uninstall`, { confirm: true }, onEvent, signal),
 
   listSkills: (params?: {
     type_id?: string
@@ -138,14 +185,7 @@ async function streamRequest<T>(
     signal,
   })
   if (!response.ok || !response.body) {
-    let detail = response.statusText
-    try {
-      const parsed = await response.json()
-      detail = typeof parsed?.detail === 'string' ? parsed.detail : detail
-    } catch {
-      /* 忽略 */
-    }
-    throw new ApiError(response.status, detail)
+    throw new ApiError(response.status, describeBody(response, await readBody(response)))
   }
 
   const reader = response.body.getReader()

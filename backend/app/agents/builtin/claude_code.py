@@ -16,6 +16,7 @@ from ..base import (
     FieldType,
     Invocation,
     Runtime,
+    RuntimeProvisioner,
 )
 from ..events import (
     AgentEvent,
@@ -110,6 +111,16 @@ class ClaudeCodeAgent(AgentDefinition):
     )
     runtime = Runtime.CLI
     executable = "claude"
+    #: 官方通过 npm 分发；平台代劳安装/更新/卸载时用的就是这套命令。
+    provisioner = RuntimeProvisioner(
+        manager="npm",
+        package="@anthropic-ai/claude-code",
+        install_argv=["npm", "install", "-g", "@anthropic-ai/claude-code"],
+        update_argv=["npm", "install", "-g", "@anthropic-ai/claude-code@latest"],
+        uninstall_argv=["npm", "uninstall", "-g", "@anthropic-ai/claude-code"],
+        latest_argv=["npm", "view", "@anthropic-ai/claude-code", "version"],
+        homepage="https://docs.claude.com/en/docs/claude-code/setup",
+    )
     api_key_env = "ANTHROPIC_AUTH_TOKEN"
     base_url_env = "ANTHROPIC_BASE_URL"
     default_gateway = "https://api.anthropic.com"

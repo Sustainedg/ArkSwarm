@@ -56,6 +56,15 @@ class AgentTestResult(BaseModel):
     checks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RuntimeAction(BaseModel):
+    """卸载请求体：破坏性操作必须显式确认。
+
+    只有 ``/uninstall`` 读这个模型；安装与更新不改动已有配置，不需要确认，也不声明请求体。
+    """
+
+    confirm: bool = False
+
+
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     agent_id: str

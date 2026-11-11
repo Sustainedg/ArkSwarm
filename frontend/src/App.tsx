@@ -5,6 +5,7 @@ import { ChatPage } from './pages/ChatPage'
 import { CollabPage } from './pages/CollabPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { RolesPage } from './pages/RolesPage'
+import { RuntimesPage } from './pages/RuntimesPage'
 import { SkillsPage } from './pages/SkillsPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -14,6 +15,7 @@ const NAV = [
   { to: '/roles', icon: '🎭', label: '角色' },
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/agents', icon: '⚙️', label: '智能体配置' },
+  { to: '/runtimes', icon: '🧬', label: '运行时' },
   { to: '/settings', icon: '📊', label: '系统' },
 ]
 
@@ -65,6 +67,7 @@ export default function App() {
           <Route path="/roles" element={<RolesPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/runtimes" element={<RuntimesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>

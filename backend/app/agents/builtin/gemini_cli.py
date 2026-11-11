@@ -13,6 +13,7 @@ from ..base import (
     FieldType,
     Invocation,
     Runtime,
+    RuntimeProvisioner,
 )
 from ..events import (
     AgentEvent,
@@ -39,6 +40,15 @@ class GeminiCliAgent(AgentDefinition):
     )
     runtime = Runtime.CLI
     executable = "gemini"
+    provisioner = RuntimeProvisioner(
+        manager="npm",
+        package="@google/gemini-cli",
+        install_argv=["npm", "install", "-g", "@google/gemini-cli"],
+        update_argv=["npm", "install", "-g", "@google/gemini-cli@latest"],
+        uninstall_argv=["npm", "uninstall", "-g", "@google/gemini-cli"],
+        latest_argv=["npm", "view", "@google/gemini-cli", "version"],
+        homepage="https://github.com/google-gemini/gemini-cli",
+    )
     api_key_env = "GEMINI_API_KEY"
     base_url_env = "GOOGLE_GEMINI_BASE_URL"
     default_gateway = "https://generativelanguage.googleapis.com"

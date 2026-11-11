@@ -10,6 +10,7 @@ import { MobileCollabTeamPage } from './pages/MobileCollabTeamPage'
 import { MobileTicketBoardPage } from './pages/MobileTicketBoardPage'
 import { MobileConversationsPage } from './pages/MobileConversationsPage'
 import { MobileRolesPage } from './pages/MobileRolesPage'
+import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
 import { MobileSkillsPage } from './pages/MobileSkillsPage'
 
@@ -38,6 +39,7 @@ export function MobileApp() {
         <Route path="/roles" element={<MobileRolesPage />} />
         <Route path="/agents" element={<MobileAgentsPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
+        <Route path="/runtimes" element={<MobileRuntimesPage />} />
         <Route path="/collab" element={<MobileCollabPage />} />
         <Route path="/collab/teams/:teamId" element={<MobileCollabTeamPage />} />
         <Route path="/collab/runs/:runId" element={<MobileCollabRunPage />} />

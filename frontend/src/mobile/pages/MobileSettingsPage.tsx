@@ -86,6 +86,14 @@ export function MobileSettingsPage({ version }: { version: string }) {
               </span>
               <span className="m-item-chevron">›</span>
             </button>
+            <button className="m-item" onClick={() => navigate('/runtimes')}>
+              <span style={{ fontSize: 18 }}>🧬</span>
+              <span className="m-item-main">
+                <span className="m-item-title">运行时</span>
+                <span className="m-item-sub">查看各内核的安装状态与版本，可安装 / 更新 / 卸载</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
           </div>
 
           {overview && (

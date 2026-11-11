@@ -95,6 +95,9 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
 > / `collab.step.finished` / `collab.ticket.created` / `collab.ticket.updated` / `collab.run.status`
 > / `collab.notice` / `collab.chat.started` / `collab.chat.event` / `collab.chat.finished`），
 > 它包住原始 `AgentEvent` 后发给协作页；**不是**对这张表的扩展。
+>
+> 「运行时」页的安装 / 更新 / 卸载也走自有信封（`provision.started` / `provision.output` /
+> `provision.finished`），由 `runtime/provisioning.py` 产出，同样**不属于**这张事件表。
 
 ## 4. 适配器的契约
 
@@ -116,6 +119,8 @@ class AgentDefinition(ABC):
 
     def discover_skills() -> list[SkillSpec]     # 技能：本内核的技能根（只读扫描）
     def skill_mount(ctx) -> SkillMount | None    # 技能：把分配到的技能物化到哪里
+
+    provisioner                                   # 运行时：如何安装 / 更新 / 卸载本内核
 ```
 
 `capabilities` 决定了平台在框架层面**如何**照顾这个智能体：
@@ -132,6 +137,29 @@ class AgentDefinition(ABC):
 从本机读取真实默认值（Claude Code 读 `~/.claude/settings*.json` 的 `env` 与 `model`，
 进程环境变量优先）。框架在新建智能体、展示配置与构建运行上下文时，会把「仍等于内置
 默认值」的网关/模型视为未自定义，回落到这份真实配置；用户显式填写过的值则保持不变。
+
+### 4.1 运行时管理（安装 / 更新 / 卸载）
+
+「运行时」= 某个 CLI 适配器依赖的**本机可执行文件**。界面上的「运行时」页列出每个运行时
+的安装状态、当前版本、安装位置与有多少实例在用它，并可直接安装 / 更新 / 卸载 / 检查更新。
+
+和技能一样，**「用哪个包管理器、包名叫什么、装到哪儿」是适配器的知识**：适配器声明
+`provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…, update_argv=…,
+uninstall_argv=…, latest_argv=…)`，框架（`runtime/provisioning.py`）只负责按声明执行：
+
+```
+适配器声明命令 ──▶ runtime/provisioning.stream_provision() ──▶ 受控子进程
+                                                              ├─ 逐行流式回显（SSE provision.output）
+                                                              ├─ 总超时（settings.provision_timeout_seconds）
+                                                              ├─ 命令脱敏（runner._redact）
+                                                              └─ 客户端断开即 kill（同一次运行的取消语义）
+```
+
+- `provision.*` 是安装器**自有的信封**（`provision.started / provision.output /
+  provision.finished`），与协作域的 `collab.*` 同理，**不是**适配器事件协议，
+  因此不参与铁律 5 的四处同步。
+- 未声明 `provisioner` 的适配器（进程内 API 内核、`custom-cli`）在界面上标成「进程内 / 自备」，
+  平台不代管它们的环境。卸载属于破坏性操作，接口要求显式 `confirm`。
 
 ## 5. 技能（Skill）
 
@@ -221,6 +249,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, age
 | 接入新 CLI 智能体 | 在 `agents/builtin/` 加一个模块 |
 | 接入新模型供应商（无官方 CLI） | 复用 `openai_harness.py` 的基类，加一个子类声明默认网关/模型 |
 | 零代码接入私有 CLI | 用 `custom-cli` 适配器填命令 + JSON 取值路径 |
+| 让运行时可由平台安装 / 更新 | 在该适配器声明 `provisioner`（`RuntimeProvisioner`），界面自动出现按钮 |
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |
 | 新增移动端页面 | 在 `frontend/src/mobile/` 加页面并在 `MobileApp.tsx` 注册路由（桌面端不受影响） |
 | 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `discover_skills()` 与 `skill_mount()` |
@@ -239,6 +268,9 @@ collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, age
   `doctor`）要靠 `skillOverrides` 关闭；工作目录自带的 `.claude/skills` 会被内核直接读取，
   平台只提示、不删除用户文件。
 - 技能目前只支持「查看 + 分配」；编辑、安装与上传留待后续（技能目录仍由各内核自己管理）。
+- 运行时的安装 / 更新按适配器声明的命令执行（内置 CLI 内核为官方 npm 包）。若某台机器上的
+  内核是用别的方式装的（例如发行版包、容器、垫片脚本），平台更新会按声明的包管理器**另装一份**；
+  页面会显示当前可执行文件路径供核对，但不会自动识别、也不会去卸载非本平台安装的副本。
 
 ## 9. 移动端与 PWA
 
@@ -264,6 +296,12 @@ frontend/
   （移动端用底部弹层替代桌面端的居中 Modal）。
 - **后端只保留一个 SPA 兜底**：`main.py:resolve_spa_target()` 按前缀把深链分派到 `dist/index.html`
   或 `dist/m/index.html`，其余静态文件原样返回；`/assets` 由两端口共享。
+  ⚠️ `/api/` 下的漏网请求**不**走这个兜底：`main.py` 明确回 JSON 404（`接口不存在：/api/xxx`）。
+  兜底一旦回 HTML，前端 `response.json()` 就会解析失败 —— WebKit 抛出的是与业务无关的
+  "The string did not match the expected pattern."（Chromium 又是另一种说法），排查成本极高。
+- **接口错误文案不交给浏览器**：`lib/api.ts` 先把响应读成文本再自己 `JSON.parse`：
+  空响应体按「没有返回」处理，非 JSON（反向代理的登录页 / 静态兜底）转成中文提示，
+  并带上 HTTP 状态与 `Content-Type`，不暴露浏览器方言的解析异常。
 - **PWA**：`public/m/manifest.webmanifest`（`scope` 与 `start_url` 都是 `/m/`）+
   `public/m/sw.js`（安装期预缓存入口 HTML 与其引用的构建产物；导航网络优先、离线回落外壳）。
   Service Worker 的作用域只在 `/m/`，且 `/api/`（含 SSE 长连接）永不缓存、一律直连后端——

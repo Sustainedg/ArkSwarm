@@ -18,6 +18,10 @@ FRONTEND = REPO / "frontend"
 MOBILE_SRC = FRONTEND / "src" / "mobile"
 
 needs_frontend = pytest.mark.skipif(not FRONTEND.is_dir(), reason="未检出前端源码目录")
+#: 前端构建产物被 git 忽略：没 build 过就跳过「按前缀分派」的接口级断言。
+needs_dist = pytest.mark.skipif(
+    not (FRONTEND / "dist" / "index.html").is_file(), reason="未构建前端产物（frontend/dist）"
+)
 
 
 def test_spa_deep_links_split_between_desktop_and_mobile(tmp_path: Path):
@@ -313,3 +317,22 @@ def test_mobile_shell_has_a_self_service_refresh():
 
     settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
     assert "refreshShell" in settings, "设置页要能触发自助刷新"
+
+
+@needs_dist
+async def test_unknown_api_path_returns_json_instead_of_the_spa_shell(client):
+    """未知接口必须显式回 404 JSON，绝不能落到 index.html。
+
+    真实踩过的坑：接口名写错（或前端比后端新）时，`/api/...` 拿到的是 200 + HTML，
+    前端 `response.json()` 解析失败，WebKit 抛出的却是一句与业务毫无关系的
+    "The string did not match the expected pattern." —— 在手机上完全无从下手。
+    """
+    response = await client.get("/api/no-such-endpoint")
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert "接口不存在" in response.json()["detail"]
+
+    # 只有非 `/api/` 的深链才回落到前端入口，交给前端路由接管。
+    spa = await client.get("/collab/runs/example")
+    assert spa.status_code == 200
+    assert spa.headers["content-type"].startswith("text/html")

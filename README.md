@@ -14,6 +14,7 @@ DeepSeek 等智能体注册成可配置的实例（自定义网关 + API 密钥 
 | 概念 | 说明 | 存储 |
 | --- | --- | --- |
 | **智能体类型** | 内置适配器（`claude-code` / `codex` / `gemini-cli` / `deepseek-harness` / `openai-harness` / `custom-cli`），声明能力位与配置项 schema | 代码（插件注册表） |
+| **运行时** | 智能体类型依赖的**本机可执行文件**（CLI 内核）；可在「运行时」页查看版本并安装 / 更新 / 卸载 | 宿主机（命令由适配器声明） |
 | **智能体实例** | 一种类型的**实例**：名称 + 网关 + API 密钥 + 模型 + 适配器选项 | `agent_instances` |
 | **角色** | 头像 + 系统提示词 + 绑定某个智能体（可覆盖模型 / 网关） | `roles` |
 | **对话** | 一次对话：绑定角色，记住智能体侧会话 id 与工作目录 | `conversations` |
@@ -215,6 +216,9 @@ class AcmeAgent(AgentDefinition):
 | GET/POST | `/api/agents` | 列出 / 创建智能体实例 |
 | PATCH/DELETE | `/api/agents/{id}` | 更新 / 删除（仍被未删除的角色引用时返回 409，否则软删除） |
 | POST | `/api/agents/{id}/test` | 连通性探测（适配器 / 运行时 / 网关三段检查） |
+| GET | `/api/runtimes` | 列出各运行时（CLI 内核）的安装状态、版本与维护方式 |
+| POST | `/api/runtimes/{id}/install` · `/update` · `/uninstall` | **SSE** 安装 / 更新 / 卸载（卸载需 `confirm`） |
+| POST | `/api/runtimes/{id}/check` | 查询该运行时远端最新版本 |
 | GET/POST | `/api/roles` | 角色管理（删除为软删除：从列表消失，历史对话保留） |
 | GET/POST | `/api/conversations` | 对话管理 |
 | POST | `/api/conversations/{id}/messages` | **SSE** 发送消息并流式接收回复 |
@@ -245,12 +249,13 @@ class AcmeAgent(AgentDefinition):
 ```
 backend/
   app/agents/            适配器层（base · events · registry · builtin/*）
-  app/runtime/           service（编排/持久化）· runner（执行）· manager（运行表）
+  app/runtime/           service（编排/持久化）· runner（执行）· manager（运行表）·
+                         provisioning（运行时的安装 / 更新 / 卸载）
   app/api/               路由 · SSE
   app/models.py db.py    数据模型与引擎
   tests/                 适配器解析、API 契约、harness 工具循环、架构守卫
 frontend/
-  src/pages/             Chat · Agents · Roles · Settings
+  src/pages/             Chat · Agents · Runtimes · Roles · Skills · Settings
   src/components/        DynamicForm（由 schema 生成表单）· MessageView · Modal
 AGENTS.md                ★ 工程约定（AI/人都要遵守的硬约束）
 docs/architecture.md     深挖：一次运行的完整时序、事件协议、扩展点

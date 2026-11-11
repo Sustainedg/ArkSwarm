@@ -134,6 +134,17 @@ def test_config_field_types_are_valid():
             assert field.type.value in valid, f"{definition.id}.{field.key} 的 FieldType 非法"
 
 
+def test_declared_provisioners_are_complete():
+    """声明了运行时维护方式的适配器必须给出包管理器与安装 / 卸载命令（AGENTS.md §4.9）。"""
+    for definition in all_agents():
+        provisioner = definition.provisioner
+        if provisioner is None:
+            continue
+        assert provisioner.manager, f"{definition.id} 的 provisioner 缺少包管理器标识"
+        assert provisioner.install_argv, f"{definition.id} 的 provisioner 缺少「安装」命令"
+        assert provisioner.uninstall_argv, f"{definition.id} 的 provisioner 缺少「卸载」命令"
+
+
 def test_adapter_metadata_and_labels_are_localised():
     """新增适配器时，name/description/字段 label 必须是中文（AGENTS.md 铁律 7 与 §6）。"""
     for definition in all_agents():

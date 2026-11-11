@@ -8,6 +8,7 @@ from .base import (  # noqa: F401
     FieldType,
     Invocation,
     Runtime,
+    RuntimeProvisioner,
 )
 from .events import AgentEvent, EventType  # noqa: F401
 from .registry import all_agents, get_agent, known_ids, register_agent  # noqa: F401
@@ -24,6 +25,7 @@ __all__ = [
     "FieldType",
     "Invocation",
     "Runtime",
+    "RuntimeProvisioner",
     "all_agents",
     "get_agent",
     "known_ids",

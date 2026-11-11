@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -100,4 +100,13 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str) -> FileResponse:
+        """前端深链交给入口 HTML；但 `/api/` 下的漏网请求必须显式报 404。
+
+        否则「不存在的接口」会拿到 200 + index.html（HTML）：前端 `response.json()`
+        解析失败，WebKit 抛出的还是一句和业务毫无关系的
+        "The string did not match the expected pattern."，极难排查。
+        明确回一个 JSON 404，客户端就能直接告诉你「接口不存在」。
+        """
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"接口不存在：/{full_path}")
         return FileResponse(resolve_spa_target(FRONTEND_DIST, full_path))

@@ -31,6 +31,71 @@ export interface Availability {
   detail?: string | null
 }
 
+/** 运行时维护动作：安装 / 更新 / 卸载。 */
+export type RuntimeAction = 'install' | 'update' | 'uninstall'
+
+/** 适配器声明的维护命令（由后端原样执行，前端只负责展示与触发）。 */
+export interface RuntimeCommands {
+  install: string[]
+  update: string[]
+  uninstall: string[]
+  latest: string[]
+}
+
+export interface RuntimeProvisioning {
+  /** 该运行时是否由平台管理（进程内 API 内核、自定义 CLI 为 false） */
+  supported: boolean
+  manager?: string | null
+  package?: string | null
+  homepage?: string | null
+  note?: string | null
+  commands?: RuntimeCommands | null
+  installed: boolean
+  version?: string | null
+  /** 已安装时的可执行文件路径 */
+  path?: string | null
+}
+
+/** 一个智能体运行时（某个 CLI 内核在本机的那份可执行文件）。 */
+export interface AgentRuntime {
+  id: string
+  name: string
+  vendor: string
+  description: string
+  runtime: 'cli' | 'api'
+  docs_url?: string | null
+  executable?: string | null
+  /** 有多少个智能体实例在用这个运行时 */
+  instances: number
+  provisioning: RuntimeProvisioning
+}
+
+/** 「检查更新」的结果。 */
+export interface RuntimeLatest {
+  supported: boolean
+  latest?: string | null
+  command?: string | null
+  error?: string | null
+}
+
+/** 运行时维护动作的 SSE 事件（自有的 provision.* 信封，非适配器事件协议）。 */
+export interface ProvisionEvent {
+  type: string
+  runtime_id?: string
+  action?: RuntimeAction
+  command?: string | null
+  manager?: string | null
+  text?: string
+  level?: string
+  ok?: boolean
+  status?: 'ok' | 'error' | 'cancelled'
+  exit_code?: number | null
+  installed?: boolean
+  version?: string | null
+  path?: string | null
+  error?: string | null
+}
+
 export interface SystemDefaults {
   gateway_url?: string | null
   model?: string | null
@@ -53,6 +118,8 @@ export interface AgentType {
   default_model?: string | null
   docs_url?: string | null
   executable?: string | null
+  /** 运行时的安装 / 更新方式（`/api/agent-types` 也带上，与「运行时」页同源） */
+  provisioning?: RuntimeProvisioning
   availability: Availability
   system_defaults?: SystemDefaults
 }
