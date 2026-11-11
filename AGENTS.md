@@ -217,7 +217,8 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **移动端（`/m/`）**：`src/mobile/pages/MobileXxxPage.tsx`，在 `src/mobile/MobileApp.tsx` 注册路由；
   样式写进 `src/mobile/mobile.css`。移动端页面**不得**引用 `src/pages/`、`src/App.tsx` 或
   `src/index.css`（有守卫测试 `tests/test_mobile_web.py`），但可以复用 `src/lib/*` 与
-  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread`
+  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
+  `TicketBoardKit`
   这些纯展示组件（对话气泡只有 `MessageView` 一份，线程装配只有 `ConversationThread` 一份）。
 - **两端功能对齐、交互各表**：桌面端有的能力（例如协作组编排）移动端也要能用，但按触屏重做交互 ——
   移动端**不引用**桌面端的编排画布（`components/CollabCanvas` 等），协作组改用表单式编辑

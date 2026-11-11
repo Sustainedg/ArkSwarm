@@ -93,6 +93,10 @@ def test_mobile_pages_do_not_import_desktop_ui():
 OFFICE_STYLE_BANNER = (
     "/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */"
 )
+#: 「工单看板」那一段卡片样式：同样两端各一份，逐字一致（从横幅到「协作办公室」横幅为止）。
+BOARD_STYLE_BANNER = (
+    "/* ================= 工单看板：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴 ================= */"
+)
 MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
 
 
@@ -120,6 +124,55 @@ def test_office_styles_are_identical_on_both_ends():
     assert desktop == mobile, (
         "index.css 与 mobile.css 的协作办公室样式不一致：改了一边记得把另一边同步（两端各一份）"
     )
+
+
+def _board_style_block(path: Path) -> str:
+    """取出一份样式表里的「工单看板」原子段（截到「协作办公室」段之前）。"""
+    text = path.read_text(encoding="utf-8")
+    start = text.find(BOARD_STYLE_BANNER)
+    assert start >= 0, f"{path.name} 里找不到「工单看板」样式段（横幅注释被删了？）"
+    end = text.find(OFFICE_STYLE_BANNER, start)
+    assert end > start, f"{path.name} 里「工单看板」段之后应当还有「协作办公室」段"
+    return text[start:end].rstrip("\n")
+
+
+@needs_frontend
+def test_ticket_board_card_styles_are_identical_on_both_ends():
+    """工单卡（徽章 / 流转卡片 / 手风琴）的样式两端各一份，必须逐字一致。
+
+    只读节点越权时的红色高亮就在这段里：改了一边忘了另一边，手机上就看不见越权提示。
+    两端各自的布局（桌面三栏、移动端单栏）写在这一段之外，不参与比对。
+    """
+    desktop = _board_style_block(FRONTEND / "src" / "index.css")
+    mobile = _board_style_block(MOBILE_SRC / "mobile.css")
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的「工单看板」卡片样式不一致：改了一边记得把另一边同步"
+    )
+    # 越权高亮必须真的在共享段里，不然这条守卫等于没守。
+    assert ".board-entry.violation" in desktop
+    assert ".board-tag.tone-error" in desktop
+
+
+@needs_frontend
+def test_ticket_board_is_shared_between_ends():
+    """工单看板：视图模型与卡片零件只有一份，两端只是外壳与交互不同。"""
+    kit = (FRONTEND / "src" / "components" / "TicketBoardKit.tsx").read_text(encoding="utf-8")
+    assert "lib/ticketBoard" in kit
+
+    desktop_board = (FRONTEND / "src" / "components" / "TicketBoard.tsx").read_text(encoding="utf-8")
+    mobile_board = (MOBILE_SRC / "pages" / "MobileTicketBoardPage.tsx").read_text(encoding="utf-8")
+    for text in (desktop_board, mobile_board):
+        assert "lib/ticketBoard" in text, "工单看板应当用共享视图模型"
+        assert "TicketBoardKit" in text, "工单看板应当用共享卡片零件"
+        # 徽章配色 / 工单状态词汇 / 越权判定不许各写一份。
+        for symbol in ("const ACTION_STYLE", "const TICKET_STATE", "const TICKET_LABELS", "const DEFAULT_SCOPE_BY_DUTY"):
+            assert symbol not in text, f"工单看板又抄了一份词汇表：{symbol}"
+
+    # 移动端要真的能走到看板（这正是之前缺失的那条路）
+    assert "MobileTicketBoardPage.tsx" in {path.name for path in (MOBILE_SRC / "pages").glob("*.tsx")}
+    assert "/collab/runs/:runId/tickets" in (MOBILE_SRC / "MobileApp.tsx").read_text(encoding="utf-8")
+    run_page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
+    assert "/tickets`" in run_page, "移动端运行页要有打开工单看板的入口"
 
 
 @needs_frontend
@@ -169,11 +222,15 @@ def test_mobile_collab_editor_is_form_based_not_a_canvas():
 def test_collab_draft_vocabulary_has_a_single_source():
     """协作编排的字段语义与默认值只有一份：两端都从 `lib/collabDraft.ts` 取。"""
     draft = (FRONTEND / "src" / "lib" / "collabDraft.ts").read_text(encoding="utf-8")
-    for symbol in ("DUTIES", "EDGE_KINDS", "SCOPES", "ACTIONS", "DEFAULT_BUDGET", "clampBudget"):
+    for symbol in ("DUTIES", "EDGE_KINDS", "SCOPES", "ACTIONS", "TICKET_STATES", "DEFAULT_BUDGET", "clampBudget"):
         assert symbol in draft, f"lib/collabDraft.ts 缺少 {symbol}"
 
     mobile_page = (MOBILE_SRC / "pages" / "MobileCollabTeamPage.tsx").read_text(encoding="utf-8")
     assert "lib/collabDraft" in mobile_page
+    # 工单状态的中文标签也只有一份（进度卡从共享词汇表取）。
+    progress = (FRONTEND / "src" / "lib" / "collabProgress.ts").read_text(encoding="utf-8")
+    assert "const TICKET_LABELS" not in progress, "collabProgress 又抄了一份工单状态词汇表"
+
     for name in ("CollabCanvas.tsx", "CollabSettingsPanel.tsx", "NodeInspector.tsx"):
         text = (FRONTEND / "src" / "components" / name).read_text(encoding="utf-8")
         assert "lib/collabDraft" in text

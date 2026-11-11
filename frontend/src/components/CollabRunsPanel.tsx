@@ -2,7 +2,7 @@
  * 「协作运行」页签：左栏是运行列表，主区是时间线（复用 `MessageView`）与工单状态摘要，
  * 底部输入框直接和入口角色说话（走协作 SSE）。
  *
- * 工单的细节（子工单树、产出文件、审查意见、越权审计）在点击后打开的全屏 `TicketBoard` 里。
+ * 工单的细节（列表、流转时间线、规则与越权审计）在点击后打开的全屏 `TicketBoard`（三栏看板）里。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CollabProgressBoard } from './CollabProgressBoard'
@@ -11,6 +11,7 @@ import type { RenderMessage } from './MessageView'
 import { TicketBoard } from './TicketBoard'
 import { Modal } from './Modal'
 import { api, ApiError, streamGet, streamPost } from '../lib/api'
+import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
 import {
@@ -39,18 +40,6 @@ const RUN_STATUS: Record<string, { label: string; pill: string }> = {
   error: { label: '出错', pill: 'err' },
   cancelled: { label: '已停止', pill: '' },
   interrupted: { label: '被中断', pill: 'warn' },
-}
-
-const TICKET_STATE: Record<string, { label: string; pill: string }> = {
-  open: { label: '待领取', pill: '' },
-  working: { label: '处理中', pill: 'brand' },
-  waiting_children: { label: '等子工单', pill: '' },
-  review: { label: '待审查', pill: 'ok' },
-  rework: { label: '返工中', pill: 'warn' },
-  escalated: { label: '已上报', pill: 'warn' },
-  done: { label: '已完成', pill: 'ok' },
-  rejected: { label: '被否决', pill: 'err' },
-  blocked: { label: '等用户', pill: 'warn' },
 }
 
 interface Props {
@@ -572,8 +561,8 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                 {detail.tickets.length > 0 && (
                   <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                     {Object.entries(ticketCounts).map(([state, count]) => (
-                      <span key={state} className={`pill ${TICKET_STATE[state]?.pill ?? ''}`}>
-                        {TICKET_STATE[state]?.label ?? state} {count}
+                      <span key={state} className={`pill ${ticketStateMeta(state).pill}`}>
+                        {ticketStateMeta(state).label} {count}
                       </span>
                     ))}
                   </div>
@@ -832,7 +821,10 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
         <TicketBoard
           tickets={detail.tickets}
           steps={detail.steps}
+          graph={team?.graph ?? null}
+          roles={roles}
           nodeLabel={(key) => roleLabel(key, team?.graph.nodes.find((item) => item.key === key)?.label)}
+          runTitle={detail.title}
           onClose={() => setBoardOpen(false)}
         />
       )}

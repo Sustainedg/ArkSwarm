@@ -1,69 +1,61 @@
 /**
- * 工单看板（全屏）：左边是「父工单 → 子工单」的树，右边是选中工单的细节。
+ * 工单看板（全屏三栏）：左边工单列表、中间流转时间线、右边静态规则。
  *
- * 工单是角色之间**唯一**的交接物，所以这张抽屉就是「谁把什么交给了谁」的全貌：
- * 工单字段（目标 / 要求 / 验收 / 约束）、产出与文件、审查意见与返工轮次，
- * 以及只读节点运行结束后的越权审计（`step.audit`）。
+ * 工单是角色之间**唯一**的交接物，所以这张看板要在一屏里回答三件事：
+ * 有哪些工单（左上→下）、这一张上谁把什么交给了谁（中）、派发时定下的规则是什么（右）。
+ * 时间线上只有动作徽章是彩色；token、耗时、工作目录指纹都压成卡片底部的小字，
+ * 唯一例外是「只读节点却动了工作目录」——它翻红，并列出被点名的文件。
  *
- * 数据全部来自已经拿到的运行详情（`CollabRunDetail`），不额外发请求。
+ * 视图模型在 `lib/ticketBoard.ts`（与移动端共用），这里只管布局与交互。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { CollabStep, CollabTicket } from '../lib/types'
-
-const TICKET_STATE: Record<string, { label: string; pill: string }> = {
-  open: { label: '待领取', pill: '' },
-  working: { label: '处理中', pill: 'brand' },
-  waiting_children: { label: '等子工单', pill: '' },
-  review: { label: '待审查', pill: 'ok' },
-  rework: { label: '返工中', pill: 'warn' },
-  escalated: { label: '已上报', pill: 'warn' },
-  done: { label: '已完成', pill: 'ok' },
-  rejected: { label: '被否决', pill: 'err' },
-  blocked: { label: '等用户', pill: 'warn' },
-}
-
-const BRIEF_FIELDS: { key: string; label: string }[] = [
-  { key: 'goal', label: '目标' },
-  { key: 'requirements', label: '要求' },
-  { key: 'acceptance', label: '验收标准' },
-  { key: 'constraints', label: '约束' },
-  { key: 'deliverables', label: '交付物' },
-]
+import type { CollabGraph, CollabStep, CollabTicket, Role } from '../lib/types'
+import type { BoardFilter, BoardTicket } from '../lib/ticketBoard'
+import { buildBoardModel, filterTickets, formatTokens } from '../lib/ticketBoard'
+import {
+  BoardAvatar,
+  BoardBriefSections,
+  BoardEntryCard,
+  BoardLegend,
+  BoardStatePill,
+  BoardTicketCard,
+} from './TicketBoardKit'
 
 interface Props {
+  /** 本次运行的工单与步骤（`CollabRunDetail`） */
   tickets: CollabTicket[]
   steps: CollabStep[]
+  /** 本次运行的协作图，用来取节点的岗位与工作目录作用域 */
+  graph?: CollabGraph | null
+  roles: Role[]
   /** 把节点 key 翻成人看的角色名 */
   nodeLabel: (key: string) => string
+  /** 运行标题，放在顶栏说明这是哪次协作 */
+  runTitle?: string
   onClose: () => void
 }
 
-export function TicketBoard({ tickets, steps, nodeLabel, onClose }: Props) {
-  const ordered = useMemo(
-    () => [...tickets].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0)),
-    [tickets],
-  )
-  const children = useMemo(() => {
-    const ids = new Set(ordered.map((ticket) => ticket.id))
-    const map = new Map<string, CollabTicket[]>()
-    for (const ticket of ordered) {
-      // 父工单不在这批数据里（理论上不该发生）时当成根，保证每张工单都看得见、不被静默吞掉
-      const parent = ticket.parent_ticket_id && ids.has(ticket.parent_ticket_id) ? ticket.parent_ticket_id : null
-      const key = parent ?? '__root__'
-      map.set(key, [...(map.get(key) ?? []), ticket])
-    }
-    return map
-  }, [ordered])
+const FILTERS: { key: BoardFilter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'active', label: '进行中' },
+  { key: 'done', label: '已完成' },
+]
 
-  // 默认挑「最需要你介入」的那张：卡住的 → 返工中 → 待审查 → 根工单
-  const preferred =
-    ordered.find((ticket) => ticket.state === 'blocked') ??
-    ordered.find((ticket) => ticket.state === 'rework') ??
-    ordered.find((ticket) => ticket.state === 'review') ??
-    ordered.find((ticket) => !ticket.parent_ticket_id) ??
-    ordered[0]
+export function TicketBoard({ tickets, steps, graph, roles, nodeLabel, runTitle, onClose }: Props) {
+  const [keyword, setKeyword] = useState('')
+  const [filter, setFilter] = useState<BoardFilter>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const current = ordered.find((ticket) => ticket.id === (selectedId ?? preferred?.id)) ?? preferred
+
+  const model = useMemo(
+    () => buildBoardModel({ tickets, steps, graph, roles, nodeLabel }),
+    [tickets, steps, graph, roles, nodeLabel],
+  )
+  const visible = useMemo(
+    () => filterTickets(model.tickets, filter, keyword),
+    [model.tickets, filter, keyword],
+  )
+  const active =
+    model.tickets.find((ticket) => ticket.id === (selectedId ?? model.focusedId)) ?? model.tickets[0] ?? null
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -73,228 +65,192 @@ export function TicketBoard({ tickets, steps, nodeLabel, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const renderBranch = (parentId: string | null, depth: number): ReactNode[] => {
-    if (depth > 8) return []
-    return (children.get(parentId ?? '__root__') ?? []).map((ticket) => [
-      <button
-        key={ticket.id}
-        className={`collab-tree-item${ticket.id === current?.id ? ' active' : ''}`}
-        style={{ paddingLeft: 10 + depth * 16 }}
-        onClick={() => setSelectedId(ticket.id)}
-      >
-        <span className={`pill ${TICKET_STATE[ticket.state]?.pill ?? ''}`}>
-          {TICKET_STATE[ticket.state]?.label ?? ticket.state}
-        </span>
-        <span className="collab-tree-title">{ticket.title}</span>
-        {ticket.round > 0 && <span className="collab-tree-round">返工 {ticket.round}</span>}
-      </button>,
-      ...renderBranch(ticket.id, depth + 1),
-    ])
-  }
-
   return (
     <div className="collab-drawer-backdrop collab-ticket-board-backdrop">
       <aside className="collab-drawer collab-ticket-board" role="dialog" aria-modal="true" aria-label="工单看板">
         <div className="collab-drawer-head">
           <div>
             <div className="collab-inspector-title">工单看板</div>
-            <div className="dim small">共 {tickets.length} 张 · 点一张看细节（角色之间只传工单）</div>
+            <div className="dim small">
+              {runTitle ? `${runTitle} · ` : ''}
+              共 {model.totals.tickets} 张 · {model.totals.steps} 条流转 · 累计{' '}
+              {model.totals.tokens.toLocaleString('en-US')} tok
+              {model.totals.violations > 0 && (
+                <span className="board-head-warn"> · ⚠ {model.totals.violations} 条越权审计</span>
+              )}
+            </div>
           </div>
           <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={onClose} aria-label="关闭">
             ✕
           </button>
         </div>
-        <div className="collab-drawer-body">
-          <div className="collab-tree">
-            {ordered.length === 0 ? (
-              <p className="dim small">这次协作还没有工单。</p>
-            ) : (
-              renderBranch(null, 0)
-            )}
+
+        {model.tickets.length === 0 ? (
+          <div className="empty" style={{ margin: 'auto' }}>
+            <div className="empty-icon">📋</div>
+            <p>这次协作还没有工单</p>
+            <p className="dim small" style={{ marginTop: 6 }}>入口角色把活派出去之后，工单会出现在这里。</p>
           </div>
-          <div className="collab-detail">
-            {current ? (
-              <TicketDetail
-                ticket={current}
-                steps={steps.filter((step) => step.ticket_id === current.id)}
-                nodeLabel={nodeLabel}
-              />
-            ) : (
-              <p className="dim small">入口角色还没把活派出去。</p>
-            )}
+        ) : (
+          <div className="board-shell">
+            {/* 左 · 工单列表 */}
+            <section className="board-col board-col-list">
+              <div className="board-col-head">
+                <input
+                  className="board-search"
+                  value={keyword}
+                  onChange={(event) => setKeyword(event.target.value)}
+                  placeholder="搜索标题 / 处理人"
+                  aria-label="搜索工单"
+                />
+                <div className="board-filters">
+                  {FILTERS.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className={`board-filter${filter === item.key ? ' active' : ''}`}
+                      onClick={() => setFilter(item.key)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="board-col-body board-ticket-list">
+                {visible.map((ticket) => (
+                  <BoardTicketCard
+                    key={ticket.id}
+                    ticket={ticket}
+                    active={ticket.id === active?.id}
+                    onSelect={() => setSelectedId(ticket.id)}
+                  />
+                ))}
+                {visible.length === 0 && <p className="dim small">没有匹配的工单。</p>}
+              </div>
+            </section>
+
+            {/* 中 · 这张工单的流转时间线 */}
+            <section className="board-col board-col-flow">
+              {active ? (
+                <>
+                  <div className="board-flow-head">
+                    <div className="board-flow-title-row">
+                      <h2 className="board-flow-title">{active.title}</h2>
+                      <BoardStatePill ticket={active} />
+                      <span className="board-flow-holder">
+                        <BoardAvatar
+                          avatar={active.holderAvatar}
+                          label={active.holderLabel}
+                          duty={active.holderDuty}
+                          size="sm"
+                        />
+                        当前处理人：{active.holderLabel}
+                      </span>
+                    </div>
+                    <div className="board-flow-meta">
+                      <span>发起人 {active.ownerLabel}</span>
+                      <span>返工 {active.round} / {active.maxRounds} 轮</span>
+                      <span>{active.stats.steps} 条流转 · {active.stats.handoffs} 次交接</span>
+                      {formatTokens(active.stats.tokens) && <span>累计 {formatTokens(active.stats.tokens)}</span>}
+                      {active.stats.violations > 0 && (
+                        <span className="board-flow-violation">⚠ {active.stats.violations} 条越权审计</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="board-col-body board-flow-body">
+                    {active.reviewComment && (
+                      <div className={`banner ${active.verdict === 'pass' ? 'info' : 'warn'}`}>
+                        审查意见：{active.reviewComment}
+                      </div>
+                    )}
+                    {active.escalation?.reason && (
+                      <div className={`banner ${active.state === 'escalated' ? 'warn' : 'info'}`}>
+                        {active.state === 'escalated' ? '上报中' : '曾上报'}：{active.escalation.from} 交回：
+                        {active.escalation.reason}
+                        {active.escalation.need ? ` · 需要：${active.escalation.need}` : ''}
+                        {active.escalation.hops.length > 0 ? `（已经过 ${active.escalation.hops.join(' → ')}）` : ''}
+                      </div>
+                    )}
+                    {(active.summary || active.artifacts.length > 0) && (
+                      <div className="board-output">
+                        <div className="board-output-label">产出</div>
+                        {active.summary && <p className="board-output-summary">{active.summary}</p>}
+                        {active.artifacts.length > 0 && (
+                          <div className="board-output-files">
+                            {active.artifacts.map((artifact) => (
+                              <span key={artifact.key} className="mono">{artifact.label}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {active.entries.length === 0 ? (
+                      <p className="dim small">还没有角色处理过它。</p>
+                    ) : (
+                      <div className="board-timeline">
+                        <span className="board-timeline-rail" aria-hidden />
+                        <ol className="board-timeline-list">
+                          {active.entries.map((entry) => (
+                            <BoardEntryCard key={entry.id} entry={entry} />
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="board-col-body">
+                  <p className="dim small">左侧选一张工单看它的流转。</p>
+                </div>
+              )}
+            </section>
+
+            {/* 右 · 静态规则 */}
+            <section className="board-col board-col-rule">
+              <div className="board-col-head">
+                <div className="board-col-title">工单规则</div>
+                <div className="dim small">派发时写死，运行中不改</div>
+              </div>
+              <div className="board-col-body board-rule-body">
+                {active && (
+                  <>
+                    <dl className="board-summary">
+                      <SummaryRow label="工单编号"><span className="mono">{active.id}</span></SummaryRow>
+                      <SummaryRow label="当前处理人">
+                        {active.holderLabel}
+                        {active.holderDuty ? `（${active.holderDuty}）` : ''}
+                      </SummaryRow>
+                      <SummaryRow label="发起人">{active.ownerLabel}</SummaryRow>
+                      <SummaryRow label="返工轮次">{active.round} / {active.maxRounds} 轮</SummaryRow>
+                      <SummaryRow label="父工单">{active.parentTicketId ?? '—（根工单）'}</SummaryRow>
+                    </dl>
+                    <BoardBriefSections ticket={active} />
+                  </>
+                )}
+                <div className="board-legend-box">
+                  <div className="board-legend-title">动作徽章</div>
+                  <BoardLegend />
+                  <p className="dim small">
+                    红色高亮 = 只读节点改动了工作目录（越权审计）。token、耗时、文件指纹属于次要信息，一律压在卡片底部。
+                  </p>
+                </div>
+              </div>
+            </section>
           </div>
-        </div>
+        )}
       </aside>
     </div>
   )
 }
 
-function TicketDetail({
-  ticket, steps, nodeLabel,
-}: {
-  ticket: CollabTicket
-  steps: CollabStep[]
-  nodeLabel: (key: string) => string
-}) {
-  const artifacts = asArtifacts(ticket.result?.artifacts)
-  const summary = typeof ticket.result?.summary === 'string' ? ticket.result.summary : ''
-
+function SummaryRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <>
-      <div className="collab-detail-head">
-        <span className={`pill ${TICKET_STATE[ticket.state]?.pill ?? ''}`}>
-          {TICKET_STATE[ticket.state]?.label ?? ticket.state}
-        </span>
-        <span className="collab-detail-title">{ticket.title}</span>
-        <span className="dim small">{`返工 ${ticket.round} / ${ticket.max_rounds || '—'} 轮`}</span>
-      </div>
-      <div className="dim small">
-        现在在 {nodeLabel(ticket.holder_key) || ticket.holder_key} 手里
-        {ticket.owner_key && ` · 汇总人 ${nodeLabel(ticket.owner_key) || ticket.owner_key}`}
-        {ticket.submitter_key && ` · 提交人 ${nodeLabel(ticket.submitter_key) || ticket.submitter_key}`}
-      </div>
-
-      <div className="collab-detail-grid">
-        {BRIEF_FIELDS.map((field) => {
-          const raw = (ticket.brief as Record<string, unknown> | undefined)?.[field.key]
-          const lines = asStringList(raw)
-          if (lines.length === 0) return null
-          return (
-            <div key={field.key} className="collab-detail-field">
-              <div className="collab-detail-label">{field.label}</div>
-              <ul className="collab-detail-list">
-                {lines.map((line, index) => (
-                  <li key={index}>{line}</li>
-                ))}
-              </ul>
-            </div>
-          )
-        })}
-      </div>
-
-      {(summary || artifacts.length > 0) && (
-        <div className="collab-detail-field">
-          <div className="collab-detail-label">产出</div>
-          {summary && <p style={{ margin: 0 }}>{summary}</p>}
-          {artifacts.length > 0 && (
-            <ul className="collab-detail-list">
-              {artifacts.map((artifact) => (
-                <li key={artifact.key} className="mono">
-                  {artifact.label}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {ticket.review_comment && (
-        <div className={`banner ${ticket.verdict === 'pass' ? 'info' : 'warn'}`}>
-          审查意见：{ticket.review_comment}
-        </div>
-      )}
-
-      {ticket.escalation?.reason && (
-        <div className={`banner ${ticket.state === 'escalated' ? 'warn' : 'info'}`}>
-          {ticket.state === 'escalated' ? '上报中' : '曾上报'}：
-          {nodeLabel(String(ticket.escalation.from ?? '')) || ticket.escalation.from} 交回
-          {ticket.escalation.hops && ticket.escalation.hops.length > 0
-            ? `（已经过 ${ticket.escalation.hops.map((hop) => nodeLabel(hop) || hop).join(' → ')}）`
-            : ''}
-          ：{ticket.escalation.reason}
-          {ticket.escalation.need ? ` · 需要：${ticket.escalation.need}` : ''}
-        </div>
-      )}
-
-      <div className="collab-detail-field">
-        <div className="collab-detail-label">这一张工单上发生的事</div>
-        {steps.filter((step) => step.role_key !== 'user').length === 0 ? (
-          <p className="dim small" style={{ margin: 0 }}>还没有角色处理过它。</p>
-        ) : (
-          <div className="stack" style={{ gap: 8 }}>
-            {steps
-              .filter((step) => step.role_key !== 'user')
-              .map((step) => (
-                <div key={step.id} className="collab-detail-step">
-                  <div className="row" style={{ gap: 6 }}>
-                    <span className="collab-detail-step-role">{nodeLabel(step.role_key) || step.role_key}</span>
-                    <span className="pill">{step.action || step.status}</span>
-                    <span className="dim small">{usageLine(step.usage)}</span>
-                  </div>
-                  {step.gist && <div className="dim small">{step.gist}</div>}
-                  {step.error && <div className="banner err">{step.error}</div>}
-                  <AuditBlock audit={step.audit} />
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
-/** 只读节点跑完后对共享工作目录的越权检查（`execution.finish_audit`）。 */
-function AuditBlock({ audit }: { audit: Record<string, unknown> }) {
-  if (!audit || audit.checked !== true) return null
-  const added = asStringList(audit.added)
-  const modified = asStringList(audit.modified)
-  const removed = asStringList(audit.removed)
-  const count = typeof audit.count === 'number' ? audit.count : added.length + modified.length + removed.length
-
-  if (count === 0) {
-    return <div className="dim small">工作目录未被改动 ✅</div>
-  }
-  return (
-    <div className="banner err">
-      <div>只读节点却动了工作目录（{count} 个文件），已记入审计：</div>
-      {(
-        [
-          ['新增', added],
-          ['修改', modified],
-          ['删除', removed],
-        ] as const
-      ).map(([label, files]) =>
-        files.length === 0 ? null : (
-          <div key={label} className="small">
-            {label}：<span className="mono">{files.join('、')}</span>
-          </div>
-        ),
-      )}
+    <div className="board-summary-row">
+      <dt>{label}</dt>
+      <dd>{children}</dd>
     </div>
   )
 }
 
-function usageLine(usage: Record<string, number>): string {
-  const total = Object.values(usage ?? {}).reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0)
-  return total > 0 ? `${total.toLocaleString()} tok` : ''
-}
-
-/**
- * 产出物：协议允许写字符串，后端会把它规整成 `{kind: 'file', path}`；
- * 这里两种都要认，不能让界面出现 `[object Object]`。
- */
-function asArtifacts(value: unknown): { key: string; label: string }[] {
-  if (!Array.isArray(value)) return []
-  const items: { key: string; label: string }[] = []
-  value.forEach((item, index) => {
-    if (typeof item === 'string' && item.trim()) {
-      items.push({ key: `${index}-${item}`, label: item })
-      return
-    }
-    if (item && typeof item === 'object') {
-      const record = item as Record<string, unknown>
-      const path = record.path ?? record.name ?? record.url
-      if (typeof path === 'string' && path.trim()) {
-        const kind = typeof record.kind === 'string' ? record.kind : ''
-        items.push({ key: `${index}-${path}`, label: kind && kind !== 'file' ? `${path}（${kind}）` : path })
-      }
-    }
-  })
-  return items
-}
-
-function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean)
-  if (typeof value === 'string' && value.trim()) return [value]
-  return []
-}
+export type { BoardTicket }

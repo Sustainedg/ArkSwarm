@@ -7,6 +7,7 @@ import { MobileChatPage } from './pages/MobileChatPage'
 import { MobileCollabPage } from './pages/MobileCollabPage'
 import { MobileCollabRunPage } from './pages/MobileCollabRunPage'
 import { MobileCollabTeamPage } from './pages/MobileCollabTeamPage'
+import { MobileTicketBoardPage } from './pages/MobileTicketBoardPage'
 import { MobileConversationsPage } from './pages/MobileConversationsPage'
 import { MobileRolesPage } from './pages/MobileRolesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
@@ -40,6 +41,7 @@ export function MobileApp() {
         <Route path="/collab" element={<MobileCollabPage />} />
         <Route path="/collab/teams/:teamId" element={<MobileCollabTeamPage />} />
         <Route path="/collab/runs/:runId" element={<MobileCollabRunPage />} />
+        <Route path="/collab/runs/:runId/tickets" element={<MobileTicketBoardPage />} />
         <Route path="/settings" element={<MobileSettingsPage version={version} />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>

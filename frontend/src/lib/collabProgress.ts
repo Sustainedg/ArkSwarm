@@ -4,7 +4,7 @@
  * 桌面端与移动端共用这份计算。主会话只展示用户与入口领导者；其他岗位的完整
  * 对话通过进度卡片点开查看。这里不碰 DOM、不发请求。
  */
-import { ACTIONS, EDGE_KINDS } from './collabDraft'
+import { ACTIONS, EDGE_KINDS, ticketStateMeta } from './collabDraft'
 import type { FinishedStep, LiveStep } from './collabStream'
 import type {
   CollabEdgeKind,
@@ -194,16 +194,6 @@ const ACTIVE_TICKET_STATES = new Set([
   'blocked',
 ])
 
-const TICKET_LABELS: Record<string, string> = {
-  open: '待领取',
-  working: '处理中',
-  waiting_children: '等子工单',
-  review: '待审查',
-  rework: '返工中',
-  escalated: '已上报',
-  blocked: '等你决定',
-}
-
 const ACTION_LABELS = Object.fromEntries(ACTIONS.map((item) => [item.value, item.label]))
 const EDGE_LABELS = Object.fromEntries(EDGE_KINDS.map((item) => [item.value, item.label]))
 
@@ -311,7 +301,7 @@ export function buildCollabProgress({
       stateLabel = last?.status === 'interrupted' ? '已中断' : '已停止'
     } else if (activeTicket) {
       state = 'active'
-      stateLabel = TICKET_LABELS[activeTicket.state] ?? '进行中'
+      stateLabel = ticketStateMeta(activeTicket.state).label
     } else if (last?.status === 'error' || lastStreamed?.status === 'error') {
       state = 'error'
       stateLabel = '需处理'

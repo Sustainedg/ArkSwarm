@@ -526,6 +526,15 @@ export function MobileCollabRunPage() {
             工单 {detail.tickets_used}/{detail.budget.max_tickets}
           </span>
           {detail.tickets_used > 0 && <span className="pill">未结 {detail.open_tickets}</span>}
+          {detail.tickets.length > 0 && (
+            <button
+              type="button"
+              className="pill m-board-link"
+              onClick={() => navigate(`/collab/runs/${detail.id}/tickets`)}
+            >
+              📋 工单看板 {detail.tickets.length}
+            </button>
+          )}
         </div>
       )}
 
@@ -732,6 +741,15 @@ export function MobileCollabRunPage() {
       {menuOpen && detail && (
         <MobileSheet title="运行操作" onClose={() => setMenuOpen(false)}>
           <div className="stack" style={{ gap: 8 }}>
+            <button
+              className="btn block"
+              onClick={() => {
+                setMenuOpen(false)
+                navigate(`/collab/runs/${detail.id}/tickets`)
+              }}
+            >
+              📋 工单看板（{detail.tickets.length} 张）
+            </button>
             {status === 'running' && (
               <button className="btn block danger" onClick={() => void stop()}>
                 ■ 叫停这次运行

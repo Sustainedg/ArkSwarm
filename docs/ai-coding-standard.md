@@ -321,7 +321,8 @@ class AcmeHarness(OpenAIHarnessBase):
 - **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、底部 Tab 与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
-  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread`
+  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
+  `TicketBoardKit`
   等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用

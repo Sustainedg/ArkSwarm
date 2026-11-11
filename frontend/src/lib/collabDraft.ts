@@ -19,6 +19,7 @@ import type {
   CollabTeam,
   CollabTeamUpdate,
   CollabTicketAction,
+  CollabTicketState,
   CollabValidation,
   CollabWorkspaceScope,
   Role,
@@ -63,6 +64,28 @@ export const ACTIONS: { value: CollabTicketAction; label: string }[] = [
   { value: 'ask_user', label: 'ask_user 提问' },
   { value: 'reject', label: 'reject 否决' },
 ]
+
+/**
+ * 工单状态的显示词汇（顶栏、进度卡、工单看板共用这一份）：`pill` 是 `.pill` 的修饰类。
+ * 状态取值与流转规则在后端 `collab/schemas.py:TicketState`，这里只解决「怎么显示」。
+ */
+export const TICKET_STATES: { value: CollabTicketState; label: string; pill: string }[] = [
+  { value: 'open', label: '待领取', pill: '' },
+  { value: 'working', label: '处理中', pill: 'brand' },
+  { value: 'waiting_children', label: '等子工单', pill: '' },
+  { value: 'review', label: '待审查', pill: 'ok' },
+  { value: 'rework', label: '返工中', pill: 'warn' },
+  { value: 'escalated', label: '已上报', pill: 'warn' },
+  { value: 'done', label: '已完成', pill: 'ok' },
+  { value: 'rejected', label: '被否决', pill: 'err' },
+  { value: 'blocked', label: '等你决定', pill: 'warn' },
+]
+
+/** 状态取值 → 显示信息；未登记的状态回落成原样文字，不吞掉信息。 */
+export function ticketStateMeta(state: string): { label: string; pill: string } {
+  const found = TICKET_STATES.find((item) => item.value === state)
+  return found ? { label: found.label, pill: found.pill } : { label: state, pill: '' }
+}
 
 export const DEFAULT_BUDGET: CollabBudget = {
   max_steps: 60,

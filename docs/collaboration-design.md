@@ -87,7 +87,10 @@ frontend/src/
   components/NodeInspector.tsx     节点 / 边 / 团队属性面板（复用 DynamicForm）（M2 ✅）
   lib/agentStream.ts               从 ChatPage 抽出的智能体事件纯归约器（两页共用，M2 ✅）
   lib/collabStream.ts              协作信封事件归约（时间线 + 工单，M2 ✅）
-  components/TicketBoard.tsx       工单看板 / 工单抽屉（M4）
+  components/TicketBoard.tsx       工单看板抽屉：左工单列表 / 中流转时间线 / 右静态规则（M4 → M14 三栏）
+  components/TicketBoardKit.tsx    看板卡片的共享零件（动作徽章 / 流转卡片 / 规则手风琴，两端共用，M14）
+  lib/ticketBoard.ts               看板纯视图模型：工单 + 步骤 → 三栏要的一切（含越权判定，M14）
+  mobile/pages/MobileTicketBoardPage.tsx  移动端工单看板（下拉选工单 + 流转 / 规则分段，M14）
   （样式按 AGENTS.md §4.7 写进 index.css，不新增 collab.css）
 ```
 
@@ -1203,3 +1206,38 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 验证：`bash scripts/test.sh` → **208 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
 用构建出的真实 CSS 渲染核对：每个工位都坐着会动的小人、工牌写对名字与职责、挂钟秒针在跳，
 桌面端与手机端各看一遍（手机端默认就是工位特写）。
+
+### M14 工单看板重构：桌面三栏 · 移动端也能看（V0.15）
+
+**关注点**：原来的看板是「子工单树 + 一坨细节」的两栏抽屉，看不出「一张工单上谁把什么交给了谁」；
+而且移动端**根本没有**工单看板的入口 —— 手机上想查工单只能去协作进度里翻。
+
+| 关注点 | 做法 |
+| --- | --- |
+| 三栏 | 左 25% 工单列表（标题两行截断 + 状态徽章 + 当前处理人）、中 50% 流转时间线、右 25% 静态规则；窄屏（< 1180px）自动降为单栏 |
+| 时间线一条 = 一步 | 数据就是 `collab_steps`：头像取节点对应角色的 `avatar`，标题优先用引擎的 `gist`，正文补 `content` 摘要；用户自己的发言单独一种徽章（「你」），只聊天的轮次也不会消失 |
+| 动作徽章化 | 看板上只有徽章是高饱和色：派发=蓝、完成=绿、出错=红、问用户=紫，提交=青、审查=琥珀、上报=橙、否决=玫红；`error` 来自运行态 `status=error`，`note` 是没有动作的普通轮 |
+| 视觉降噪 | token、耗时、工作目录指纹一律沉到卡片底部的小字；产出、审查意见、上报、调用过的工具名各自成块，不跟正文抢注意力 |
+| 越权高亮 | `workspace_scope=read` 且 `audit.unchanged=false` → 整卡红框 + 红横幅 + 逐条列出 `added / modified / removed`；**可写**节点的改动只给中性青色 chip；`none`（协调者的一次性空目录）不判越权，只作中性说明 |
+| 用量口径 | token 一律过 `lib/usage.ts:summarizeUsage()`，与顶栏 / 进度卡同口径（各内核字段名不同，直接相加会重复计数） |
+| 移动端补齐 | `/m/collab/runs/:runId/tickets`：顶上一个原生下拉选工单（含子工单缩进与状态），下面「流转 / 工单规则」两个分段，一屏只回答一个问题；运行页的状态行与「运行操作」弹层都放了入口 |
+| 一份逻辑、两套外壳 | 视图模型（`lib/ticketBoard.ts`）与卡片零件（`components/TicketBoardKit.tsx`）两端共用；卡片样式两端**各写一份**（移动端不加载 index.css），由守卫测试盯「逐字一致」；桌面三栏骨架只写在 index.css，移动端单栏外壳只写在 mobile.css |
+| 词汇表收口 | 工单状态的中文标签原先在 `CollabRunsPanel` 与 `collabProgress` 各有一份，这次收归 `lib/collabDraft.ts:TICKET_STATES` 一份（顶栏、进度卡、看板共用） |
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/lib/ticketBoard.ts`（新增） | 纯视图模型：工单 / 步骤 → 看板条目（徽章档位、标题、交接对象、用量、作用域、审计、越权判定）、左栏筛选与「默认打开最需要介入的那张」 |
+| `frontend/src/components/TicketBoardKit.tsx`（新增） | 两端共用零件：动作徽章、状态徽章、头像、工单卡、流转卡片、规则手风琴、徽章图例 |
+| `frontend/src/components/TicketBoard.tsx` | 重写为三栏（列表 / 时间线 / 规则），原来看板里的产出、审查意见、上报信息全部保留；Esc 关闭 |
+| `frontend/src/mobile/pages/MobileTicketBoardPage.tsx`（新增） | 移动端看板：下拉选工单 + 流转 / 规则分段；只复用 `lib/*` 与共享零件，不引用桌面页面 |
+| `frontend/src/mobile/pages/MobileCollabRunPage.tsx` / `mobile/MobileApp.tsx` | 状态行与「运行操作」弹层加看板入口；注册 `/collab/runs/:runId/tickets` |
+| `frontend/src/lib/collabDraft.ts` | 新增 `TICKET_STATES` / `ticketStateMeta()`：工单状态显示词汇的唯一来源 |
+| `frontend/src/lib/collabProgress.ts` / `components/CollabRunsPanel.tsx` | 改用共享词汇表，删掉各自的工单状态副本 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | `.board-*` 卡片样式（两端各一份，守卫测试盯逐字一致）；桌面三栏骨架只在 index.css，移动端单栏外壳只在 mobile.css |
+| `backend/tests/test_mobile_web.py` | 新增守卫：两端卡片样式逐字一致、看板复用共享模型、移动端有看板页与入口；「词汇表单一来源」补上工单状态 |
+| `frontend/public/m/sw.js` | 外壳缓存名 v16 → v17（移动端样式与产物都变了） |
+
+验证：`bash scripts/test.sh` → **210 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
+用一次真实运行（32 步 / 11 张工单）渲染核对：三栏比例、标题限行、动作徽章、底部小字元数据，
+以及「只读节点却改动了工作目录」那条的红色高亮（往真实数据里插一条只读节点的越权步骤复现）；
+移动端另外看了单栏看板与运行页上的入口按钮。
