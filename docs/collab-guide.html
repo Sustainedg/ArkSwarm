@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>协作是怎么跑起来的 · 小白版说明</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --ink-soft: #5a6376;
+    --line: #e3e7ef;
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --brand: #3b5bdb;
+    --brand-soft: #eef1fd;
+    --ok: #1f9254;
+    --ok-soft: #e8f7ee;
+    --warn: #b7791f;
+    --warn-soft: #fdf6e3;
+    --bad: #c53030;
+    --bad-soft: #fdeaea;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  a { color: var(--brand); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: #f0f2f7;
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  header.top {
+    background: linear-gradient(135deg, #3b5bdb, #5f3dc4);
+    color: #fff;
+    padding: 40px 24px 32px;
+  }
+  header.top .wrap { max-width: 980px; margin: 0 auto; }
+  header.top h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0.5px; }
+  header.top p { margin: 0; opacity: 0.9; font-size: 15px; }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 24px;
+  }
+  nav.toc .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 14px;
+  }
+  nav.toc a { text-decoration: none; color: var(--ink-soft); white-space: nowrap; }
+  nav.toc a:hover { color: var(--brand); }
+  main { max-width: 980px; margin: 0 auto; padding: 28px 24px 80px; }
+  section { margin-bottom: 34px; }
+  h2 {
+    font-size: 21px;
+    margin: 34px 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--brand-soft);
+  }
+  h3 { font-size: 17px; margin: 22px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 12px 0;
+  }
+  .lead {
+    background: var(--brand-soft);
+    border: 1px solid #d5dcfb;
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    font-size: 17px;
+  }
+  .lead strong { color: var(--brand); }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .pill {
+    display: inline-block;
+    font-size: 12.5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .p-ok { color: var(--ok); background: var(--ok-soft); }
+  .p-warn { color: var(--warn); background: var(--warn-soft); }
+  .p-bad { color: var(--bad); background: var(--bad-soft); }
+  .p-info { color: var(--brand); background: var(--brand-soft); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 15px; }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: #f2f4fa; font-weight: 600; }
+  tbody tr:nth-child(even) { background: #fafbfe; }
+  .flow { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 18px 0; }
+  .flow .box {
+    width: min(460px, 100%);
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-align: center;
+  }
+  .flow .box b { display: block; font-size: 15px; }
+  .flow .box span { font-size: 13.5px; color: var(--ink-soft); }
+  .flow .arrow { color: var(--brand); font-size: 15px; line-height: 1; }
+  .flow .who { font-size: 13px; color: var(--ink-soft); }
+  .kw { color: var(--brand); font-weight: 600; }
+  .note {
+    border-left: 4px solid var(--brand);
+    background: #fbfcff;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+  }
+  .warn {
+    border-left: 4px solid var(--warn);
+    background: var(--warn-soft);
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+  }
+  .before-after { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .before-after .box { border-radius: var(--radius); padding: 16px 18px; border: 1px solid var(--line); }
+  .before-after .bad { background: var(--bad-soft); border-color: #f3c9c9; }
+  .before-after .good { background: var(--ok-soft); border-color: #c3e6d1; }
+  .before-after h4 { margin: 0 0 8px; font-size: 16px; }
+  footer {
+    border-top: 1px solid var(--line);
+    background: #fff;
+    padding: 22px 24px 40px;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  footer .wrap { max-width: 980px; margin: 0 auto; }
+  @media (max-width: 560px) {
+    header.top h1 { font-size: 23px; }
+    main { padding: 20px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <h1>协作是怎么跑起来的</h1>
+    <p>用大白话讲清 Magenta Agents 里「多角色协作」的工单机制、权限与流程 —— 不用懂代码也能看完。</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#idea">一句话理解</a>
+    <a href="#words">三个词</a>
+    <a href="#flow">一次任务怎么走</a>
+    <a href="#perm">谁能干什么</a>
+    <a href="#life">工单的一生</a>
+    <a href="#payload">工单里装了什么</a>
+    <a href="#handover">交接规则</a>
+    <a href="#chat">随时找 CEO</a>
+    <a href="#guard">防死循环</a>
+    <a href="#fix">这次修了什么</a>
+    <a href="#you">你能做什么</a>
+  </div>
+</nav>
+
+<main>
+
+<section id="idea">
+  <div class="lead">
+    <strong>一句话：</strong>你把一件事交给「小组长」，小组长不会自己埋头写完，
+    而是把它写成一张<strong>工单</strong>派给下游；活干完了，工单要一层层交回来，最后有人对你说一句结论。
+  </div>
+  <p>这套机制要解决的核心问题只有一个：<span class="kw">让「活干到哪了、干出了什么」永远有人看得见</span>，
+  而且看的是结构化的结论，不是一大段聊天记录。</p>
+</section>
+
+<section id="words">
+  <h2>1. 先记住三个词</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>协作组</h3>
+      <p>一个「编好队的小组」。里面画好了谁是谁的上级、谁审谁、谁能把活打回给谁。
+      就像一张组织架构图，图上的每条线都规定了活的流向。</p>
+    </div>
+    <div class="card">
+      <h3>角色与岗位</h3>
+      <p><b>角色</b>是一个具体的人设（比如「码农 · 小王」），背后绑着一个智能体。
+      <b>岗位</b>是它在这张图里站的位置（协调者 / 实施者 / 审查者），岗位决定了它能做什么、不能做什么。</p>
+    </div>
+    <div class="card">
+      <h3>工单</h3>
+      <p>角色之间<b>唯一</b>的交接物。它长得像一张任务卡：要干什么、验收标准是什么、
+      最后交回了什么结论、产出了哪些文件。<b>角色之间不传聊天记录，只传工单。</b></p>
+    </div>
+  </div>
+  <div class="note">
+    为什么只传工单？因为对话记录又长又乱、还容易互相污染。工单是「结论」，干净、可核对、可回放 ——
+    出了问题能一眼看出是哪一环没交清楚。
+  </div>
+</section>
+
+<section id="flow">
+  <h2>2. 一次任务怎么走</h2>
+  <p>下边是一条典型链路。每一格都是一次真实调用（会花时间和钱），箭头就是「工单交给谁」。</p>
+  <div class="flow">
+    <div class="box"><b>👤 你</b><span>「把登录页改成暗色主题」</span></div>
+    <div class="arrow">▼</div>
+    <div class="box"><b>🧑‍💼 CEO（协调者）</b><span>理解目标 → 不自己动手，把工单派给 CTO</span></div>
+    <div class="arrow">▼ 派发</div>
+    <div class="box"><b>🧑‍🔧 CTO（协调者）</b><span>把大任务拆成子工单 → 交给码农</span></div>
+    <div class="arrow">▼ 拆子工单</div>
+    <div class="box"><b>👩‍💻 码农（实施者）</b><span>真正动手干 → 提交结论 + 产出文件清单</span></div>
+    <div class="arrow">▼ 提交</div>
+    <div class="box"><b>🔍 审查员（审查者）</b><span>对照验收标准检查 → 通过 / 打回返工</span></div>
+    <div class="arrow">▼ 通过</div>
+    <div class="box"><b>🧑‍🔧 CTO</b><span>子工单收尾 → 汇总结论</span></div>
+    <div class="arrow">▼ 收尾</div>
+    <div class="box"><b>🧑‍💼 CEO</b><span>对你说一句结论：「已上线，改动在 theme.ts」</span></div>
+  </div>
+  <div class="warn">
+    <b>同一时刻只有一个人在干活。</b>这是刻意的：串行推进才能说得清「谁在等谁」，
+    取消、重试、排查也才有确定答案。
+  </div>
+  <p>滚动的动作只有六种，看懂这六个词就够用了：</p>
+  <table>
+    <thead><tr><th>动作</th><th>大白话</th><th>谁能用</th></tr></thead>
+    <tbody>
+      <tr><td><code>delegate</code> · handoff</td><td>「这活我不做，转给你」，同一张工单换个人接着干</td><td>协调者、实施者</td></tr>
+      <tr><td><code>delegate</code> · split</td><td>「这活太大，我拆成一张子工单给你」，拆的人负责最后汇总</td><td>协调者、实施者</td></tr>
+      <tr><td><code>submit</code></td><td>「干完了，这是我的结论和产出文件」</td><td>实施者</td></tr>
+      <tr><td><code>review</code></td><td>「我审了，通过 / 不通过（附原因）」</td><td>审查者</td></tr>
+      <tr><td><code>done</code></td><td>「这件事到此为止」，并写一句结论</td><td>协调者</td></tr>
+      <tr><td><code>ask_user</code></td><td>「这事得你拍板」，弹出可点选项</td><td>只有入口角色</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="perm">
+  <h2>3. 谁能干什么（权限）</h2>
+  <p>权限分两层：<b>岗位能发起的动作</b>，和<b>能不能碰工作目录里的文件</b>。</p>
+  <table>
+    <thead><tr><th>岗位</th><th>默认能做的动作</th><th>工作目录权限</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>协调者<br /><span class="pill p-info">coordinator</span></td>
+        <td>派发、提问、收尾、否决</td>
+        <td><b>不能读写</b></td>
+        <td>只负责组织和拍板，不许自己写代码 —— 靠工单往下派</td>
+      </tr>
+      <tr>
+        <td>实施者<br /><span class="pill p-ok">engineer</span></td>
+        <td>提交、派发、否决</td>
+        <td><b>可读可写</b>（限目录内）</td>
+        <td>真正的劳动力，所有改动都必须落在共享工作目录里</td>
+      </tr>
+      <tr>
+        <td>审查者<br /><span class="pill p-warn">reviewer</span></td>
+        <td>审查、否决</td>
+        <td><b>只读</b></td>
+        <td>只看不改；发现越权改动会被审计记下来并标红</td>
+      </tr>
+    </tbody>
+  </table>
+  <h3>那「协调者不能读文件」不会误事吗？</h3>
+  <p>不会，它也不需要：它靠工单里的<b>结论</b>和<b>产出文件清单</b>来判断，而不是自己去翻目录。
+  这也正是下面第 6 节要讲的「交接规则」。</p>
+  <div class="note">
+    共享工作目录是<b>整个协作组共用的同一个文件夹</b>。所有角色拿到的是同一个绝对路径，
+    「只读」「不许越界」靠提示词约束 + 运行前后的越权审计兜底（实现者改了不该改的目录会被当场发现）。
+  </div>
+</section>
+
+<section id="life">
+  <h2>4. 工单的一生（状态）</h2>
+  <table>
+    <thead><tr><th>状态</th><th>大白话</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p-info">open</span></td><td>刚开出来，还没人动手</td></tr>
+      <tr><td><span class="pill p-info">working</span></td><td>有人正在干</td></tr>
+      <tr><td><span class="pill p-info">waiting_children</span></td><td>我把它拆成了子工单，等下面的活先干完</td></tr>
+      <tr><td><span class="pill p-info">review</span></td><td>提交了，等审查者看</td></tr>
+      <tr><td><span class="pill p-info">rework</span></td><td>被打回了，正在按要求返工</td></tr>
+      <tr><td><span class="pill p-warn">escalated</span></td><td>下级把「我搞不定」上报上来了，等派活的那个人处理</td></tr>
+      <tr><td><span class="pill p-ok">done</span></td><td>收尾了（附一句结论）</td></tr>
+      <tr><td><span class="pill p-bad">rejected</span></td><td>被否决，这条分支终止</td></tr>
+      <tr><td><span class="pill p-warn">blocked</span></td><td>卡住了，在等你拍板 / 或撞上了护栏</td></tr>
+    </tbody>
+  </table>
+  <p>整个协作运行本身也有状态：<code>running</code>（跑着）、<code>waiting_user</code>（等你）、
+  <code>done</code>（完成）、<code>error</code>（出错）、<code>cancelled</code>（你点了停止）、
+  <code>interrupted</code>（服务中断/被停）。</p>
+</section>
+
+<section id="payload">
+  <h2>5. 工单里装了什么</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>派活时填的（brief）</h3>
+      <ul>
+        <li><b>目标</b>：这件事要达成什么</li>
+        <li><b>需求</b>：具体要做哪几件事</li>
+        <li><b>验收标准</b>：怎么算干完了（最重要）</li>
+        <li><b>约束</b>：不许碰什么、不许加什么</li>
+        <li><b>交付物</b>：要交出什么</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>交活时填的（result）</h3>
+      <ul>
+        <li><b>结论</b>：一句话说清干成了什么</li>
+        <li><b>产出文件</b>：改了/生成了哪些文件</li>
+      </ul>
+      <p style="font-size:14px;color:var(--ink-soft);margin-top:10px">
+        这张「交付摘要」是给上游看的唯一凭证：上游汇总、最终汇报，看的都是它。
+      </p>
+    </div>
+  </div>
+  <div class="warn">
+    结论写空 = 等于没交付。过去「收尾（done）不带结论」就是事故源头之一：
+    上游只看到一张「完成了」的空壳，只能重新派人再干一遍。
+  </div>
+</section>
+
+<section id="handover">
+  <h2>6. 交接规则：谁看得到什么</h2>
+  <p>这是整套机制里最容易被忽略、也最关键的一条：<b>角色之间不共享记忆</b>。</p>
+  <ul>
+    <li>每个角色干活时都是<b>全新会话</b>，看不到别人聊过什么；</li>
+    <li>它只能看到：<b>工单字段 + 一句话摘要 + 文件路径清单</b>；</li>
+    <li><b>上游</b>能看到的，是派活时那张工单的内容；</li>
+    <li><b>下游</b>能看到的，是上游留下的交付摘要；</li>
+    <li>子工单干完了，它的结论也会作为「<b>下游交付</b>」出现在上游那一轮的输入里。</li>
+    <li>干不动了也能<b>往上报</b>：把工单交回「派活给我的那个人」，附上一句「卡在哪、需要什么」；
+      一级一级报到入口角色，最后由 CEO 统一来问你。</li>
+  </ul>
+  <div class="note">
+    「下游交付」这一条就是这次修的核心：以前上游只看得见自己几次「我派出去了」的记录，
+    看不到下游交回了什么，于是把「已经干完」误判成「还没回报」——
+    接下来第 9 节会讲这个真实事故。
+  </div>
+</section>
+
+<section id="chat">
+  <h2>7. 任务跑着，也能随时找 CEO</h2>
+  <p>入口角色（CEO / 小组长）在大多数时候是<b>空闲的</b>：真正动手的是下游岗位。
+  所以任务开始推进后，你仍然可以在输入框里继续和它说话，不需要等整条流程结束。</p>
+  <p>流程暂时空闲、出错或已经收尾时，输入框<b>默认就是聊天模式</b>：发送的消息只进入你和
+  CEO 的对话，不会重开工单、也不会消耗步数。想继续跑工单时，点输入框旁的按钮切到
+  <b>「推进任务」</b>——用来回答系统的提问或让 CEO 继续派活。</p>
+  <div class="note">
+    如果某张工单卡住了（例如报「只有入口节点能向用户提问」），页面会给出错误卡和一键「重试」，
+    并说明卡在哪里。点重试后会从那张工单重新跑；想先了解情况，直接用聊天模式问 CEO 即可。
+  </div>
+  <table>
+    <thead><tr><th>你可以问 / 说</th><th>会发生什么</th></tr></thead>
+    <tbody>
+      <tr><td>「现在做到哪了？」</td><td>CEO 看系统给的工单快照，告诉你谁在做、哪张工单在什么状态、最近结论和产出文件</td></tr>
+      <tr><td>「再加一条要求：……」「验收改成……」</td><td>CEO 正常回复你，并把新要求同步进还没收尾的工单；<b>下一轮步骤</b>开始按新要求做</td></tr>
+      <tr><td>「这个方案是什么意思？」「辛苦了，聊两句」</td><td>正常聊天、解释方案，不会打断主流程，也不会改变工单状态</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    <b>它不是“共享记忆”。</b>聊天原文只给入口角色本人看；其他岗位仍然只拿到工单字段。
+    CEO 也不能在聊天里直接改工单状态、派活或建子工单 —— 它只能把你明确补充的要求写进工单，
+    真正的流转仍由原来的规则执行。
+  </div>
+  <div class="warn">
+    正在执行的那一步已经拿到指令了，所以新要求<b>不会中途塞进去</b>；它会从下一步开始生效。
+    如果你要的是“立刻停掉重来”，先点「停止」，再在对话里说明。
+  </div>
+</section>
+
+<section id="guard">
+  <h2>8. 防死循环的护栏</h2>
+  <p>协作会花钱花时间，所以系统不会「让它一直转」。撞上任一条护栏，都会<b>挂起等人处理</b>，
+  并且明说原因，绝不悄悄空转。</p>
+  <table>
+    <thead><tr><th>护栏</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td>返工轮次上限</td><td>同一张工单被打回太多次就停，喊你来看</td></tr>
+      <tr><td>拆解层数上限（5 层）</td><td>防「子工单再拆子工单」无穷套娃</td></tr>
+      <tr><td>同名子工单上限（2 张）</td><td>防「换个说法重复派同一件事」，近似的标题也算</td></tr>
+      <tr><td>上抛件不许再往下派</td><td>上报上来的阻塞，只能「解决」或「继续往上」；想换个说法又派回去，系统会直接拦下</td></tr>
+      <tr><td>运行预算</td><td>步数 / 工单数 / token 上限；超了就挂起</td></tr>
+      <tr><td>空闲超时</td><td>按「多久没有新进展」算，不会因为你隔天回来继续就失效</td></tr>
+      <tr><td>单次推进上限</td><td>一条消息内最多推进 200 步，杜绝无限自转</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="fix">
+  <h2>9. 这次修的是什么（真实事故复盘）</h2>
+  <p>一次「你好，你看看现在的路径有哪些文件」的协作，跑了 <b>23 步、11 张工单</b>，
+  直到你手动点「停止」才停。下面是它和修复后的对比。</p>
+  <div class="before-after">
+    <div class="box bad">
+      <h4>❌ 修复前：转圈</h4>
+      <ol>
+        <li>CEO 拆一张子工单给 CTO</li>
+        <li>CTO 转给码农，码农干完点「完成」</li>
+        <li>系统把父工单退回给 CEO，<b>但不带回码农的结论</b></li>
+        <li>CEO 看不到结果，以为没干，<b>再拆一张几乎一样的工单</b></li>
+        <li>……回到第 1 步，反复 8 轮</li>
+      </ol>
+    </div>
+    <div class="box good">
+      <h4>✅ 修复后：回流</h4>
+      <ol>
+        <li>码农收尾时<b>必须写下结论</b>，结论存进工单</li>
+        <li>父工单退回时，<b>子工单的结论一起带回去</b></li>
+        <li>上游这一轮的输入里出现「<b>下游交付</b>：…结论…产出文件…」</li>
+        <li>系统同时提醒：「<b>能收尾就收尾，别为了再确认一遍重复派发</b>」</li>
+        <li>上游判断已完成 → 收尾 → 入口角色向你汇报</li>
+      </ol>
+    </div>
+  </div>
+  <p>另外，护栏也补强了一条：以前只有<b>标题一字不差</b>才算「重名」，
+  模型只要在标题尾巴上加几个字（「列出文件清单」→「列出文件清单并回报」）就绕过去了；
+  现在<b>近似的标题</b>同样会被拦住。</p>
+  <div class="note">
+    一句话总结这次修复：<b>把「信息断头」接上</b> —— 让上游看得见下游到底交回了什么，
+    并且明确告诉它「活已经干完了，可以收尾了」。
+  </div>
+
+  <h3 style="margin-top:28px">第二次修复：卡住了，要能往上走</h3>
+  <p>一次「帮我写一个建筑工程的业务记账系统」的协作里：UI 要做实测，但当前权限模式下智能体
+  <b>不能执行命令</b>（那是另一件事，改权限就好），它只能把这句话写进「完成」的结论里。</p>
+  <div class="before-after">
+    <div class="box bad">
+      <h4>❌ 修复前：往下一压，白转一轮</h4>
+      <ol>
+        <li>UI 报「跑不了」，但它的动作里<b>只有「完成」一个</b>，说不出「我卡住了」</li>
+        <li>CTO 收到后也<b>没有「上报」这个动作</b>，能派的只有码农和 UI（全是往下）</li>
+        <li>于是它把同一件事改写成「静态核对，全程不执行任何命令」，又派给码农</li>
+        <li>静态核对永远跑不出运行证据，<b>白烧一轮</b>，你什么都没收到</li>
+      </ol>
+    </div>
+    <div class="box good">
+      <h4>✅ 修复后：逐级上报，CEO 来问你</h4>
+      <ol>
+        <li>UI 用 <b>escalate</b> 上报，写清「卡在哪、需要什么」</li>
+        <li>工单交回<b>派它活的那个人</b>（CTO）；CTO 解决不了，继续往上</li>
+        <li>到了入口角色，它把问题转成一张<b>可点选项卡</b>交给你</li>
+        <li>你回答后，工单<b>交回原来那张</b>接着跑，不用从头再来</li>
+      </ol>
+    </div>
+  </div>
+  <div class="note">
+    一句话总结这次修复：<b>给「我搞不定」修了一条正式的路</b> ——
+    上报只朝上走、不许原地往下压；到顶了就变成问你的一张卡片。
+  </div>
+</section>
+
+<section id="you">
+  <h2>10. 卡住了，你能做什么</h2>
+  <table>
+    <thead><tr><th>界面上的东西</th><th>它的意思 / 你该做什么</th></tr></thead>
+    <tbody>
+      <tr><td>状态变成「等你决定」</td>
+      <td>有人 <code>ask_user</code> 提问了，输入框上方会弹出<b>可点选项</b>，点一下或者自己补充说明</td></tr>
+      <tr><td>弹出红色提示</td>
+      <td>多半是撞了护栏（返工太多 / 拆太深 / 标题重复 / 预算用尽），提示里写了具体原因和怎么改</td></tr>
+      <tr><td>「📋 工单看板」</td>
+      <td>看整棵工单树：谁把活交给了谁、每张工单的结论与产出文件、返工了几轮</td></tr>
+      <tr><td>「🧭 协作进度」</td>
+      <td>整次协作画成一间<b>等距视角的办公室</b>：最里面一行是领导者一个人，往里第二行是 CTO，
+      再往外两排是并排干活的人（3 个人干活就是一行 3 张桌子）。<b>每张桌子上真的坐着一个小人</b>：
+      在干活的就一直动（敲键盘、点头、头顶冒气泡），没事干的就趴着睡，一眼看出谁在忙</td></tr>
+      <tr><td>工牌</td>
+      <td>每个人头顶挂一张<b>工牌</b>，写着这是谁（CEO / CTO / 程序员 / 测试…）与她的职责；
+      工牌角上的小圆点就是状态：<b>绿点</b>=正在工作、<b>红点</b>=忙碌 / 出问题、<b>黄点</b>=在等你决定、
+      <b>灰点</b>=闲置没人派活、<b>绿勾</b>=已收工。缩得太小的时候工牌只剩头像，放大一点才会把职责写全</td></tr>
+      <tr><td>墙上的挂钟</td>
+      <td>办公室墙上的钟是<b>真的钟</b>：指针按你电脑的时间走，秒针一秒一跳</td></tr>
+      <tr><td>进度页怎么看细节</td>
+      <td><b>滚轮</b>（手机上双指捏合）放大、<b>按住拖动</b>平移、右下角 ↺ 一键复位；
+      点工牌弹出信息卡：她是谁、在忙什么、<b>粗略进度</b>、跑了多少步、几张工单在处理，
+      卡上「查看实时对话 →」能直接翻到该岗位这一轮的实时输出</td></tr>
+      <tr><td>工单状态显示「已上报」</td>
+      <td>某个岗位把「我搞不定」交回了派活的人，正在逐级往上报；到 CEO 那里会变成一张问你的卡片，此时你先不用动</td></tr>
+      <tr><td>输入框一直可用</td>
+      <td>任务在跑也能给 CEO 发消息：问进度、补要求、解释方案；新要求从下一轮步骤生效</td></tr>
+      <tr><td>「停止」</td>
+      <td>真的在空转就停下来。工单和产出都会保留，之后可以「继续」</td></tr>
+      <tr><td>提醒右上角的「×」</td>
+      <td>关掉这条提醒。失败那类会<b>记住</b>（刷新也不再冒出来）；等状态真的又变了，它才重新提醒你</td></tr>
+      <tr><td>提醒自己消失</td>
+      <td>协作收尾了、这个岗位上一次已经跑通、或者同一件事已经报过好几遍 —— 旧的提醒都会<b>自动退休</b>，
+      留在上面的只应该是「现在还需要你处理」的那几条</td></tr>
+      <tr><td>「继续」</td>
+      <td>挂起（等你拍板 / 出错）修好之后从这里接着跑，不会从头再来</td></tr>
+      <tr><td>「继续」时报 <code>cannot be used with root/sudo privileges</code></td>
+      <td>本机以 root 运行，而岗位勾了 <code>bypassPermissions</code>（跳过全部权限检查）——
+      Claude Code 在这种组合下会直接拒绝启动。系统会自动补上它要的 <code>IS_SANDBOX=1</code>；
+      若还在报，先重启服务，再检查是不是自己在角色的环境变量里把 <code>IS_SANDBOX</code> 设成了别的值</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    只有<b>入口角色</b>的那条主会话是给你看的；其他角色的对话不打扰你，
+    但它们随时能在「工单看板 / 协作进度」里查到 —— 看得少，但看得清。
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>本页面向非工程读者；工程细节（数据结构、状态机、护栏实现）见 <code>docs/collaboration-design.md</code>，
+    分层与事件协议见 <code>docs/architecture.md</code>。</p>
+    <p>页面为单文件、无外部依赖，可直接用浏览器打开，也可随仓库一起分发。</p>
+  </div>
+</footer>
+
+</body>
+</html>

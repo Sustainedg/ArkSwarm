@@ -7,7 +7,7 @@
 外键一律用字符串表名声明，因此本模块不 import ``app.models`` 的实体类，
 避免与 ``db.init_db`` 的导入顺序互相纠缠。
 
-注册方式：``db.init_db`` 会 import 本模块，``SQLModel.metadata.create_all`` 才能看到这 4 张表
+注册方式：``db.init_db`` 会 import 本模块，``SQLModel.metadata.create_all`` 才能看到这些表
 （有架构守卫测试盯着，见 ``tests/test_collab_architecture.py``）。
 """
 from __future__ import annotations
@@ -31,6 +31,10 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "owner_key": "VARCHAR(64) NOT NULL DEFAULT ''",
         "holder_key": "VARCHAR(64) NOT NULL DEFAULT ''",
         "submitter_key": "VARCHAR(64) NOT NULL DEFAULT ''",
+        # 上报记录：{from, reason, need, hops}；为空表示这张工单没被上报过
+        "escalation": "JSON NOT NULL DEFAULT '{}'",
+        # 收尾汇报的时间：根工单每次收尾只汇报一次（用户追问后会重新开启一轮）
+        "report_at": "DATETIME",
     },
     "collab_steps": {
         "gist": "VARCHAR(300) NOT NULL DEFAULT ''",
@@ -134,7 +138,7 @@ class CollabTicket(SQLModel, table=True):
     brief: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    #: open / working / waiting_children / review / rework / done / rejected / blocked
+    #: open / working / waiting_children / review / rework / escalated / done / rejected / blocked
     state: str = Field(default="open", sa_column=Column(String(24), nullable=False, index=True))
     #: 已返工轮次
     round: int = Field(default=0)
@@ -145,9 +149,17 @@ class CollabTicket(SQLModel, table=True):
     result: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
+    #: 最近一次上报：{from, reason, need, hops}。非空表示这张工单正被逐级上抛。
+    escalation: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     closed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    #: 把「收尾汇报」交回入口角色的时间；为空表示还没汇报过。
+    #: 根工单每次收尾只汇报一次，用户追问重新开启后会清零（见 ``engine.prepare_turn``）。
+    report_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
 
 class CollabStep(SQLModel, table=True):
@@ -188,7 +200,7 @@ class CollabStep(SQLModel, table=True):
     action: str = Field(default="", sa_column=Column(String(24), nullable=False))
     #: delegate 时的目标节点 key（即这一步把活交给了谁）；其他动作为空串
     target_key: str = Field(default="", sa_column=Column(String(64), nullable=False, default=""))
-    #: streaming / complete / error / cancelled
+    #: streaming / complete / error / cancelled / interrupted
     status: str = Field(default="streaming", sa_column=Column(String(16), nullable=False, index=True))
     content: str = Field(default="", sa_column=Column(Text, nullable=False))
     #: 由引擎从工单（结构化字段）派生出的一句话摘要 —— 交给下游时只看它，不看 content
@@ -205,4 +217,50 @@ class CollabStep(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
     started_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class CollabMessage(SQLModel, table=True):
+    """入口角色与用户的一对一对话（CEO 常驻联络通道）。
+
+    这是协作域里**唯一**允许携带历史原文的地方：它只面向入口角色，用于细化要求、
+    询问进度和日常沟通；工单步骤的 prompt 永远不读取这张表。单独建表而不是塞进
+    ``collab_steps``，是为了不让聊天污染工单时间线、步骤计数与“谁把活交给了谁”的交接链。
+    """
+
+    __tablename__ = "collab_messages"
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    run_id: str = Field(
+        sa_column=Column(
+            String(64), ForeignKey("collab_runs.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+    )
+    #: user = 用户本人；leader = 入口角色。没有其他发送者。
+    sender: str = Field(default="user", sa_column=Column(String(16), nullable=False, index=True))
+    #: 入口角色岗位 key（用户发言也记下当时的入口，便于界面显示）
+    role_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
+    role_id: str | None = Field(
+        default=None, sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"))
+    )
+    agent_id: str | None = Field(
+        default=None,
+        sa_column=Column(String(64), ForeignKey("agent_instances.id", ondelete="RESTRICT")),
+    )
+    sequence: int = Field(default=0)
+    #: streaming / complete / error / cancelled
+    status: str = Field(default="complete", sa_column=Column(String(16), nullable=False, index=True))
+    content: str = Field(default="", sa_column=Column(Text, nullable=False))
+    parts: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False, default=list)
+    )
+    usage: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
+    error: str | None = Field(default=None, sa_column=Column(Text))
+    #: 结构化伴随信息：本轮识别到的需求更新、同步到的工单、解析告警等
+    meta: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))

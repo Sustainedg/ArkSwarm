@@ -366,6 +366,14 @@ code, pre, .mono { font-family: var(--mono); }
 .banner.err { background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.35); color: #fca5a5; }
 .banner.ok { background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.3); color: #86efac; }
 .banner.info { background: var(--accent-soft); border-color: rgba(110, 231, 209, 0.3); color: var(--accent); }
+.banner.warn { background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.32); color: var(--warn); }
+/* 提醒右上角的「×」：过时提醒可以自己关掉（关掉后不再重建，见 lib/collabNotices.ts） */
+.banner-close {
+  flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border-radius: 50%; border: 1px solid transparent; background: transparent;
+  color: inherit; opacity: 0.55; font-size: 11px; line-height: 1; cursor: pointer;
+}
+.banner-close:hover { opacity: 1; border-color: currentColor; background: rgba(255, 255, 255, 0.06); }
 
 /* ---------- 弹窗 ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(5, 4, 10, 0.72); backdrop-filter: blur(4px); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 20px; z-index: 50; overflow: auto; }
@@ -501,45 +509,6 @@ code, pre, .mono { font-family: var(--mono); }
   background: linear-gradient(180deg, rgba(27, 25, 45, 0.98), rgba(14, 13, 24, 0.98));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
-.collab-progress-overview {
-  display: grid; grid-template-columns: 138px minmax(0, 1fr); align-items: center; gap: 28px;
-  padding: 24px 30px; border: 1px solid rgba(217, 79, 208, 0.25); border-radius: 20px;
-  background: linear-gradient(135deg, rgba(217, 79, 208, 0.11), rgba(110, 231, 209, 0.05));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 18px 50px rgba(0, 0, 0, 0.2);
-}
-.collab-progress-ring {
-  width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center;
-  box-shadow: 0 0 34px rgba(217, 79, 208, 0.14);
-}
-.collab-progress-ring-inner {
-  width: 92px; height: 92px; border-radius: 50%; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 2px;
-  background: var(--bg-panel); border: 1px solid var(--border-strong);
-}
-.collab-progress-ring-inner strong { font-size: 26px; font-family: var(--mono); letter-spacing: -0.04em; }
-.collab-progress-ring-inner span { font-size: 10.5px; color: var(--text-dim); }
-.collab-progress-overview-main { min-width: 0; }
-.collab-progress-overview-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--text-dim); }
-.collab-progress-overview-title { margin-top: 5px; font-size: 21px; font-weight: 620; }
-.collab-progress-overview-summary {
-  margin-top: 7px; max-width: 900px; font-size: 13.5px; line-height: 1.65; color: var(--text-muted);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.collab-progress-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 17px; }
-.collab-progress-stat {
-  min-width: 118px; padding: 10px 14px; border: 1px solid var(--border); border-top: 2px solid var(--border-strong);
-  border-radius: 12px; background: rgba(11, 10, 18, 0.36); display: flex; align-items: baseline; gap: 7px;
-}
-.collab-progress-stat strong { font-size: 20px; font-family: var(--mono); }
-.collab-progress-stat span { font-size: 11px; color: var(--text-muted); }
-.collab-progress-stat.state-active { border-top-color: var(--brand); }
-.collab-progress-stat.state-active strong { color: var(--brand); }
-.collab-progress-stat.state-waiting { border-top-color: var(--warn); }
-.collab-progress-stat.state-waiting strong { color: var(--warn); }
-.collab-progress-stat.state-done { border-top-color: var(--ok); }
-.collab-progress-stat.state-done strong { color: var(--ok); }
-.collab-progress-stat.state-error { border-top-color: var(--danger); }
-.collab-progress-stat.state-error strong { color: var(--danger); }
 .collab-progress-section { display: flex; flex-direction: column; gap: 14px; }
 .collab-progress-section-head { display: flex; align-items: flex-end; gap: 14px; }
 .collab-progress-section-head > div { min-width: 0; flex: 1; }
@@ -549,69 +518,315 @@ code, pre, .mono { font-family: var(--mono); }
   flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
   font-size: 11px; color: var(--text-muted); background: var(--bg-input);
 }
-.collab-progress-stage-list {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px;
+/* ---------- 3D 工位场景 ---------- */
+.collab-station-scene {
+  --shirt-a: #b06bff; --shirt-b: #7b3fd0; --shirt-c: #452276;
+  position: relative; display: block; height: 138px; margin: 2px 0 0;
+  perspective: 900px; perspective-origin: 50% 30%;
 }
-.collab-progress-stage {
-  position: relative; min-width: 0; min-height: 210px; display: flex; flex-direction: column; gap: 10px;
-  padding: 17px 18px 14px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
-  color: inherit; text-align: left; cursor: pointer;
-  background: linear-gradient(180deg, rgba(28, 26, 46, 0.94), rgba(19, 18, 32, 0.88));
-  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+.collab-station-scene.state-active { --shirt-a: #d987ff; --shirt-b: #a03fd0; --shirt-c: #5b2276; }
+.collab-station-scene.state-waiting { --shirt-a: #f0c86b; --shirt-b: #c48f24; --shirt-c: #8a6012; }
+.collab-station-scene.state-error { --shirt-a: #ff9d9d; --shirt-b: #c85252; --shirt-c: #8c2f2f; }
+.collab-station-scene.state-done { --shirt-a: #86efac; --shirt-b: #34a86c; --shirt-c: #1d6b45; }
+.collab-desk-ground {
+  position: absolute; left: 5%; right: 5%; bottom: 3px; height: 18px; border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0) 74%);
 }
-.collab-progress-stage::before {
-  content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--border-strong);
+
+/* 小人：转椅 + 头 + 身体 + 两条手臂（手另画在键盘上，见下） */
+.collab-worker {
+  position: absolute; left: 4px; bottom: 30px; width: 68px; height: 90px;
+  transform: rotateY(-11deg);
+  animation: collab-breathe 3.4s ease-in-out infinite;
 }
-.collab-progress-stage.state-active::before { background: linear-gradient(90deg, var(--brand), #9d54ff); }
-.collab-progress-stage.state-waiting::before { background: var(--warn); }
-.collab-progress-stage.state-error::before { background: var(--danger); }
-.collab-progress-stage.state-done::before { background: var(--ok); }
-.collab-progress-stage:hover {
-  transform: translateY(-2px); border-color: var(--border-strong);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+.collab-worker-chair {
+  position: absolute; left: -3px; bottom: -2px; width: 74px; height: 84px;
+  border-radius: 20px 20px 14px 14px;
+  background: linear-gradient(165deg, #3a3466, #1d1a33 74%);
+  box-shadow: inset 3px 4px 10px rgba(255, 255, 255, 0.1), inset -4px -6px 10px rgba(0, 0, 0, 0.42),
+              0 10px 18px rgba(0, 0, 0, 0.36);
 }
-.collab-progress-stage.live { border-color: rgba(217, 79, 208, 0.45); animation: collab-progress-card-glow 2s ease-in-out infinite; }
-.collab-progress-stage.selected {
-  border-color: var(--accent); background: linear-gradient(180deg, rgba(32, 34, 55, 0.98), rgba(19, 24, 34, 0.94));
-  box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.13), 0 18px 42px rgba(0, 0, 0, 0.32);
+.collab-worker-chair::after {
+  content: ''; position: absolute; left: 9px; right: 9px; bottom: 7px; height: 3px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
 }
-@keyframes collab-progress-card-glow {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(217, 79, 208, 0.12); }
-  50% { box-shadow: 0 0 0 4px rgba(217, 79, 208, 0.1); }
+.collab-worker-bubble {
+  position: absolute; left: 48px; top: -10px; z-index: 4;
+  min-width: 22px; padding: 2px 5px; font-size: 12px; line-height: 1.3; text-align: center; white-space: nowrap;
+  border-radius: 10px; background: var(--bg-elevated); border: 1px solid var(--border);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.34);
+  animation: collab-bubble-float 2.6s ease-in-out infinite;
 }
-.collab-progress-stage-index { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); letter-spacing: 0.08em; }
-.collab-progress-stage-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.collab-progress-stage-avatar {
-  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
-  font-size: 20px; border-radius: 11px; background: var(--bg-input); border: 1px solid var(--border);
+.collab-worker-bubble::after {
+  content: ''; position: absolute; left: 5px; bottom: -4px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--bg-elevated); border: 1px solid var(--border);
 }
-.collab-progress-stage-identity { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.collab-progress-stage-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.collab-progress-stage-duty { font-size: 10.5px; color: var(--text-dim); }
-.collab-progress-stage-state { margin-left: auto; flex: none; font-size: 10.5px; color: var(--text-muted); }
-.state-active .collab-progress-stage-state { color: var(--brand); }
-.state-waiting .collab-progress-stage-state { color: var(--warn); }
-.state-error .collab-progress-stage-state { color: var(--danger); }
-.state-done .collab-progress-stage-state { color: var(--ok); }
-.collab-progress-stage-meta { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.collab-progress-stage-summary {
-  flex: 1; font-size: 12.5px; line-height: 1.62; color: var(--text-dim); overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+.collab-worker-neck {
+  position: absolute; left: 29px; top: 33px; width: 10px; height: 11px; border-radius: 4px;
+  background: linear-gradient(180deg, #e9b98f, #cf9670);
 }
-.collab-progress-stage-foot {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted);
+/* 脑袋：球面高光 + 外侧阴影，做出体积感 */
+.collab-worker-head {
+  position: absolute; left: 15px; top: 2px; width: 38px; height: 36px; z-index: 2;
+  border-radius: 50% 50% 46% 46%;
+  background: radial-gradient(circle at 33% 26%, #fff3e6, #f9d0a8 56%, #db9d6b 100%);
+  box-shadow: inset -6px -6px 12px rgba(150, 96, 58, 0.4), inset 5px 4px 9px rgba(255, 255, 255, 0.55),
+              0 7px 13px rgba(0, 0, 0, 0.34);
+  animation: collab-head-bob 3.4s ease-in-out infinite;
 }
-.collab-progress-stage-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; }
-.collab-progress-stage-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); }
-.collab-progress-stage-badge.state-active { color: var(--brand); }
-.collab-progress-stage-badge.state-active::before { background: var(--brand); }
-.collab-progress-stage-badge.state-waiting { color: var(--warn); }
-.collab-progress-stage-badge.state-waiting::before { background: var(--warn); }
-.collab-progress-stage-badge.state-error { color: var(--danger); }
-.collab-progress-stage-badge.state-error::before { background: var(--danger); }
-.collab-progress-stage-badge.state-done { color: var(--ok); }
-.collab-progress-stage-badge.state-done::before { background: var(--ok); }
+.collab-worker-hair {
+  position: absolute; left: -2px; top: -5px; width: 42px; height: 19px;
+  border-radius: 21px 21px 9px 6px;
+  background: linear-gradient(155deg, #8f72ff, #43307a 68%);
+  box-shadow: inset 3px 4px 8px rgba(255, 255, 255, 0.24), 0 4px 10px rgba(0, 0, 0, 0.34);
+}
+.collab-worker-hair::after {
+  content: ''; position: absolute; left: 4px; bottom: -7px; width: 11px; height: 10px;
+  border-radius: 0 0 9px 9px; background: linear-gradient(155deg, #6b52d0, #3a2a68);
+}
+.collab-worker-ear {
+  position: absolute; top: 15px; width: 8px; height: 10px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 32%, #ffeede, #e2ab7c);
+  box-shadow: inset -1px -1px 3px rgba(150, 96, 58, 0.4);
+}
+.collab-worker-ear.left { left: -4px; }
+.collab-worker-ear.right { right: -4px; }
+.collab-worker-eye {
+  position: absolute; top: 16px; width: 6px; height: 7px; border-radius: 50%;
+  background: radial-gradient(circle at 36% 28%, #4b4269, #201c33);
+  box-shadow: inset 1px -1px 0 rgba(255, 255, 255, 0.75);
+  animation: collab-blink 4.6s ease-in-out infinite;
+}
+.collab-worker-eye.left { left: 8px; }
+.collab-worker-eye.right { right: 8px; }
+.collab-worker-cheek {
+  position: absolute; top: 22px; width: 8px; height: 5px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(241, 108, 138, 0.55), rgba(241, 108, 138, 0));
+}
+.collab-worker-cheek.left { left: 2px; }
+.collab-worker-cheek.right { right: 2px; }
+.collab-worker-mouth {
+  position: absolute; left: 50%; bottom: 6px; width: 10px; height: 5px; margin-left: -5px;
+  border-radius: 0 0 10px 10px; background: linear-gradient(180deg, #c8627c, #934055);
+  box-shadow: inset 0 -1px 1px rgba(0, 0, 0, 0.25);
+}
+/* 身体：上亮下暗的球面渐变当衣服 */
+.collab-worker-torso {
+  position: absolute; left: 15px; bottom: 2px; width: 38px; height: 46px; z-index: 1;
+  border-radius: 17px 17px 11px 11px;
+  background: radial-gradient(circle at 32% 16%, var(--shirt-a), var(--shirt-b) 62%, var(--shirt-c));
+  box-shadow: inset -6px -5px 11px rgba(0, 0, 0, 0.36), inset 4px 4px 9px rgba(255, 255, 255, 0.2),
+              0 9px 16px rgba(0, 0, 0, 0.32);
+}
+/* 手臂：肩关节当轴，往下伸到桌面后面；手单独画在键盘上（.collab-hand） */
+.collab-worker-arm {
+  position: absolute; z-index: 3; bottom: 16px; width: 11px; height: 52px; border-radius: 6px 6px 9px 9px;
+  background: linear-gradient(180deg, var(--shirt-b), var(--shirt-c));
+  transform-origin: 50% 4px; transition: transform 0.3s ease;
+  box-shadow: inset -2px 0 4px rgba(0, 0, 0, 0.3);
+}
+.collab-worker-arm.left { left: 8px; transform: rotate(26deg); }
+.collab-worker-arm.right { right: 10px; transform: rotate(17deg); }
+
+/* 桌子：桌面横跨工位、显示器立在右边、键盘压在最前面 */
+.collab-workdesk {
+  position: absolute; left: 44px; right: 0; bottom: 8px; height: 104px;
+  perspective: 720px; perspective-origin: 50% 0%;
+}
+.collab-workdesk-top {
+  position: absolute; left: 0; right: 0; bottom: 20px; height: 46px;
+  border-radius: 10px; transform: rotateX(56deg); transform-origin: 50% 100%;
+  background: linear-gradient(180deg, #5f5aa8, #2b2750 84%);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.44), inset 0 2px 0 rgba(255, 255, 255, 0.2);
+}
+/* 桌面下沿那道厚边：让它看着是一块板，而不是一张纸 */
+.collab-workdesk-lip {
+  position: absolute; left: 0; right: 0; bottom: 16px; height: 7px; border-radius: 3px;
+  background: linear-gradient(180deg, #443f85, #221f3d);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.46);
+}
+/* 前挡板：从桌面到地面的整块面板，桌子才立得住 */
+.collab-workdesk-apron {
+  position: absolute; left: 12px; right: 12px; bottom: 0; height: 20px; border-radius: 4px 4px 3px 3px;
+  background: linear-gradient(180deg, #332f60, #1a1730);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.collab-workdesk-leg {
+  position: absolute; bottom: 0; width: 12px; height: 22px; border-radius: 3px;
+  background: linear-gradient(180deg, #4a4585, #201d38);
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.4);
+}
+.collab-workdesk-leg.left { left: 4px; }
+.collab-workdesk-leg.right { right: 4px; }
+.collab-workdesk-monitor {
+  position: absolute; left: 92px; width: 62px; bottom: 44px; height: 58px;
+  border-radius: 7px; transform: rotateY(-12deg); transform-origin: 50% 100%;
+  background: linear-gradient(160deg, #262c49, #121625 72%);
+  border: 1px solid #3d3a66; overflow: hidden; padding: 9px 10px;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 22px rgba(110, 231, 209, 0.14);
+}
+.collab-workdesk-code { display: flex; flex-direction: column; gap: 5px; }
+.collab-workdesk-code i {
+  display: block; height: 3.5px; width: var(--w, 60%); border-radius: 2px;
+  background: var(--accent); opacity: 0.55;
+}
+.collab-workdesk-code i:nth-child(1) { --w: 62%; background: var(--brand); }
+.collab-workdesk-code i:nth-child(2) { --w: 84%; }
+.collab-workdesk-code i:nth-child(3) { --w: 44%; }
+.collab-workdesk-code i:nth-child(4) { --w: 72%; background: var(--brand); }
+.collab-workdesk-caret {
+  position: absolute; left: 63%; top: 31px; width: 3px; height: 8px; border-radius: 1px;
+  background: var(--accent); opacity: 0.9;
+}
+/* 键盘：压在最前面，小人的手正落在键上 */
+.collab-workdesk-keyboard {
+  position: absolute; left: 4px; width: 82px; bottom: 20px; height: 28px; z-index: 2;
+  border-radius: 5px; transform: rotateX(58deg); transform-origin: 50% 100%;
+  display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 3px; padding: 5px;
+  background: linear-gradient(180deg, #4a4585, #2a2750);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.collab-workdesk-keyboard::after {
+  content: ''; position: absolute; inset: auto 0 -4px 0; height: 6px; border-radius: 0 0 4px 4px;
+  background: linear-gradient(180deg, #322e5e, #1c1930);
+}
+.collab-workdesk-keyboard i { width: 9px; height: 4px; border-radius: 1.5px; background: #625cb0; }
+/* 手：从桌面后伸出来按在键上，打字时轮流抬起来 */
+.collab-hand {
+  position: absolute; z-index: 3; bottom: 21px; width: 14px; height: 14px;
+  border-radius: 46% 46% 40% 40%;
+  background:
+    repeating-linear-gradient(90deg, rgba(120, 70, 30, 0.14) 0 1px, rgba(255, 255, 255, 0) 1px 4.5px),
+    radial-gradient(circle at 36% 30%, #ffeedd, #e6b083);
+  box-shadow: inset -2px -2px 4px rgba(150, 96, 58, 0.42), 0 2px 5px rgba(0, 0, 0, 0.35);
+}
+.collab-hand.left { left: 6px; }
+.collab-hand.right { left: 26px; }
+/* 杯子：干活时冒热气 */
+.collab-workdesk-mug {
+  position: absolute; left: 74px; bottom: 46px; width: 15px; height: 16px; border-radius: 3px 3px 6px 6px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)), #b93ab0;
+  box-shadow: inset -2px -2px 4px rgba(0, 0, 0, 0.3), 0 4px 8px rgba(0, 0, 0, 0.35);
+}
+.collab-workdesk-mug::after {
+  content: ''; position: absolute; left: 5px; top: -9px; width: 4px; height: 8px; border-radius: 3px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+  opacity: 0; animation: collab-steam 2.6s ease-in-out infinite;
+}
+@keyframes collab-steam {
+  0% { opacity: 0; transform: translateY(3px) scaleX(0.7); }
+  40% { opacity: 0.75; }
+  100% { opacity: 0; transform: translateY(-9px) scaleX(1.3); }
+}
+
+/* ---------- 状态：忙碌敲代码 ---------- */
+.collab-station-scene.state-active .collab-worker-arm.left,
+.collab-station-scene.live .collab-worker-arm.left { animation: collab-typing-left 0.52s ease-in-out infinite alternate; }
+.collab-station-scene.state-active .collab-worker-arm.right,
+.collab-station-scene.live .collab-worker-arm.right { animation: collab-typing-right 0.52s ease-in-out infinite alternate; }
+.collab-station-scene.state-active .collab-hand.left,
+.collab-station-scene.live .collab-hand.left { animation: collab-key-tap 0.52s ease-in-out infinite alternate; }
+.collab-station-scene.state-active .collab-hand.right,
+.collab-station-scene.live .collab-hand.right { animation: collab-key-tap 0.52s ease-in-out infinite alternate-reverse; }
+@keyframes collab-key-tap {
+  from { transform: translateY(0); }
+  to { transform: translateY(-2.5px); }
+}
+.collab-station-scene.state-active .collab-worker-bubble,
+.collab-station-scene.live .collab-worker-bubble { border-color: rgba(217, 79, 208, 0.55); }
+.collab-station-scene.state-active .collab-workdesk-code i,
+.collab-station-scene.live .collab-workdesk-code i { animation: collab-code-type 1.5s steps(10, end) infinite; }
+.collab-station-scene.state-active .collab-workdesk-code i:nth-child(2),
+.collab-station-scene.live .collab-workdesk-code i:nth-child(2) { animation-delay: 0.18s; }
+.collab-station-scene.state-active .collab-workdesk-code i:nth-child(3),
+.collab-station-scene.live .collab-workdesk-code i:nth-child(3) { animation-delay: 0.36s; }
+.collab-station-scene.state-active .collab-workdesk-code i:nth-child(4),
+.collab-station-scene.live .collab-workdesk-code i:nth-child(4) { animation-delay: 0.54s; }
+.collab-station-scene.state-active .collab-workdesk-keyboard i { animation: collab-key-press 0.9s steps(2, end) infinite; }
+.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(2) { animation-delay: 0.12s; }
+.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(3) { animation-delay: 0.26s; }
+.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(4) { animation-delay: 0.38s; }
+.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(5) { animation-delay: 0.52s; }
+.collab-station-scene.state-active .collab-workdesk-monitor { box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 30px rgba(110, 231, 209, 0.26); }
+@keyframes collab-typing-left {
+  from { transform: rotate(18deg); }
+  to { transform: rotate(27deg) translateY(1.5px); }
+}
+@keyframes collab-typing-right {
+  from { transform: rotate(-24deg); }
+  to { transform: rotate(-33deg) translateY(1.5px); }
+}
+@keyframes collab-code-type { from { width: 6%; } to { width: var(--w, 60%); } }
+@keyframes collab-key-press { 0%, 49% { background: #6ee7d1; } 50%, 100% { background: #4b4780; } }
+@keyframes collab-breathe {
+  0%, 100% { transform: rotateY(-11deg) translateY(0); }
+  50% { transform: rotateY(-11deg) translateY(-1.5px); }
+}
+@keyframes collab-head-bob {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-1.6px) rotate(1.4deg); }
+}
+@keyframes collab-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.12); }
+}
+@keyframes collab-bubble-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+/* ---------- 状态：闲置打盹 ---------- */
+.collab-station-scene.state-pending { opacity: 0.72; filter: saturate(0.72); }
+.collab-station-scene.state-pending .collab-worker-head { transform: translateY(3px) rotate(-7deg); }
+.collab-station-scene.state-pending .collab-worker-eye { animation: none; transform: scaleY(0.18); }
+.collab-station-scene.state-pending .collab-worker-mouth { height: 3px; width: 7px; margin-left: -3.5px; border-radius: 10px; }
+.collab-station-scene.state-pending .collab-worker-arm.left { transform: rotate(8deg); }
+.collab-station-scene.state-pending .collab-worker-arm.right { transform: rotate(-12deg); }
+.collab-station-scene.state-pending .collab-workdesk-code i { opacity: 0.14; }
+.collab-station-scene.state-pending .collab-workdesk-caret { opacity: 0.12; }
+.collab-station-scene.state-pending .collab-workdesk-monitor { box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 12px rgba(110, 231, 209, 0.06); }
+.collab-station-scene.state-pending .collab-workdesk-keyboard i { background: #3a3763; }
+
+/* ---------- 状态：等你决定 ---------- */
+.collab-station-scene.state-waiting .collab-worker-arm.right { transform: rotate(-125deg); animation: collab-wave 1.5s ease-in-out infinite; }
+.collab-station-scene.state-waiting .collab-hand.right { left: 46px; bottom: 99px; }
+.collab-station-scene.state-waiting .collab-worker-mouth { height: 6px; width: 8px; margin-left: -4px; border-radius: 10px; }
+.collab-station-scene.state-waiting .collab-worker-bubble { border-color: rgba(251, 191, 36, 0.6); }
+.collab-station-scene.state-waiting .collab-workdesk-code i { background: var(--warn); opacity: 0.5; }
+@keyframes collab-wave {
+  0%, 100% { transform: rotate(-120deg); }
+  50% { transform: rotate(-134deg); }
+}
+
+/* ---------- 状态：出错 ---------- */
+.collab-station-scene.state-error .collab-workdesk-monitor {
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 26px rgba(248, 113, 113, 0.32);
+  animation: collab-panic 0.42s steps(2, end) 6;
+}
+.collab-station-scene.state-error .collab-workdesk-code i { background: var(--danger); opacity: 0.72; }
+.collab-station-scene.state-error .collab-worker-eye { transform: scaleY(1.35); box-shadow: none; }
+.collab-station-scene.state-error .collab-worker-bubble { border-color: rgba(248, 113, 113, 0.6); }
+@keyframes collab-panic {
+  0%, 100% { transform: rotateY(-13deg) translateX(0); }
+  50% { transform: rotateY(-13deg) translateX(-2px); }
+}
+
+/* ---------- 状态：收工 ---------- */
+.collab-station-scene.state-done .collab-workdesk-code i { background: var(--ok); opacity: 0.4; }
+.collab-station-scene.state-done .collab-workdesk-caret { display: none; }
+.collab-station-scene.state-done .collab-worker-arm.left { transform: rotate(10deg); }
+.collab-station-scene.state-done .collab-worker-arm.right { transform: rotate(-14deg); }
+
+/* 降低动效：动画一律停下（无障碍） */
+@media (prefers-reduced-motion: reduce) {
+  .collab-worker, .collab-worker-head, .collab-worker-eye, .collab-worker-bubble,
+  .collab-station-scene .collab-worker-arm, .office-pin-face, .office-pin-dot,
+  .office-popover, .office-progress-fill,
+  .collab-station-scene .collab-workdesk-code i, .collab-station-scene .collab-workdesk-keyboard i,
+  .collab-station-scene .collab-workdesk-monitor { animation: none !important; }
+}
+
 .collab-progress-flow-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .collab-progress-flow {
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px;
@@ -844,6 +1059,7 @@ code, pre, .mono { font-family: var(--mono); }
   border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); color: var(--text-muted);
 }
 .collab-toggle.on { border-color: rgba(217, 79, 208, 0.45); background: var(--brand-soft); color: #f0a9ea; }
+.collab-toggle.disabled { opacity: 0.55; cursor: not-allowed; }
 .collab-toggle input { display: none; }
 .collab-issues { display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow: auto; padding: 10px 14px; border-top: 1px solid var(--border); }
 
@@ -866,15 +1082,185 @@ code, pre, .mono { font-family: var(--mono); }
     grid-template-rows: minmax(0, 1fr) minmax(340px, 48%);
     padding-bottom: 22px;
   }
-  .collab-progress-overview { grid-template-columns: 1fr; justify-items: center; padding: 22px; }
-  .collab-progress-overview-main { width: 100%; }
-  .collab-progress-ring { width: 108px; height: 108px; }
-  .collab-progress-ring-inner { width: 80px; height: 80px; }
-  .collab-progress-stage-list { grid-template-columns: 1fr; }
+  /* 窄屏：一层一行、行内自动换行（箭头本来就是朝下的） */
+  .collab-flow { padding: 16px 10px 22px; }
+  .collab-flow-row { gap: 12px; }
+  .collab-station { width: min(236px, 100%); }
   .collab-role-panel-head { flex-wrap: wrap; }
   .collab-role-panel-close { margin-left: auto; }
   .collab-inspector { border-left: none; border-top: 1px solid var(--border); }
   .chat-list { display: none; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .span-2 { grid-column: span 1; }
+}
+
+/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
+.office-map {
+  position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
+  border: 1px solid var(--border); border-radius: 20px; background: #05040a;
+  cursor: grab; touch-action: none; overscroll-behavior: contain; user-select: none;
+  -webkit-user-select: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 44px rgba(0, 0, 0, 0.35);
+}
+.office-map.dragging { cursor: grabbing; }
+.office-map-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; will-change: transform; }
+.office-map-bg { display: block; pointer-events: none; -webkit-user-drag: none; }
+.office-map-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+
+/* 工牌：挂在人头顶的小卡片（照片位 + 名字 + 职责），右上角的点区分状态。
+   缩得太小（缩到 LABEL_ZOOM 以下）就只剩头像，免得一排工牌糊成一片。 */
+.office-pin {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  padding: 0; border: none; background: none; cursor: pointer; pointer-events: auto;
+  transform: translate(-50%, -100%);
+}
+.office-pin::after { /* 挂绳：从工牌底端垂到人头顶 */
+  content: ''; position: absolute; top: 100%; left: 50%; width: 2px; height: 13px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+}
+.office-pin-body {
+  position: relative; display: flex; align-items: center; gap: 5px;
+  padding: 3px 7px 3px 3px; border-radius: 12px;
+  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.94);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.office-pin-face { /* 工牌上的照片位 */
+  position: relative; flex: none; width: 28px; height: 28px; display: grid; place-items: center;
+  font-size: 15px; border-radius: 8px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.03));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.office-pin:hover .office-pin-body,
+.office-pin.selected .office-pin-body { transform: translateY(-3px) scale(1.04); border-color: var(--accent); }
+.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), 0 10px 22px rgba(0, 0, 0, 0.5); }
+.office-pin.tone-working .office-pin-body { border-color: rgba(52, 211, 153, 0.62); }
+.office-pin.tone-busy .office-pin-body { border-color: rgba(248, 113, 113, 0.62); }
+.office-pin.tone-ask .office-pin-body { border-color: rgba(251, 191, 36, 0.62); }
+.office-pin.tone-done .office-pin-body { border-color: rgba(34, 197, 94, 0.5); }
+.office-pin-text { display: none; flex-direction: column; align-items: flex-start; gap: 1px; padding-right: 1px; }
+.office-pin.labelled .office-pin-text, .office-pin.selected .office-pin-text { display: flex; }
+.office-pin.detailed .office-pin-text { gap: 0; }
+.office-pin-dot {
+  position: absolute; top: -5px; right: -5px; width: 13px; height: 13px; border-radius: 50%;
+  border: 2.5px solid #0b0a12; background: var(--text-dim);
+}
+.office-pin.tone-working .office-pin-dot { background: #34d399; animation: office-pin-pulse 1.9s ease-in-out infinite; }
+.office-pin.tone-busy .office-pin-dot { background: #f87171; }
+.office-pin.tone-ask .office-pin-dot { background: #fbbf24; }
+.office-pin.tone-idle .office-pin-dot { background: #6b7280; }
+.office-pin.tone-done .office-pin-dot { background: #22c55e; }
+.office-pin.live .office-pin-body { animation: office-pin-glow 1.8s ease-in-out infinite; }
+@keyframes office-pin-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+  70% { box-shadow: 0 0 0 9px rgba(52, 211, 153, 0); }
+}
+@keyframes office-pin-glow {
+  0%, 100% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 0 rgba(217, 79, 208, 0.5); }
+  50% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 8px rgba(217, 79, 208, 0); }
+}
+.office-pin-name {
+  max-width: 92px; font-size: 11px; font-weight: 640; line-height: 1.3; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.office-pin-duty { /* 职责：放得更大（DETAIL_ZOOM）才写出来 */
+  display: none; max-width: 92px; font-size: 9px; line-height: 1.25; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.office-pin.detailed .office-pin-duty { display: block; }
+
+/* 工位上真的坐着一个会动的 3D 小人：整层跟着底图缩放，所以永远踩在自己那把转椅上 */
+.office-map-people { position: absolute; inset: 0; pointer-events: none; }
+.office-worker { position: absolute; width: 0; height: 0; }
+.office-worker > .collab-station-scene {
+  position: absolute; left: 0; bottom: -20px; width: 168px; height: 138px; margin: 0;
+  transform: translate(-50%, 0) scale(0.72); transform-origin: 50% 100%;
+}
+/* 每个人各走各的节拍，一排人不会像机器人一样同频呼吸 */
+.office-worker:nth-child(even) > .collab-station-scene .collab-worker,
+.office-worker:nth-child(even) > .collab-station-scene .collab-worker-head { animation-delay: -1.7s; }
+.office-worker:nth-child(3n) > .collab-station-scene .collab-worker-head { animation-delay: -0.8s; }
+.office-worker:nth-child(3n) > .collab-station-scene .collab-worker-eye { animation-delay: -2.4s; }
+
+/* 挂钟：钟面画在底图里（`.office-clock-face`），指针按真实时间转（见 components/OfficeClock.tsx） */
+.office-clock { position: absolute; width: 0; height: 0; pointer-events: none; }
+.office-clock-hand {
+  position: absolute; left: 0; bottom: 0; border-radius: 999px;
+  transform-origin: 50% 100%; will-change: transform;
+}
+.office-clock-hour { width: 3px; height: 8px; margin-left: -1.5px; background: #e6e3ff; }
+.office-clock-minute { width: 2px; height: 12px; margin-left: -1px; background: #f4f2ff; }
+.office-clock-second { width: 1.5px; height: 13px; margin-left: -0.75px; background: #6ee7d1; }
+.office-clock-cap {
+  position: absolute; left: 0; bottom: 0; width: 4px; height: 4px; margin: 0 0 -2px -2px;
+  border-radius: 50%; background: #d94fd0;
+}
+
+/* 点标记弹出的进度信息卡 */
+.office-popover {
+  position: absolute; z-index: 6; width: 306px; padding: 12px 13px 13px;
+  border: 1px solid rgba(123, 92, 255, 0.42); border-radius: 16px;
+  background: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.55); backdrop-filter: blur(10px);
+}
+.office-popover-head { display: flex; align-items: flex-start; gap: 10px; }
+.office-popover-scene { flex: none; width: 108px; height: 88px; overflow: hidden; }
+.office-popover-scene .collab-station-scene { width: 168px; height: 138px; transform: scale(0.64); transform-origin: 0 0; }
+.office-popover-id { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.office-popover-name { font-size: 15px; font-weight: 640; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.office-popover-duty { font-size: 11px; color: var(--text-dim); }
+.office-popover-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); }
+.office-popover-status i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.office-tone-working, .office-popover-status.tone-working { color: #34d399; }
+.office-tone-busy, .office-popover-status.tone-busy { color: #f87171; }
+.office-tone-ask, .office-popover-status.tone-ask { color: #fbbf24; }
+.office-tone-idle, .office-popover-status.tone-idle { color: #8b93a7; }
+.office-tone-done, .office-popover-status.tone-done { color: #22c55e; }
+.office-popover-close {
+  flex: none; width: 24px; height: 24px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-muted); font-size: 11px;
+}
+.office-popover-close:hover { color: var(--text); border-color: var(--border-strong); }
+.office-popover-progress { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+.office-popover-progress-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
+.office-popover-progress-head b { font-family: var(--mono); font-size: 13px; color: var(--text); }
+.office-progress-track { height: 7px; border-radius: 999px; background: var(--bg-input); overflow: hidden; }
+.office-progress-fill { display: block; height: 100%; border-radius: 999px; background: currentColor; transition: width 0.4s ease; }
+.office-progress-fill.tone-working { color: #34d399; }
+.office-progress-fill.tone-busy { color: #f87171; }
+.office-progress-fill.tone-ask { color: #fbbf24; }
+.office-progress-fill.tone-idle { color: #8b93a7; }
+.office-progress-fill.tone-done { color: #22c55e; }
+.office-popover-summary {
+  margin-top: 10px; font-size: 12px; line-height: 1.65; color: var(--text-muted);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.office-popover-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
+.office-popover-meta span {
+  padding: 2px 8px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
+  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.5);
+}
+.office-popover-more { margin-top: 11px; width: 100%; justify-content: center; }
+
+/* 右下角工具与图例 */
+.office-map-tools { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; flex-direction: column; gap: 7px; }
+.office-map-tools button {
+  width: 38px; height: 38px; border-radius: 12px; cursor: pointer; font-size: 15px;
+  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.92); color: var(--text);
+  backdrop-filter: blur(8px); transition: background 0.15s ease, transform 0.15s ease;
+}
+.office-map-tools button:hover { background: rgba(45, 41, 76, 0.95); transform: translateY(-1px); }
+.office-map-legend {
+  position: absolute; right: 14px; top: 14px; z-index: 1; display: flex; flex-wrap: wrap; gap: 10px;
+  justify-content: flex-end; max-width: calc(100% - 28px);
+  padding: 7px 11px; border-radius: 12px; border: 1px solid var(--border);
+  background: rgba(11, 10, 18, 0.78); backdrop-filter: blur(8px);
+}
+.office-map-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
+.office-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.office-map-hint {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
+  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.75); pointer-events: none;
 }

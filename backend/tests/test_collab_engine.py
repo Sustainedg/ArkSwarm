@@ -23,7 +23,7 @@ from app.collab.bus import bus
 from app.collab.schemas import Duty, EdgeKind, EdgeSpec, GraphSpec, NodeSpec
 from app.collab import graph as graph_service
 from app.collab.store import recover_interrupted
-from app.collab.tables import CollabRun, CollabStep
+from app.collab.tables import CollabRun, CollabStep, CollabTicket
 from app.db import SessionLocal
 from app.models import AgentInstance, Role, utcnow
 
@@ -45,8 +45,11 @@ HANDOFF = {
     },
 }
 
+#: 收尾汇报：根工单完成后交回入口角色（CEO），它只汇报结论并 done 关闭工单。
+CLOSING = {"action": "done", "remark": "已交付：暗色主题已上线，改动集中在 frontend/src/theme.ts"}
+
 FULL_SCRIPT = {
-    "ceo": [HANDOFF],
+    "ceo": [HANDOFF, CLOSING],
     "cto": [
         {
             "action": "delegate",
@@ -222,8 +225,8 @@ async def test_full_chain_with_one_rework_round(client: httpx.AsyncClient, full)
     kinds = [event["type"] for event in events]
     # 串行推进：每一步都有 started / finished，最后给出运行状态
     assert kinds[0] == "collab.run.started"
-    assert kinds.count("collab.step.started") == 7, kinds
-    assert kinds.count("collab.step.finished") == 7
+    assert kinds.count("collab.step.started") == 8, kinds
+    assert kinds.count("collab.step.finished") == 8
     # 流以框架自带的 stream.closed 收尾；运行态看最后一个 collab.run.status
     assert kinds[-1] == "stream.closed"
     statuses = [event["status"] for event in events if event["type"] == "collab.run.status"]
@@ -238,17 +241,96 @@ async def test_full_chain_with_one_rework_round(client: httpx.AsyncClient, full)
     child = next(t for t in detail["tickets"] if t["parent_ticket_id"])
     assert child["state"] == "done" and child["round"] == 1 and child["verdict"] == "pass"
 
-    # 时间线：用户 1 条 + 角色 7 条，且顺序与岗位一致
-    assert [s["role_key"] for s in detail["steps"]] == ["user", "ceo", "cto", "se", "qa", "se", "qa", "cto"]
+    # 时间线：用户 1 条 + 角色 8 条，且顺序与岗位一致；最后一条是入口角色的收尾汇报
+    assert [s["role_key"] for s in detail["steps"]] == [
+        "user", "ceo", "cto", "se", "qa", "se", "qa", "cto", "ceo",
+    ]
     assert detail["steps"][0]["content"] == "把登录页改成暗色主题"
+    assert detail["steps"][-1]["action"] == "done"
     # 用量从每一步累加到运行上
-    assert detail["usage"]["input_tokens"] == 70 and detail["usage"]["output_tokens"] == 35
+    assert detail["usage"]["input_tokens"] == 80 and detail["usage"]["output_tokens"] == 40
+
+
+async def test_root_ticket_closure_reports_back_to_entry(client: httpx.AsyncClient, full):
+    """根工单收尾后必须交回入口角色：由它把结论汇报给用户。
+
+    否则工单在链路里转一圈就结束了，用户那边（主会话）永远等不到一句回话。
+    """
+    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "done"
+    assert sum(1 for step in detail["steps"] if step["role_key"] == "ceo") == 2  # 派工 + 汇报
+    last = detail["steps"][-1]
+    assert last["role_key"] == "ceo" and last["action"] == "done"
+    # 汇报挂在根工单上，工单树不变、也不额外占一张工单
+    assert last["ticket_id"] == detail["tickets"][0]["id"]
+    assert detail["tickets_used"] == 2
+
+    report = prompts_of(prompts(full["state_dir"]), "ceo")[-1]
+    assert "全流程结果" in report
+    # 收尾只允许汇报 / 提问，绝不允许从这里重新派活
+    assert "允许的动作：done、ask_user" in report
+    assert "（你没有派发对象）" in report
+    assert "本轮要求：所有工单都已收尾" in report
+    # 子工单的结论也在汇总里：入口角色据此汇报，不必回头问下游
+    assert "《实现主题开关与持久化》" in report
+    assert "已按审查意见补上对比度" in report
+
+    # 已完成后再点「继续」也不会反复汇报
+    resumed = await client.post(f"/api/collab/runs/{run_id}/resume")
+    assert resumed.status_code == 200
+    await read_sse(resumed)
+    again = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert again["status"] == "done"
+    assert len(again["steps"]) == len(detail["steps"])
+
+    # 只汇报一次：标记落库，下一次推进不会再来一轮
+    async with SessionLocal() as session:
+        root = (
+            await session.execute(select(CollabTicket).where(CollabTicket.run_id == run_id))
+        ).scalars().first()
+        assert root is not None and root.report_at is not None
+
+
+async def test_entry_closing_the_ticket_itself_does_not_report_twice(client: httpx.AsyncClient, tmp_path: Path):
+    """入口角色自己收尾时（它那一步就是给用户的答复）不再补一轮汇报。"""
+    script = {"ceo": [{"action": "done", "remark": "已答复用户：这次不用改代码"}]}
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["roles"], "解释一下这个报错")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "done"
+    assert [step["role_key"] for step in detail["steps"]] == ["user", "ceo"]
+    assert len(prompts(scenario["state_dir"])) == 1
+
+
+async def test_user_follow_up_opens_a_new_report_round(client: httpx.AsyncClient, tmp_path: Path):
+    """用户追问 → 重新干活 → 再汇报一轮：汇报标记在重新开启根工单时清零。"""
+    script = {"ceo": [HANDOFF, CLOSING, HANDOFF, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+
+    first = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert first["status"] == "done"
+    assert [step["role_key"] for step in first["steps"]] == ["user", "ceo", "cto", "ceo"]
+
+    response = await client.post(f"/api/collab/runs/{run_id}/messages", json={"content": "再加一个导出功能"})
+    assert response.status_code == 200
+    await read_sse(response)
+
+    final = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert final["status"] == "done"
+    assert [step["role_key"] for step in final["steps"]] == [
+        "user", "ceo", "cto", "ceo", "user", "ceo", "cto", "ceo",
+    ]
+    assert final["steps"][-1]["role_key"] == "ceo" and final["steps"][-1]["action"] == "done"
 
 
 async def test_single_rework_to_cto_does_not_need_rework_to(client: httpx.AsyncClient, tmp_path: Path):
     """审查者只有一条 QA → CTO 退路时，工单不写 rework_to 也应自动交回 CTO。"""
     script = {
-        "ceo": [HANDOFF],
+        "ceo": [HANDOFF, CLOSING],
         "cto": [
             {
                 "action": "delegate",
@@ -320,7 +402,7 @@ async def test_single_rework_to_cto_does_not_need_rework_to(client: httpx.AsyncC
     detail = (await client.get(f"/api/collab/runs/{run.json()['id']}")).json()
     assert detail["status"] == "done"
     assert [step["role_key"] for step in detail["steps"]] == [
-        "user", "ceo", "cto", "se", "qa", "cto", "se", "qa", "cto",
+        "user", "ceo", "cto", "se", "qa", "cto", "se", "qa", "cto", "ceo",
     ]
     child = next(ticket for ticket in detail["tickets"] if ticket["parent_ticket_id"])
     assert child["state"] == "done" and child["round"] == 1 and child["verdict"] == "pass"
@@ -330,7 +412,7 @@ async def test_downstream_only_sees_the_ticket_never_the_conversation(client: ht
     """C5：下游只拿到工单字段与摘要，拿不到任何角色的对话原文。"""
     await start_run(client, full["roles"], "把登录页改成暗色主题")
     all_prompts = prompts(full["state_dir"])
-    assert len(all_prompts) == 7
+    assert len(all_prompts) == 8
 
     for text in all_prompts:
         # 每个角色都会说「（<key>）我来处理。」；它出现在别人的输入里就等于泄露了对话
@@ -350,11 +432,15 @@ async def test_downstream_only_sees_the_ticket_never_the_conversation(client: ht
 
     # 协调者也会收到团队工作路径；但按岗位职责没有该路径的读写权限
     ceo_prompts = prompts_of(all_prompts, "ceo")
-    assert len(ceo_prompts) == 1
-    ceo_prompt = ceo_prompts[0]
-    assert "工作路径（本次协作唯一允许访问的目录）：" in ceo_prompt
-    assert "没有该路径的读写权限" in ceo_prompt
-    assert "不得写代码" in ceo_prompt
+    assert len(ceo_prompts) == 2  # 一次派工 + 一次收尾汇报
+    dispatch_prompt, report_prompt = ceo_prompts
+    assert "工作路径（本次协作唯一允许访问的目录）：" in dispatch_prompt
+    assert "没有该路径的读写权限" in dispatch_prompt
+    assert "不得写代码" in dispatch_prompt
+
+    # 收尾汇报只看「结构化结果」，仍然看不到任何角色的对话原文
+    assert "全流程结果" in report_prompt
+    assert "已按审查意见补上对比度" in report_prompt
 
 
 async def test_run_workspace_path_is_passed_to_every_role(client: httpx.AsyncClient, full, tmp_path: Path):
@@ -364,7 +450,7 @@ async def test_run_workspace_path_is_passed_to_every_role(client: httpx.AsyncCli
 
     run_id, _ = await start_run(client, full["roles"], "统一工作路径", run_workspace_dir=str(shared))
     all_prompts = prompts(full["state_dir"])
-    assert len(all_prompts) == 7
+    assert len(all_prompts) == 8
 
     matched = [WORKSPACE_LINE.search(text) for text in all_prompts]
     assert all(match is not None for match in matched)
@@ -375,7 +461,10 @@ async def test_run_workspace_path_is_passed_to_every_role(client: httpx.AsyncCli
 
 
 async def test_protocol_violation_hangs_then_recovers_by_retry(client: httpx.AsyncClient, tmp_path: Path):
-    script = {"ceo": ["我这就去办，稍等。", HANDOFF], "cto": [{"action": "done", "remark": "完成"}]}
+    script = {
+        "ceo": ["我这就去办，稍等。", HANDOFF, CLOSING],
+        "cto": [{"action": "done", "remark": "完成"}],
+    }
     scenario = await make_scenario(script, tmp_path)
     run_id, events = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
 
@@ -408,7 +497,7 @@ async def test_round_with_two_work_order_blocks_uses_the_last_one(client: httpx.
         '"options": [{"label": "好", "value": "好"}, {"label": "不好", "value": "不好"}]}\n```\n'
     )
     final = "\n想清楚了，最终决定如下：\n\n```work_order\n" + json.dumps(HANDOFF, ensure_ascii=False) + "\n```\n"
-    script = {"ceo": [draft + final], "cto": [{"action": "done", "remark": "完成"}]}
+    script = {"ceo": [draft + final, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
     scenario = await make_scenario(script, tmp_path)
     run_id, events = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
 
@@ -435,6 +524,7 @@ async def test_entry_can_ask_the_user_and_then_continue(client: httpx.AsyncClien
                 ],
             },
             HANDOFF,
+            CLOSING,
         ],
         "cto": [{"action": "done", "remark": "完成"}],
     }
@@ -468,6 +558,69 @@ async def test_entry_can_ask_the_user_and_then_continue(client: httpx.AsyncClien
     # 答复之后旧卡片数据被清掉，后续因别的原因挂起时不会误显示上一轮的选择题
     assert "question" not in final["tickets"][0]["result"]
     assert "options" not in final["tickets"][0]["result"]
+
+
+async def test_non_entry_ask_user_is_explained_and_never_ends_in_silence(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """非入口节点误配 ask_user 时：提示词不再教它这么做，报错说清原因，且用户发言不会石沉大海。
+
+    真实事故：编辑器把 ask_user 勾给了实施者，模型照做，整轮被判中止；用户随后在输入框里问
+    「进度怎么样了」，界面只多了一条用户发言、没有任何回话。
+    """
+    split_to_cto = {
+        "action": "delegate",
+        "assignee": "cto",
+        "mode": "split",
+        "ticket": {
+            "title": "查一下工作目录",
+            "goal": "列出工作目录下的文件",
+            "acceptance": ["给出文件清单，或明确说明目录为空"],
+        },
+    }
+    script = {
+        "ceo": [split_to_cto],
+        "cto": [
+            {
+                "action": "ask_user",
+                "question": "要暗色还是亮色？",
+                "options": [{"label": "暗色", "value": "暗色"}, {"label": "亮色", "value": "亮色"}],
+            }
+        ],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    body = team_body(scenario["roles"])
+    for item in body["graph"]["nodes"]:
+        if item["key"] == "cto":
+            item["output_contract"] = ["done", "ask_user"]
+    created = await client.post("/api/collab/teams", json=body)
+    assert created.status_code == 201, created.text
+
+    run = await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})
+    run_id = run.json()["id"]
+    response = await client.post(
+        f"/api/collab/runs/{run_id}/messages", json={"content": "做一个记账系统"}
+    )
+    assert response.status_code == 200, response.text
+    await read_sse(response)
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "只有入口节点能向用户提问" in (detail["error"] or "")
+    # 提示词里不再出现 ask_user：配置错了，引擎也不该教模型越权
+    cto_prompt = prompts_of(prompts(scenario["state_dir"]), "cto")[-1]
+    assert "ask_user" not in cto_prompt
+
+    # 用户以为在问进度：即使这次轮不到任何工单，也必须有一条明确回话，而不是静默。
+    again = await client.post(
+        f"/api/collab/runs/{run_id}/messages", json={"content": "进度怎么样了"}
+    )
+    assert again.status_code == 200, again.text
+    events = await read_sse(again)
+    notices = [event for event in events if event["type"] == "collab.notice"]
+    assert any("没有可推进的工单" in (event.get("text") or "") for event in notices), notices
+    after = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert "没有可推进的工单" in (after["error"] or "")
 
 
 async def test_ask_user_without_options_is_salvaged_into_card(client: httpx.AsyncClient, tmp_path: Path):
@@ -506,7 +659,7 @@ async def test_resume_after_created_at_exceeds_timeout(client: httpx.AsyncClient
             {"label": "桌面端", "value": "先覆盖桌面端入口"},
         ],
     }
-    script = {"ceo": [ask_once, ask_twice, HANDOFF], "cto": [{"action": "done", "remark": "完成"}]}
+    script = {"ceo": [ask_once, ask_twice, HANDOFF, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
     scenario = await make_scenario(script, tmp_path)
     run_id, _ = await start_run(client, scenario["roles"], "推进首期版本")
 
@@ -674,6 +827,34 @@ def _has_subscriber(run_id: str) -> bool:
     return bool(stream and stream.subscribers)
 
 
+async def _start_until_gate(
+    client: httpx.AsyncClient,
+    scenario: dict,
+    goal: str,
+    gate_key: str,
+) -> tuple[str, asyncio.Task[None], Path]:
+    """在后台启动协作，并等某个岗位真的进入执行（剧本已写入 prompt、卡在闸门）。"""
+    gate = scenario["state_dir"] / f"gate-{gate_key}"
+    gate.write_text("wait", encoding="utf-8")
+    created = await client.post("/api/collab/teams", json=team_body(scenario["roles"]))
+    assert created.status_code == 201, created.text
+    run_id = (await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})).json()["id"]
+
+    async def drive() -> None:
+        async with client.stream(
+            "POST", f"/api/collab/runs/{run_id}/messages", json={"content": goal}
+        ) as response:
+            assert response.status_code == 200, response.text
+            async for _ in response.aiter_lines():
+                pass
+
+    task = asyncio.create_task(drive())
+    assert await _wait_until(lambda: bool(prompts_of(prompts(scenario["state_dir"]), gate_key))), (
+        f"岗位 {gate_key} 没有进入执行"
+    )
+    return run_id, task, gate
+
+
 async def test_stream_endpoint_replays_buffered_events_after_disconnect(client: httpx.AsyncClient, full):
     """断开后用 ``GET /runs/{id}/stream`` 重连：先补发本轮已产生的事件，再接着看实时增量。
 
@@ -732,13 +913,149 @@ async def test_stream_endpoint_replays_buffered_events_after_disconnect(client: 
     # 补发：重连后先看到的就是断开前已经发生的事件，顺序一致
     assert kinds[: len(buffered)] == buffered, kinds
     # 续看：同一订阅上继续收完这一轮，直到传输层收尾
-    assert kinds.count("collab.step.finished") == 7, kinds
+    assert kinds.count("collab.step.finished") == 8, kinds
     assert kinds[-1] == "stream.closed", kinds
     assert received[0]["type"] == "collab.run.started"
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "done", detail
-    assert detail["steps_used"] == 7
+    assert detail["steps_used"] == 8
+
+
+async def test_entry_chat_stays_available_while_the_workflow_is_running(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """工单推进期间仍能随时找入口角色：不返回 409，也不会打断主流程。"""
+    script = {
+        **FULL_SCRIPT,
+        "ceo:chat": ["现在是审查阶段：子工单已经提交，审查员正在看。可以继续补充要求。"],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    run_id, drive_task, gate = await _start_until_gate(
+        client, scenario, "把登录页改成暗色主题", "qa"
+    )
+    try:
+        response = await client.post(
+            f"/api/collab/runs/{run_id}/chat", json={"content": "现在进度怎么样了？"}
+        )
+        assert response.status_code == 200, response.text
+        events = await read_sse(response)
+        kinds = [event["type"] for event in events]
+        assert "collab.chat.started" in kinds
+        assert "collab.chat.event" in kinds
+        assert kinds[-2:] == ["collab.chat.finished", "stream.closed"], kinds
+        finished = next(event for event in events if event["type"] == "collab.chat.finished")
+        assert finished["status"] == "complete"
+
+        # 主流程没有被聊天顶掉，仍然稳稳停在审查步骤。
+        assert (await client.get(f"/api/collab/runs/{run_id}")).json()["status"] == "running"
+
+        # 聊天历史单独落库，并且只给入口角色回放结构化进度。
+        detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+        chat_rows = detail["chat_messages"]
+        assert [row["sender"] for row in chat_rows] == ["user", "leader"]
+        assert chat_rows[0]["content"] == "现在进度怎么样了？"
+        assert "审查阶段" in chat_rows[1]["content"]
+        listed = (await client.get(f"/api/collab/runs/{run_id}/chat")).json()["items"]
+        assert [row["id"] for row in listed] == [row["id"] for row in chat_rows]
+        # 聊天是旁路，不消耗工单步数。
+        assert detail["steps_used"] == 3
+
+        chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
+        assert len(chat_prompts) == 1
+        chat_prompt = chat_prompts[0]
+        assert "《实现主题开关与持久化》" in chat_prompt
+        assert "状态：review" in chat_prompt
+        assert "最近结论：已完成主题开关与持久化" in chat_prompt
+        assert "frontend/src/theme.ts" in chat_prompt
+        # 聊天能看进度，但看不到其他角色的对话原文（C5 只对入口聊天开一个口子）。
+        assert f"（se）{CHITCHAT}。" not in chat_prompt
+    finally:
+        gate.unlink(missing_ok=True)
+        await asyncio.wait_for(drive_task, timeout=20)
+
+
+async def test_chat_can_refine_requirements_and_next_step_sees_them(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """聊天里的细化要求会写进未收尾工单，并从下一轮步骤开始生效。"""
+    chat_reply = (
+        "这是只给 CEO 的闲聊暗号。好的，我再补一条要求：增加重置按钮。\n"
+        "```chat_update\n"
+        '{"requirements_add": ["增加一个重置按钮"], '
+        '"acceptance_add": ["重置后恢复默认主题"]}\n'
+        "```\n"
+    )
+    script = {**FULL_SCRIPT, "ceo:chat": [chat_reply]}
+    scenario = await make_scenario(script, tmp_path)
+    run_id, drive_task, gate = await _start_until_gate(
+        client, scenario, "把登录页改成暗色主题", "qa"
+    )
+    try:
+        response = await client.post(
+            f"/api/collab/runs/{run_id}/chat", json={"content": "再加一个重置按钮"}
+        )
+        assert response.status_code == 200, response.text
+        events = await read_sse(response)
+        finished = next(event for event in events if event["type"] == "collab.chat.finished")
+        assert finished["status"] == "complete"
+        assert finished["applied"]["ticket_count"] == 2
+        assert "requirements" in finished["applied"]["fields"]
+
+        detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+        child = next(ticket for ticket in detail["tickets"] if ticket["parent_ticket_id"])
+        root = next(ticket for ticket in detail["tickets"] if not ticket["parent_ticket_id"])
+        assert "增加一个重置按钮" in child["brief"]["requirements"]
+        assert "重置后恢复默认主题" in child["brief"]["acceptance"]
+        assert "增加一个重置按钮" in root["brief"]["requirements"]
+        # 聊天协议块不会作为正文展示给用户。
+        leader = detail["chat_messages"][-1]
+        assert "chat_update" not in leader["content"]
+        assert "闲聊暗号" in leader["content"]
+    finally:
+        gate.unlink(missing_ok=True)
+        await asyncio.wait_for(drive_task, timeout=20)
+
+    # 聊天原文不会传给任何工单角色；细化后的字段会。
+    all_prompts = prompts(scenario["state_dir"])
+    work_prompts = [text for text in all_prompts if "[协作对话]" not in text]
+    assert all("闲聊暗号" not in text for text in work_prompts)
+    qa_prompts = prompts_of(all_prompts, "qa")
+    assert len(qa_prompts) == 2
+    assert "增加一个重置按钮" in qa_prompts[1]
+    assert "重置后恢复默认主题" in qa_prompts[1]
+
+
+async def test_chat_stays_available_after_the_run_is_done(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """一轮收尾后仍可只找入口角色聊天：不重开工单、不增加步数。"""
+    script = {
+        **FULL_SCRIPT,
+        "ceo:chat": ["这轮已经收尾了。想闲聊或问结论都可以，我不会重新派活。"],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    before = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert before["status"] == "done"
+
+    response = await client.post(
+        f"/api/collab/runs/{run_id}/chat", json={"content": "辛苦了，聊两句"}
+    )
+    assert response.status_code == 200, response.text
+    events = await read_sse(response)
+    finished = next(event for event in events if event["type"] == "collab.chat.finished")
+    assert finished["status"] == "complete"
+
+    after = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    # 聊天是旁路：运行状态、工单时间线与步数都不变。
+    assert after["status"] == "done"
+    assert len(after["steps"]) == len(before["steps"])
+    assert after["steps_used"] == before["steps_used"]
+    assert [row["sender"] for row in after["chat_messages"]] == ["user", "leader"]
+
+    chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
+    assert chat_prompts and "运行状态：done" in chat_prompts[0]
 
 
 async def test_delegate_step_records_target_for_handoff_chain(client: httpx.AsyncClient, full):
@@ -760,3 +1077,210 @@ async def test_delegate_step_records_target_for_handoff_chain(client: httpx.Asyn
         assert step["target_key"] in known_keys, f"派发目标应当是节点 key：{step['target_key']}"
     # 至少有一条「上游交给下游」的记录（ceo→cto 或 cto→se）
     assert any(step["target_key"] != step["role_key"] for step in delegates)
+
+
+# --- 「活干完了，上游要看得见」 --------------------------------------------------
+
+#: 一次拆解：根工单拆出一张子工单交给 CTO；子工单完成后必须回到 CEO 手里汇总。
+SPLIT_TO_CTO = {
+    "action": "delegate",
+    "assignee": "cto",
+    "mode": "split",
+    "ticket": {
+        "title": "查一下工作目录",
+        "goal": "列出工作目录下的文件",
+        "acceptance": ["给出文件清单，或明确说明目录为空"],
+    },
+}
+
+
+async def test_child_conclusion_is_carried_back_to_the_upstream_ticket(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """子工单收尾后，上游那张工单的 prompt 里必须出现「下游交付」。
+
+    这是线上「反复流转」事故的正面回归：上游过去只看得到自己几次派单记录，
+    于是把「活已经干完」误判成「还没收到回报」，一遍遍重派同一件事。
+    """
+    script = {
+        "ceo": [SPLIT_TO_CTO, {"action": "done", "remark": "已汇总：目录为空，没有任何文件"}],
+        "cto": [{"action": "done", "remark": "目录为空，没有任何文件（已用 ls -la 与 find 双重确认）"}],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["roles"], "看看工作目录下有哪些文件")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "done"
+
+    # done 的 remark 必须落进工单 result —— 否则父工单汇总时只看到一张空壳
+    child = next(ticket for ticket in detail["tickets"] if ticket["parent_ticket_id"])
+    assert child["state"] == "done"
+    assert child["result"]["summary"] == "目录为空，没有任何文件（已用 ls -la 与 find 双重确认）"
+
+    ceo_prompts = prompts_of(prompts(scenario["state_dir"]), "ceo")
+    assert len(ceo_prompts) == 2
+    assert "下游交付" not in ceo_prompts[0]  # 第一次只是派活
+    rollback = ceo_prompts[1]  # 子工单已收尾、工单回到 CEO 手里
+    assert "下游交付（我派出去的子工单" in rollback
+    assert "《查一下工作目录》" in rollback
+    assert "目录为空，没有任何文件（已用 ls -la 与 find 双重确认）" in rollback
+    assert "· done" in rollback
+    assert "重复派发同一件事" in rollback
+
+
+async def test_rollback_prompt_shows_downstream_delivery_in_full_flow(
+    client: httpx.AsyncClient, full
+):
+    """完整链路（拆子工单 → 实施 → 审查 → 返工 → 通过）里，汇总方同样拿得到下游交付摘要。"""
+    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+
+    cto_prompts = prompts_of(prompts(full["state_dir"]), "cto")
+    assert len(cto_prompts) == 2
+    assert "下游交付" not in cto_prompts[0]
+    second = cto_prompts[1]
+    assert "下游交付" in second
+    assert "《实现主题开关与持久化》" in second
+    assert "已按审查意见补上对比度" in second  # 下游 submit 的结论
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    child = next(ticket for ticket in detail["tickets"] if ticket["parent_ticket_id"])
+    assert child["result"]["summary"] == "已按审查意见补上对比度"
+
+
+ESCALATION_BLOCKER = {
+    "action": "escalate",
+    "reason": "本环境禁止执行命令，跑不了运行时验收",
+    "remark": "需要用户决定是否授予执行权限",
+}
+
+BLOCKED_TITLE = "跑运行时验收"
+
+
+def allowed_actions_line(prompt: str) -> str:
+    """取 prompt 里「允许的动作：…」那一行，用来断言这一轮生效的动作白名单。"""
+    match = re.search(r"允许的动作：([^\n]+)", prompt)
+    return match.group(1) if match else ""
+
+
+async def test_escalation_walks_up_to_entry_then_asks_user_and_resumes(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """卡住了要能逐级上报：se → cto → ceo，最后由入口角色 ask_user 交给用户。
+
+    真实事故：UI 卡在「环境禁止执行」后只能把失败写进 done；CTO 手里没有上报动作，
+    只好把同一件事改写成「静态核对」又派给码农 —— 阻塞原地转了一圈，用户什么都没收到。
+    """
+    split_to_cto = {
+        "action": "delegate",
+        "assignee": "cto",
+        "mode": "split",
+        "ticket": {"title": "落地首期", "goal": "交付记账系统首期", "acceptance": ["可启动"]},
+    }
+    split_to_se = {
+        "action": "delegate",
+        "assignee": "se",
+        "mode": "split",
+        "ticket": {
+            "title": BLOCKED_TITLE,
+            "goal": "启动服务并跑通验收 1-12",
+            "acceptance": ["有真实命令输出"],
+        },
+    }
+    ask = {
+        "action": "ask_user",
+        "question": "本环境禁止执行命令，无法跑运行时验收，怎么处理？",
+        "options": [
+            {"label": "授权后补测", "value": "授权执行权限后补测"},
+            {"label": "按现状收尾", "value": "按现状收尾"},
+        ],
+    }
+    script = {
+        "ceo": [split_to_cto, ask, {"action": "done", "remark": "已按用户答复收尾"}],
+        "cto": [
+            split_to_se,
+            ESCALATION_BLOCKER,
+            {"action": "done", "remark": "子工单已收尾，汇总完成"},
+        ],
+        "se": [ESCALATION_BLOCKER],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    run_id, events = await start_run(client, scenario["roles"], "做一个记账系统")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    blocked = {ticket["title"]: ticket for ticket in detail["tickets"]}[BLOCKED_TITLE]
+    assert blocked["state"] == "blocked"
+    # 上报链整条留在工单上：谁报的、卡在哪、已经过谁
+    assert blocked["escalation"]["from"] == "cto"
+    assert blocked["escalation"]["hops"] == ["se", "cto"]
+    assert "禁止执行命令" in blocked["escalation"]["reason"]
+    assert blocked["result"]["question"]
+    # 上报本身也是时间线上的一条提示：「谁把什么上报给了谁」用户看得见
+    assert any(
+        event["type"] == "collab.notice" and "上报给" in (event.get("text") or "")
+        for event in events
+    )
+
+    # 提示词一路收窄：CTO 那一步不许再往下派，到入口角色则只剩「转给用户」
+    cto_prompts = prompts_of(prompts(scenario["state_dir"]), "cto")
+    assert "delegate" not in allowed_actions_line(cto_prompts[-1])
+    assert "escalate" in allowed_actions_line(cto_prompts[-1])
+    assert "不要再往下派" in cto_prompts[-1]
+    ceo_prompts = prompts_of(prompts(scenario["state_dir"]), "ceo")
+    assert "escalate" not in allowed_actions_line(ceo_prompts[-1])
+    assert "ask_user" in allowed_actions_line(ceo_prompts[-1])
+
+    # 用户回答后，重新打开的必须是**提问的那张工单**（不是根工单），否则回答会石沉大海
+    reply = await client.post(
+        f"/api/collab/runs/{run_id}/messages", json={"content": "授权执行，重跑验收"}
+    )
+    assert reply.status_code == 200, reply.text
+    await read_sse(reply)
+    after = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    answered = {ticket["title"]: ticket for ticket in after["tickets"]}[BLOCKED_TITLE]
+    assert answered["state"] != "blocked"
+    # 用户的话与工单一起交回入口角色：认的是这张工单的 prompt，不是根工单那条
+    resumed = [
+        text for text in prompts_of(prompts(scenario["state_dir"]), "ceo") if BLOCKED_TITLE in text
+    ][-1]
+    assert "授权执行" in resumed
+    assert after["status"] == "done"
+
+
+async def test_escalated_ticket_cannot_be_delegated_back_down(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """上抛件不许再往下压：换个说法派回去，运行时也必须明确拦下。"""
+    script = {
+        "ceo": [
+            {
+                "action": "delegate",
+                "assignee": "cto",
+                "mode": "split",
+                "ticket": {"title": "落地首期", "goal": "交付首期", "acceptance": ["可启动"]},
+            }
+        ],
+        "cto": [
+            {
+                "action": "delegate",
+                "assignee": "se",
+                "mode": "split",
+                "ticket": {
+                    "title": BLOCKED_TITLE,
+                    "goal": "跑运行时验收",
+                    "acceptance": ["有真实输出"],
+                },
+            },
+            {"action": "delegate", "assignee": "se", "mode": "handoff"},
+        ],
+        "se": [ESCALATION_BLOCKER],
+    }
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["roles"], "做一个记账系统")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "本轮不允许的动作：delegate" in (detail["error"] or "")
+    # 提示词里压根没教它这么做，运行时再兜一道
+    cto_prompts = prompts_of(prompts(scenario["state_dir"]), "cto")
+    assert "delegate" not in allowed_actions_line(cto_prompts[-1])

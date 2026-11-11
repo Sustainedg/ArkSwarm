@@ -61,6 +61,7 @@ class TicketAction(str, Enum):
     REVIEW = "review"       # 审查并给出结论
     DONE = "done"           # 确认完成
     ASK_USER = "ask_user"   # 向用户提问（仅入口节点）
+    ESCALATE = "escalate"   # 上报：卡住了、需要发起人/上层拍板或协调
     REJECT = "reject"       # 否决，终止该分支
 
 
@@ -77,6 +78,7 @@ class TicketState(str, Enum):
     WAITING_CHILDREN = "waiting_children"
     REVIEW = "review"
     REWORK = "rework"
+    ESCALATED = "escalated"
     DONE = "done"
     REJECTED = "rejected"
     BLOCKED = "blocked"
@@ -279,6 +281,8 @@ class TicketRead(BaseModel):
     verdict: str | None = None
     review_comment: str | None = None
     result: dict[str, Any] = Field(default_factory=dict)
+    #: 最近一次上报记录 {from, reason, need, hops}；为空表示没被上报过
+    escalation: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None = None
@@ -310,6 +314,28 @@ class StepRead(BaseModel):
     finished_at: datetime | None = None
 
 
+class ChatMessageRead(BaseModel):
+    """入口角色对话的一条消息（``collab_messages``）。"""
+
+    id: str
+    run_id: str
+    #: user / leader
+    sender: str
+    role_key: str = ""
+    role_id: str | None = None
+    agent_id: str | None = None
+    sequence: int = 0
+    status: str = "complete"
+    content: str = ""
+    parts: list[dict[str, Any]] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    #: 需求更新、同步工单与解析告警等结构化信息
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
 class RunRead(BaseModel):
     id: str
     team_id: str
@@ -334,3 +360,7 @@ class RunRead(BaseModel):
 class RunDetail(RunRead):
     tickets: list[TicketRead] = Field(default_factory=list)
     steps: list[StepRead] = Field(default_factory=list)
+    #: 入口角色与用户的一对一对话；与工单步骤分开保存、在界面上按时间合并展示
+    chat_messages: list[ChatMessageRead] = Field(default_factory=list)
+    #: 当前是否有一条 CEO 回复正在生成（前端刷新后可据此重新订阅聊天流）
+    chat_active: bool = False

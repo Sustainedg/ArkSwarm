@@ -27,22 +27,27 @@ with open(os.path.join(state_dir, "prompts.jsonl"), "a", encoding="utf-8") as ha
 
 match = re.search(r"你的岗位：([^（\n]+)（([^）\n]+)）", prompt)
 node_key = match.group(2) if match else "unknown"
+is_chat = "[协作对话]" in prompt
+#: 聊天用 ``<key>:chat`` 的剧本，与工单步骤完全分开；这样测试能明确区分两条通道。
+script_key = f"{node_key}:chat" if is_chat else node_key
 
 with open(script_path, encoding="utf-8") as handle:
     script = json.load(handle)
-steps = script.get(node_key) or []
-counter_path = os.path.join(state_dir, f"{node_key}.count")
+steps = script.get(script_key) or []
+counter_path = os.path.join(state_dir, f"{script_key.replace(':', '-')}.count")
 index = 0
 if os.path.exists(counter_path):
     with open(counter_path, encoding="utf-8") as handle:
         index = int((handle.read().strip() or "0"))
 with open(counter_path, "w", encoding="utf-8") as handle:
     handle.write(str(index + 1))
-payload = steps[min(index, len(steps) - 1)] if steps else {
+payload = steps[min(index, len(steps) - 1)] if steps else ({
+    "content": f"（{node_key}）我在，随时可以聊。",
+} if is_chat else {
     "action": "ask_user",
     "question": "要继续吗？",
     "options": [{"label": "继续", "value": "继续"}, {"label": "停止", "value": "停止"}],
-}
+})
 
 
 def emit(obj):
@@ -52,19 +57,22 @@ def emit(obj):
 
 # 可选「闸门」：``<state_dir>/gate-<key>`` 存在时先卡住，直到测试删掉它（10 秒兜底）。
 # 用来让某一步稳稳停在运行中，测试可据此确定性地验证「断线后重连订阅」。
-gate_path = os.path.join(state_dir, f"gate-{node_key}")
+gate_path = os.path.join(state_dir, f"gate-{script_key}")
 if os.path.exists(gate_path):
     deadline = time.time() + 10
     while os.path.exists(gate_path) and time.time() < deadline:
         time.sleep(0.02)
 
 
-emit({"type": "session", "session_id": f"fake-{node_key}-{index}"})
+emit({"type": "session", "session_id": f"fake-{script_key}-{index}"})
 for piece in ["（", node_key, "）", "我来处理。"]:
     emit({"type": "message", "delta": piece})
 if isinstance(payload, str):
     # 剧本给字符串时，原样输出（用来模拟「产出不符合工单协议」）
     emit({"type": "message", "delta": payload})
+elif is_chat:
+    # 聊天剧本给对象时，取 content 原样输出（不会混进 work_order 协议）
+    emit({"type": "message", "delta": str(payload.get("content") or "")})
 else:
     emit(
         {

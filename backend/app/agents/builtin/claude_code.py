@@ -33,6 +33,30 @@ from ..skills import SkillMount, SkillSpec, scan_skill_root
 from .util import as_list, flatten_content, truthy
 
 
+# Claude Code 拒绝以 root 身份使用 bypassPermissions（"cannot be used with root/sudo
+# privileges for security reasons"），除非进程声明自己处在一个「有意的沙箱」里 —— 这是内核
+# 自带、官方容器场景使用的逃生口 ``IS_SANDBOX=1``。本控制台由 PyPanel 以 root 托管，用户又是
+# 显式勾了 bypassPermissions（无人值守），所以这里替它补上；没勾 bypassPermissions 的节点不受影响。
+
+
+def _is_root() -> bool:
+    """当前进程是否以 root 身份运行（real uid，与内核的 ``process.getuid()`` 判定一致）。"""
+    getuid = getattr(os, "getuid", None)
+    return bool(getuid) and getuid() == 0
+
+
+def _root_bypass_escape(ctx: AgentContext) -> str | None:
+    """root + bypassPermissions 时要给内核声明的 ``IS_SANDBOX`` 值；不需要时返回 ``None``。
+
+    用户在自己的 ``env`` 里显式配了 ``IS_SANDBOX`` 就以用户为准。
+    """
+    if (ctx.option("permission_mode") or "acceptEdits") != "bypassPermissions":
+        return None
+    if not _is_root():
+        return None
+    return str((ctx.option("env") or {}).get("IS_SANDBOX", "1"))
+
+
 #: Claude Code 自己的系统级配置文件，按顺序合并（后者覆盖前者）。
 _SYSTEM_SETTINGS_FILES = ("settings.json", "settings.local.json")
 
@@ -115,7 +139,10 @@ class ClaudeCodeAgent(AgentDefinition):
                 {"value": "dontAsk", "label": "dontAsk · 不询问，直接拒绝需确认的操作"},
                 {"value": "bypassPermissions", "label": "bypassPermissions · 跳过全部权限检查"},
             ],
-            help="bypassPermissions 会让智能体无人值守地执行操作，请只在沙箱环境中使用。",
+            help=(
+                "bypassPermissions 会让智能体无人值守地执行操作，请只在沙箱环境中使用；"
+                "以 root 运行时本适配器会自动设置 IS_SANDBOX=1，否则 Claude Code 会拒绝启动。"
+            ),
         ),
         ConfigField(
             "auth_style",
@@ -262,6 +289,10 @@ class ClaudeCodeAgent(AgentDefinition):
 
         env = self.effective_env(ctx)
         self._apply_auth_style(env, ctx)
+        # 以 root 跑 bypassPermissions 需要内核认作「有意的沙箱」，见 _root_bypass_escape
+        sandbox_escape = _root_bypass_escape(ctx)
+        if sandbox_escape is not None:
+            env.setdefault("IS_SANDBOX", sandbox_escape)
         env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         env.setdefault("CI", "1")
         if ctx.skill_home_dir:
@@ -288,6 +319,13 @@ class ClaudeCodeAgent(AgentDefinition):
     # -- 解析输出 ------------------------------------------------------------
 
     def parse_line(self, line: str, run: AgentRun) -> Iterable[AgentEvent]:
+        # 只提示一次：root + bypassPermissions 时补了 IS_SANDBOX，否则用户看到内核拒绝启动会一头雾水
+        if not run.state.get("_sandbox_noted") and _root_bypass_escape(run.ctx) == "1":
+            run.state["_sandbox_noted"] = True
+            yield log(
+                "当前以 root 运行且勾选了 bypassPermissions：已按 Claude Code 的约定设置 IS_SANDBOX=1",
+                "info",
+            )
         line = line.strip()
         if not line or not line.startswith("{"):
             if line:

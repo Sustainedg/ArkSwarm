@@ -89,6 +89,12 @@ function NodePanel({
   const role = roles.find((item) => item.id === node.role_id)
   const type = agentTypes.find((item) => item.id === role?.agent_type_id)
   const nodeIssues = issues.filter((issue) => issue.node_key === node.key)
+  const isEntry = entryKey === node.key
+  // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
+  // 任何一次改动都会把它清掉（运行时本来就会忽略，界面别显示成「生效了」）。
+  const contract = node.output_contract.filter(
+    (item) => (item !== 'ask_user' || isEntry) && (item !== 'escalate' || !isEntry),
+  )
 
   return (
     <>
@@ -202,17 +208,30 @@ function NodePanel({
           <span className="field-label">允许发起的动作</span>
           <div className="chips">
             {ACTIONS.map((action) => {
-              const checked = node.output_contract.includes(action.value)
+              const checked = contract.includes(action.value)
+              const lockHint =
+                action.value === 'ask_user' && !isEntry
+                  ? '只有入口节点能向用户提问'
+                  : action.value === 'escalate'
+                    ? isEntry
+                      ? '入口节点是最顶端，没有更上级可以上报（由 ask_user 收口）'
+                      : '上报是保底动作：任何岗位都保留，不用勾也生效'
+                    : undefined
               return (
-                <label key={action.value} className={`collab-toggle${checked ? ' on' : ''}`}>
+                <label
+                  key={action.value}
+                  className={`collab-toggle${checked ? ' on' : ''}${lockHint ? ' disabled' : ''}`}
+                  title={lockHint}
+                >
                   <input
                     type="checkbox"
                     checked={checked}
+                    disabled={Boolean(lockHint)}
                     onChange={() =>
                       onPatch({
                         output_contract: checked
-                          ? node.output_contract.filter((item) => item !== action.value)
-                          : [...node.output_contract, action.value],
+                          ? contract.filter((item) => item !== action.value)
+                          : [...contract, action.value],
                       })
                     }
                   />
@@ -221,7 +240,10 @@ function NodePanel({
               )
             })}
           </div>
-          <span className="field-help">一个都不选 = 按岗位取默认动作集合。</span>
+          <span className="field-help">
+            一个都不选 = 按岗位取默认动作集合。ask_user 只有入口节点可用（只有它直接面对用户）；
+            escalate 是保底动作，非入口节点始终可用。
+          </span>
         </div>
         <button className="btn sm" onClick={onSetEntry} disabled={entryKey === node.key}>
           {entryKey === node.key ? '★ 已是入口节点' : '设为入口节点（与用户对话）'}

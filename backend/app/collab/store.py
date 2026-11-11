@@ -16,6 +16,7 @@ from ..settings import get_settings
 from . import graph as graph_service
 from .schemas import (
     BudgetSpec,
+    ChatMessageRead,
     GraphIssue,
     GraphSpec,
     GraphValidation,
@@ -29,7 +30,7 @@ from .schemas import (
     TeamUpdate,
     TicketRead,
 )
-from .tables import CollabRun, CollabStep, CollabTeam, CollabTicket
+from .tables import CollabMessage, CollabRun, CollabStep, CollabTeam, CollabTicket
 
 
 class TeamNotFound(Exception):
@@ -192,6 +193,9 @@ async def recover_interrupted(session: AsyncSession) -> int:
         session.add(step)
     if rows or steps:
         await session.commit()
+    await mark_chat_interrupted(
+        session, None, "服务重启，这条 CEO 回复被中断；可以直接再问一次"
+    )
     return len(rows)
 
 
@@ -200,6 +204,22 @@ async def recover_interrupted(session: AsyncSession) -> int:
 
 def _ticket_read(ticket: CollabTicket) -> TicketRead:
     return TicketRead.model_validate(ticket, from_attributes=True)
+
+
+def _chat_read(message: CollabMessage) -> ChatMessageRead:
+    return ChatMessageRead.model_validate(message, from_attributes=True)
+
+
+async def list_chat_messages(session: AsyncSession, run_id: str) -> list[ChatMessageRead]:
+    """按发生顺序读出入口角色对话。"""
+    rows = (
+        await session.execute(
+            select(CollabMessage)
+            .where(CollabMessage.run_id == run_id)
+            .order_by(CollabMessage.sequence, CollabMessage.created_at, CollabMessage.id)
+        )
+    ).scalars().all()
+    return [_chat_read(row) for row in rows]
 
 
 async def create_run(session: AsyncSession, payload: RunCreate) -> CollabRun:
@@ -286,6 +306,24 @@ async def mark_interrupted(session: AsyncSession, run_id: str, reason: str) -> N
     await session.commit()
 
 
+async def mark_chat_interrupted(
+    session: AsyncSession, run_id: str | None, reason: str
+) -> int:
+    """把残留的 ``streaming`` 聊天回复收尾，避免界面永远显示「CEO 正在回复」。"""
+    query = select(CollabMessage).where(CollabMessage.status == "streaming")
+    if run_id:
+        query = query.where(CollabMessage.run_id == run_id)
+    rows = (await session.execute(query)).scalars().all()
+    for row in rows:
+        row.status = "interrupted"
+        row.error = row.error or reason
+        row.finished_at = utcnow()
+        session.add(row)
+    if rows:
+        await session.commit()
+    return len(rows)
+
+
 async def run_read(session: AsyncSession, run: CollabRun) -> RunRead:
     """运行列表项：只算计数，不把工单与步骤全捞出来。"""
     team = await session.get(CollabTeam, run.team_id)
@@ -365,4 +403,5 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
             )
             for step in steps
         ],
+        chat_messages=await list_chat_messages(session, run.id),
     )

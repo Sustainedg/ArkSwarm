@@ -89,6 +89,39 @@ def test_mobile_pages_do_not_import_desktop_ui():
     assert offenders == [], "\n".join(offenders)
 
 
+#: 「协作办公室」那一段样式：移动端不加载 index.css，所以两端**各写一份**，语义必须一致。
+OFFICE_STYLE_BANNER = (
+    "/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */"
+)
+MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
+
+
+def _office_style_block(path: Path, cut: str | None = None) -> str:
+    """取出一份样式表里的「协作办公室」样式段（可选：在移动端微调段之前截断）。"""
+    text = path.read_text(encoding="utf-8")
+    start = text.find(OFFICE_STYLE_BANNER)
+    assert start >= 0, f"{path.name} 里找不到「协作办公室」样式段（横幅注释被删了？）"
+    if cut is not None:
+        end = text.find(cut, start)
+        assert end > start, f"{path.name} 里找不到移动端微调段"
+        text = text[:end]
+    return text[start:].rstrip("\n")
+
+
+@needs_frontend
+def test_office_styles_are_identical_on_both_ends():
+    """办公室的样式两端各写一份（移动端不加载 index.css），两份必须逐字一致。
+
+    改了一边忘了另一边，手机上就会走样：小人不在工位上、工牌错位、挂钟指针飞出去。
+    移动端自己那几条微调规则写在这一段之后，不参与比对。
+    """
+    desktop = _office_style_block(FRONTEND / "src" / "index.css")
+    mobile = _office_style_block(MOBILE_SRC / "mobile.css", MOBILE_OFFICE_TUNING)
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的协作办公室样式不一致：改了一边记得把另一边同步（两端各一份）"
+    )
+
+
 @needs_frontend
 def test_mobile_manifest_scopes_to_the_mobile_link():
     manifest_path = FRONTEND / "public" / "m" / "manifest.webmanifest"
@@ -161,7 +194,15 @@ def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
     # iOS Safari 会忽略 user-scalable=no，必须靠 touch-action 兜底（允许集里不含 pinch-zoom）。
     css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
     assert "touch-action: pan-x pan-y" in css
-    assert "touch-action: none" not in css
+    # 外壳本身不许锁住手势；只有「协作办公室画布」例外——它要自己接管拖动与缩放。
+    locked = [
+        selector.strip()
+        for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", css)
+        if "touch-action: none" in body
+    ]
+    assert all(".office-map" in selector for selector in locked), (
+        f"只有协作办公室画布能锁触摸手势，这里是：{locked}"
+    )
 
     # 锁定缩放后输入框必须 ≥ 16px：iOS 聚焦 font-size < 16px 的输入框会强制放大页面。
     for selector in (".input, .select, .textarea", ".m-composer textarea", ".input.mono"):

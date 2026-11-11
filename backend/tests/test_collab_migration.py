@@ -66,3 +66,21 @@ async def test_migration_is_idempotent():
     assert columns.count("gist") == 1
     assert columns.count("target_key") == 1
     await _restore_full_schema()
+
+
+async def test_report_column_is_added_to_an_existing_tickets_table():
+    """收尾汇报标记 ``report_at`` 同样是后加的列：旧库启动时要被补上，旧行保持可读。"""
+    await init_db()
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql("ALTER TABLE collab_tickets DROP COLUMN report_at")
+
+    await init_db()
+    await init_db()
+
+    async with engine.begin() as conn:
+        columns = {
+            row[1] for row in (await conn.exec_driver_sql("PRAGMA table_info(collab_tickets)")).all()
+        }
+        count = (await conn.exec_driver_sql("SELECT COUNT(*) FROM collab_tickets")).scalar()
+    assert "report_at" in columns, "旧库缺 report_at 列时 init_db 应当自动补上"
+    assert count is not None  # 补列不能动到旧行

@@ -4,8 +4,9 @@
 设计是整条链路最关键的地方：
 
 1. 严格 JSON。模型老实输出时走这条，最快也最可靠。
-2. 正则清理后再解析：去掉不可见控制字符、把中文智能引号还原成 ``"``、修掉尾随逗号。
-   这一步能救回大量「截断 / 转义 / 复制粘贴」造成的低级语法错误。
+2. 正则清理后再解析：去掉不可见控制字符、把中文智能引号还原成 ``"``、修掉尾随逗号、
+   把字符串正文里**没转义的双引号**补上反斜杠。这一步能救回大量「截断 / 转义 / 复制粘贴」
+   造成的低级语法错误（中文输出里尤其常见）。
 3. 扫描正文里平衡的 ``{...}`` 对象（含被多余文字包裹的情况），并在末尾被截断时
    逐段回退到最后一个可解析的 ``}``。
 
@@ -23,6 +24,8 @@ from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, Tick
 
 #: 工单块的围栏标记
 FENCE = "work_order"
+#: 入口角色聊天里可选的「需求细化」围栏标记
+CHAT_FENCE = "chat_update"
 
 #: 允许的 JSON 对象扫描体积上限（避免畸形输出把解析拖死）
 MAX_SCAN_CHARS = 200_000
@@ -40,8 +43,14 @@ _SMART_QUOTES = {
     "\u3002": "。",  # 全角句号（误当小数点的情况极少，这里只做等值替换，不改语义）
 }
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+#: 字符串**收尾**引号后面（跳过空白）只可能是这些结构字符；不是它们就说明这个引号是正文里的
+_AFTER_STRING = frozenset(",}]:")
 _FENCE_RE = re.compile(
     r"```[ \t]*" + FENCE + r"[ \t]*\r?\n?(.*?)(?:```|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+_CHAT_FENCE_RE = re.compile(
+    r"```[ \t]*" + CHAT_FENCE + r"[ \t]*\r?\n?(.*?)(?:```|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 _COERCE = {
@@ -70,6 +79,20 @@ _COERCE = {
 # --- 数据结构 ---------------------------------------------------------------
 
 
+#: 模型常用来写「长说明」的字段名（不是 ticket 的正式字段，但必须接住，不能静默丢掉）
+_DESCRIPTION_KEYS = (
+    "description",
+    "desc",
+    "detail",
+    "details",
+    "spec",
+    "note",
+    "notes",
+    "说明",
+    "描述",
+)
+
+
 @dataclass(slots=True)
 class TicketDraft:
     """工单字段。所有列表字段都容忍「模型只给了一个字符串」的情况。"""
@@ -90,10 +113,23 @@ class TicketDraft:
             return cls(title=value.strip())
         if not isinstance(value, dict):
             return cls()
+        goal = _text(value.get("goal") or value.get("objective"))
+        requirements = _lines(value.get("requirements"))
+        # 模型有时把整段规格塞进 description 之类的字段（线上真实发生过）。直接丢掉就等于
+        # 「工单字段静默消失」——下游只拿到一个标题，所以这里必须接住：没有 goal 就当成 goal，
+        # 否则并进需求。
+        described = next(
+            (text for key in _DESCRIPTION_KEYS if (text := _text(value.get(key)))), ""
+        )
+        if described:
+            if goal:
+                requirements = [*_lines(described), *requirements]
+            else:
+                goal = described
         return cls(
             title=_text(value.get("title")),
-            goal=_text(value.get("goal") or value.get("objective")),
-            requirements=_lines(value.get("requirements")),
+            goal=goal,
+            requirements=requirements,
             acceptance=_lines(value.get("acceptance") or value.get("acceptance_criteria")),
             constraints=_lines(value.get("constraints")),
             deliverables=_lines(value.get("deliverables") or value.get("deliverable")),
@@ -140,6 +176,33 @@ class ParseResult:
     source: str | None = None
     #: 可继续但需要提醒用户的偏差（例如一轮里出现多个工单块，已取最后一个）
     warning: str | None = None
+
+
+@dataclass(slots=True)
+class ChatUpdate:
+    """聊天里识别到的结构化需求更新（只追加，不直接改工单状态）。"""
+
+    goal: str = ""
+    requirements_add: list[str] = field(default_factory=list)
+    acceptance_add: list[str] = field(default_factory=list)
+    constraints_add: list[str] = field(default_factory=list)
+    deliverables_add: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.goal,
+                self.requirements_add,
+                self.acceptance_add,
+                self.constraints_add,
+                self.deliverables_add,
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        return {key: value for key, value in data.items() if value not in ("", [])}
 
 
 @dataclass(slots=True)
@@ -331,6 +394,43 @@ def _text(value: Any) -> str:
     return ""
 
 
+#: 标题比对时先抹掉的噪声：空白与中英文标点（模型改标题时几乎都改在这里）
+_TITLE_NOISE = re.compile(r"[\s，。、；：,.;:!！?？（）()【】\[\]「」『』\"'“”‘’\-—_/+]+")
+#: 「近似重名」判定的最短长度：太短的标题（如「第 1 层」）容易误判，不进入前缀比对
+_SHORT_TITLE = 4
+#: 前缀占比阈值：两个标题前 80% 都一样，就当作同一件事
+_PREFIX_RATIO = 0.8
+
+
+def normalize_title(text: str) -> str:
+    """把标题归一化（去掉空白与标点、转小写），用于「是不是同一件事」的比较。"""
+    return _TITLE_NOISE.sub("", _text(text).lower())
+
+
+def titles_look_duplicated(left: str, right: str) -> bool:
+    """两个标题是不是「同一件事」（防复读式拆解）。
+
+    只做「完全相等 / 互相包含 / 长公共前缀」三种纯字符串判断，可预测、可单测。
+    模型想绕开「重名子工单」护栏时，最常见的做法就是在标题尾巴上追加几个字
+    （「列出文件清单」→「列出文件清单并回报」），这条规则正是冲着它去的。
+    """
+    a, b = normalize_title(left), normalize_title(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) < _SHORT_TITLE or len(b) < _SHORT_TITLE:
+        return False
+    if a in b or b in a:
+        return True
+    prefix = 0
+    for char_a, char_b in zip(a, b):
+        if char_a != char_b:
+            break
+        prefix += 1
+    return prefix >= _PREFIX_RATIO * min(len(a), len(b))
+
+
 def _lines(value: Any) -> list[str]:
     """把各种形态规整成字符串列表：字符串按行拆，列表逐项取文本。"""
     if value is None:
@@ -348,12 +448,62 @@ def _lines(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def escape_inner_quotes(text: str) -> str:
+    """把字符串值内部**未转义**的 ``"`` 补成 ``\\"``（第 2 级容错）。
+
+    模型（中文尤其常见）会在 JSON 字符串里直接写 ASCII 双引号来引用话术，
+    例如 ``"…照着做通，含"换电脑恢复"的具体步骤。…"``：第一个引号会提前结束字符串，
+    整块 JSON 直接判死。判定规则很朴素 —— 一个 ``"`` 后面（跳过空白）如果不是结构字符
+    （``,`` ``}`` ``]`` ``:``）也不是文本结尾，那它就不是字符串的收尾引号，补个反斜杠即可。
+    合法 JSON 的收尾引号后面必然是结构字符，因此这个函数对正常输出是恒等变换。
+    """
+    out: list[str] = []
+    length = len(text)
+    in_string = False
+    escaped = False
+    index = 0
+    while index < length:
+        char = text[index]
+        if not in_string:
+            if char == '"':
+                in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if escaped:
+            escaped = False
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\":
+            escaped = True
+            out.append(char)
+            index += 1
+            continue
+        if char != '"':
+            out.append(char)
+            index += 1
+            continue
+        lookahead = index + 1
+        while lookahead < length and text[lookahead] in " \t\r\n":
+            lookahead += 1
+        if lookahead >= length or text[lookahead] in _AFTER_STRING:
+            in_string = False
+            out.append(char)
+        else:
+            out.append('\\"')
+        index += 1
+    return "".join(out)
+
+
 def sanitize_json_text(text: str) -> str:
     """第 2 级容错：清理不可见字符与常见的低级语法错误。"""
     cleaned = text.replace("\ufeff", "")
     cleaned = _CTRL.sub("", cleaned)
     for src, dst in _SMART_QUOTES.items():
         cleaned = cleaned.replace(src, dst)
+    # 智能引号还原成语义相同的 ASCII 引号后，字符串正文里就可能多出"裸引号"，必须补转义
+    cleaned = escape_inner_quotes(cleaned)
     for _ in range(3):  # 连续尾随逗号要迭代几次才能清干净
         new = _TRAILING_COMMA.sub(r"\1", cleaned)
         if new == cleaned:
@@ -465,9 +615,12 @@ def _extract(raw: str) -> tuple[dict[str, Any] | None, str | None]:
             obj = json.loads(candidate)
         except json.JSONDecodeError as exc:
             if level == "严格":
-                last_error = f"工单块不是合法 JSON：{exc.msg}（第 {exc.lineno} 行第 {exc.colno} 列）"
+                # 严格解析的报错带行列号、最贴近模型原文，优先保留（清理后的行列号会漂移）
+                last_error = last_error or (
+                    f"工单块不是合法 JSON：{exc.msg}（第 {exc.lineno} 行第 {exc.colno} 列）"
+                )
             else:
-                last_error = f"工单块不是合法 JSON，清理后仍无法解析：{exc.msg}"
+                last_error = last_error or f"工单块不是合法 JSON，清理后仍无法解析：{exc.msg}"
             continue
         found, reason = _pick(obj)
         if found is not None:
@@ -491,7 +644,14 @@ def _extract(raw: str) -> tuple[dict[str, Any] | None, str | None]:
     if repaired is not None:
         return repaired, None
 
-    return None, missing_action or last_error or "没有找到可解析的工单对象"
+    if missing_action:
+        return None, missing_action
+    if last_error:
+        return None, (
+            f"{last_error}。常见原因：字符串里的双引号没有转义（应写成 \\\" 或改用「」），"
+            "或者输出被截断；请检查这一轮的工单块"
+        )
+    return None, "没有找到可解析的工单对象"
 
 
 def _build_order(obj: dict[str, Any]) -> WorkOrder:
@@ -591,6 +751,114 @@ def parse_work_order(text: str) -> ParseResult:
     return ParseResult(True, order, None, source, warning)
 
 
+def _extract_chat_object(raw: str) -> tuple[dict[str, Any] | None, str | None]:
+    """从 ``chat_update`` 块里取对象；不要求 action 字段。"""
+    text = raw.strip()
+    if not text:
+        return None, "chat_update 块是空的"
+    cleaned = sanitize_json_text(text)
+    last_error: str | None = None
+    for candidate in (text, cleaned):
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = last_error or f"第 {exc.lineno} 行第 {exc.colno} 列：{exc.msg}"
+            continue
+        if isinstance(obj, dict):
+            return obj, None
+        last_error = last_error or "chat_update 必须是一个 JSON 对象"
+
+    for obj_text in _scan_objects(cleaned):
+        try:
+            obj = json.loads(obj_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj, None
+
+    start = cleaned.find("{")
+    if start >= 0:
+        closed = _close_unbalanced(cleaned[start:])
+        if closed:
+            try:
+                obj = json.loads(closed)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(obj, dict):
+                    return obj, None
+    return None, f"chat_update 不是合法 JSON（{last_error or '无法解析'}）"
+
+
+def parse_chat_update(text: str) -> tuple[ChatUpdate | None, str | None]:
+    """解析聊天末尾可选的 ``chat_update`` 块。
+
+    没有这个块是完全正常的（纯聊天 / 问进度）；只有用户明确要改需求时才要求模型给出。
+    因此解析失败只返回告警，不把整条回复判死。
+    """
+    bodies = [match.group(1) for match in _CHAT_FENCE_RE.finditer(text or "")]
+    if not bodies:
+        return None, None
+    warning = None
+    if len(bodies) > 1:
+        warning = f"检测到 {len(bodies)} 个 {CHAT_FENCE} 代码块，已按最后一个处理"
+    obj, error = _extract_chat_object(bodies[-1])
+    if obj is None:
+        return None, error
+
+    def lines(*keys: str) -> list[str]:
+        for key in keys:
+            if key in obj:
+                items = _lines(obj.get(key))
+                if items:
+                    return items
+        return []
+
+    update = ChatUpdate(
+        goal=_text(obj.get("goal") or obj.get("objective")),
+        requirements_add=lines("requirements_add", "requirements", "requirement_add"),
+        acceptance_add=lines("acceptance_add", "acceptance", "acceptance_criteria"),
+        constraints_add=lines("constraints_add", "constraints"),
+        deliverables_add=lines("deliverables_add", "deliverables", "deliverable"),
+    )
+    if update.is_empty:
+        return None, warning or "chat_update 里没有任何可用的需求字段"
+    return update, warning
+
+
+def extract_chat_body(text: str) -> str:
+    """去掉 ``chat_update`` 块后剩下的聊天正文。"""
+    return _CHAT_FENCE_RE.sub("", text or "").strip()
+
+
+def merge_chat_update(brief: dict[str, Any], update: ChatUpdate) -> tuple[dict[str, Any], list[str]]:
+    """把聊天里的需求更新合并进工单 brief，返回新 brief 与改动过的字段名。
+
+    列表字段一律去重追加：用户在对话里补充要求是最常见的动作，直接覆盖会丢掉原工单里
+    已经写清楚的需求。``goal`` 只有模型明确给出时才替换。
+    """
+    merged = dict(brief or {})
+    changed: list[str] = []
+    if update.goal and update.goal != _text(merged.get("goal")):
+        merged["goal"] = update.goal
+        changed.append("goal")
+    for field_name, additions in (
+        ("requirements", update.requirements_add),
+        ("acceptance", update.acceptance_add),
+        ("constraints", update.constraints_add),
+        ("deliverables", update.deliverables_add),
+    ):
+        if not additions:
+            continue
+        existing = _lines(merged.get(field_name))
+        seen = {_text(item) for item in existing}
+        appended = [item for item in additions if item and item not in seen]
+        if appended:
+            merged[field_name] = [*existing, *appended]
+            changed.append(field_name)
+    return merged, changed
+
+
 def resolve_order_targets(order: WorkOrder, aliases: Mapping[str, str]) -> None:
     """把岗位显示名归一成节点 key。
 
@@ -638,12 +906,30 @@ def validate_order(
     is_entry: bool = False,
 ) -> str | None:
     """语义校验：动作是否越权、派发对象是否在白名单内、必填字段是否齐全。"""
+    # 先给 ask_user 一个明确的原因：只有入口节点能代表系统向用户提问。
+    # 放在白名单判断之前，避免报成笼统的「本轮不允许的动作」而让人看不懂。
+    if order.action is TicketAction.ASK_USER and not is_entry:
+        return "只有入口节点能向用户提问（ask_user）"
+
     actions = {item.value for item in allowed_actions}
     if order.action.value not in actions:
         return (
             f"本轮不允许的动作：{order.action.value}；"
             f"你只能做：{'、'.join(sorted(actions))}"
         )
+
+    if order.action is TicketAction.ESCALATE:
+        # 上抛是「我解决不了」的正式通道：必须说清卡在哪，否则上游只能再问一遍。
+        if is_entry:
+            return (
+                "你已经是入口节点：需要用户拍板的事请直接用 ask_user 交给用户，"
+                "不要再 escalate（上面没人可以接了）"
+            )
+        if not order.reason:
+            return (
+                "escalate 必须给 reason：写清卡在哪、为什么你自己解决不了、"
+                "需要发起人或上层做什么（例如「本环境没有执行权限，需用户决定是否授权」）"
+            )
 
     assignees = sorted(allowed_assignees)
     if order.action is TicketAction.DELEGATE:
@@ -670,8 +956,6 @@ def validate_order(
                 )
 
     if order.action is TicketAction.ASK_USER:
-        if not is_entry:
-            return "只有入口节点能向用户提问（ask_user）"
         if not order.question:
             return "ask_user 必须给 question（说明要用户决定什么）"
         if len(order.options) < MIN_ASK_OPTIONS:
@@ -726,6 +1010,11 @@ def render_protocol_guide(
             "handoff（转交：同一件活换人做，我继续等结果，ticket 可省略）；"
             "split（拆子工单：我是子工单的发起人，等它完成后我来汇总，必须给 ticket.title）。"
         )
+        rules.append(
+            "ticket 只有这几个字段：title / goal / requirements / acceptance / constraints / "
+            "deliverables；详细说明请分条写进 requirements（每条一行），不要自造 description 等字段名，"
+            "否则下游只会收到一个标题。"
+        )
     if TicketAction.REVIEW in actions:
         rules.append(
             f"review 必须给 verdict（{VERDICT_PASS} / {VERDICT_CHANGES}）；"
@@ -737,6 +1026,28 @@ def render_protocol_guide(
             )
     if TicketAction.SUBMIT in actions:
         rules.append("submit 要给 summary（一句话结论）与 artifacts（改动的文件路径清单）。")
+    if TicketAction.DONE in actions:
+        rules.append(
+            "done 要给 remark（一句话结论）：它是这张工单交给上游的交付摘要——"
+            "父工单汇总与最终收尾汇报都只看它，留空等于没交付。"
+        )
+    if TicketAction.ESCALATE in actions:
+        rules.append(
+            "escalate 是**往上上报**：你自己解决不了的阻塞（缺权限、需求不清、依赖外部资源）用它，"
+            "必须给 reason（写清卡在哪、需要什么）。工单会交回发起人；发起人也解决不了就继续往上报，"
+            "一直到入口角色向用户确认。不要用 delegate 把同一件事换个说法再往下派，那只是把问题原地推一圈。"
+        )
+    if TicketAction.ASK_USER not in actions and TicketAction.DONE in actions:
+        if TicketAction.ESCALATE in actions:
+            rules.append(
+                "需要用户拍板、或你自己解决不了的事，用 escalate 上报（reason 写清卡在哪、需要什么），"
+                "不要自己问用户，也不要硬撑到 done 里一句带过。"
+            )
+        else:
+            rules.append(
+                "需要用户拍板的事项不要自己问用户：把问题和你的建议写进正文或 done 的 remark，"
+                "交给上游汇总；只有入口节点会统一向用户确认。"
+            )
     if TicketAction.ASK_USER in actions:
         rules.append(
             "需要用户拍板时用 ask_user：question 写清要决定什么；options 给 2-6 条可点选项，"
@@ -796,6 +1107,11 @@ def _example_for(actions: Sequence[TicketAction], assignees: Sequence[str]) -> d
             "action": "submit",
             "summary": "已完成主题开关与持久化，改动集中在 src/theme.ts",
             "artifacts": [{"kind": "file", "path": "src/theme.ts"}],
+        }
+    if TicketAction.DONE in actions and TicketAction.DELEGATE not in actions:
+        return {
+            "action": "done",
+            "remark": "已按验收标准交付：改动集中在 src/theme.ts，无遗留问题",
         }
     return {
         "action": "delegate",

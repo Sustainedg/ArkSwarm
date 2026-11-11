@@ -26,6 +26,10 @@ class CollabEventType(str, Enum):
     TICKET_UPDATED = "collab.ticket.updated"
     RUN_STATUS = "collab.run.status"
     NOTICE = "collab.notice"
+    #: 入口角色聊天通道：与工单步骤分开，客户端用独立的归约器渲染
+    CHAT_STARTED = "collab.chat.started"
+    CHAT_EVENT = "collab.chat.event"
+    CHAT_FINISHED = "collab.chat.finished"
 
 
 @dataclass(slots=True)
@@ -85,3 +89,45 @@ def run_status(status: str, reason: str | None = None, **extra: Any) -> CollabEv
 
 def notice(text: str, level: str = "info", **extra: Any) -> CollabEvent:
     return CollabEvent(CollabEventType.NOTICE, {"text": text, "level": level, **extra})
+
+
+def chat_started(
+    message_id: str, run_id: str, role_name: str, agent_name: str, role_key: str = ""
+) -> CollabEvent:
+    return CollabEvent(
+        CollabEventType.CHAT_STARTED,
+        {
+            "message_id": message_id,
+            "run_id": run_id,
+            "role_name": role_name,
+            "agent_name": agent_name,
+            "role_key": role_key,
+        },
+    )
+
+
+def chat_event(message_id: str, event: AgentEvent) -> CollabEvent:
+    """把聊天这一轮里的原始智能体事件透传；前端复用同一个归约器逐字渲染。"""
+    return CollabEvent(CollabEventType.CHAT_EVENT, {"message_id": message_id, "event": event.to_dict()})
+
+
+def chat_finished(
+    message_id: str,
+    status: str,
+    *,
+    usage: dict[str, Any] | None = None,
+    error: str | None = None,
+    warning: str | None = None,
+    applied: dict[str, Any] | None = None,
+) -> CollabEvent:
+    return CollabEvent(
+        CollabEventType.CHAT_FINISHED,
+        {
+            "message_id": message_id,
+            "status": status,
+            "usage": usage or {},
+            "error": error,
+            "warning": warning,
+            "applied": applied or {},
+        },
+    )

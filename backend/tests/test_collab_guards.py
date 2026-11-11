@@ -235,6 +235,37 @@ async def test_duplicate_child_titles_guard(client: httpx.AsyncClient, tmp_path:
     assert detail["tickets_used"] == 3  # 根工单 + 两张子工单
 
 
+async def test_duplicate_child_titles_guard_catches_tail_tweaks(client: httpx.AsyncClient, tmp_path: Path):
+    """只改标题尾巴（「并回报」之类）绕开重名护栏也要被拦住——这是线上真实发生过的空转形态。"""
+    env = await make_env(
+        {
+            "ceo": [
+                split("se", "写登录接口"),
+                split("se", "写登录接口并回报"),
+                split("se", "写登录接口并回报结果"),
+            ],
+            "se": [{"action": "submit", "summary": "写好了"}],
+        },
+        tmp_path,
+    )
+    spec = GraphSpec(
+        nodes=[
+            NodeSpec(key="ceo", role_id=env["roles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", role_id=env["roles"]["se"], label="SE", duty=Duty.ENGINEER),
+        ],
+        edges=[EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN)],
+    )
+    team = await create_team(client, spec)
+    run_id, _ = await start_run(client, team["id"], "把登录接口写了")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "同名" in (detail["error"] or "")
+    assert detail["tickets_used"] == 3  # 根工单 + 前两张（第三张被挡）
+    titles = {ticket["title"] for ticket in detail["tickets"] if ticket["parent_ticket_id"]}
+    assert titles == {"写登录接口", "写登录接口并回报"}
+
+
 async def test_run_detail_reports_budget(client: httpx.AsyncClient, tmp_path: Path):
     """运行详情要带上本次预算，界面才能显示「已用 / 上限」。"""
     env = await make_env({"ceo": [handoff("cto", "随便干点啥")]}, tmp_path)

@@ -25,11 +25,24 @@ from .schemas import (
     WorkspaceScope,
 )
 
-#: 各岗位默认能发起的动作
+#: 各岗位默认能发起的动作。
+#: 三个岗位都默认带上 escalate：卡住了就往发起人上报，是「不静默、不硬撑」的最后一条退路
+#: （真实事故：实施者只能 done，被阻塞后唯一出口是把失败写进结论，上游只能反复重派）。
 DUTY_OUTPUT_CONTRACT: dict[Duty, tuple[TicketAction, ...]] = {
-    Duty.COORDINATOR: (TicketAction.DELEGATE, TicketAction.ASK_USER, TicketAction.DONE, TicketAction.REJECT),
-    Duty.ENGINEER: (TicketAction.SUBMIT, TicketAction.DELEGATE, TicketAction.REJECT),
-    Duty.REVIEWER: (TicketAction.REVIEW, TicketAction.REJECT),
+    Duty.COORDINATOR: (
+        TicketAction.DELEGATE,
+        TicketAction.ASK_USER,
+        TicketAction.ESCALATE,
+        TicketAction.DONE,
+        TicketAction.REJECT,
+    ),
+    Duty.ENGINEER: (
+        TicketAction.SUBMIT,
+        TicketAction.DELEGATE,
+        TicketAction.ESCALATE,
+        TicketAction.REJECT,
+    ),
+    Duty.REVIEWER: (TicketAction.REVIEW, TicketAction.ESCALATE, TicketAction.REJECT),
 }
 
 #: 各岗位默认的工作目录范围：协调者拿不到目录，审查者只读
@@ -119,8 +132,33 @@ def rework_edge(graph: GraphSpec, from_key: str, to_key: str) -> EdgeSpec | None
     return None
 
 
-def effective_output_contract(node: NodeSpec) -> tuple[TicketAction, ...]:
-    return tuple(node.output_contract) if node.output_contract else DUTY_OUTPUT_CONTRACT[node.duty]
+def effective_output_contract(
+    node: NodeSpec, *, is_entry: bool, escalated: bool = False
+) -> tuple[TicketAction, ...]:
+    """该节点本轮真正允许的动作。
+
+    三条规则只在这里给出，提示词与运行时校验才会一致：
+
+    * ``ask_user`` 只有入口节点能用（用户只和入口角色对话）——非入口节点即使在编辑器里
+      勾了它也要剔除，避免「提示词说能做、运行时又报只有入口能提问」的自相矛盾；
+    * ``escalate`` 反过来：**非入口节点无条件保留**。它是「我搞不定」的保底出路，
+      不能被节点契约配成死路（真实事故：实施者的生效动作只剩 done，卡住后只能硬撑）；
+      入口节点是链路顶端，没有更上级可报，由 ``ask_user`` 收口，所以剔除；
+    * ``escalated``（这张工单是被下游上报上来的）时剔除 ``delegate``：上抛件只能
+      「自己解决 / 继续往上 / 交给用户」，不许把阻塞换个说法再往下压
+      （真实事故：CTO 把「跑不了」改写成「静态核对」又派给码农，白转一轮）。
+    """
+    contract = (
+        tuple(node.output_contract) if node.output_contract else DUTY_OUTPUT_CONTRACT[node.duty]
+    )
+    if is_entry:
+        return tuple(action for action in contract if action is not TicketAction.ESCALATE)
+    if TicketAction.ESCALATE not in contract:
+        contract = (*contract, TicketAction.ESCALATE)
+    contract = tuple(action for action in contract if action is not TicketAction.ASK_USER)
+    if escalated:
+        contract = tuple(action for action in contract if action is not TicketAction.DELEGATE)
+    return contract
 
 
 def effective_workspace_scope(node: NodeSpec) -> WorkspaceScope:
@@ -348,6 +386,21 @@ def validate_graph(
             )
 
     for node in graph.nodes:
+        if (
+            entry is not None
+            and node.key != entry.key
+            and TicketAction.ASK_USER in node.output_contract
+        ):
+            warnings.append(
+                GraphIssue(
+                    code="node.ask_user_not_entry",
+                    message=(
+                        f"「{node.label or node.key}」不是入口节点，勾选的 ask_user 会被忽略："
+                        "只有入口节点能向用户提问"
+                    ),
+                    node_key=node.key,
+                )
+            )
         if node.duty is Duty.REVIEWER and len(rework_targets(graph, node.key)) > 1:
             warnings.append(
                 GraphIssue(

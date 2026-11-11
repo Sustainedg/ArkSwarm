@@ -41,12 +41,25 @@ from .graph import (
     rework_targets,
     validate_graph,
 )
-from .prompt import HistoryEntry, TicketView, build_step_prompt, ticket_code
+from .prompt import (
+    ENTRY_REPORT_ACTIONS,
+    ChatHistoryEntry,
+    ChatTicketView,
+    HistoryEntry,
+    TicketView,
+    build_chat_prompt,
+    build_step_prompt,
+    ticket_code,
+)
 from .tickets import (
+    extract_chat_body,
     ensure_ask_options,
     extract_body,
+    merge_chat_update,
+    parse_chat_update,
     parse_work_order,
     resolve_order_targets,
+    titles_look_duplicated,
     validate_order,
 )
 from .schemas import (
@@ -59,7 +72,7 @@ from .schemas import (
     VERDICT_CHANGES,
     VERDICT_PASS,
 )
-from .tables import CollabRun, CollabStep, CollabTeam, CollabTicket
+from .tables import CollabMessage, CollabRun, CollabStep, CollabTeam, CollabTicket
 
 #: 防御性上限：即使预算配错了，也不允许一个请求里无限循环
 MAX_STEPS_PER_TURN = 200
@@ -74,6 +87,8 @@ READY_STATES = {
     TicketState.WORKING.value,
     TicketState.REVIEW.value,
     TicketState.REWORK.value,
+    # 上抛件归发起人处理：它必须能被立刻取起来，否则「上报」就变成了静默搁置
+    TicketState.ESCALATED.value,
 }
 ACTIVE_STATES = {
     TicketState.OPEN.value,
@@ -81,12 +96,17 @@ ACTIVE_STATES = {
     TicketState.WAITING_CHILDREN.value,
     TicketState.REVIEW.value,
     TicketState.REWORK.value,
+    TicketState.ESCALATED.value,
     TicketState.BLOCKED.value,
 }
 
 
 class TurnError(Exception):
     """这次请求没法开始（配置缺失、图不合法、已经在跑等）。"""
+
+
+class ChatError(Exception):
+    """入口角色聊天没法开始（没写内容、图不合法、上一条还在回复等）。"""
 
 
 @dataclass
@@ -96,6 +116,18 @@ class PreparedTurn:
     graph: GraphSpec
     entry: NodeSpec
     content: str | None = None
+
+
+@dataclass
+class PreparedChat:
+    """一次入口角色聊天：已经落库的用户消息 + 拼好的 prompt。"""
+
+    run: CollabRun
+    team: CollabTeam
+    graph: GraphSpec
+    entry: NodeSpec
+    prompt: str
+    user_message: CollabMessage
 
 
 @dataclass
@@ -118,11 +150,40 @@ async def _tickets(session: AsyncSession, run_id: str) -> list[CollabTicket]:
                 select(CollabTicket)
                 .where(CollabTicket.run_id == run_id)
                 .order_by(CollabTicket.created_at, CollabTicket.id)
+                # 入口聊天可能在另一个数据库会话里刚补过 brief；每次都从库里取最新行，
+                # 不能拿同一回合早期缓存在 identity map 里的旧对象拼下一步 prompt。
+                .execution_options(populate_existing=True)
             )
         )
         .scalars()
         .all()
     )
+
+
+async def _pending_question_ticket(session: AsyncSession, run_id: str) -> CollabTicket | None:
+    """最近一张在等用户回答的工单（``state=blocked`` 且 ``result`` 里有 question）。
+
+    入口角色提问时工单会挂起；但提问的**未必是根工单** —— 上抛件是在发起人手里转成
+    ``ask_user`` 的。用户回答后要把它交回提问者，所以这里不写死 ``parent_ticket_id is None``。
+    """
+    rows = (
+        (
+            await session.execute(
+                select(CollabTicket)
+                .where(
+                    CollabTicket.run_id == run_id,
+                    CollabTicket.state == TicketState.BLOCKED.value,
+                )
+                .order_by(CollabTicket.updated_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for ticket in rows:
+        if (ticket.result or {}).get("question"):
+            return ticket
+    return None
 
 
 async def _next_sequence(session: AsyncSession, run_id: str) -> int:
@@ -164,6 +225,9 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     text = (content or "").strip()
     tickets = await _tickets(session, run_id)
     root = next((t for t in tickets if t.parent_ticket_id is None), None)
+    # 用户可能在回答**某个角色**的提问；上抛件会在发起人手里 ask_user，未必是根工单，
+    # 所以先找出「最近一张在等用户回答的工单」，下面优先把它重新打开。
+    asked = await _pending_question_ticket(session, run_id) if text else None
 
     if text:
         if run.goal == "":
@@ -204,6 +268,16 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
         run.tickets_used = (run.tickets_used or 0) + 1
         await session.commit()
         await session.refresh(root)
+    elif asked is not None:
+        # 用户回答了提问 → 把提问的那张工单交回给提问者（当前持有者）继续推进
+        asked.state = TicketState.OPEN.value
+        # 提问已经答复，清掉卡片数据；否则下一次因别的原因挂起时会把旧卡片带出来
+        result = dict(asked.result or {})
+        result.pop("question", None)
+        result.pop("options", None)
+        asked.result = result
+        asked.updated_at = utcnow()
+        session.add(asked)
     elif text and root.state == TicketState.BLOCKED.value:
         # 入口角色问过话，用户现在回答了 → 工单重新回到提问者（当前持有者）手里
         root.state = TicketState.OPEN.value
@@ -220,6 +294,8 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
         root.to_role_id = entry.role_id
         root.closed_at = None
         root.verdict = None
+        # 新一轮收尾要重新汇报一次：清掉上一轮的汇报标记（用户追问 → 干完 → 再来一次汇报）
+        root.report_at = None
 
     run.status = RunStatus.RUNNING.value
     run.error = None
@@ -228,6 +304,318 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     await session.commit()
     await session.refresh(run)
     return PreparedTurn(run=run, team=team, graph=graph, entry=entry, content=text or None)
+
+
+# --- 入口角色常驻聊天 -------------------------------------------------------
+
+
+async def _next_chat_sequence(session: AsyncSession, run_id: str) -> int:
+    rows = (
+        await session.execute(
+            select(CollabMessage.sequence).where(CollabMessage.run_id == run_id)
+        )
+    ).all()
+    return max((row[0] for row in rows), default=0) + 1
+
+
+async def _chat_history(
+    session: AsyncSession, run_id: str, limit: int = 20
+) -> list[CollabMessage]:
+    """最近若干条聊天，按时间正序返回（只给入口角色本人回放）。"""
+    rows = list(
+        (
+            await session.execute(
+                select(CollabMessage)
+                .where(CollabMessage.run_id == run_id)
+                .order_by(CollabMessage.sequence.desc(), CollabMessage.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+    )
+    rows.reverse()
+    return rows
+
+
+def _node_label(node: NodeSpec) -> str:
+    return node.label or node.key
+
+
+async def _active_step_label(
+    session: AsyncSession, run_id: str, graph: GraphSpec
+) -> str | None:
+    """当前正在跑的工单步骤，用一句结构化事实告诉 CEO「谁在做什么」。"""
+    step = (
+        await session.execute(
+            select(CollabStep)
+            .where(CollabStep.run_id == run_id, CollabStep.status == "streaming")
+            .order_by(CollabStep.sequence.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if step is None:
+        return None
+    node = node_map(graph).get(step.role_key)
+    label = _node_label(node) if node else (step.role_key or "某个角色")
+    ticket = await session.get(CollabTicket, step.ticket_id) if step.ticket_id else None
+    if ticket is not None:
+        return f"{label}（{step.role_key}）正在处理《{ticket.title}》"
+    return f"{label}（{step.role_key}）正在处理一项工作"
+
+
+def _chat_ticket_view(ticket: CollabTicket, labels: dict[str, str]) -> ChatTicketView:
+    brief = ticket.brief or {}
+    result = ticket.result or {}
+    holder = labels.get(ticket.holder_key, ticket.holder_key) or "未指定"
+    return ChatTicketView(
+        id=ticket.id,
+        title=ticket.title,
+        state=ticket.state,
+        holder=f"{holder}（{ticket.holder_key}）" if ticket.holder_key else holder,
+        goal=str(brief.get("goal") or ""),
+        requirements=[str(item) for item in (brief.get("requirements") or [])],
+        acceptance=[str(item) for item in (brief.get("acceptance") or [])],
+        constraints=[str(item) for item in (brief.get("constraints") or [])],
+        deliverables=[str(item) for item in (brief.get("deliverables") or [])],
+        summary=str(result.get("summary") or result.get("remark") or ""),
+        artifacts=_artifact_paths(result),
+        review_comment=str(ticket.review_comment or ""),
+    )
+
+
+async def prepare_chat(session: AsyncSession, run_id: str, content: str) -> PreparedChat:
+    """校验并落库一条用户消息，拼出入口角色这次的聊天 prompt。
+
+    这里刻意**不碰工单状态**，也不检查主流程是否正在跑：CEO 的聊天通道与工单推进并行，
+    是用户随时能找到负责人的唯一入口。
+    """
+    run = await session.get(CollabRun, run_id)
+    if run is None:
+        raise ChatError(f"找不到协作运行：{run_id}")
+    if execution.is_chat_running(run_id):
+        raise ChatError("CEO 正在回复上一条消息，请稍等它说完")
+    text = (content or "").strip()
+    if not text:
+        raise ChatError("请先输入想对 CEO 说的话")
+
+    team = await session.get(CollabTeam, run.team_id)
+    if team is None:
+        raise ChatError("协作组已被删除")
+    try:
+        graph = from_storable(team.graph)
+    except ValueError as exc:
+        raise ChatError(f"编排图无法解析：{exc}") from None
+    validation = validate_graph(graph, team.entry_key)
+    if not validation.ok:
+        detail = "；".join(issue.message for issue in validation.errors[:3])
+        raise ChatError(f"编排图还不能跑：{detail}")
+    entry = entry_node(graph, team.entry_key)
+    assert entry is not None
+
+    tickets = await _tickets(session, run.id)
+    history = await _chat_history(session, run.id)
+    labels = {key: (spec.label or key) for key, spec in node_map(graph).items()}
+
+    user_message = CollabMessage(
+        run_id=run.id,
+        sender="user",
+        role_key=entry.key,
+        sequence=await _next_chat_sequence(session, run.id),
+        status="complete",
+        content=text,
+        finished_at=utcnow(),
+    )
+    session.add(user_message)
+    run.updated_at = utcnow()
+    session.add(run)
+    await session.commit()
+    await session.refresh(user_message)
+
+    prompt = build_chat_prompt(
+        team_name=team.name,
+        run_title=run.title,
+        run_status=run.status,
+        node=entry,
+        tickets=[_chat_ticket_view(ticket, labels) for ticket in tickets],
+        history=[ChatHistoryEntry(sender=row.sender, content=row.content) for row in history],
+        user_message=text,
+        active_label=await _active_step_label(session, run.id, graph),
+        node_labels=labels,
+    )
+    return PreparedChat(
+        run=run,
+        team=team,
+        graph=graph,
+        entry=entry,
+        prompt=prompt,
+        user_message=user_message,
+    )
+
+
+def _chat_parts(parts: list[dict[str, Any]], body: str) -> list[dict[str, Any]]:
+    """持久化聊天消息时去掉 ``chat_update`` 块，避免刷新后把协议 JSON 当正文展示。"""
+    cleaned: list[dict[str, Any]] = []
+    for part in parts:
+        item = dict(part)
+        if item.get("kind") == "text":
+            item["text"] = extract_chat_body(str(item.get("text") or ""))
+            if not item["text"]:
+                continue
+        cleaned.append(item)
+    if body and not any(item.get("kind") == "text" for item in cleaned):
+        cleaned.append({"kind": "text", "text": body})
+    return cleaned
+
+
+async def _apply_chat_update(
+    session: AsyncSession, run: CollabRun, update
+) -> tuple[dict[str, Any], str | None]:
+    """把聊天里的新增要求同步到根工单和所有未收尾工单。"""
+    tickets = await _tickets(session, run.id)
+    targets = [ticket for ticket in tickets if ticket.state in ACTIVE_STATES]
+    if not targets:
+        return {}, "当前没有仍在推进的工单，新要求没有可同步的对象；可以等任务继续后再补充"
+
+    changed_any: list[str] = []
+    applied_ids: list[str] = []
+    for ticket in targets:
+        merged, changed = merge_chat_update(ticket.brief or {}, update)
+        if not changed:
+            continue
+        ticket.brief = merged
+        ticket.updated_at = utcnow()
+        session.add(ticket)
+        applied_ids.append(ticket.id)
+        for field_name in changed:
+            if field_name not in changed_any:
+                changed_any.append(field_name)
+    if applied_ids:
+        run.updated_at = utcnow()
+        session.add(run)
+    return (
+        {
+            "ticket_ids": applied_ids,
+            "ticket_count": len(applied_ids),
+            "fields": changed_any,
+            "update": update.to_dict(),
+        },
+        None,
+    )
+
+
+async def consume_chat(
+    session: AsyncSession, prepared: PreparedChat
+) -> AsyncIterator[protocol.CollabEvent]:
+    """执行入口角色的一次聊天回复，并把可选的 chat_update 落进工单。"""
+    run = prepared.run
+    entry = prepared.entry
+    assistant = CollabMessage(
+        run_id=run.id,
+        sender="leader",
+        role_key=entry.key,
+        sequence=await _next_chat_sequence(session, run.id),
+        status="streaming",
+    )
+    session.add(assistant)
+    await session.commit()
+    await session.refresh(assistant)
+
+    try:
+        prepared_step = await execution.prepare_chat(
+            session, run=run, node=entry, prompt=prepared.prompt
+        )
+    except execution.StepError as exc:
+        assistant.status, assistant.error, assistant.finished_at = "error", str(exc), utcnow()
+        session.add(assistant)
+        await session.commit()
+        yield protocol.chat_started(
+            assistant.id, run.id, _node_label(entry), "", entry.key
+        )
+        yield protocol.chat_finished(assistant.id, "error", error=str(exc))
+        return
+
+    assistant.role_id = prepared_step.role.id
+    assistant.agent_id = prepared_step.agent.id
+    session.add(assistant)
+    await session.commit()
+    yield protocol.chat_started(
+        assistant.id,
+        run.id,
+        prepared_step.role.name,
+        prepared_step.agent.name,
+        entry.key,
+    )
+
+    handle = execution.chat_registry.register(
+        run.id, f"chat:{assistant.id}", prepared_step.agent.name, entry.key
+    )
+    text_parts: list[str] = []
+    parts: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+    error_text: str | None = None
+    status = "complete"
+
+    try:
+        async for event in execution.stream_step(prepared_step, handle):
+            _accumulate(event, text_parts, parts, usage)
+            if event.type is EventType.ERROR:
+                error_text = event.text or "智能体返回了错误"
+            elif event.type is EventType.RUN_FINISHED:
+                finished = (event.payload or {}).get("status")
+                if finished in ("error", "cancelled"):
+                    status = finished
+            yield protocol.chat_event(assistant.id, event)
+    except Exception as exc:  # noqa: BLE001 - 聊天失败也要显式落库并上报
+        error_text, status = str(exc), "error"
+        yield protocol.chat_event(assistant.id, AgentEvent(EventType.ERROR, text=str(exc)))
+    finally:
+        execution.chat_registry.finish(f"chat:{assistant.id}")
+
+    raw_text = "".join(text_parts)
+    body = extract_chat_body(raw_text)
+    warning: str | None = None
+    applied: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+
+    if status == "complete" and error_text is None:
+        if not raw_text.strip():
+            warning = "CEO 这次没有返回文字，只能先把空回复记下来；可以再问一次"
+        update, parse_warning = parse_chat_update(raw_text)
+        if parse_warning:
+            warning = f"{warning}；{parse_warning}" if warning else parse_warning
+        if update is not None:
+            applied, apply_warning = await _apply_chat_update(session, run, update)
+            if apply_warning:
+                warning = f"{warning}；{apply_warning}" if warning else apply_warning
+            if applied:
+                meta["update"] = update.to_dict()
+                meta["applied"] = applied
+        if warning:
+            meta["warning"] = warning
+
+    assistant.content = body
+    assistant.parts = _chat_parts(parts, body)
+    assistant.usage = usage
+    assistant.status = (
+        status
+        if status in ("cancelled", "error")
+        else ("error" if error_text else "complete")
+    )
+    assistant.error = error_text
+    assistant.meta = meta
+    assistant.finished_at = utcnow()
+    run.updated_at = utcnow()
+    session.add(assistant)
+    session.add(run)
+    await session.commit()
+
+    yield protocol.chat_finished(
+        assistant.id,
+        assistant.status,
+        usage=usage,
+        error=error_text,
+        warning=warning,
+        applied=applied,
+    )
 
 
 # --- 推进 -------------------------------------------------------------------
@@ -256,8 +644,30 @@ async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIt
             state.stop, state.reason, state.budget_exhausted = True, reason, True
             break
 
+        # 根工单收尾后，把最后一步交回入口角色：让它把结论汇报给用户（主会话里唯一看得到的人）
+        async for event in _hand_back_to_entry(session, prepared, run):
+            yield event
+
         ready = [t for t in await _tickets(session, run_id) if t.state in READY_STATES]
         if not ready:
+            if prepared.content and steps_this_turn == 0:
+                # 用户发了一句话，但没有任何工单能自动推进 —— 最常见的两种原因：
+                # 有工单被协议错误卡在 blocked，或这一轮的活已经收尾。
+                # 过去这里直接 break，界面上只会多一条用户发言、永远等不到回话；
+                # 现在显式说明原因，并提示可以去哪处理 / 改用 CEO 聊天。
+                blocked = [
+                    item
+                    for item in await _tickets(session, run_id)
+                    if item.state == TicketState.BLOCKED.value
+                ]
+                if blocked:
+                    state.stop = True
+                    state.status = RunStatus.WAITING_USER.value
+                    state.reason = (
+                        f"这条消息没有可推进的工单：有 {len(blocked)} 张工单卡在「等待处理」。"
+                        "打开「工单看板」查看受阻原因，或点错误卡片上的「重试」；"
+                        "想先了解进度，可以直接切到「只聊天」找 CEO。"
+                    )
             break
 
         ticket = ready[0]
@@ -346,7 +756,27 @@ async def _run_step(
         if label and label != key and label_counts[label] == 1
     }
 
+    # 收尾汇报（见 _hand_back_to_entry）：根工单已完成、现在轮到入口角色对用户交代结论。
+    # 这一步只允许 done / ask_user —— 活已经干完了，绝不允许从这里重新派活。
+    closing_report = (
+        ticket.parent_ticket_id is None
+        and ticket.report_at is not None
+        and node.key == prepared.entry.key
+    )
+    digest = (
+        _run_digest(await _tickets(session, run.id), reporting_id=ticket.id) if closing_report else ()
+    )
+
+    # 「我派出去的活交回了什么」：子工单的结构化摘要。上游据此判断能不能收尾，
+    # 而不是像过去那样只能看见自己几次派单记录、于是反复重派。
+    children = await _direct_children(session, ticket)
+    downstream = _child_digest_lines(children)[-MAX_DOWNSTREAM_LINES:]
+    downstream_ready = bool(children) and all(
+        child.state in FINISHED_STATES for child in children
+    )
+
     history = await _ticket_history(session, ticket.id)
+    is_entry = node.key == prepared.entry.key
     prompt_text = build_step_prompt(
         team_name=prepared.team.name,
         workspace_path=str(execution.workspace_root(run)),
@@ -360,6 +790,7 @@ async def _run_step(
             result=ticket.result or {},
             review_comment=ticket.review_comment,
             submitter_key=ticket.submitter_key or "",
+            escalation=ticket.escalation or {},
         ),
         history=history,
         assignees=assignees,
@@ -367,6 +798,11 @@ async def _run_step(
         rework_targets=rework,
         user_message=user_message,
         node_labels=labels,
+        closing_report=closing_report,
+        run_digest=digest,
+        downstream=downstream,
+        downstream_ready=downstream_ready,
+        is_entry=is_entry,
     )
 
     step = CollabStep(
@@ -410,7 +846,7 @@ async def _run_step(
     for warning in prepared_step.warnings:
         yield protocol.notice(warning, "warn", step_id=step.id)
 
-    handle = execution.registry.register(run.id, step.id, prepared_step.agent.name)
+    handle = execution.registry.register(run.id, step.id, prepared_step.agent.name, node.key)
     text_parts: list[str] = []
     parts: list[dict[str, Any]] = []
     usage: dict[str, Any] = {}
@@ -452,7 +888,13 @@ async def _run_step(
             # ask_user 漏给 options 时不把用户堵在协议错误上：补成可点卡片继续推进。
             ensure_ask_options(parsed.order)
             semantic = validate_order_ctx(
-                parsed.order, node, assignees, rework, is_entry=node.key == prepared.entry.key
+                parsed.order,
+                node,
+                assignees,
+                rework,
+                is_entry=is_entry,
+                escalated=ticket.state == TicketState.ESCALATED.value,
+                allowed_actions=ENTRY_REPORT_ACTIONS if closing_report else None,
             )
             if semantic:
                 error_text = semantic
@@ -516,12 +958,25 @@ async def _run_step(
 
 
 def validate_order_ctx(
-    order, node: NodeSpec, assignees: Sequence[str], rework: Sequence[str], *, is_entry: bool
+    order,
+    node: NodeSpec,
+    assignees: Sequence[str],
+    rework: Sequence[str],
+    *,
+    is_entry: bool,
+    escalated: bool = False,
+    allowed_actions: Sequence[TicketAction] | None = None,
 ) -> str | None:
-    """把「节点允许的动作/对象」喂给纯函数做语义校验。"""
+    """把「节点允许的动作/对象」喂给纯函数做语义校验。
+
+    ``allowed_actions`` 只在收尾汇报时收窄（done / ask_user），其余情况按节点契约来。
+    """
     return validate_order(
         order,
-        allowed_actions=effective_output_contract(node),
+        # 非入口节点不把 ask_user 当作「允许的动作」：配置里勾了它也会被忽略，
+        # 校验层仍会给出「只有入口节点能向用户提问」这句明确原因。
+        allowed_actions=allowed_actions
+        or effective_output_contract(node, is_entry=is_entry, escalated=escalated),
         allowed_assignees=assignees,
         allowed_rework_targets=rework,
         is_entry=is_entry,
@@ -547,6 +1002,8 @@ def _order_gist(order: Any, limit: int = 160) -> str:
             text += f"：{order.review_comment}"
     elif order.action is TicketAction.ASK_USER:
         text = order.question or "向用户提问"
+    elif order.action is TicketAction.ESCALATE:
+        text = f"上报给发起人：{order.reason or '未说明原因'}"
     elif order.action is TicketAction.REJECT:
         text = order.reason or order.review_comment or "否决"
     else:
@@ -616,6 +1073,144 @@ async def _ticket_history(session: AsyncSession, ticket_id: str) -> list[History
     return entries
 
 
+# --- 收尾汇报 ---------------------------------------------------------------
+
+
+async def _last_role_step(session: AsyncSession, ticket_id: str) -> CollabStep | None:
+    """这张工单上最后一次**角色**发言（用户自己的发言不算）。"""
+    rows = (
+        await session.execute(
+            select(CollabStep)
+            .where(CollabStep.ticket_id == ticket_id, CollabStep.role_key != "user")
+            .order_by(CollabStep.sequence.desc())
+            .limit(1)
+        )
+    ).scalars().all()
+    return rows[0] if rows else None
+
+
+def _artifact_paths(result: dict[str, Any]) -> list[str]:
+    """从工单 ``result`` 里取产出文件路径（兼容字符串与 ``{kind, path}`` 两种形态）。"""
+    paths: list[str] = []
+    for item in result.get("artifacts") or []:
+        if isinstance(item, dict):
+            path = item.get("path") or item.get("name")
+            if path:
+                paths.append(str(path))
+        elif isinstance(item, str):
+            paths.append(item)
+    return paths
+
+
+async def _direct_children(session: AsyncSession, ticket: CollabTicket) -> list[CollabTicket]:
+    """这张工单的**直接**子工单（按拆出来的先后排序）。
+
+    刻意只看直接子工单、不看整棵子树：子树的信息会沿着「子工单自己的 result」一层层带上来，
+    没必要把整棵树的字段都塞进一次 prompt。
+    """
+    return list(
+        (
+            await session.execute(
+                select(CollabTicket)
+                .where(CollabTicket.parent_ticket_id == ticket.id)
+                .order_by(CollabTicket.created_at, CollabTicket.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+#: 「下游交付摘要」最多带几行：工单多起来时必须截断，别把 prompt 顶爆
+MAX_DOWNSTREAM_LINES = 12
+
+
+def _child_digest_lines(children: Sequence[CollabTicket]) -> list[str]:
+    """把子工单压成几行**结构化事实**，让上游看得见「我派出去的活交回了什么」。
+
+    与 :func:`_run_digest` 同一套约束：只取工单字段（标题 / 状态 / 最后经手 / 交付摘要 /
+    产出文件），不取任何角色的对话原文 —— 与「只传工单」是同一套隔离。
+    """
+    lines: list[str] = []
+    for child in children:
+        result = child.result or {}
+        parts = [f"{ticket_code(child.id)}《{child.title}》· {child.state}"]
+        if child.holder_key:
+            parts.append(f"最后经手：{child.holder_key}")
+        summary = str(result.get("summary") or "").strip()
+        if summary:
+            parts.append(f"结论：{summary}")
+        paths = _artifact_paths(result)
+        if paths:
+            shown = paths[:8]
+            suffix = f"（共 {len(paths)} 个）" if len(paths) > len(shown) else ""
+            parts.append(f"产出：{'、'.join(shown)}{suffix}")
+        lines.append(" · ".join(parts))
+    return lines
+
+
+def _run_digest(tickets: Sequence[CollabTicket], reporting_id: str | None = None) -> list[str]:
+    """把整次协作的结果压成几行**结构化事实**，供入口角色向用户汇报。
+
+    只取工单字段（标题 / 状态 / 交付摘要 / 产出文件），不取任何角色的对话原文 ——
+    与「只传工单」是同一套约束。``reporting_id`` 是本次汇报的那张工单：它为了汇报被重新
+    打开了，清单里仍按「已收尾」表述，免得模型以为活还没干完。
+    """
+    lines: list[str] = []
+    for ticket in tickets:
+        result = ticket.result or {}
+        state = "已收尾（本次汇报）" if ticket.id == reporting_id else ticket.state
+        parts = [f"{ticket_code(ticket.id)}《{ticket.title}》· {state}"]
+        if ticket.holder_key:
+            parts.append(f"最后经手：{ticket.holder_key}")
+        summary = str(result.get("summary") or "").strip()
+        if summary:
+            parts.append(summary)
+        paths = _artifact_paths(result)
+        if paths:
+            shown = paths[:8]
+            suffix = f"（共 {len(paths)} 个）" if len(paths) > len(shown) else ""
+            parts.append(f"产出：{'、'.join(shown)}{suffix}")
+        lines.append(" · ".join(parts))
+    return lines
+
+
+async def _hand_back_to_entry(
+    session: AsyncSession, prepared: PreparedTurn, run: CollabRun
+) -> AsyncIterator[protocol.CollabEvent]:
+    """根工单收尾后，把最后一步交回**入口角色**：由它把结论汇报给用户。
+
+    工单沿着交接链一路往下走时，用户能看到的只有入口角色那条主会话；活干完了如果没人回来说一声，
+    用户在界面上就只能自己去翻工单树。所以这里在「根工单已完成」时把工单重新交回入口角色，
+    让它用一次 ``done`` 收尾（prompt 会要求它讲清结论，并禁止重新派活）。
+
+    三条护栏：
+    * 只有根工单收尾才汇报：子工单各归各的发起人（沿用「谁拆的谁汇总」）；
+    * 最后拍板的就是入口角色本人时不再汇报（它那一步已经把话说给用户听了）；
+    * ``report_at`` 保证每轮收尾只汇报一次（用户追问重新开启后才清零）。
+    """
+    tickets = await _tickets(session, run.id)
+    root = next((t for t in tickets if t.parent_ticket_id is None), None)
+    if root is None or root.state != TicketState.DONE.value or root.report_at is not None:
+        return
+
+    entry = prepared.entry
+    last = await _last_role_step(session, root.id)
+    if last is None or last.role_key == entry.key:
+        return
+
+    root.state = TicketState.OPEN.value
+    root.holder_key = entry.key
+    root.to_role_id = entry.role_id
+    root.closed_at = None
+    root.report_at = utcnow()
+    root.updated_at = utcnow()
+    session.add(root)
+    await session.commit()
+    await session.refresh(root)
+    yield protocol.ticket_updated(_ticket_payload(root))
+
+
 # --- 动作 -------------------------------------------------------------------
 
 
@@ -633,15 +1228,17 @@ async def _ticket_depth(session: AsyncSession, ticket: CollabTicket) -> int:
 
 
 async def _child_count_with_title(session: AsyncSession, parent_id: str, title: str) -> int:
-    """同一父工单下、同名子工单已经拆过几次（含已完成/被否决的，用来发现"复读式拆解"）。"""
+    """同一父工单下、**同名或近似同名**的子工单已经拆过几次。
+
+    含已完成/被否决的，用来发现"复读式拆解"。只比完全同名是不够的：模型最常靠
+    「在标题尾巴上追加几个字」绕开它，所以这里按 ``titles_look_duplicated`` 判近似。
+    """
     rows = (
         await session.execute(
-            select(CollabTicket.id).where(
-                CollabTicket.parent_ticket_id == parent_id, CollabTicket.title == title
-            )
+            select(CollabTicket.title).where(CollabTicket.parent_ticket_id == parent_id)
         )
     ).all()
-    return len(rows)
+    return sum(1 for (other,) in rows if titles_look_duplicated(other or "", title))
 
 
 async def _reject_action(
@@ -657,6 +1254,29 @@ async def _reject_action(
     await session.commit()
     await session.refresh(ticket)
     state.stop, state.status, state.reason = True, RunStatus.WAITING_USER.value, message
+
+
+async def _escalation_target(
+    session: AsyncSession, *, ticket: CollabTicket, node: NodeSpec, entry_key: str
+) -> str | None:
+    """上报给谁：这张工单的**发起人**（``owner_key``）。
+
+    ``owner_key`` 是「谁派了这张活 / 谁负责汇总」——子工单上它就是派活的那个节点。
+    顶层工单的负责人在把活交出去之后 ``owner_key`` 会变成它自己，这时沿父链往上走一层，
+    直到找到一个不是我的节点。真的一路到顶（我就是发起人）→ 返回 ``None``，
+    由调用方给出「请改用 ask_user」的明确原因，绝不静默搁置。
+    """
+    target = ticket.owner_key or ""
+    current = ticket
+    while (not target or target == node.key) and current.parent_ticket_id:
+        parent = await session.get(CollabTicket, current.parent_ticket_id)
+        if parent is None:
+            break
+        current = parent
+        target = parent.owner_key or ""
+    if not target or target == node.key:
+        return entry_key if entry_key != node.key else None
+    return target
 
 
 async def _apply_action(
@@ -694,8 +1314,9 @@ async def _apply_action(
             repeats = await _child_count_with_title(session, ticket.id, title)
             if repeats >= MAX_DUPLICATE_CHILD_TITLES:
                 message = (
-                    f"同一个父工单下已经拆出过 {repeats} 张同名子工单「{title}」，"
-                    "再拆同样的活只会空转：请换一个更具体的标题，或者由你确认这件事到底该怎么做"
+                    f"同一个父工单下已经拆出过 {repeats} 张同名（或高度相似）的子工单，最近一张是「{title}」。"
+                    "再拆同一件事只会空转：要么先看看下游已经交回了什么、直接汇总收尾，"
+                    "要么换一件真正不同的事、并给出更具体的标题；实在拿不准就 ask_user 让用户拍板"
                 )
                 await _reject_action(session, run, ticket, state, message)
                 yield protocol.ticket_updated(_ticket_payload(ticket))
@@ -828,6 +1449,17 @@ async def _apply_action(
     if action is TicketAction.DONE:
         ticket.state = TicketState.DONE.value
         ticket.closed_at = utcnow()
+        # 收尾也要留下结论：done 的 remark 就是这张工单对外的交付摘要。
+        # 少了它，父工单汇总时只看到一张"完成了"的空壳 —— 那正是「活干完了上游却看不见」的根因之一。
+        summary = (order.summary or order.remark or "").strip()
+        if summary or order.artifacts:
+            result = dict(ticket.result or {})
+            # 最新的结论为准：done 是这张工单最后一次表态，父工单汇总与收尾汇报都只看它
+            if summary:
+                result["summary"] = summary
+            if order.artifacts:
+                result["artifacts"] = order.artifacts
+            ticket.result = result
         ticket.updated_at = utcnow()
         session.add(ticket)
         await session.commit()
@@ -846,6 +1478,48 @@ async def _apply_action(
         await session.refresh(ticket)
         yield protocol.ticket_updated(_ticket_payload(ticket))
         yield protocol.notice(question, "ask", question=question, options=options)
+        return
+
+    if action is TicketAction.ESCALATE:
+        target_key = await _escalation_target(
+            session, ticket=ticket, node=node, entry_key=prepared.entry.key
+        )
+        if target_key is None or target_key not in nodes:
+            await _reject_action(
+                session,
+                run,
+                ticket,
+                state,
+                "这张工单没有可接手的上一级（发起人已不在图里，或已经到顶）："
+                "需要用户拍板的事请让入口角色用 ask_user 交给用户",
+            )
+            yield protocol.ticket_updated(_ticket_payload(ticket))
+            return
+        # 同一张工单被连续上报时累计「已经过谁」，提示词据此展示整条上报链
+        was_escalated = ticket.state == TicketState.ESCALATED.value
+        hops = list((ticket.escalation or {}).get("hops") or []) if was_escalated else []
+        if node.key not in hops:
+            hops.append(node.key)
+        target = nodes[target_key]
+        ticket.state = TicketState.ESCALATED.value
+        ticket.holder_key = target_key
+        ticket.to_role_id = target.role_id
+        ticket.escalation = {
+            "from": node.key,
+            "reason": order.reason or "",
+            "need": order.remark or "",
+            "hops": hops,
+        }
+        ticket.updated_at = utcnow()
+        session.add(ticket)
+        await session.commit()
+        await session.refresh(ticket)
+        yield protocol.notice(
+            f"工单 {ticket_code(ticket.id)} 被「{node.key}」上报给「{target_key}」："
+            f"{ticket.escalation['reason'] or '未说明原因'}",
+            "warn",
+        )
+        yield protocol.ticket_updated(_ticket_payload(ticket))
         return
 
     if action is TicketAction.REJECT:
@@ -960,6 +1634,7 @@ def _ticket_payload(ticket: CollabTicket) -> dict[str, Any]:
         "verdict": ticket.verdict,
         "review_comment": ticket.review_comment,
         "result": ticket.result or {},
+        "escalation": ticket.escalation or {},
         "created_at": ticket.created_at.isoformat(),
         "updated_at": ticket.updated_at.isoformat(),
         "closed_at": ticket.closed_at.isoformat() if ticket.closed_at else None,

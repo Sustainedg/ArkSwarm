@@ -26,7 +26,13 @@ COLLAB_EXECUTION_EDGE = "execution.py"
 COLLAB_PURE_MODULES = ("tickets.py", "graph.py", "prompt.py")
 PURE_FORBIDDEN_ROOTS = {"sqlalchemy", "sqlmodel", "fastapi", "httpx", "starlette"}
 
-COLLAB_TABLES = {"collab_teams", "collab_runs", "collab_tickets", "collab_steps"}
+COLLAB_TABLES = {
+    "collab_teams",
+    "collab_runs",
+    "collab_tickets",
+    "collab_steps",
+    "collab_messages",
+}
 
 
 def _refs(path: Path) -> list[str]:

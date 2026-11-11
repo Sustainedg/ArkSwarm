@@ -67,6 +67,8 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
            ├─ ctx.history = []、ctx.session_id = None   ← 每一步都是全新会话，不共享记忆
            └─ ctx.prompt = prompt.build_step_prompt(...) # 只含工单字段与 gist 摘要
       └─ runner.stream_run(ctx) → AgentEvent → 累积 → 解析 work_order → 更新工单 → 交给下一个岗位
+      └─ 根工单收尾 → 交回入口角色做一次收尾汇报（附全流程工单汇总）→ 结论回到用户那条主会话
+      └─ 入口角色聊天（并行）→ prepare_chat() → 只读工单快照 + 最近聊天 → 独立 chat_bus 推给用户
 ```
 
 协作域使用自有的信封协议 `collab.*`（`app/collab/protocol.py`），与下面的智能体事件协议**分属两层**，
@@ -91,7 +93,8 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
 
 > 协作运行另有一层 `collab.*` 信封（`collab.run.started` / `collab.step.started` / `collab.step.event`
 > / `collab.step.finished` / `collab.ticket.created` / `collab.ticket.updated` / `collab.run.status`
-> / `collab.notice`），它包住原始 `AgentEvent` 后发给协作页；**不是**对这张表的扩展。
+> / `collab.notice` / `collab.chat.started` / `collab.chat.event` / `collab.chat.finished`），
+> 它包住原始 `AgentEvent` 后发给协作页；**不是**对这张表的扩展。
 
 ## 4. 适配器的契约
 
@@ -178,10 +181,12 @@ collab_runs(id, team_id→collab_teams, title, goal, status, entry_key, workspac
             steps_used, tickets_used, error)
 collab_tickets(id, run_id→collab_runs, parent_ticket_id→collab_tickets, from_role_id→roles,
                to_role_id→roles, owner_key, holder_key, submitter_key, title, brief JSON, state,
-               round, max_rounds, verdict, review_comment, result JSON, closed_at)
+               round, max_rounds, verdict, review_comment, result JSON, closed_at, report_at)
 collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→roles, agent_id→agent_instances,
              role_key, duty, sequence, action, status, content, gist, parts JSON, usage JSON,
              error, audit JSON)
+collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, agent_id→agent_instances,
+                sequence, status, content, parts JSON, usage JSON, error, meta JSON)
 ```
 
 设计取舍：

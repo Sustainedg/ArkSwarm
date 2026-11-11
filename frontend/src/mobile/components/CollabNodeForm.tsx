@@ -35,11 +35,16 @@ export function CollabNodeForm({
   const type = agentTypes.find((item) => item.id === role?.agent_type_id)
 
   const set = (next: Partial<CollabNode>) => setForm((prev) => ({ ...prev, ...next }))
+  // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
+  // 任何一次改动都会把它清掉（运行时本来就会忽略，界面别显示成「生效了」）。
+  const contract = form.output_contract.filter(
+    (item) => (item !== 'ask_user' || isEntry) && (item !== 'escalate' || !isEntry),
+  )
   const toggleAction = (action: CollabTicketAction) =>
     set({
-      output_contract: form.output_contract.includes(action)
-        ? form.output_contract.filter((item) => item !== action)
-        : [...form.output_contract, action],
+      output_contract: contract.includes(action)
+        ? contract.filter((item) => item !== action)
+        : [...contract, action],
     })
 
   return (
@@ -143,18 +148,36 @@ export function CollabNodeForm({
       <div className="field">
         <label className="field-label">允许发起的动作</label>
         <div className="m-chip-row">
-          {ACTIONS.map((action) => (
-            <label key={action.value} className={`m-chip${form.output_contract.includes(action.value) ? ' on' : ''}`}>
-              <input
-                type="checkbox"
-                checked={form.output_contract.includes(action.value)}
-                onChange={() => toggleAction(action.value)}
-              />
-              {action.label}
-            </label>
-          ))}
+          {ACTIONS.map((action) => {
+            const lockHint =
+              action.value === 'ask_user' && !isEntry
+                ? '只有入口节点能向用户提问'
+                : action.value === 'escalate'
+                  ? isEntry
+                    ? '入口节点是最顶端，没有更上级可以上报'
+                    : '上报是保底动作：任何岗位都保留，不用勾也生效'
+                  : undefined
+            return (
+              <label
+                key={action.value}
+                className={`m-chip${contract.includes(action.value) ? ' on' : ''}`}
+                style={lockHint ? { opacity: 0.55 } : undefined}
+                title={lockHint}
+              >
+                <input
+                  type="checkbox"
+                  checked={contract.includes(action.value)}
+                  disabled={Boolean(lockHint)}
+                  onChange={() => toggleAction(action.value)}
+                />
+                {action.label}
+              </label>
+            )
+          })}
         </div>
-        <span className="field-help">一个都不选 = 按岗位取默认动作集合。</span>
+        <span className="field-help">
+          一个都不选 = 按岗位取默认动作集合。ask_user 只有入口节点可用；escalate 是保底动作，始终可用。
+        </span>
       </div>
 
       {type && type.config_fields.length > 0 && (

@@ -175,12 +175,71 @@ def test_helpers_resolve_flow_and_effective_defaults():
     ceo = graph.nodes[0]
     assert g.effective_workspace_scope(ceo) is WorkspaceScope.NONE
     assert g.effective_workspace_scope(graph.nodes[3]) is WorkspaceScope.READ
-    assert TicketAction.ASK_USER in g.effective_output_contract(ceo)
-    assert g.effective_output_contract(graph.nodes[3]) == (TicketAction.REVIEW, TicketAction.REJECT)
+    assert TicketAction.ASK_USER in g.effective_output_contract(ceo, is_entry=True)
+    assert g.effective_output_contract(graph.nodes[3], is_entry=False) == (
+        TicketAction.REVIEW,
+        TicketAction.ESCALATE,
+        TicketAction.REJECT,
+    )
 
     budget = BudgetSpec(max_rounds_per_ticket=3)
     assert g.effective_max_rounds(graph.nodes[2], budget) == 3
     assert g.effective_max_rounds(node("se", "r-se", Duty.ENGINEER, max_rounds=5), budget) == 3
+
+
+def test_non_entry_ask_user_is_warned_and_filtered():
+    """非入口节点勾选 ask_user 时必须提示，并在生效动作里被剔除。
+
+    真实事故：编辑器允许把 ask_user 勾给实施者，提示词也照写，模型于是用它向用户提问，
+    运行时却被判「只有入口节点能向用户提问」。这里把「配置 → 提示词 → 校验」拉回一致。
+    """
+    graph = canonical()
+    cto = graph.nodes[1]  # 非入口的协调者
+    cto.output_contract = [TicketAction.DELEGATE, TicketAction.ASK_USER, TicketAction.DONE]
+
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert "node.ask_user_not_entry" in warn_codes(result)
+
+    assert TicketAction.ASK_USER in g.effective_output_contract(cto, is_entry=True)
+    filtered = g.effective_output_contract(cto, is_entry=False)
+    assert TicketAction.ASK_USER not in filtered
+    assert TicketAction.DELEGATE in filtered and TicketAction.DONE in filtered
+
+
+def test_escalated_contract_drops_delegate():
+    """上抛件只能「解决 / 继续上报 / 交给用户」，不许再往下派。
+
+    这条收窄必须由 ``effective_output_contract`` 统一给出，提示词与运行时校验才会一致
+    （真实事故：CTO 把「环境跑不了」改写成「静态核对」又派给码农，白转一轮）。
+    """
+    graph = canonical()
+    cto = graph.nodes[1]
+    normal = g.effective_output_contract(cto, is_entry=False)
+    assert TicketAction.DELEGATE in normal and TicketAction.ESCALATE in normal
+
+    escalated = g.effective_output_contract(cto, is_entry=False, escalated=True)
+    assert TicketAction.DELEGATE not in escalated
+    assert TicketAction.ESCALATE in escalated
+
+
+def test_escalate_is_always_available_for_non_entry_nodes():
+    """上报是保底出路：节点契约里没写它也必须生效，否则历史团队里会留着一条死路。
+
+    真实事故里 UI 节点的契约是 ``["done", "ask_user"]``；修完之后它必须拿得到 ``escalate``，
+    否则用户还得逐个节点手动补勾，问题只解决了一半。
+    """
+    graph = canonical()
+    se = graph.nodes[2]
+    se.output_contract = [TicketAction.DONE, TicketAction.ASK_USER]
+
+    contract = g.effective_output_contract(se, is_entry=False)
+    assert TicketAction.ESCALATE in contract
+    assert TicketAction.ASK_USER not in contract and TicketAction.DONE in contract
+
+    # 入口节点是最顶端：没有更上级可报，由 ask_user 收口，所以不给 escalate
+    graph.nodes[0].output_contract = [TicketAction.DELEGATE, TicketAction.ESCALATE]
+    assert TicketAction.ESCALATE not in g.effective_output_contract(graph.nodes[0], is_entry=True)
 
 
 def test_storable_round_trip():

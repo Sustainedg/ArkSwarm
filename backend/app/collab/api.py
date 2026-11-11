@@ -14,7 +14,7 @@ from sqlmodel import select
 from ..db import SessionLocal, get_session
 from ..models import Role, utcnow
 from ..transport.sse import sse_stream
-from .bus import bus
+from .bus import bus, chat_bus
 from . import engine, execution, graph as graph_service, store
 from .schemas import (
     GraphSpec,
@@ -146,13 +146,16 @@ async def get_run(run_id: str, session: AsyncSession = Depends(get_session)) -> 
         run = await store.get_run(session, run_id)
     except store.RunNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return await store.run_detail(session, run)
+    detail = await store.run_detail(session, run)
+    detail.chat_active = chat_bus.is_running(run_id) or execution.is_chat_running(run_id)
+    return detail
 
 
 @router.delete("/runs/{run_id}", status_code=204)
 async def delete_run(run_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     execution.cancel_run(run_id)
     bus.cancel(run_id)
+    chat_bus.cancel(run_id)
     try:
         await store.delete_run(session, run_id)
     except store.RunNotFound as exc:
@@ -168,9 +171,11 @@ async def cancel_run(run_id: str, session: AsyncSession = Depends(get_session)) 
         raise HTTPException(status_code=404, detail=str(exc)) from None
     execution.cancel_run(run_id)
     cancelled = bus.cancel(run_id)
+    chat_cancelled = chat_bus.cancel(run_id)
     if run.status == "running":
         await store.mark_interrupted(session, run_id, "已停止")
-    return {"ok": True, "cancelled": cancelled}
+    await store.mark_chat_interrupted(session, run_id, "你停止了这次对话")
+    return {"ok": True, "cancelled": cancelled or chat_cancelled}
 
 
 async def _drive_turn(prepared: engine.PreparedTurn) -> AsyncIterator[dict]:
@@ -207,6 +212,22 @@ def _stream_turn(prepared: engine.PreparedTurn) -> StreamingResponse:
     return _sse(bus.subscribe(run_id))
 
 
+async def _drive_chat(prepared: engine.PreparedChat) -> AsyncIterator[dict]:
+    """后台执行一次 CEO 回复：与主流程使用各自独立的数据库会话。"""
+    async with SessionLocal() as session:
+        run = await session.get(CollabRun, prepared.run.id)
+        if run is not None:
+            prepared.run = run
+        async for event in engine.consume_chat(session, prepared):
+            yield event.to_dict()
+
+
+def _stream_chat(prepared: engine.PreparedChat) -> StreamingResponse:
+    run_id = prepared.run.id
+    chat_bus.start(run_id, lambda: _drive_chat(prepared))
+    return _sse(chat_bus.subscribe(run_id))
+
+
 @router.get("/runs/{run_id}/stream")
 async def stream_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
     """订阅一次运行的实时事件：用于断开后重连，或在另一台设备上实时围观。"""
@@ -223,6 +244,8 @@ async def send_message(
 ) -> StreamingResponse:
     if bus.is_running(run_id):
         raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
+    if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
+        raise HTTPException(status_code=409, detail="CEO 正在回复你的上一条消息，请稍等它说完")
     try:
         prepared = await engine.prepare_turn(session, run_id, payload.content)
     except store.RunNotFound as exc:
@@ -232,11 +255,55 @@ async def send_message(
     return _stream_turn(prepared)
 
 
+@router.get("/runs/{run_id}/chat")
+async def list_chat(
+    run_id: str, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """入口角色对话历史；运行推进期间也可以随时读取。"""
+    try:
+        await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return {"items": [item.model_dump() for item in await store.list_chat_messages(session, run_id)]}
+
+
+@router.get("/runs/{run_id}/chat/stream")
+async def stream_chat(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+    """订阅正在生成的 CEO 回复；断线重连时先补发本轮已产生的事件。"""
+    try:
+        await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return _sse(chat_bus.subscribe(run_id))
+
+
+@router.post("/runs/{run_id}/chat")
+async def send_chat(
+    run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
+) -> StreamingResponse:
+    """和入口角色聊天：**不受**主流程是否正在推进影响。"""
+    if not (payload.content or "").strip():
+        raise HTTPException(status_code=422, detail="请先输入想对 CEO 说的话")
+    if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
+        raise HTTPException(status_code=409, detail="CEO 正在回复上一条消息，请稍等它说完")
+    try:
+        await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    try:
+        prepared = await engine.prepare_chat(session, run_id, payload.content)
+    except engine.ChatError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _stream_chat(prepared)
+
+
 @router.post("/runs/{run_id}/resume")
 async def resume_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
     """从中断处继续（不追加用户消息）。"""
     if bus.is_running(run_id):
         raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
+    if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
+        raise HTTPException(status_code=409, detail="CEO 正在回复你的上一条消息，请稍等它说完")
     try:
         prepared = await engine.prepare_turn(session, run_id, None)
     except store.RunNotFound as exc:

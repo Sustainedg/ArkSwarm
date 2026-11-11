@@ -32,12 +32,145 @@ export interface CollabRoleProgress {
   activeTickets: CollabTicket[]
 }
 
+/** 各状态对应的「粗略进度」底数——后端没有真实百分比，这里只给进度条一个说法。 */
+const STATE_PROGRESS: Record<CollabRoleState, number> = {
+  pending: 0,
+  active: 45,
+  waiting: 62,
+  error: 30,
+  done: 100,
+}
+
+/**
+ * 粗估一个岗位跑到了几成：已完成 100%、闲置 0%，干活中按跑过的步数往上抬，
+ * 最多停在 96%——免得「还在干」看起来像已经收工。
+ */
+export function roleProgressPercent(node: CollabRoleProgress): number {
+  if (node.state === 'done') return 100
+  if (node.state === 'pending') return 0
+  return Math.min(96, STATE_PROGRESS[node.state] + node.stepCount * 9)
+}
+
 export interface CollabFlowEdge {
   id: string
+  /** 起点岗位的显示名（给「协作流向」那排标签用） */
   from: string
   to: string
+  /** 起点 / 终点的岗位 key（画流程图连线要用，显示名可能重名） */
+  fromKey: string
+  toKey: string
   kind: CollabEdgeKind
   kindLabel: string
+}
+
+/** 流程图里的一条连线：把相邻岗位接起来；回流（审查打回 / 返工）单独标记。 */
+export interface CollabFlowLink {
+  id: string
+  fromKey: string
+  toKey: string
+  kind: CollabEdgeKind
+  kindLabel: string
+  /** true = 回头箭头：目标在流程里排在源的前面（审查打回、返工），流程图上要单独画。 */
+  isLoop: boolean
+}
+
+/**
+ * 把图的边整理成流程图用的连线。
+ *
+ * 岗位的顺序来自 :func:`orderedCollabNodes`（从入口做广度遍历），所以「目标排在源之后」
+ * 就是顺流，反之就是回流。两端节点都在本次运行图里的边才画。
+ */
+export function buildFlowLinks(
+  nodes: { key: string }[],
+  edges: CollabFlowEdge[],
+): CollabFlowLink[] {
+  const rank = new Map(nodes.map((node, index) => [node.key, index]))
+  return edges.flatMap((edge) => {
+    const from = rank.get(edge.fromKey)
+    const to = rank.get(edge.toKey)
+    if (from === undefined || to === undefined) return []
+    return [{
+      id: edge.id,
+      fromKey: edge.fromKey,
+      toKey: edge.toKey,
+      kind: edge.kind,
+      kindLabel: edge.kindLabel,
+      isLoop: to <= from,
+    }]
+  })
+}
+
+/** 相邻两个岗位之间那条直接连线（没有就是虚线「流程继续」，说明中间经过别的岗位）。 */
+export function linkBetween(
+  links: CollabFlowLink[],
+  fromKey: string,
+  toKey: string,
+): CollabFlowLink | undefined {
+  return links.find((link) => link.fromKey === fromKey && link.toKey === toKey && !link.isLoop)
+}
+
+/** 流程图里的一行（一个层级）：入口这一层只有领导者一个人，往下每层是本层的干活的人。 */
+export interface CollabFlowRow<T> {
+  rank: number
+  nodes: T[]
+}
+
+/**
+ * 按「谁向谁派活」把人排成一行行：入口是第 0 行（就它一个人），它派活的人在第 1 行，
+ * 再下一层在第 2 行 —— 于是「领导者一人一行、下面干活的并排一行」自然就出来了。
+ *
+ * 只认顺着推进方向的边（就是 :func:`buildFlowLinks` 里 `isLoop === false` 的那些）：
+ * 往回走的边（审查打回、返工）不改变层级，否则一行会被硬拽到流程末尾去。
+ * 没接进流程的孤立岗位放到第 1 行，不与领导者挤在同一行。
+ */
+export function buildFlowRows<T extends { key: string }>(
+  nodes: T[],
+  edges: CollabFlowEdge[],
+): CollabFlowRow<T>[] {
+  const index = new Map(nodes.map((node, position) => [node.key, position]))
+  const rank = new Map(nodes.map((node) => [node.key, 0]))
+  const outgoing = new Map<string, CollabFlowEdge[]>()
+  for (const edge of edges) {
+    if (!index.has(edge.fromKey) || !index.has(edge.toKey)) continue
+    const list = outgoing.get(edge.fromKey) ?? []
+    list.push(edge)
+    outgoing.set(edge.fromKey, list)
+  }
+  // 顺着「用户能看懂的推进顺序」走一遍就够了：朝后的边只会指向更靠后的岗位，轮到它时层级已经算定。
+  nodes.forEach((node) => {
+    const from = index.get(node.key)!
+    const level = rank.get(node.key)!
+    for (const edge of outgoing.get(node.key) ?? []) {
+      const to = index.get(edge.toKey)!
+      if (to <= from) continue
+      rank.set(edge.toKey, Math.max(rank.get(edge.toKey)!, level + 1))
+    }
+  })
+  const rows: CollabFlowRow<T>[] = []
+  nodes.forEach((node, position) => {
+    const level = position > 0 && rank.get(node.key) === 0 ? 1 : rank.get(node.key)!
+    const row = rows.find((item) => item.rank === level)
+    if (row) row.nodes.push(node)
+    else rows.push({ rank: level, nodes: [node] })
+  })
+  return rows.sort((left, right) => left.rank - right.rank)
+}
+
+/** 相邻两行之间那条箭头要写的动作（派发 / 审查 / 验收…），同一行里最多写三条。 */
+export function rowLinkLabels(
+  links: CollabFlowLink[],
+  rows: CollabFlowRow<{ key: string }>[],
+  rowIndex: number,
+): string[] {
+  if (rowIndex <= 0 || rowIndex >= rows.length) return []
+  const above = new Set(rows[rowIndex - 1].nodes.map((node) => node.key))
+  const below = new Set(rows[rowIndex].nodes.map((node) => node.key))
+  const labels: string[] = []
+  for (const link of links) {
+    if (link.isLoop || !above.has(link.fromKey) || !below.has(link.toKey)) continue
+    if (!labels.includes(link.kindLabel)) labels.push(link.kindLabel)
+  }
+  return labels.slice(0, 3)
 }
 
 interface BuildProgressArgs {
@@ -51,7 +184,15 @@ interface BuildProgressArgs {
   runStatus: CollabRunStatus
 }
 
-const ACTIVE_TICKET_STATES = new Set(['open', 'working', 'waiting_children', 'review', 'rework', 'blocked'])
+const ACTIVE_TICKET_STATES = new Set([
+  'open',
+  'working',
+  'waiting_children',
+  'review',
+  'rework',
+  'escalated',
+  'blocked',
+])
 
 const TICKET_LABELS: Record<string, string> = {
   open: '待领取',
@@ -59,6 +200,7 @@ const TICKET_LABELS: Record<string, string> = {
   waiting_children: '等子工单',
   review: '待审查',
   rework: '返工中',
+  escalated: '已上报',
   blocked: '等你决定',
 }
 
@@ -215,6 +357,8 @@ export function buildCollabProgress({
     id: edge.id,
     from: labels.get(edge.from_key) ?? edge.from_key,
     to: labels.get(edge.to_key) ?? edge.to_key,
+    fromKey: edge.from_key,
+    toKey: edge.to_key,
     kind: edge.kind,
     kindLabel: EDGE_LABELS[edge.kind] ?? edge.kind,
   }))

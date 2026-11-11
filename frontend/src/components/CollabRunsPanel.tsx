@@ -12,7 +12,13 @@ import { TicketBoard } from './TicketBoard'
 import { Modal } from './Modal'
 import { api, ApiError, streamGet, streamPost } from '../lib/api'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
-import { applyCollabEvent, makeCollabTurn, type CollabTurnState } from '../lib/collabStream'
+import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
+import {
+  applyCollabEvent, dismissCollabNotice, makeCollabTurn, type CollabNotice, type CollabTurnState,
+} from '../lib/collabStream'
+import {
+  forgetDismissedNotices, loadDismissedNotices, rememberDismissedNotice,
+} from '../lib/collabNotices'
 import { buildCollabProgress } from '../lib/collabProgress'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
@@ -41,6 +47,7 @@ const TICKET_STATE: Record<string, { label: string; pill: string }> = {
   waiting_children: { label: '等子工单', pill: '' },
   review: { label: '待审查', pill: 'ok' },
   rework: { label: '返工中', pill: 'warn' },
+  escalated: { label: '已上报', pill: 'warn' },
   done: { label: '已完成', pill: 'ok' },
   rejected: { label: '被否决', pill: 'err' },
   blocked: { label: '等用户', pill: 'warn' },
@@ -57,8 +64,14 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   const [runs, setRuns] = useState<CollabRun[]>([])
   const [detail, setDetail] = useState<CollabRunDetail | null>(null)
   const [turn, setTurn] = useState<CollabTurnState | null>(null)
+  //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
+  const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
+  const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [chatBusy, setChatBusy] = useState(false)
+  //: 空闲时的发送模式：auto = 有待回答的问题就走工单、否则只聊天；chat/work 是用户手动指定。
+  const [idleMode, setIdleMode] = useState<'auto' | 'chat' | 'work'>('auto')
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [startTeamId, setStartTeamId] = useState('')
@@ -70,7 +83,9 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   const [reconnecting, setReconnecting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
+  const chatBusyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -80,6 +95,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
     [detail?.steps, leaderKey],
   )
+  const chatMessages = detail?.chat_messages ?? []
   const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
 
   const loadRuns = useCallback(async () => {
@@ -95,7 +111,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
       const next = await api.getCollabRun(id)
       setDetail(next)
       setTurn((prev) => {
-        const base = prev ?? makeCollabTurn(next, next.tickets)
+        const base = prev ?? makeCollabTurn(next, next.tickets, next.steps, dismissedNotices)
         return {
           ...base,
           status: next.status,
@@ -115,14 +131,17 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
       }
       return null
     }
-  }, [])
+  }, [dismissedNotices])
 
   useEffect(() => {
     void loadRuns()
   }, [loadRuns])
 
   // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    chatAbortRef.current?.abort()
+  }, [])
 
   // 两台设备看同一次协作时，以落库详情为准定时对齐；本机 SSE 推进期间暂停轮询。
   useAutoRefresh(() => (runId ? loadDetail(runId) : undefined), {
@@ -134,7 +153,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [visibleSteps.length, leaderLive?.agent.text, turn?.notices.length])
+  }, [visibleSteps.length, chatMessages.length, leaderLive?.agent.text, chatTurn.live?.agent.text, turn?.notices.length])
 
   /**
    * 订阅一次运行的实时事件并渲染。
@@ -187,22 +206,77 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     [loadDetail, loadRuns],
   )
 
+  /** 订阅/发起一次 CEO 聊天；状态与主流程完全分开，主流程在跑也不占用这里。 */
+  const subscribeChat = useCallback(
+    async (
+      runId: string,
+      kickoff?: (onEvent: (event: RunEvent) => void, signal: AbortSignal) => Promise<void>,
+    ) => {
+      if (chatBusyRef.current) return
+      chatBusyRef.current = true
+      setChatBusy(true)
+      const controller = new AbortController()
+      chatAbortRef.current = controller
+      let closed = false
+      const onEvent = (event: RunEvent) => {
+        if (event.type === 'stream.closed') {
+          closed = true
+          return
+        }
+        if (
+          event.type === 'collab.chat.started'
+          || event.type === 'collab.chat.event'
+          || event.type === 'collab.chat.finished'
+        ) {
+          setChatTurn((prev) => applyChatEvent(prev, event))
+        }
+      }
+      try {
+        if (kickoff) await kickoff(onEvent, controller.signal)
+        let attempt = 0
+        while (!closed && !controller.signal.aborted && attempt < 5) {
+          attempt += 1
+          // 主动发消息后的第一次读取已经由 kickoff 完成；只有断线才需要补订阅。
+          if (attempt === 1 && kickoff) break
+          await delay(Math.min(800 * attempt, 3000))
+          if (controller.signal.aborted) break
+          await streamGet<RunEvent>(`/api/collab/runs/${runId}/chat/stream`, onEvent, controller.signal)
+        }
+      } catch (e) {
+        if ((e as Error)?.name !== 'AbortError') setError(describe(e))
+      } finally {
+        chatBusyRef.current = false
+        chatAbortRef.current = null
+        setChatBusy(false)
+        await loadDetail(runId)
+        await loadRuns()
+      }
+    },
+    [loadDetail, loadRuns],
+  )
+
   useEffect(() => {
     abortRef.current?.abort()
+    chatAbortRef.current?.abort()
     if (!runId) {
       setDetail(null)
       setTurn(null)
+      setChatTurn(emptyChatTurn())
       return
     }
     setDetail(null)
     setTurn(null)
+    setChatTurn(emptyChatTurn())
+    setIdleMode('auto')
     setError(null)
     void (async () => {
       const next = await loadDetail(runId)
       // 这次运行在跑就订阅实时事件：不管它是本页发起，还是另一台设备/上次会话发起的。
       if (next && next.status === 'running' && !busyRef.current) void subscribe(runId)
+      // 刷新/换设备时，如果 CEO 正好在回复，重新接上聊天流。
+      if (next?.chat_active && !chatBusyRef.current) void subscribeChat(runId)
     })()
-  }, [runId, loadDetail, subscribe])
+  }, [runId, loadDetail, subscribe, subscribeChat])
 
   /** 发消息（或空内容触发重跑）并订阅这一轮的推进。 */
   const stream = async (path: string, body: unknown, userText?: string) => {
@@ -215,6 +289,25 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     } finally {
       if (pending) setPendingUser(null)
     }
+  }
+
+  /** 把一句话发给入口角色：主流程在跑时走独立聊天通道，否则走正常推进。 */
+  const sendMessage = async (text: string) => {
+    if (!detail || !text.trim()) return
+    if (status === 'running' || busy || chatActive) {
+      const pending = { id: `local-user-${Date.now()}`, text }
+      setPendingUser(pending)
+      setError(null)
+      try {
+        await subscribeChat(detail.id, (onEvent, signal) =>
+          streamPost<RunEvent>(`/api/collab/runs/${detail.id}/chat`, { content: text }, onEvent, signal),
+        )
+      } finally {
+        setPendingUser(null)
+      }
+      return
+    }
+    await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
   }
 
   const start = async () => {
@@ -241,8 +334,16 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   const stop = async () => {
     if (!detail) return
     abortRef.current?.abort()
+    chatAbortRef.current?.abort()
     await api.cancelCollabRun(detail.id).catch(() => undefined)
     await loadDetail(detail.id)
+  }
+
+  /** 关掉一条提醒：立即从待处理区移除，并记住「用户已经看过、不用再提」。 */
+  const dismissNotice = async (notice: CollabNotice) => {
+    const current = runId ?? detail?.id ?? ''
+    setTurn((prev) => (prev ? dismissCollabNotice(prev, notice.key) : prev))
+    rememberDismissedNotice(current, notice.key)
   }
 
   const retryAndResume = async (stepId: string) => {
@@ -257,7 +358,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   }
 
   const answerAsk = (choice: CollabChoice) => {
-    if (!detail || busy) return
+    if (!detail || busy || chatBusy) return
     const text = collabChoiceAnswer(choice)
     if (!text) {
       composerRef.current?.focus()
@@ -281,19 +382,38 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     [leaderKey, persistedIds, turn?.completed],
   )
   const timeline: RenderMessage[] = [
-    ...visibleSteps.map((step) =>
-      step.role_key === 'user'
-        ? { id: step.id, role: 'user' as const, content: step.content, parts: [], status: 'complete' }
-        : {
-            id: step.id,
-            role: 'assistant' as const,
-            content: step.content,
-            parts: step.parts,
-            status: step.status,
-            error: step.error,
-            usage: step.usage,
-          },
-    ),
+    ...[
+      ...visibleSteps.map((step) => ({
+        at: step.started_at,
+        message: step.role_key === 'user'
+          ? { id: step.id, role: 'user' as const, content: step.content, parts: [], status: 'complete' }
+          : {
+              id: step.id,
+              role: 'assistant' as const,
+              content: step.content,
+              parts: step.parts,
+              status: step.status,
+              error: step.error,
+              usage: step.usage,
+            },
+      })),
+      ...chatMessages.map((row) => ({
+        at: row.created_at,
+        message: row.sender === 'user'
+          ? { id: row.id, role: 'user' as const, content: row.content, parts: [], status: 'complete' }
+          : {
+              id: row.id,
+              role: 'assistant' as const,
+              content: row.content,
+              parts: row.parts,
+              status: row.status,
+              error: row.error,
+              usage: row.usage,
+            },
+      })),
+    ]
+      .sort((left, right) => String(left.at).localeCompare(String(right.at)))
+      .map((item) => item.message),
     ...(pendingUser
       ? [{ id: pendingUser.id, role: 'user' as const, content: pendingUser.text, parts: [], status: 'complete' }]
       : []),
@@ -321,6 +441,19 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
       }
     : null
 
+  const chatLiveMessage: RenderMessage | null = chatTurn.live
+    ? {
+        id: `chat-live-${chatTurn.live.messageId}`,
+        role: 'assistant',
+        content: chatTurn.live.agent.text,
+        parts: chatTurn.live.agent.parts,
+        status: chatTurn.live.agent.error ? 'error' : 'streaming',
+        error: chatTurn.live.agent.error,
+        usage: chatTurn.live.agent.usage,
+        streaming: true,
+      }
+    : null
+
   const threadItems: ConversationThreadItem[] = [
     ...timeline.map((message) => ({
       id: message.id,
@@ -334,6 +467,14 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
           message: liveMessage,
           avatar: roleAvatar(undefined, leaderLive.nodeKey),
           label: roleLabel(leaderLive.nodeKey, leaderLive.roleName),
+        }]
+      : []),
+    ...(chatLiveMessage && chatTurn.live
+      ? [{
+          id: chatLiveMessage.id,
+          message: chatLiveMessage,
+          avatar: roleAvatar(undefined, chatTurn.live.roleKey || leaderKey),
+          label: roleLabel(chatTurn.live.roleKey || leaderKey, chatTurn.live.roleName),
         }]
       : []),
   ]
@@ -369,6 +510,10 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
         : [],
     [detail, status, turn?.tickets],
   )
+  //: 任务开始后、主流程空闲时，默认先聊天：问进度/补要求不会白跑一步工单。
+  //: auto 模式下「有待回答的问题」自动走推进任务，避免把答复误发进聊天。
+  const idle = Boolean(detail?.goal) && status !== 'running' && !busy
+  const chatActive = idle && (idleMode === 'chat' || (idleMode === 'auto' && pendingAsks.length === 0))
   const runUsage = summarizeUsage([detail?.usage])
   // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
   const ticketCounts = useMemo(() => {
@@ -454,7 +599,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                   </button>
                 ) : (
                   (status === 'waiting_user' || status === 'interrupted' || status === 'error') && (
-                    <button className="btn sm" onClick={() => void stream(`/api/collab/runs/${detail.id}/resume`, {})}>
+                    <button className="btn sm" disabled={chatBusy} onClick={() => void stream(`/api/collab/runs/${detail.id}/resume`, {})}>
                       ▶ 继续
                     </button>
                   )
@@ -463,7 +608,13 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                   className="btn sm danger"
                   onClick={async () => {
                     if (!confirm(`删除这次协作「${detail.title}」？工单与时间线都会一起删除。`)) return
-                    await api.deleteCollabRun(detail.id)
+                    try {
+                      await api.deleteCollabRun(detail.id)
+                    } catch (e) {
+                      setError(describe(e))
+                      return
+                    }
+                    forgetDismissedNotices(detail.id)
                     onOpenRun(null)
                     await loadRuns()
                   }}
@@ -476,14 +627,22 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
             {turn && turn.notices.filter((notice) => notice.level !== 'ask').length > 0 && (
               <div className="stack" style={{ gap: 6, padding: '0 22px 6px' }}>
                 {turn.notices.filter((notice) => notice.level !== 'ask').slice(-4).map((notice) => (
-                  <div key={notice.id} className={`banner ${notice.level === 'error' ? 'err' : 'info'}`}>
+                  <div key={notice.key} className={`banner ${notice.level === 'error' ? 'err' : 'info'}`}>
                     <div className="row" style={{ gap: 8 }}>
                       <span style={{ flex: 1 }}>{notice.text}</span>
-                      {notice.level === 'error' && notice.stepId && !busy && (
+                      {notice.level === 'error' && notice.stepId && !busy && !chatBusy && (
                         <button className="btn sm" onClick={() => void retryAndResume(notice.stepId!)}>
                           重试这一步
                         </button>
                       )}
+                      <button
+                        className="banner-close"
+                        aria-label="关掉这条提醒"
+                        title="关掉这条提醒（状态没变化时，刷新后不会再出现）"
+                        onClick={() => void dismissNotice(notice)}
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -536,7 +695,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                         <button
                           key={`${ask.ticketId}-${index}-${choice.label}`}
                           className={`collab-ask-option${choice.freeform ? ' freeform' : ''}`}
-                          disabled={busy}
+                          disabled={busy || chatBusy}
                           onClick={() => answerAsk(choice)}
                         >
                           <span className="collab-ask-option-label">{choice.label}</span>
@@ -558,6 +717,23 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
               </div>
             )}
 
+            {chatTurn.notice && (
+              <div style={{ padding: '0 22px 6px' }}>
+                <div className={`banner ${chatTurn.notice.level === 'error' ? 'err' : chatTurn.notice.level === 'warn' ? 'warn' : 'info'}`}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <span style={{ flex: 1 }}>{chatTurn.notice.text}</span>
+                    <button
+                      className="banner-close"
+                      aria-label="关掉这条提示"
+                      onClick={() => setChatTurn((prev) => dismissChatNotice(prev))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="composer">
               <div className="composer-inner">
                 <div className="composer-box">
@@ -566,10 +742,14 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                     rows={1}
                     value={draft}
                     placeholder={
-                      busy || remoteRunning
-                        ? '协作正在推进，可在「协作进度」按钮里查看实时输出…'
+                      chatBusy
+                        ? 'CEO 正在回复…'
+                        : chatActive
+                          ? '和 CEO 聊聊：问进度、补要求、随便说两句…'
+                        : status === 'running'
+                          ? '随时问 CEO：细化要求、问进度、聊两句…'
                         : detail.goal
-                          ? `和领导者「${roleLabel(leaderKey, detail.entry_key)}」继续对话…`
+                          ? '推进任务：回答提问，或让 CEO 继续推进工单…'
                           : '告诉领导者这次协作要做什么…'
                     }
                     onChange={(e) => {
@@ -581,29 +761,57 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                         e.preventDefault()
-                        if (!busy && !remoteRunning && draft.trim()) {
+                        if (!chatBusy && draft.trim()) {
                           const text = draft
                           setDraft('')
-                          void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+                          void sendMessage(text)
                         }
                       }
                     }}
-                    disabled={busy || remoteRunning}
+                    disabled={chatBusy}
                   />
                   <button
                     className="btn primary"
-                    disabled={busy || remoteRunning || !draft.trim()}
+                    disabled={chatBusy || !draft.trim()}
                     onClick={() => {
                       const text = draft
                       setDraft('')
-                      void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+                      void sendMessage(text)
                     }}
                   >
-                    发送 ↵
+                    {chatBusy ? '回复中…' : '发送 ↵'}
                   </button>
                 </div>
                 <div className="composer-hint">
-                  <span>主会话只展示你和领导者；内部角色输出在「协作进度」按钮里点开查看</span>
+                  <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+                    {idle && (
+                      <button
+                        type="button"
+                        className={`btn sm${chatActive ? ' primary' : ' ghost'}`}
+                        onClick={() => setIdleMode(chatActive ? 'work' : 'chat')}
+                        title={
+                          chatActive
+                            ? '切到推进任务：发送后会继续跑工单'
+                            : '切到只聊天：不推进工单，只和 CEO 对话'
+                        }
+                      >
+                        {chatActive ? '💬 聊天中 · 点此推进任务' : '▶ 推进任务 · 点此只聊天'}
+                      </button>
+                    )}
+                    <span>
+                      {chatBusy
+                        ? 'CEO 正在整理回复…'
+                        : chatActive
+                          ? pendingAsks.length > 0
+                            ? '聊天模式：上方有待回答的问题；回答请点选项，或切到推进任务'
+                            : '聊天模式：不推进工单；明确补充的要求会在下一轮步骤生效'
+                          : status === 'running'
+                            ? 'CEO 在线：任务在跑也能随时问进度、补要求；内部输出在「协作进度」里查看'
+                            : detail.goal
+                              ? '推进模式：发送后会继续跑工单；想纯聊天点上面的按钮'
+                              : '主会话只展示你和领导者；内部角色输出在「协作进度」里查看'}
+                    </span>
+                  </span>
                   <span>工作目录：{detail.workspace_dir ?? '默认'}</span>
                 </div>
               </div>

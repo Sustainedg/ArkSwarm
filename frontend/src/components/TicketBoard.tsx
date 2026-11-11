@@ -16,6 +16,7 @@ const TICKET_STATE: Record<string, { label: string; pill: string }> = {
   waiting_children: { label: '等子工单', pill: '' },
   review: { label: '待审查', pill: 'ok' },
   rework: { label: '返工中', pill: 'warn' },
+  escalated: { label: '已上报', pill: 'warn' },
   done: { label: '已完成', pill: 'ok' },
   rejected: { label: '被否决', pill: 'err' },
   blocked: { label: '等用户', pill: 'warn' },
@@ -190,6 +191,18 @@ function TicketDetail({
       {ticket.review_comment && (
         <div className={`banner ${ticket.verdict === 'pass' ? 'info' : 'warn'}`}>
           审查意见：{ticket.review_comment}
+        </div>
+      )}
+
+      {ticket.escalation?.reason && (
+        <div className={`banner ${ticket.state === 'escalated' ? 'warn' : 'info'}`}>
+          {ticket.state === 'escalated' ? '上报中' : '曾上报'}：
+          {nodeLabel(String(ticket.escalation.from ?? '')) || ticket.escalation.from} 交回
+          {ticket.escalation.hops && ticket.escalation.hops.length > 0
+            ? `（已经过 ${ticket.escalation.hops.map((hop) => nodeLabel(hop) || hop).join(' → ')}）`
+            : ''}
+          ：{ticket.escalation.reason}
+          {ticket.escalation.need ? ` · 需要：${ticket.escalation.need}` : ''}
         </div>
       )}
 

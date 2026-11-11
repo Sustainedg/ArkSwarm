@@ -190,3 +190,36 @@ def test_adapters_without_real_config_keep_their_defaults(monkeypatch, tmp_path)
     definition = get_agent("codex")
     assert definition.system_defaults() == {}
     assert definition.resolve_gateway(definition.default_gateway) == definition.default_gateway
+
+
+def test_claude_code_root_bypass_sets_sandbox_env(monkeypatch):
+    """以 root 勾 bypassPermissions 时必须声明 IS_SANDBOX，否则内核直接拒绝启动。"""
+    from app.agents.builtin import claude_code
+
+    definition = get_agent("claude-code")
+
+    monkeypatch.setattr(claude_code, "_is_root", lambda: True)
+    invocation = definition.build_invocation(ctx(options={"permission_mode": "bypassPermissions"}))
+    assert "--dangerously-skip-permissions" in invocation.argv
+    assert invocation.env["IS_SANDBOX"] == "1"
+    # 运行日志里要有一次明示，否则用户看到内核拒绝启动会一头雾水
+    run = definition.create_run(ctx(options={"permission_mode": "bypassPermissions"}))
+    notes = [e for e in run.feed("") if e.type.value == "log" and "IS_SANDBOX" in (e.text or "")]
+    assert len(notes) == 1
+
+    # 常规权限模式不受影响
+    plain = definition.build_invocation(ctx(options={"permission_mode": "acceptEdits"}))
+    assert "IS_SANDBOX" not in plain.env
+
+    # 非 root 也不用补
+    monkeypatch.setattr(claude_code, "_is_root", lambda: False)
+    assert "IS_SANDBOX" not in definition.build_invocation(
+        ctx(options={"permission_mode": "bypassPermissions"})
+    ).env
+
+    # 用户自己配了 env.IS_SANDBOX 就以用户为准
+    monkeypatch.setattr(claude_code, "_is_root", lambda: True)
+    custom = definition.build_invocation(
+        ctx(options={"permission_mode": "bypassPermissions", "env": {"IS_SANDBOX": "0"}})
+    )
+    assert custom.env["IS_SANDBOX"] == "0"

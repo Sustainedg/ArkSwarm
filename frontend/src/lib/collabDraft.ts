@@ -59,6 +59,7 @@ export const ACTIONS: { value: CollabTicketAction; label: string }[] = [
   { value: 'submit', label: 'submit 提交' },
   { value: 'review', label: 'review 审查' },
   { value: 'done', label: 'done 确认完成' },
+  { value: 'escalate', label: 'escalate 上报' },
   { value: 'ask_user', label: 'ask_user 提问' },
   { value: 'reject', label: 'reject 否决' },
 ]

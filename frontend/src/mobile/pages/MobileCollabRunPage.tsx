@@ -3,7 +3,13 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { api, streamGet, streamPost } from '../../lib/api'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
-import { applyCollabEvent, makeCollabTurn, type CollabTurnState } from '../../lib/collabStream'
+import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
+import {
+  applyCollabEvent, dismissCollabNotice, makeCollabTurn, type CollabNotice, type CollabTurnState,
+} from '../../lib/collabStream'
+import {
+  forgetDismissedNotices, loadDismissedNotices, rememberDismissedNotice,
+} from '../../lib/collabNotices'
 import { buildCollabProgress } from '../../lib/collabProgress'
 import type {
   CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
@@ -55,8 +61,14 @@ export function MobileCollabRunPage() {
   const [teams, setTeams] = useState<CollabTeam[]>([])
   const [roles, setRoles] = useState<Role[]>([])
   const [turn, setTurn] = useState<CollabTurnState | null>(null)
+  //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
+  const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
+  const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [chatBusy, setChatBusy] = useState(false)
+  //: 空闲时的发送模式：auto = 有待回答的问题就走工单、否则只聊天；chat/work 是用户手动指定。
+  const [idleMode, setIdleMode] = useState<'auto' | 'chat' | 'work'>('auto')
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedRoleKey, setSelectedRoleKey] = useState<string | null>(null)
@@ -64,7 +76,9 @@ export function MobileCollabRunPage() {
   const [reconnecting, setReconnecting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
+  const chatBusyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -75,6 +89,7 @@ export function MobileCollabRunPage() {
     () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
     [detail?.steps, leaderKey],
   )
+  const chatMessages = detail?.chat_messages ?? []
   const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
 
   const load = useCallback(async (id: string) => {
@@ -82,7 +97,7 @@ export function MobileCollabRunPage() {
       const next = await api.getCollabRun(id)
       setDetail(next)
       setTurn((prev) => {
-        const base = prev ?? makeCollabTurn(next, next.tickets)
+        const base = prev ?? makeCollabTurn(next, next.tickets, next.steps, dismissedNotices)
         return {
           ...base,
           status: next.status,
@@ -97,7 +112,7 @@ export function MobileCollabRunPage() {
       setError(describeError(e))
       return null
     }
-  }, [])
+  }, [dismissedNotices])
 
   // 协作组与角色只用于把步骤渲染成「谁的产出」：头像与岗位名。
   useEffect(() => {
@@ -113,7 +128,10 @@ export function MobileCollabRunPage() {
   }, [])
 
   // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    chatAbortRef.current?.abort()
+  }, [])
 
   // SSE 只负责本设备发起的增量；运行详情以落库结果为准，并定时对齐其他设备。
   useAutoRefresh(() => (runId ? load(runId) : undefined), {
@@ -124,7 +142,7 @@ export function MobileCollabRunPage() {
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [visibleSteps.length, leaderLive?.agent.text])
+  }, [visibleSteps.length, chatMessages.length, leaderLive?.agent.text, chatTurn.live?.agent.text])
 
   /**
    * 订阅一次运行的实时事件并渲染。
@@ -173,17 +191,63 @@ export function MobileCollabRunPage() {
     [load],
   )
 
+  /** 入口角色独立聊天通道：主流程在跑时也不占用、不打断这里的流。 */
+  const subscribeChat = useCallback(
+    async (
+      target: string,
+      kickoff?: (onEvent: (event: RunEvent) => void, signal: AbortSignal) => Promise<void>,
+    ) => {
+      if (chatBusyRef.current) return
+      chatBusyRef.current = true
+      setChatBusy(true)
+      const controller = new AbortController()
+      chatAbortRef.current = controller
+      let closed = false
+      const onEvent = (event: RunEvent) => {
+        if (event.type === 'stream.closed') {
+          closed = true
+          return
+        }
+        if (
+          event.type === 'collab.chat.started'
+          || event.type === 'collab.chat.event'
+          || event.type === 'collab.chat.finished'
+        ) {
+          setChatTurn((prev) => applyChatEvent(prev, event))
+        }
+      }
+      try {
+        if (kickoff) await kickoff(onEvent, controller.signal)
+        if (!closed && !controller.signal.aborted && !kickoff) {
+          await streamGet<RunEvent>(`/api/collab/runs/${target}/chat/stream`, onEvent, controller.signal)
+        }
+      } catch (e) {
+        if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
+      } finally {
+        chatBusyRef.current = false
+        chatAbortRef.current = null
+        setChatBusy(false)
+        await load(target)
+      }
+    },
+    [load],
+  )
+
   useEffect(() => {
     abortRef.current?.abort()
+    chatAbortRef.current?.abort()
     if (!runId) return
     setError(null)
     setSelectedRoleKey(null)
+    setChatTurn(emptyChatTurn())
+    setIdleMode('auto')
     void (async () => {
       const next = await load(runId)
       // 这次运行在跑就订阅实时事件：本页发起的、或别的设备/上次会话发起的都一样。
       if (next && next.status === 'running' && !busyRef.current) void subscribe(runId)
+      if (next?.chat_active && !chatBusyRef.current) void subscribeChat(runId)
     })()
-  }, [runId, load, subscribe])
+  }, [runId, load, subscribe, subscribeChat])
 
   const stream = useCallback(
     async (path: string, body: unknown, userText?: string) => {
@@ -200,6 +264,30 @@ export function MobileCollabRunPage() {
     [detail, subscribe],
   )
 
+  const sendMessage = async (text: string) => {
+    if (!detail || !text.trim()) return
+    if (status === 'running' || busy || chatActive) {
+      const pending = { id: `local-user-${Date.now()}`, text }
+      setPendingUser(pending)
+      setError(null)
+      try {
+        await subscribeChat(detail.id, (onEvent, signal) =>
+          streamPost<RunEvent>(`/api/collab/runs/${detail.id}/chat`, { content: text }, onEvent, signal),
+        )
+      } finally {
+        setPendingUser(null)
+      }
+      return
+    }
+    await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
+  /** 关掉一条提醒：立即移除，并记住「用户已经看过」，刷新后不再冒出来。 */
+  const dismissNotice = (notice: CollabNotice) => {
+    setTurn((prev) => (prev ? dismissCollabNotice(prev, notice.key) : prev))
+    rememberDismissedNotice(runId ?? detail?.id ?? '', notice.key)
+  }
+
   const resumeWithRetry = async (stepId: string) => {
     try {
       await api.retryCollabStep(stepId)
@@ -211,7 +299,7 @@ export function MobileCollabRunPage() {
   }
 
   const answerAsk = (choice: CollabChoice) => {
-    if (!detail || busy) return
+    if (!detail || busy || chatBusy) return
     const text = collabChoiceAnswer(choice)
     if (!text) {
       composerRef.current?.focus()
@@ -225,6 +313,7 @@ export function MobileCollabRunPage() {
     if (!detail) return
     setMenuOpen(false)
     abortRef.current?.abort()
+    chatAbortRef.current?.abort()
     // 尽力而为：本地流已经断开，服务端叫停失败不影响用户（引擎会按预算自行收尾）。
     await api.cancelCollabRun(detail.id).catch(() => undefined)
     await load(detail.id)
@@ -234,37 +323,74 @@ export function MobileCollabRunPage() {
     if (!detail) return
     setMenuOpen(false)
     if (!confirm(`删除运行「${detail.title}」及其全部工单与步骤？`)) return
-    await api.deleteCollabRun(detail.id)
+    try {
+      await api.deleteCollabRun(detail.id)
+    } catch (e) {
+      setError(describeError(e))
+      return
+    }
+    forgetDismissedNotices(detail.id)
     navigate('/collab', { replace: true })
   }
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     if (!detail) return []
-    const entries = visibleSteps.map((step): TimelineEntry => {
-      if (step.role_key === 'user') {
-        return {
-          id: step.id,
-          label: '你',
-          message: { id: step.id, role: 'user', content: step.content, parts: [], status: 'complete' },
-        }
-      }
-      const node = team?.graph.nodes.find((item) => item.key === step.role_key)
-      const role = roles.find((item) => item.id === (step.role_id ?? node?.role_id))
-      return {
-        id: step.id,
-        avatar: role?.avatar ?? '🤖',
-        label: node?.label ?? step.role_name ?? step.role_key,
-        message: {
-          id: step.id,
-          role: 'assistant',
-          content: step.content,
-          parts: step.parts,
-          status: step.status,
-          error: step.error,
-          usage: step.usage,
-        },
-      }
-    })
+    const pairs = [
+      ...visibleSteps.map((step) => ({
+        at: step.started_at,
+        entry: (() => {
+          if (step.role_key === 'user') {
+            return {
+              id: step.id,
+              label: '你',
+              message: { id: step.id, role: 'user' as const, content: step.content, parts: [], status: 'complete' },
+            }
+          }
+          const node = team?.graph.nodes.find((item) => item.key === step.role_key)
+          const role = roles.find((item) => item.id === (step.role_id ?? node?.role_id))
+          return {
+            id: step.id,
+            avatar: role?.avatar ?? '🤖',
+            label: node?.label ?? step.role_name ?? step.role_key,
+            message: {
+              id: step.id,
+              role: 'assistant' as const,
+              content: step.content,
+              parts: step.parts,
+              status: step.status,
+              error: step.error,
+              usage: step.usage,
+            },
+          }
+        })(),
+      })),
+      ...chatMessages.map((row) => ({
+        at: row.created_at,
+        entry: row.sender === 'user'
+          ? {
+              id: row.id,
+              label: '你',
+              message: { id: row.id, role: 'user' as const, content: row.content, parts: [], status: 'complete' },
+            }
+          : {
+              id: row.id,
+              avatar: roles.find((role) => role.id === row.role_id)?.avatar ?? '🤖',
+              label: leaderLabel,
+              message: {
+                id: row.id,
+                role: 'assistant' as const,
+                content: row.content,
+                parts: row.parts,
+                status: row.status,
+                error: row.error,
+                usage: row.usage,
+              },
+            },
+      })),
+    ]
+    const entries: TimelineEntry[] = pairs
+      .sort((left, right) => String(left.at).localeCompare(String(right.at)))
+      .map((pair) => pair.entry)
     if (pendingUser) {
       entries.push({
         id: pendingUser.id,
@@ -294,7 +420,7 @@ export function MobileCollabRunPage() {
       })
     }
     return entries
-  }, [detail, team, roles, visibleSteps, pendingUser, turn?.completed, leaderKey])
+  }, [detail, team, roles, visibleSteps, chatMessages, pendingUser, turn?.completed, leaderKey, leaderLabel])
 
   const liveEntry: TimelineEntry | null = leaderLive
     ? {
@@ -313,6 +439,29 @@ export function MobileCollabRunPage() {
           usage: leaderLive.agent.usage,
           streaming: leaderLive.agent.status === 'running',
           logs: leaderLive.agent.logs,
+        },
+      }
+    : null
+
+  const chatLiveEntry: TimelineEntry | null = chatTurn.live
+    ? {
+        id: `chat-live-${chatTurn.live.messageId}`,
+        avatar: roles.find((role) => role.id === team?.graph.nodes.find(
+          (node) => node.key === (chatTurn.live?.roleKey || leaderKey),
+        )?.role_id)?.avatar ?? '🤖',
+        label: team?.graph.nodes.find(
+          (node) => node.key === (chatTurn.live?.roleKey || leaderKey),
+        )?.label ?? chatTurn.live.roleName,
+        message: {
+          id: `chat-live-${chatTurn.live.messageId}`,
+          role: 'assistant',
+          content: chatTurn.live.agent.text,
+          parts: chatTurn.live.agent.parts,
+          status: chatTurn.live.agent.error ? 'error' : 'streaming',
+          error: chatTurn.live.agent.error,
+          usage: chatTurn.live.agent.usage,
+          streaming: chatTurn.live.agent.status === 'running',
+          logs: chatTurn.live.agent.logs,
         },
       }
     : null
@@ -345,6 +494,10 @@ export function MobileCollabRunPage() {
         : [],
     [detail, status, turn?.tickets],
   )
+  //: 任务开始后、主流程空闲时，默认先聊天：问进度/补要求不会白跑一步工单。
+  //: auto 模式下「有待回答的问题」自动走推进任务，避免把答复误发进聊天。
+  const idle = Boolean(detail?.goal) && status !== 'running' && !busy
+  const chatActive = idle && (idleMode === 'chat' || (idleMode === 'auto' && pendingAsks.length === 0))
 
   return (
     <div className="m-page">
@@ -394,7 +547,7 @@ export function MobileCollabRunPage() {
         <div style={{ padding: '8px 12px 0' }}>
           <div className="stack" style={{ gap: 6 }}>
             {turn.notices.filter((notice) => notice.level !== 'ask').slice(-3).map((notice) => (
-              <div className={`banner${notice.level === 'error' ? ' err' : ''}`} key={notice.id}>
+              <div className={`banner${notice.level === 'error' ? ' err' : ''}`} key={notice.key}>
                 <div className="row" style={{ gap: 8 }}>
                   <span style={{ flex: 1 }}>{notice.text}</span>
                   {notice.level === 'error' && notice.stepId && (
@@ -406,6 +559,13 @@ export function MobileCollabRunPage() {
                       重试
                     </button>
                   )}
+                  <button
+                    className="banner-close"
+                    aria-label="关掉这条提醒"
+                    onClick={() => dismissNotice(notice)}
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
             ))}
@@ -421,8 +581,25 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
+      {chatTurn.notice && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <div className={`banner${chatTurn.notice.level === 'error' ? ' err' : chatTurn.notice.level === 'warn' ? ' warn' : ' info'}`}>
+            <div className="row" style={{ gap: 8 }}>
+              <span style={{ flex: 1 }}>{chatTurn.notice.text}</span>
+              <button
+                className="banner-close"
+                aria-label="关掉这条提示"
+                onClick={() => setChatTurn((prev) => dismissChatNotice(prev))}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="m-thread" ref={scrollRef}>
-        {timeline.length === 0 && !liveEntry && pendingAsks.length === 0 && !busy && (
+        {timeline.length === 0 && !liveEntry && !chatLiveEntry && pendingAsks.length === 0 && !busy && (
           <div className="m-empty">
             <div className="m-empty-icon">🤝</div>
             <p>和领导者开始对话</p>
@@ -433,6 +610,9 @@ export function MobileCollabRunPage() {
           <MessageView key={entry.id} message={entry.message} avatar={entry.avatar} label={entry.label} />
         ))}
         {liveEntry && <MessageView message={liveEntry.message} avatar={liveEntry.avatar} label={liveEntry.label} />}
+        {chatLiveEntry && (
+          <MessageView message={chatLiveEntry.message} avatar={chatLiveEntry.avatar} label={chatLiveEntry.label} />
+        )}
         {pendingAsks.map((ask) => (
           <div key={ask.ticketId} className="m-ask-card">
             <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -445,7 +625,7 @@ export function MobileCollabRunPage() {
                 <button
                   key={`${ask.ticketId}-${index}-${choice.label}`}
                   className={`m-ask-option${choice.freeform ? ' freeform' : ''}`}
-                  disabled={busy}
+                  disabled={busy || chatBusy}
                   onClick={() => answerAsk(choice)}
                 >
                   <span>{choice.label}</span>
@@ -458,53 +638,82 @@ export function MobileCollabRunPage() {
       </div>
 
       <div className="m-composer">
-        {remoteRunning ? (
+        {(busy || remoteRunning) && (
           <div className="m-collab-running-bar">
             <span className="dim small">
-              领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}，完成后可继续对话
+              领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}；你可以继续找 CEO 细化要求或问进度
             </span>
             <button className="btn sm danger" onClick={() => void stop()}>
-              叫停
+              {busy ? '■ 停止' : '叫停'}
             </button>
           </div>
-        ) : (
-          <>
-            <div className="m-composer-box">
-              <textarea
-                ref={composerRef}
-                rows={1}
-                value={draft}
-                disabled={busy}
-                placeholder={busy ? '协作正在推进…' : `和领导者「${leaderLabel}」对话…`}
-                onChange={(event) => setDraft(event.target.value)}
-              />
-              {busy ? (
-                <button className="btn danger" onClick={() => void stop()}>
-                  ■ 停止
-                </button>
-              ) : (
-                <button
-                  className="btn primary"
-                  disabled={!draft.trim()}
-                  onClick={() => {
-                    const text = draft
-                    setDraft('')
-                    void stream(`/api/collab/runs/${detail?.id}/messages`, { content: text }, text)
-                  }}
-                >
-                  发送
-                </button>
-              )}
-            </div>
-            {canResume && !busy && (
-              <button
-                className="btn ghost block m-composer-secondary"
-                onClick={() => void stream(`/api/collab/runs/${detail?.id}/resume`, {})}
-              >
-                让领导者继续推进（不补充内容）
-              </button>
-            )}
-          </>
+        )}
+        {idle && (
+          <div className="row" style={{ gap: 8, alignItems: 'center', padding: '0 2px 7px' }}>
+            <button
+              type="button"
+              className={`btn sm${chatActive ? ' primary' : ' ghost'}`}
+              onClick={() => setIdleMode(chatActive ? 'work' : 'chat')}
+            >
+              {chatActive ? '💬 聊天中' : '▶ 推进任务'}
+            </button>
+            <span className="dim small">
+              {chatActive
+                ? pendingAsks.length > 0
+                  ? '聊天模式：上方有待回答的问题，回答请点选项'
+                  : '只对话，不推进工单'
+                : '发送后会继续推进工单'}
+            </span>
+          </div>
+        )}
+        <div className="m-composer-box">
+          <textarea
+            ref={composerRef}
+            rows={1}
+            value={draft}
+            disabled={chatBusy}
+            placeholder={
+              chatBusy
+                ? 'CEO 正在回复…'
+                : chatActive
+                  ? '和 CEO 聊聊：问进度、补要求、随便说两句…'
+                : status === 'running'
+                  ? '随时问 CEO：细化要求、问进度、聊两句…'
+                  : detail?.goal
+                    ? '推进任务：回答提问，或让 CEO 继续推进工单…'
+                    : `和领导者「${leaderLabel}」对话…`
+            }
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                if (!chatBusy && draft.trim()) {
+                  const text = draft
+                  setDraft('')
+                  void sendMessage(text)
+                }
+              }
+            }}
+          />
+          <button
+            className="btn primary"
+            disabled={chatBusy || !draft.trim()}
+            onClick={() => {
+              const text = draft
+              setDraft('')
+              void sendMessage(text)
+            }}
+          >
+            {chatBusy ? '回复中…' : '发送'}
+          </button>
+        </div>
+        {canResume && !busy && !chatBusy && (
+          <button
+            className="btn ghost block m-composer-secondary"
+            onClick={() => void stream(`/api/collab/runs/${detail?.id}/resume`, {})}
+          >
+            让领导者继续推进（不补充内容）
+          </button>
         )}
       </div>
 

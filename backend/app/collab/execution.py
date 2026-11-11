@@ -67,9 +67,12 @@ class StepRegistry:
     def __init__(self) -> None:
         self._handles: dict[str, ActiveRun] = {}
 
-    def register(self, run_id: str, step_id: str, agent_name: str) -> ActiveRun:
+    def register(
+        self, run_id: str, step_id: str, agent_name: str, node_key: str | None = None
+    ) -> ActiveRun:
         handle = ActiveRun(id=new_id()[:12], conversation_id=run_id, agent_name=agent_name)
         handle.step_id = step_id  # 动态属性：仅供协作域自己查，不影响执行层
+        handle.node_key = node_key or ""  # 动态属性：聊天与工单步骤可分别追踪岗位
         self._handles[step_id] = handle
         return handle
 
@@ -80,6 +83,10 @@ class StepRegistry:
 
     def active_for(self, run_id: str) -> list[ActiveRun]:
         return [h for h in self._handles.values() if h.conversation_id == run_id and not h.finished]
+
+    def active_for_node(self, run_id: str, node_key: str) -> list[ActiveRun]:
+        """这个运行下、某个岗位上仍在跑的句柄（聊天通道用来避免同一岗位并发）。"""
+        return [h for h in self.active_for(run_id) if getattr(h, "node_key", "") == node_key]
 
     def cancel_run(self, run_id: str) -> bool:
         handles = self.active_for(run_id)
@@ -106,7 +113,10 @@ class StepRegistry:
         return True
 
 
+#: 工单步骤的句柄表：主流程串行推进，同一时刻最多一个。
 registry = StepRegistry()
+#: 入口角色聊天的句柄表：与主流程完全分开，聊天不会挡住工单推进，反之亦然。
+chat_registry = StepRegistry()
 
 
 # --- 工作目录 ---------------------------------------------------------------
@@ -195,15 +205,26 @@ async def _role_skill_count(session: AsyncSession, role_id: str) -> int:
     return int((await session.execute(query)).scalar() or 0)
 
 
-async def prepare_step(
-    session: AsyncSession,
-    *,
-    run: CollabRun,
-    node: NodeSpec,
-    step_id: str,
-    prompt: str,
-) -> PreparedStep:
-    """解析角色与智能体、组装一次运行的上下文。"""
+@dataclass(slots=True)
+class ResolvedAgent:
+    """一个岗位解析出来的角色 / 智能体 / 运行参数（工单步骤与聊天共用）。"""
+
+    role: Role
+    agent: AgentInstance
+    definition: AgentDefinition
+    options: dict[str, Any]
+    model: str | None
+    gateway: str | None
+    cwd: str
+    scope: WorkspaceScope
+    #: 需要以 notice 暴露给用户的说明（例如「技能这次没注入」）
+    warnings: list[str] = field(default_factory=list)
+
+
+async def _resolve_agent(
+    session: AsyncSession, *, run: CollabRun, node: NodeSpec
+) -> ResolvedAgent:
+    """把节点上的角色、智能体与运行参数解析出来（步骤与聊天共用）。"""
     role = await session.get(Role, node.role_id)
     if role is None:
         raise StepError(f"节点「{node.label or node.key}」绑定的角色已不存在")
@@ -225,9 +246,43 @@ async def prepare_step(
         options = {**options, **definition.coerce_options({**options, **node.options_override})}
 
     model = (role.parameters or {}).get("model") or definition.resolve_model(agent.model)
-    gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(agent.gateway_url)
+    gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(
+        agent.gateway_url
+    )
     cwd, scope = _step_cwd(run, node)
 
+    warnings: list[str] = []
+    skill_count = await _role_skill_count(session, role.id)
+    if skill_count:
+        warnings.append(
+            f"角色「{role.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
+            "（技能物化安排在 M5，见 docs/collaboration-design.md §11）"
+        )
+    return ResolvedAgent(
+        role=role,
+        agent=agent,
+        definition=definition,
+        options=options,
+        model=model,
+        gateway=gateway,
+        cwd=cwd,
+        scope=scope,
+        warnings=warnings,
+    )
+
+
+def _build_context(
+    *,
+    role: Role,
+    agent: AgentInstance,
+    definition: AgentDefinition,
+    options: dict[str, Any],
+    model: str | None,
+    gateway: str | None,
+    cwd: str,
+    prompt: str,
+    history: list[dict[str, str]] | None = None,
+) -> AgentContext:
     text = prompt
     system_prompt = role.system_prompt or None
     if system_prompt and not definition.capabilities.native_system_prompt:
@@ -235,7 +290,7 @@ async def prepare_step(
         text = f"[system]\n{system_prompt}\n\n{prompt}"
         system_prompt = None
 
-    ctx = AgentContext(
+    return AgentContext(
         agent_id=agent.id,
         agent_name=agent.name,
         options=options,
@@ -247,31 +302,80 @@ async def prepare_step(
         workspace_dir=cwd,
         # 「不共享记忆」：每次步骤都是全新会话，历史只走工单载荷
         session_id=None,
-        history=[],
+        history=list(history or []),
         prompt=text,
     )
 
-    warnings: list[str] = []
-    skill_count = await _role_skill_count(session, role.id)
-    if skill_count:
-        warnings.append(
-            f"角色「{role.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
-            "（技能物化安排在 M5，见 docs/collaboration-design.md §11）"
-        )
+
+async def prepare_step(
+    session: AsyncSession,
+    *,
+    run: CollabRun,
+    node: NodeSpec,
+    step_id: str,
+    prompt: str,
+) -> PreparedStep:
+    """解析角色与智能体、组装一次工单步骤的上下文。"""
+    resolved = await _resolve_agent(session, run=run, node=node)
+    ctx = _build_context(
+        role=resolved.role,
+        agent=resolved.agent,
+        definition=resolved.definition,
+        options=resolved.options,
+        model=resolved.model,
+        gateway=resolved.gateway,
+        cwd=resolved.cwd,
+        prompt=prompt,
+    )
 
     prepared = PreparedStep(
-        role=role,
-        agent=agent,
-        definition=definition,
+        role=resolved.role,
+        agent=resolved.agent,
+        definition=resolved.definition,
         ctx=ctx,
-        workspace=cwd,
-        scope=scope,
-        warnings=warnings,
+        workspace=resolved.cwd,
+        scope=resolved.scope,
+        warnings=resolved.warnings,
     )
-    if scope is not WorkspaceScope.WRITE:
-        prepared.audit_root = cwd
+    if resolved.scope is not WorkspaceScope.WRITE:
+        prepared.audit_root = resolved.cwd
         prepared.audit_before = snapshot_workspace(Path(prepared.audit_root))
     return prepared
+
+
+async def prepare_chat(
+    session: AsyncSession,
+    *,
+    run: CollabRun,
+    node: NodeSpec,
+    prompt: str,
+) -> PreparedStep:
+    """组装入口角色的一次聊天上下文。
+
+    与工单步骤共用角色/智能体解析与适配器能力，但**不做越权审计、不注入技能警告之外的
+    工单记忆**。聊天历史已经由 ``prompt.build_chat_prompt`` 折进这一轮正文；这里仍保持
+    ``session_id=None``，避免不同设备/重试时悄悄续接到旧服务端会话。
+    """
+    resolved = await _resolve_agent(session, run=run, node=node)
+    ctx = _build_context(
+        role=resolved.role,
+        agent=resolved.agent,
+        definition=resolved.definition,
+        options=resolved.options,
+        model=resolved.model,
+        gateway=resolved.gateway,
+        cwd=resolved.cwd,
+        prompt=prompt,
+    )
+    return PreparedStep(
+        role=resolved.role,
+        agent=resolved.agent,
+        definition=resolved.definition,
+        ctx=ctx,
+        workspace=resolved.cwd,
+        scope=resolved.scope,
+        warnings=resolved.warnings,
+    )
 
 
 async def stream_step(prepared: PreparedStep, handle: ActiveRun) -> AsyncIterator[AgentEvent]:
@@ -289,8 +393,10 @@ def finish_audit(prepared: PreparedStep) -> dict[str, Any]:
 
 
 def cancel_run(run_id: str) -> bool:
-    """取消这个协作运行下所有还在跑的步骤。"""
-    return registry.cancel_run(run_id)
+    """取消这个协作运行下所有还在跑的工单步骤与聊天回复。"""
+    main = registry.cancel_run(run_id)
+    chat = chat_registry.cancel_run(run_id)
+    return main or chat
 
 
 def cancel_step(step_id: str) -> bool:
@@ -299,3 +405,11 @@ def cancel_step(step_id: str) -> bool:
 
 def is_running(run_id: str) -> bool:
     return bool(registry.active_for(run_id))
+
+
+def is_chat_running(run_id: str) -> bool:
+    return bool(chat_registry.active_for(run_id))
+
+
+def cancel_chat(run_id: str) -> bool:
+    return chat_registry.cancel_run(run_id)

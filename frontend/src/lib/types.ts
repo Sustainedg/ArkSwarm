@@ -236,7 +236,8 @@ export type CollabEdgeKind = 'assign' | 'review' | 'rework'
 export type CollabEdgePort = 'left' | 'right' | 'top' | 'bottom'
 export type CollabWorkspaceScope = 'none' | 'read' | 'write'
 /** 一个节点在一轮里能发起的动作 */
-export type CollabTicketAction = 'delegate' | 'submit' | 'review' | 'done' | 'ask_user' | 'reject'
+export type CollabTicketAction =
+  | 'delegate' | 'submit' | 'review' | 'done' | 'ask_user' | 'escalate' | 'reject'
 
 /** `ask_user` 的一条可点选项；`freeform` 表示点它只是把焦点交给输入框。 */
 export interface CollabChoice {
@@ -339,7 +340,16 @@ export interface CollabTeamValidateIn {
 export type CollabRunStatus = 'running' | 'waiting_user' | 'done' | 'error' | 'cancelled' | 'interrupted'
 
 export type CollabTicketState =
-  | 'open' | 'working' | 'waiting_children' | 'review' | 'rework' | 'done' | 'rejected' | 'blocked'
+  | 'open' | 'working' | 'waiting_children' | 'review' | 'rework'
+  | 'escalated' | 'done' | 'rejected' | 'blocked'
+
+/** 一次上报：`from` 谁上报的、`reason` 卡在哪、`need` 需要上层做什么、`hops` 已经过谁 */
+export interface CollabEscalation {
+  from?: string
+  reason?: string
+  need?: string
+  hops?: string[]
+}
 
 export interface CollabTicket {
   id: string
@@ -362,6 +372,8 @@ export interface CollabTicket {
   verdict?: string | null
   review_comment?: string | null
   result: Record<string, unknown>
+  /** 最近一次上报记录；非空表示这张工单曾被上报过 */
+  escalation?: CollabEscalation
   created_at: string
   updated_at: string
   closed_at?: string | null
@@ -393,6 +405,27 @@ export interface CollabStep {
   finished_at?: string | null
 }
 
+/** 入口角色聊天的一条消息（对应后端 `collab_messages`）。 */
+export interface CollabChatMessage {
+  id: string
+  run_id: string
+  /** user = 你；leader = 入口角色 */
+  sender: 'user' | 'leader'
+  role_key: string
+  role_id?: string | null
+  agent_id?: string | null
+  sequence: number
+  status: string
+  content: string
+  parts: MessagePart[]
+  usage: Record<string, number>
+  error?: string | null
+  /** 需求细化与同步结果 */
+  meta: Record<string, unknown>
+  created_at: string
+  finished_at?: string | null
+}
+
 export interface CollabRun {
   id: string
   team_id: string
@@ -417,6 +450,9 @@ export interface CollabRun {
 export interface CollabRunDetail extends CollabRun {
   tickets: CollabTicket[]
   steps: CollabStep[]
+  chat_messages: CollabChatMessage[]
+  /** 刷新时是否有一条 CEO 回复仍在生成 */
+  chat_active: boolean
 }
 
 /* ---------- 协作信封事件（app/collab/protocol.py）---------- */
@@ -424,6 +460,7 @@ export interface CollabRunDetail extends CollabRun {
 export type CollabEventType =
   | 'collab.run.started' | 'collab.step.started' | 'collab.step.event' | 'collab.step.finished'
   | 'collab.ticket.created' | 'collab.ticket.updated' | 'collab.run.status' | 'collab.notice'
+  | 'collab.chat.started' | 'collab.chat.event' | 'collab.chat.finished'
 
 /** 传输层在 SSE 收尾时补发的事件（不属于协作信封）：用来区分「正常结束」与「连接被切断」。 */
 export interface StreamClosedEvent {
@@ -440,6 +477,7 @@ export interface CollabEvent {
   ticket_id?: string | null
   /** 岗位 key（对应图上的节点） */
   node_key?: string
+  role_key?: string
   duty?: string
   role_name?: string
   agent_name?: string
@@ -457,4 +495,15 @@ export interface CollabEvent {
   /** `collab.notice` 且 level=ask 时一并带上，便于即时渲染决策卡 */
   question?: string
   options?: CollabChoice[]
+  /** 聊天事件：这一条回复的消息 ID */
+  message_id?: string
+  /** 聊天结束时的解析/同步告警 */
+  warning?: string | null
+  /** 聊天里识别到并同步进工单的需求更新 */
+  applied?: {
+    ticket_ids?: string[]
+    ticket_count?: number
+    fields?: string[]
+    update?: Record<string, unknown>
+  }
 }

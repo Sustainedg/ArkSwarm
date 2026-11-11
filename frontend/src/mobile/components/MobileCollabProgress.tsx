@@ -1,6 +1,6 @@
-/** 移动端协作进度：横向滑动查看岗位状态，点击进入该岗位的内部实时会话。 */
-import { Fragment } from 'react'
-import type { CollabFlowEdge, CollabRoleProgress } from '../../lib/collabProgress'
+/** 移动端协作进度：与桌面端同一间等距办公室（双指缩放 / 单指拖动 / 点工牌看进度）。 */
+import { buildFlowLinks, type CollabFlowEdge, type CollabRoleProgress } from '../../lib/collabProgress'
+import { CollabOfficeMap } from '../../components/CollabOfficeMap'
 
 interface Props {
   nodes: CollabRoleProgress[]
@@ -10,41 +10,22 @@ interface Props {
 
 export function MobileCollabProgress({ nodes, edges, onOpenRole }: Props) {
   if (nodes.length === 0) return null
+  const loops = buildFlowLinks(nodes, edges).filter((link) => link.isLoop)
+
   return (
     <div className="m-collab-progress">
       <div className="m-collab-progress-head">
         <span>协作进度</span>
-        <span className="dim">点岗位查看实时对话</span>
+        <span className="dim">双指缩放 · 拖动平移 · 点工牌看详情</span>
       </div>
-      <div className="m-collab-progress-track">
-        {nodes.map((node, index) => (
-          <Fragment key={node.key}>
-            {index > 0 && <span className="m-collab-progress-arrow">→</span>}
-            <button
-              className={`m-collab-progress-node state-${node.state}${node.isLive ? ' live' : ''}`}
-              onClick={() => onOpenRole(node.key)}
-            >
-              <span className="m-collab-progress-node-head">
-                <span className="avatar">{node.avatar}</span>
-                <span className="m-collab-progress-label">{node.label}</span>
-                {node.isEntry && <span className="m-badge">领导者</span>}
-              </span>
-              <span className="m-collab-progress-state">{node.stateLabel}</span>
-              <span className="m-collab-progress-meta">
-                {node.stepCount > 0 ? `${node.stepCount} 步` : '未参与'}
-                {node.lastAction ? ` · ${node.lastAction}` : ''}
-              </span>
-            </button>
-          </Fragment>
-        ))}
-      </div>
-      {edges.length > 0 && (
+      <CollabOfficeMap nodes={nodes} edges={edges} onOpenRole={onOpenRole} initialView="desks" />
+      {loops.length > 0 && (
         <div className="m-collab-progress-links">
-          {edges.map((edge) => (
-            <span className={`m-collab-progress-link kind-${edge.kind}`} key={edge.id}>
-              {edge.from}
-              <b>{edge.kindLabel}</b>
-              {edge.to}
+          {loops.map((link) => (
+            <span className={`m-collab-progress-link kind-${link.kind}`} key={link.id}>
+              {nodes.find((node) => node.key === link.fromKey)?.label ?? link.fromKey}
+              <b>↩ {link.kindLabel}</b>
+              {nodes.find((node) => node.key === link.toKey)?.label ?? link.toKey}
             </span>
           ))}
         </div>

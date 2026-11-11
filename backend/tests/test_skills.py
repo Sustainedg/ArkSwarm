@@ -483,14 +483,21 @@ async def test_run_materializes_assigned_skills_into_isolated_home(
     response = await client.post(
         f"/api/conversations/{conversation['id']}/messages", json={"content": "你好"}
     )
-    # codex 未安装，运行会失败；但技能物化发生在启动子进程之前，必须已经完成。
+    # 不管本机是否装了 codex，技能物化都发生在启动子进程之前，必须已经完成。
     events = await read_sse(response)
     logs = [event.get("text") or "" for event in events if event["type"] == "log"]
     assert any("已改为新会话" in line for line in logs), logs
 
     home = get_settings().agent_homes_root / conversation["id"] / "codex-home"
     assert (home / "skills" / "user-skill" / "SKILL.md").is_file()
-    assert sorted(path.name for path in (home / "skills").iterdir()) == ["user-skill"]
+    names = {path.name for path in (home / "skills").iterdir()}
+    # 装了 Codex CLI 的机器上，内核启动时会自己预置 ``skills/.system`` 系统技能目录，
+    # 那不是角色分配带进去的，所以允许它存在；除此之外必须只有分配到的那个技能。
+    assert "user-skill" in names, names
+    assert names - {"user-skill", ".system"} == set(), names
+    # 源目录里故意放在 ``.system`` 下的未分配技能，绝不能连目录一起被带进来
+    # （整目录复制会把它塞进隔离目录，等于「未分配的技能悄悄生效」）。
+    assert not (home / "skills" / ".system" / "sys-skill").exists()
     assert (home / "config.toml").is_file()
     assert (home / "auth.json").stat().st_mode & 0o777 == 0o600
 

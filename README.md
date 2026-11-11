@@ -234,7 +234,9 @@ class AcmeAgent(AgentDefinition):
 - 命令行日志会**自动脱敏**所有出现在 env 中的凭据。
 - `Runtime.API` 型智能体的工具被限制在工作目录内，`../` 逃逸与越界路径会被拒绝。
 - 单轮智能体运行默认 3600 秒超时；可随时取消（进程会被 kill，消息标记为 `interrupted`）。
-- `permission_mode=bypassPermissions` / `danger-full-access` 等无人值守模式请只在沙箱里使用。
+- `permission_mode=bypassPermissions` / `danger-full-access` 等无人值守模式请只在沙箱里使用；
+  Claude Code 适配器在**以 root 运行时**会自动声明 `IS_SANDBOX=1`（内核要求），否则它会以
+  `--dangerously-skip-permissions cannot be used with root/sudo privileges` 拒绝启动。
 
 ---
 
@@ -253,6 +255,8 @@ frontend/
 AGENTS.md                ★ 工程约定（AI/人都要遵守的硬约束）
 docs/architecture.md     深挖：一次运行的完整时序、事件协议、扩展点
 docs/ai-coding-standard.md  编码规范详版：分层理由、契约、扩展决策树、自检清单
+docs/collaboration-design.md 多角色协作（工单机制 · 状态机 · 护栏）设计详版
+docs/collab-guide.html       协作的机制 · 权限 · 流程（小白版图文，浏览器直接打开）
 ```
 
 ## 参与开发

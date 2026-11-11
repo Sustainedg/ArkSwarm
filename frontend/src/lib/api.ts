@@ -1,7 +1,7 @@
 import type {
-  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabRun, CollabRunDetail, CollabTeam,
-  CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation, Message, Overview, Role,
-  Skill, SkillDetail, SkillRescanResult, TestResult,
+  AgentEvent, AgentInstance, AgentType, ArchitectureDoc, CollabChatMessage, CollabRun, CollabRunDetail,
+  CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation, Message,
+  Overview, Role, Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -111,6 +111,8 @@ export const api = {
   createCollabRun: (body: { team_id: string; title?: string; workspace_dir?: string | null }) =>
     request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
   getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),
+  listCollabChat: (id: string) =>
+    request<{ items: CollabChatMessage[] }>(`/api/collab/runs/${id}/chat`).then((r) => r.items),
   deleteCollabRun: (id: string) => request<void>(`/api/collab/runs/${id}`, { method: 'DELETE' }),
   cancelCollabRun: (id: string) =>
     request<{ ok: boolean; cancelled: boolean }>(`/api/collab/runs/${id}/cancel`, { method: 'POST' }),

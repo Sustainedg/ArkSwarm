@@ -208,7 +208,7 @@ Edge {
 ### 3.3 工单状态机（这是 C7 的落地）
 
 工单状态：`open`(待领取) · `working`(处理中) · `waiting_children`(等子工单) · `review`(待审查)
-· `rework`(打回返工) · `done` · `rejected` · `blocked`(等用户)
+· `rework`(打回返工) · `escalated`(已上报，等发起人处理) · `done` · `rejected` · `blocked`(等用户)
 
 | 动作 | 允许的 duty | 工单变化 | 下一个持有者 |
 | --- | --- | --- | --- |
@@ -218,9 +218,27 @@ Edge {
 | `review` + `verdict=changes_requested` | reviewer | `→ rework`，追加审查意见，`round += 1` | `rework_to` 指明的节点；缺省退回最近提交者（`submitter_key`） |
 | `done` 确认 | coordinator / engineer | 工单 `→ done`（含子工单全通过） | 父工单发起者 / 运行收尾 |
 | `ask_user` 提问 | 仅入口节点 | 运行 `→ waiting_user`；工单落库 `question + options`，界面渲染决策卡 | 用户 |
+| `escalate` 上报 | coordinator / engineer / reviewer | `→ escalated`；落库 `escalation{from, reason, need, hops}`，运行继续 | 这张工单的**发起人**（`owner_key`；已到顶层则入口节点） |
 | `reject` 否决 | coordinator / reviewer | `→ rejected`，向上抛错误 | 父工单发起者（分支终止） |
 
 **运行状态**：`running` · `waiting_user` · `done` · `error` · `cancelled` · `interrupted`。
+
+**上报是保底动作**：非入口节点无论 `output_contract` 怎么配，`escalate` 都会生效 ——
+任何岗位都必须能说「我搞不定」，不能被配置成一条死路（真实事故：实施者的生效动作只剩 `done`，
+卡住后唯一的出口是把失败写进结论）。反过来，入口节点不持有 `escalate`：它是链路顶端，没有更
+上级可报，由 `ask_user` 收口。两条都由 `graph.effective_output_contract()` 统一给出，
+提示词与运行时校验才会一致。
+
+**收尾汇报（根工单完成后交回入口角色）**：工单沿交接链一路往下走时，用户只能在入口角色那条
+主会话里说话；活干完了如果没人回来说一声，用户就只能自己去翻工单树。所以**根工单**收尾（`done`）后，
+引擎把它重新交回**入口角色**（`collab_tickets.report_at` 记下这次汇报），由入口角色用一次 `done`
+收尾：交给它的 prompt 里附上整次协作的**结构化汇总**（每张工单的标题 / 状态 / 交付摘要 / 产出文件），
+并要求它用几句话讲清结论。这一轮**只允许** `done` / `ask_user` —— 绝不允许从这里重新派活。
+
+三条护栏：
+- 只对根工单：子工单仍按「谁拆的谁汇总」各归各的发起人；
+- 最后拍板的就是入口角色本人时不再汇报（它那一步已经把话说给用户听了）；
+- 每轮收尾只汇报一次（`report_at`），用户追问重新开启根工单时会清零，下一轮收尾再汇报一次。
 
 **打回目标**：`rework` 的终点允许是**协调者**（把审查意见交回 CTO 重新拆解），不限于原实施者。
 图校验只强制"有 `review` 边就必须有 `rework` 回边"；具体退回给谁由审查者在工单里用 `rework_to`
@@ -245,8 +263,11 @@ Edge {
   都写明「已返工 N 轮仍未通过（上限 M 轮），需要你介入」，**不静默**；
 - **拆解树深度上限** `MAX_TICKET_DEPTH = 5`：第 6 层还继续 `split` 会被拒绝，提示改用 `handoff`
   直接交给实施者（防"拆子工单再拆子工单"无穷套娃）；
-- **重名子工单上限** `MAX_DUPLICATE_CHILD_TITLES = 2`：同一个父工单下第三次拆出**同名**子工单会被拒绝，
-  提示换更具体的标题或由用户拍板（防"复读式拆解"空转烧钱）；
+- **重名子工单上限** `MAX_DUPLICATE_CHILD_TITLES = 2`：同一个父工单下第三次拆出**同名或近似同名**
+  的子工单会被拒绝，提示「先看看下游已经交回了什么、直接汇总收尾，或换一件真正不同的事」
+  （防"复读式拆解"空转烧钱）。近似判定见 `tickets.titles_look_duplicated()`：归一化（去空白/标点、
+  转小写）后 **完全相等 / 互相包含 / 公共前缀 ≥ 80%** 都算同一件事 —— 只比完全同名是不够的，
+  模型最常靠「在标题尾巴上追加几个字」绕开它（M5 的真实故障就是这样反复了 8 轮）；
 - `max_steps` / `max_tickets` / `max_tokens` 任一超限 → 挂起并明确提示；`timeout_seconds`
   按「距上次进展」的时长判断，用户隔一段时间回来继续不会因创建时间较早而永久失效；
 - 单次推进的防御性硬上限 `MAX_STEPS_PER_TURN = 200`，杜绝一条消息内无限自转。
@@ -259,7 +280,8 @@ Edge {
 - **同一时刻只有一个步骤在跑**：谁在等谁，UI 才说得清、日志才好查、取消语义才确定。
 - **谁拆的谁汇总**：子工单全部完成 → 父工单自动回到**拆解者**手里（`ticket.owner_key` 记着"谁拆的"，
   `waiting_children → open`），协调者据此继续 `delegate` 或 `done`。
-- 没有就绪工单且没有 `waiting_children` 的工单 → 运行 `done`。
+- 没有就绪工单且没有 `waiting_children` 的工单 → 若根工单已完成但还没汇报，先把它交回入口角色
+  做收尾汇报（见 §3.3），之后运行才进 `done`。
 
 ---
 
@@ -344,6 +366,8 @@ Edge {
 上游交付摘要：                           ← 摘要，不是对话
   - 「CTO」于 14:03 提交：把主题开关拆成 2 个子任务（子工单 T-13/T-14 已通过）
   - 变更文件：frontend/src/theme.ts
+下游交付（我派出去的子工单，引擎汇总）：    ← 子工单交回了什么（M5）
+  - T-13《实现主题开关》· done · 最后经手：se · 结论：已完成主题开关与持久化 · 产出：src/theme.ts
 本工单历史：                             ← 只有同一工单的历史
   - 第 1 轮「SE」提交 → 「审查员」打回：「第 2 条验收未满足：…」
 本轮要求：请按审查意见修改后重新提交。
@@ -358,6 +382,10 @@ Edge {
 - `ctx.history = []`、`ctx.session_id = None`（**每个步骤都是全新会话**），绝不续接内核会话；
 - prompt 里**不含**任何角色的完整对话、其他工单正文、其他分支内容；
 - 上游只能以「工单字段 + 一句话摘要 + 文件路径清单」的形式被看见；
+- **下游**同理，只能以「工单字段 + 一句话摘要 + 文件路径清单」的形式被看见（M5 的「下游交付」区块，
+  由 `engine._child_digest_lines()` 派生，**只取直接子工单**；子树的细节沿着每一层自己的 `result`
+  逐级带上来，不重复塞进同一份 prompt）。这是「活干完了，上游必须看得见」的那条数据通路 ——
+  少了它，上游只看得见自己几次派单记录，会把「已完成」误判成「还没回报」，一遍遍重派；
 - 这一步的摘要取自引擎派生的 `collab_steps.gist`（只由结构化字段拼成），拼 prompt 时**只读
   `gist`、不读 `content`** —— 下游看不到对话原文不是靠自律，而是没有那条通路。
 
@@ -658,6 +686,8 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
   驱动一个 CEO→CTO→SE→审查（拆子工单 + 打回一次后通过）的完整流程：
   断言工单状态流转、`collab_steps` 落库顺序、SSE 事件序列、运行终态、
   以及**每个下游 prompt 的隔离性**。
+- 收尾汇报：根工单完成后交回入口角色（`done`）、汇总里含子工单结论、prompt 只允许 `done`/`ask_user`、
+  入口角色自己收尾时不重复汇报、用户追问后重新开启一轮汇报。
 - 取消 / 超时 / 解析失败 → 运行状态与事件正确。
 - 重启恢复：造 `running` 残留 → `recover_interrupted()` → `interrupted`。
 
@@ -706,6 +736,7 @@ curl -s http://127.0.0.1:8010/api/health
 | **M4e 运行与连接解耦 + 岗位交接链** ✅ | 推进改跑后台任务（`collab/bus.py`），SSE 断开只退订、不再打断运行；新增 `GET /runs/{id}/stream` 订阅与前端自动重连；步骤记录 `target_key`（把活交给谁），岗位抽屉按时间还原「上游对我说了什么 → 我做了什么」 | 已完成：`test_client_disconnect_does_not_stop_the_run`、`test_stream_endpoint_replays_buffered_events_after_disconnect`（重连先补发再续看）、`test_delegate_step_records_target_for_handoff_chain`、`backend/tests/test_collab_bus.py`（补发 / 断线退订 / 缓冲回收）；`bash scripts/test.sh` + `npm run build` |
 | **M4f 超长单行输出不再打断运行** ✅ | 执行层自建行缓冲（`runtime/runner.py` 的 `_StreamLines`）：内核把整段代码或工具结果塞进一行 JSONL 时，不再抛 「Separator is found, but chunk is longer than limit」把整轮运行判成 error；单行越过 64 MiB 上限只丢该行并补一条 `log(warn)`，stdout 与 stderr 同一条路径 | 已完成：`backend/tests/test_runner.py`（默认 `readline` 会炸的前提、整行读出、内存上限兜底、端到端超长单行跑通）；`bash scripts/test.sh` |
 | **M4g 一轮多个工单块不再判死** ✅ | 同一轮里出现多个 `work_order` 块时取最后一个，并产出一条 `collab.notice(warn)` 说明偏差；草稿块不再进正文；提示词同步要求「整轮只输出一个、正文里不要粘贴草稿」 | 已完成：`test_parse_takes_the_last_block_when_a_round_has_several`、`test_round_with_two_work_order_blocks_uses_the_last_one`；`bash scripts/test.sh` |
+| **M4h 收尾汇报** ✅ | 根工单完成后交回入口角色汇报：引擎附上整次协作的结构化汇总，入口角色用一次 `done` 把结论回复给用户；汇报轮只允许 `done`/`ask_user`；`report_at` 保证每轮只汇报一次（用户追问重新开启后清零） | 已完成：`test_root_ticket_closure_reports_back_to_entry`、`test_entry_closing_the_ticket_itself_does_not_report_twice`、`test_user_follow_up_opens_a_new_report_round`、`test_collab_migration.py` 的补列用例；`bash scripts/test.sh` |
 | **M5 打磨** | 技能物化接入协作运行、用量统计与导出、运行复制/模板 | `pytest` + 前端 build；技能端到端确认"仅分配生效" |
 
 每个里程碑单独提交、单独验证（铁律 8），M1 完成前不碰前端画布。
@@ -897,3 +928,278 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 
 验证：桌面端 `tsc --noEmit`、`npm run build`、`bash scripts/test.sh` 通过；无头浏览器在 `1440×900`
 实际点击按钮，确认页面铺满视口、5 个岗位卡片与流转关系正常渲染。
+
+**M5 · 交付回流（上游看得见下游干完了什么）—— 已完成。**
+
+真实故障：一次「你好，你看看现在的路径有哪些文件」的协作跑了 **23 步、11 张工单**，
+`lead`（CEO）→ `dev`（CTO）→ `dev-2`（码农）反复「拆子工单 → 干完 → 退回 → 再拆一张」，
+直到用户点「停止」。根因不是模型发疯，而是**信息断头**：子工单收尾后系统只把父工单退回给拆解者，
+却**没有把子工单的交付一起带回去**；父工单的 `result` 始终是空的，历史里只有自己几次「我派出去了」的
+记录 —— 于是每一层都把「已完成」误判成「还没回报」，重派同一件事。第二次兜底的护栏也失效：模型靠在
+标题尾巴上追加几个字（「列出文件清单」→「…并回报」→「…并原样回报」）绕开了「同名」比对。
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/engine.py` | `done` 分支把 `remark`（或 `summary`）与 `artifacts` 落进工单 `result`：收尾也要留下结论，父工单汇总时不再只看到空壳；新增 `_direct_children()` / `_child_digest_lines()` / `_artifact_paths()`（与 `_run_digest` 共用取路径逻辑），把**直接子工单**压成结构化摘要；`_run_step()` 把「下游交付」与 `downstream_ready` 交给 prompt 层；`_child_count_with_title()` 改为按**近似同名**计数 |
+| `backend/app/collab/prompt.py` | prompt 新增「下游交付（我派出去的子工单，引擎汇总，只有结构化字段）」区块；`expected_instruction()` 新增收尾分支：子工单全部收尾时明确要求「先汇总，能收尾就 `done`，不要为了再确认一遍重复派发同一件事」 |
+| `backend/app/collab/tickets.py` | `normalize_title()` / `titles_look_duplicated()`（纯函数，可脱离数据库单测）；`render_protocol_guide()` 补一条「`done` 要给 `remark`，它是这张工单交给上游的交付摘要」 |
+| `backend/tests/test_collab_engine.py` / `test_collab_guards.py` / `test_collab_tickets.py` | 7 项新用例：子工单结论回流到上游 prompt、`done` 的 `remark` 落库、完整链路里汇总方拿得到下游摘要、近似重名子工单被拦、标题归一化与近似判定、协议说明含「交付摘要」 |
+
+验证：`bash scripts/test.sh`（pytest）→ **180 passed, 1 skipped**；
+其中 `tests/test_skills.py::test_run_materializes_assigned_skills_into_isolated_home` 在本机预置了
+`~/.codex/skills/.system` 的环境下会失败，**与本次改动无关**（改动前后各跑一次，同样失败）。
+本轮未改前端，故未跑 `npm run build`。
+
+面向非工程读者的图文说明另出一份单文件静态页：`docs/collab-guide.html`（无依赖，浏览器直接打开）。
+
+**M6 · 工单块里的裸引号不再判死（自造字段也不再被丢掉）—— 已完成。**
+
+真实故障：一次「帮我写一个建筑工程的业务记账系统…」的协作，`dev`（CTO）把子工单的详细规格
+写进了 `ticket.goal`，里面有一句 `含"换电脑恢复"的具体步骤` —— 字符串正文里直接写了 ASCII 双引号，
+第一个引号提前结束字符串，整块 JSON 判死，运行挂在 `waiting_user`。用户看到的报错还是三级容错里
+**信息量最小**的那一句（`Expecting value`），既没有出错位置，也没说明原因。同一个工单块里还埋着第二个
+坑：模型把整段规格塞进了自造的 `ticket.description` 字段，而 `TicketDraft` 只认正式字段 ——
+就算 JSON 解析通过，这张子工单也会只剩一个标题，DOM 契约与验收标准**静默消失**。
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/tickets.py` | 新增 `escape_inner_quotes()` 并接进 `sanitize_json_text()`（第 2 级容错）：字符串正文里「后面不是 `,` `}` `]` `:` 也不是结尾」的 `"` 一律补转义 —— 合法 JSON 的收尾引号必然紧跟结构字符，所以对正常输出是恒等变换；`_extract()` 的报错改为**优先保留严格解析的报错**（带行列号），并在后面补一句可操作原因（「双引号没转义 / 输出被截断」）；`TicketDraft.from_value()` 接住 `description/desc/detail/details/spec/note(s)/说明/描述`：没有 `goal` 就当作 `goal`，否则并进 `requirements`；`render_protocol_guide()` 明确列出 ticket 的 6 个正式字段，从源头少犯 |
+| `backend/tests/test_collab_tickets.py` | 4 项新用例：裸引号被自动补转义后照常解析、合法 JSON 不被改写、救不回来时报错带行列号与原因、`description` 不再被丢弃（进 `goal` / 进 `requirements` 两条路径） |
+
+验证：用**线上那次真实产物**（`collab_steps.content` 原文）回放 `parse_work_order()`，由
+「Expecting value」变为解析成功，且 `title / goal / deliverables` 三项都在；
+`bash scripts/test.sh` → **184 passed, 1 skipped**（同一项与本改动无关的既有失败见 M5）。
+
+**M7 · 入口角色常驻对话（任务跑着也能找 CEO）—— 已完成。**
+
+真实体验问题：一次协作开始推进后，主会话的发送入口会被 `409 / 等待运行结束` 挡住。
+但入口角色（CEO / 领导者）在大多数时间里其实是空闲的 —— 用户理应能继续细化要求、询问进度、
+让 CEO 解释方案，甚至只是聊两句。把「协作」和「聊天」绑成同一条串行通道，是把两个生命周期
+完全不同的事情硬塞进了同一个任务里。
+
+设计选择：**给入口角色开一条独立的、持久化的旁路会话**，而不是放宽 `/messages` 的并发限制。
+
+| 关注点 | 处理 |
+| --- | --- |
+| 存储 | 新增 `collab_messages`，与 `collab_steps` 分开。聊天不会进入工单时间线、不增加 `steps_used`、不参与「谁把活交给了谁」的交接链 |
+| 并发 | 新增 `chat_bus` 与 `execution.chat_registry`：聊天有独立后台任务和 SSE 缓冲区，主流程仍按原来的串行引擎推进，两者互不覆盖；`/cancel` 会同时停掉两条通道 |
+| 空闲时也能聊 | 运行中发送自动走聊天；流程空闲（等待、出错、已收尾）时**默认也走聊天**，想继续跑工单再切到「推进任务」。有待回答的问题时自动切回推进，避免把答复误发到聊天里；用户仍可手动切去聊天问进度 |
+| 记忆隔离 | 这是 C5 的**唯一例外**：聊天历史只回放给入口角色本人。其他角色的 prompt 仍然只由 `prompt.build_step_prompt()` 从工单结构化字段拼出，绝不读取 `collab_messages` |
+| 进度问答 | CEO 拿到的是引擎生成的工单快照：标题、状态、当前持有者、目标/需求/验收、最近结论、产出文件、当前正在执行的岗位；不包含其他角色的对话原文 |
+| 细化要求 | 用户明确补充/修改要求时，CEO 在正常回复后附一个 `chat_update` JSON 块。引擎解析后**只追加**到根工单与所有未收尾工单的 `brief`（去重），从下一轮步骤开始生效；聊天本身不能直接改工单状态、派活或建子工单 |
+| 失败处理 | 聊天解析失败只产生可读告警，不影响这条回复；执行失败会落库为 `error` 并推 `collab.chat.finished`；服务重启/叫停会把残留的 `streaming` 回复收尾为 `interrupted` |
+| API | `POST /api/collab/runs/{id}/chat`（SSE）、`GET /api/collab/runs/{id}/chat`、`GET /api/collab/runs/{id}/chat/stream`；`GET /runs/{id}` 同时返回 `chat_messages` 供首屏恢复 |
+| 事件 | `collab.chat.started` / `collab.chat.event` / `collab.chat.finished`，与工单信封同属协作层，不扩展 `agents/events.py` |
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/tables.py` / `schemas.py` / `store.py` | `collab_messages` 表、`ChatMessageRead`、聊天历史/序列号、运行详情返回 `chat_messages`、重启时收尾残留聊天 |
+| `backend/app/collab/prompt.py` / `tickets.py` | `build_chat_prompt()` 组装「岗位 + 工单快照 + 最近聊天 + 新消息 + 回答规则」；`parse_chat_update()` / `extract_chat_body()` / `merge_chat_update()` 是纯函数，容错与清洗复用既有 JSON 修复逻辑 |
+| `backend/app/collab/execution.py` | `prepare_chat()` 复用角色/智能体解析；聊天使用独立 `chat_registry`。主流程的 `is_running()` 只检查工单步骤，聊天不会把它顶成「正在跑」 |
+| `backend/app/collab/engine.py` / `protocol.py` / `bus.py` / `api.py` | `prepare_chat()` / `consume_chat()`、聊天事件、独立 `chat_bus` 与三条聊天接口；`/chat` 不再受主流程 409 限制 |
+| `frontend/src/lib/collabChat.ts` / `types.ts` / `api.ts` | 聊天事件归约器与类型；「已同步到 N 张工单」提示；`CollabEventType` 增加三种聊天事件 |
+| `frontend/src/components/CollabRunsPanel.tsx` / `frontend/src/mobile/pages/MobileCollabRunPage.tsx` | 运行中输入框保持可用，聊天状态与主流程 `busy` 分开；两条时间线按时间合并；桌面与移动端都提示「CEO 在线」 |
+| `frontend/public/m/sw.js` | 移动端外壳缓存名 v9 → v10 |
+
+验证：新增端到端用例覆盖「主流程卡在审查步骤时 `/chat` 返回 200 而不是 409」「聊天 prompt 含工单状态、
+结论与产出文件」「聊天原文不出现在任何工单角色 prompt 里」「`chat_update` 写入未收尾工单并在下一轮
+审查 prompt 生效」「收尾后仍可只聊天，不重开工单、不增加步数」；`bash scripts/test.sh` → **192 passed, 1 skipped**（技能隔离测试已改为容忍 Codex CLI 自己预置的 `.system` 系统技能，同时继续守住未分配技能不得出现），`npm run build` 通过。
+
+**M8 · 误配 ask_user 与「发消息没反应」—— 已完成。**
+
+真实事故（线上工单 `a99c538f`）：团队编辑器允许给实施者（dev-3）勾选 `ask_user`，节点契约里于是
+写进了这个动作，提示词也照实告诉模型「你可以 ask_user」。模型照做后，运行层却判「只有入口节点能向
+用户提问（ask_user）」把整轮中止；用户接着在输入框里问「进度怎么样了」，消息只落成一条用户发言，
+界面没有任何回话。两个问题叠在一起，看起来就像「CEO 不回我」。
+
+根因有两层：
+
+* **配置 → 提示词 → 校验三层不一致**：`ask_user` 只有入口节点能用，但节点契约、提示词、动作白名单
+  各自为政；编辑器还能把 `ask_user` 勾给任何岗位。
+* **空闲消息默认走工单，且工单没有可推进项时静默退出**：`/messages` 在没有 ready 工单时直接结束，
+  只留下一条用户发言；用户以为在「找 CEO 聊天」，实际走的是工单推进。
+
+| 关注点 | 处理 |
+| --- | --- |
+| 契约层 | `effective_output_contract(node, allow_ask_user=...)`：非入口节点的动作里强制剔除 `ask_user`；`validate_graph` 对历史误配产出 `node.ask_user_not_entry` 提醒 |
+| 提示词 | 非入口节点的「允许的动作 / 本轮要求」都不再出现 `ask_user`，统一改成「把问题交给上层或入口角色转达」 |
+| 校验层 | `validate_order` 把「只有入口节点能向用户提问」提到白名单判断之前，报错不再莫名其妙 |
+| 编辑器 | 桌面与移动端：非入口节点的 `ask_user` 选项禁用，并提示只有入口节点可用；历史脏数据在下次改动时自动清掉 |
+| 不再静默 | 用户发了消息但没有任何 ready 工单时，产出 `collab.notice` 说明卡在哪、去哪重试，而不是静静结束 |
+| 失败可见 | 刷新运行详情时，从落库步骤重建「失败步骤」错误卡，保留一键重试入口（`makeCollabTurn(run, tickets, steps)`） |
+| 空闲默认聊天 | 输入框默认先聊天（有待回答的问题时自动走推进）；按钮可切「推进任务 / 只聊天」 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/graph.py` / `tickets.py` / `prompt.py` | `allow_ask_user` 过滤、`ask_user` 错误前置、非入口提示词改写、`node.ask_user_not_entry` 校验提醒 |
+| `backend/app/collab/engine.py` | 用统一 `is_entry` 驱动提示词与校验；无 ready 工单时产出明确 notice |
+| `frontend/src/components/NodeInspector.tsx` / `mobile/components/CollabNodeForm.tsx` | 非入口节点禁用 `ask_user` 选项并提示 |
+| `frontend/src/components/CollabRunsPanel.tsx` / `mobile/pages/MobileCollabRunPage.tsx` / `lib/collabStream.ts` | 空闲默认聊天（可切推进任务）；刷新后重建失败步骤错误卡 |
+| `frontend/public/m/sw.js` | 移动端外壳缓存名 v10 → v11 |
+
+验证：新增用例覆盖「非入口节点误配 ask_user 时提示词不含 ask_user、报错原因清晰」「用户发言在无可推进
+工单时得到明确 notice 而不是静默」；`bash scripts/test.sh` → **195 passed, 1 skipped**，`npm run build` 通过。
+
+**M9 · 上报（escalate）：卡住了要能往上走 —— 已完成。**
+
+真实事故（线上工单 `a99c538f`）：UI（`dev-3`）实测时被权限闸门拒绝，只能把「环境禁止执行命令」
+写进 `done` 的结论里。它没有别的出口 —— 实施者的生效动作只有 `done` 一个。CTO 收到后同样没有出口：
+它可派给的对象只有 `dev-2`、`dev-3`（全是向下），契约里没有「上报」这个动作，`ask_user` 又只有入口
+节点能用。于是它挑了唯一看起来有意义的动作 —— `delegate`，把同一件事改写成「静态核对，全程不执行
+任何命令」又派给码农。阻塞原地转了一圈，白烧一轮，用户什么都没收到。
+
+根因是**协议里根本没有「上报」这条路**：`delegate` 只朝下走，`reject` 是终止，`done` 是硬撑，
+`ask_user` 被限定在入口节点。节点一旦「自己解决不了、又需要用户拍板」，就无路可走。
+
+| 关注点 | 处理 |
+| --- | --- |
+| 契约层 | 新增动作 `escalate`，三个岗位默认契约都带上它；更关键的是**非入口节点无条件保留**它（保底出路，不受节点契约配置影响），入口节点则剔除（顶端无更上级，由 `ask_user` 收口）；新增状态 `escalated`，它属于「该有人动手」的就绪集合，发起人立刻能接起来 |
+| 路由 | 上报给这张工单的**发起人**（`collab_tickets.owner_key`）；发起人自己也解决不了就继续往上报，直到入口节点。顶层工单的负责人沿父链上溯一层，真正到顶时给出「请改用 ask_user」的明确原因，绝不静默 |
+| 收窄 | `effective_output_contract(..., escalated=True)` 剔除 `delegate`：上抛件不许把阻塞换个说法再往下压；到入口节点时再剔除 `escalate`（上面没人了，只剩转给用户） |
+| 提示词 | 上抛件附一张「上报表」（谁报的、已经过谁、卡在哪、需要你什么）；非入口节点的本轮要求改为「解决不了就继续 escalate」，入口节点改为「用 ask_user 把问题转达给用户」 |
+| 校验层 | `escalate` 必须给 `reason`；入口节点 `escalate` 直接报「用 ask_user」；上抛件上的 `delegate` 被白名单拦下 |
+| 用户回答 | 提问的**未必是根工单**（上抛件是在发起人手里转成 `ask_user` 的），所以 `prepare_turn` 改成「重新打开最近一张在等用户回答的工单」，而不再写死根工单 |
+| 可见性 | 每次上报都产出 `collab.notice`（谁把什么上报给了谁）；上报表与 `escalated` 状态在工单看板与看板徽标上可见 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/schemas.py` | `TicketAction.ESCALATE`、`TicketState.ESCALATED`、`TicketRead.escalation` |
+| `backend/app/collab/tables.py` | `collab_tickets.escalation`（JSON，登记进 `ADDITIVE_COLUMNS`，旧库幂等补列） |
+| `backend/app/collab/graph.py` | 三个岗位的默认契约加入 `escalate`；`effective_output_contract(escalated=...)` 的两条收窄 |
+| `backend/app/collab/tickets.py` | `validate_order` 的 `escalate` 语义校验；协议说明与「非入口要用户拍板」的措辞改为上报 |
+| `backend/app/collab/prompt.py` | 动作白名单统一取自 `effective_output_contract`（删掉重复的默认契约表）；上报表与上抛件的本轮要求 |
+| `backend/app/collab/engine.py` | `escalate` 分支与 `_escalation_target()`、`_pending_question_ticket()`、就绪/活跃状态集合、`_order_gist` |
+| `frontend/src/lib/{types,collabDraft,collabProgress}.ts` | 动作与状态类型、编辑器可选动作、看板标签 |
+| `frontend/src/components/{TicketBoard,CollabRunsPanel}.tsx` | `escalated` 状态标签（「已上报」） |
+| `frontend/public/m/sw.js` | 移动端外壳缓存名 v11 → v12 |
+
+验证：新增用例覆盖「se → cto → ceo 逐级上报后由入口角色 ask_user 交给用户并记录整条上报链」
+「上抛件上再 `delegate` 被运行时拦下」「入口节点 `escalate` 被要求改用 `ask_user`」「escalate 缺 reason
+被拒」「上抛件提示词不含 delegate」「用户回答重新打开的是提问的那张工单（非根工单）」；
+`bash scripts/test.sh` → **200 passed, 1 skipped**，`npm run build` 通过。
+
+### M10 提醒生命周期 · 进度页画成流程图（V0.11）
+
+**关注点**
+
+| 关注点 | 做法 |
+| --- | --- |
+| 「过时的提醒一直挂着」 | 待处理区以前是「历史失败的堆」：刷新会把它全部重建，实时产生的又永不退休。现在每条提醒有**稳定身份**（失败步骤 = `step:<id>`，其余 = 岗位 + 文本），并定下三条退休规则：① 运行已收尾（`done`/`cancelled`）就清空；② 每个岗位只看它**最后一次**参与的结果，后来的成功顶掉早先的失败；③ 同一岗位的同一条错误只留最新一条（重试指向最新那一步） |
+| 临时提醒 | 审计、诊断这类没有 `stepId` 的提醒**只在当轮有效**：下一步开始时自动退休。刷新后本来就不会重建它们，两条路径行为一致 |
+| 手动关闭 | 每条提醒带「×」。失败步骤类会记进本地存储（`lib/collabNotices.ts`，最多 20 个运行 × 50 条），刷新后不再重建；运行被删除时一并清掉；聊天里的一次性提示也能点掉 |
+| 进度页为什么改版 | 以前是一列大卡片加一排流向标签，看不出「现在轮到谁、谁在闲置」。现在按 `orderedCollabNodes` 的推进顺序画成流程：工位之间用带动作名的箭头相连，往回走的边（review/rework）单独收在「打回与返工」里 |
+| 工位上的小人 | 纯 CSS 画的（不引入图片与依赖）：头 / 眼睛 / 头发 / 身体 / 两条手臂 + 桌子 + 显示器（代码行在闪）。忙碌 = 手臂上下敲、脑袋点、屏幕闪；闲置 = 靠回椅背、屏幕暗、头顶 💤；等你决定 = 举起一只手 + ❓；出错 = 屏幕泛红 + 💥；收工 = 绿衣服 + ✅。只用现有 CSS 变量；**动画只加在「忙碌」这一种状态上**，闲置工位是静态的，不白烧 CPU |
+| 两端一致、外观各表 | 桌面 `CollabProgressBoard.tsx`（全屏流程页）与移动 `MobileCollabProgress.tsx`（横向滑动条，尺寸小一号）各自写外观，**共用** `lib/collabProgress.ts` 的 `buildFlowLinks/linkBetween` 与 `lib/collabStream.ts` 的提醒规则；样式分别落在 `index.css` / `mobile.css` |
+| 窄屏 | 流程图在窄屏竖排，箭头转为朝下 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/lib/collabStream.ts` | 提醒的 `key` / `nodeKey`、`noticeKey()` / `pruneNotices()` / `dismissCollabNotice()`，以及 `staleFailureNotices()` 的三条退休规则 |
+| `frontend/src/lib/collabNotices.ts`（新增） | 「已关闭」记忆：本地存储读写，不可用时降级成「没有记忆」 |
+| `frontend/src/lib/collabChat.ts` | `dismissChatNotice()` |
+| `frontend/src/lib/collabProgress.ts` | 连线的 `fromKey` / `toKey`、`CollabFlowLink`、`buildFlowLinks()`、`linkBetween()` |
+| `frontend/src/components/CollabProgressBoard.tsx` | 流程图布局 + `WorkerStation` / `FlowConnector` |
+| `frontend/src/mobile/components/MobileCollabProgress.tsx` | 同款工位（小一号，横向滑动） |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | 工位与连线的样式（各端一份）；删掉被替换的 `.collab-progress-stage*` 死样式 |
+| `frontend/src/components/CollabRunsPanel.tsx` / `mobile/pages/MobileCollabRunPage.tsx` | 提醒的「×」、关闭记忆接线、删除运行时清理记忆 |
+| `frontend/public/m/sw.js` | 外壳缓存名 v12 → v13（样式表与移动端产物都变了） |
+
+验证：`bash scripts/test.sh` → **202 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过。
+
+> M11（V0.12）把本节这套**平面**工位（`WorkerStation` + 横向流程图 + 顶部概览卡）整块换成了
+> 分层流程图与 3D 小人；M12（V0.13）又把「分层流程图」换成了等距视角的办公室（见文末）。
+> 下面这一节记录的只是当时的实现。
+
+### M11 分层流程图 · 会动的 3D 小人（V0.12）
+
+**关注点**
+
+| 关注点 | 做法 |
+| --- | --- |
+| 去掉「本次协作概览」卡 | 它把完成率、当前焦点、四个状态计数又重复了一遍，与流程图和岗位卡上的信息重叠，白占一屏 → 整块删除（连 CSS 一起）。完成度只留区块标题右侧的「x/y 个岗位已完成」 |
+| 按层级排布（用户要的形态） | 新增纯函数 `buildFlowRows(nodes, edges)`：入口是第 0 行（领导者独占一行），它派活的人在第 1 行，再下一层在第 2 行 —— 「上面一个、下面一排干活的」自然就出来了。判据与 `buildFlowLinks` 的 `isLoop` 同源：**只认顺着推进方向的边**，往回走的边（审查打回、返工）不改变层级，否则整行会被拽到流程末尾；没有前序的孤立岗位放到第 1 行，不与领导者挤一行 |
+| 行与行之间的箭头 | 每两行之间画一条朝下的箭头，箭头上写这一层跨行的动作（`rowLinkLabels()`，同一行最多三条）；中间没有直接连线的就画虚线「流程继续」 |
+| 3D 小人 | 纯 CSS 画的（无图片、无依赖），结构抽成共享组件 `components/WorkerAtDesk.tsx`，桌面端与移动端同一份：球面径向渐变 + 内侧阴影做体积，`perspective` 给显示器 / 桌面 / 键盘做透视，转椅、桌板、桌腿、键盘、咖啡杯各就各位 |
+| ⚠️ 踩过的坑：`preserve-3d` | 场景与桌子**不能**开 `transform-style: preserve-3d`：身体绕 Y 轴转过之后，「离镜头更近的一侧」会赢过后面绘制的兄弟元素，桌上的键盘与手会被身体盖住。关掉它，绘制顺序回到 DOM / z-index，由我们自己决定谁在前面 |
+| 手为什么单独画 | 手臂画在身体里（伸到桌子后沿就被桌子挡住），**手单独画在键盘上**并和手臂同频起伏 —— 比把手指接在手臂末端更好对齐，也顺手解决了「手被桌面吃掉」的问题 |
+| 状态挂在场景根上 | 状态差异（打盹 / 敲键盘 / 举手 / 泛红 / 收工）一律写成 `.collab-station-scene.state-*`，不是挂在工位卡上：两端卡片的类名不同（`.collab-station` / `.m-station`），挂在场景根上同一套规则才能共用 |
+| 忙碌 / 闲置一眼可辨 | 忙碌 = 手臂上下敲 + 手指按键盘起伏 + 屏幕里的代码一行行敲出来（`steps()` 打字机）+ 键帽轮次亮起 + 咖啡冒热气；闲置 = 趴着睡（眼睛压成一条线）+ 💤 + 屏幕暗；等你决定 = 举手 + ❓；出错 = 屏幕泛红 + 眼睛瞪大 + 抖动；收工 = 换绿衣服 + 屏幕熄灭 + ✅。**动画只加在「忙碌」上**，闲置工位不动，不白烧 CPU |
+| 无障碍 | `@media (prefers-reduced-motion: reduce)` 下所有动画停下 |
+| 移动端 | 同一套小人与分层规则，按触屏重排成「一行一层、行内可横向滑」；`transform: scale(0.742)` 把 210×138 的场景缩到 156×104 的卡片宽度（`.m-station .collab-station-scene`），样式在 `mobile.css` 里自成一份（移动端不加载 `index.css`） |
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/lib/collabProgress.ts` | `CollabFlowRow`、`buildFlowRows()`（分层）、`rowLinkLabels()`（行间箭头上的动作） |
+| `frontend/src/components/WorkerAtDesk.tsx`（新增） | 3D 小人的共享结构（两端同一份 DOM，尺寸由各自样式表决定） |
+| `frontend/src/components/CollabProgressBoard.tsx` | 删除概览卡；按层渲染 `collab-flow-row`；箭头改成朝下 + 动作标签；`WorkerStation` → `WorkerAtDesk` |
+| `frontend/src/mobile/components/MobileCollabProgress.tsx` | 同款分层与小人，横向可滑 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | 3D 工位样式（各端一份）：场景 / 小人 / 桌椅 / 显示器 / 键盘 / 手 / 杯子 + 五个状态 + 关键帧 |
+| `frontend/public/m/sw.js` | 外壳缓存名 v13 → v14（样式表与移动端产物都变了） |
+
+验证：`bash scripts/test.sh` → **202 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
+用构建出的真实 CSS 渲染核对五个状态的桌面与移动外观（工位分层、手落在键盘上、状态动画）。
+
+### M12 等距视角的办公室 · 热区标记（V0.13）
+
+**关注点**：把「谁在忙、忙什么」做成一眼能看懂的实景，而不是一排卡片。
+
+| 关注点 | 做法 |
+| --- | --- |
+| 为什么是等距（isometric） | 用户要 Gather.town 那种「走进办公室看一眼」的感觉。等距投影只用一个 `iso(ix, iy)` 公式就能把地砖坐标换算成画布坐标，不需要 3D 引擎 |
+| 底图从哪来 | **脚本生成**，不是手画、也不是位图：`scripts/gen_office_bg.py`（纯标准库）输出 `frontend/public/office/iso-office.svg`。放大 2.4 倍也不糊，体积只有 ~50 KB，两端共用同一张图（`/office/iso-office.svg`，绝对路径，`/m/` 下同样取得到） |
+| 坐标只有一份 | 工位的唯一真源是 `frontend/src/lib/collabOffice.ts` 的 `OFFICE_DESKS`；生成脚本**读它**去摆桌子，前端热区也钉在同一组坐标上 —— 桌子与标记不会错位。`backend/tests/test_frontend_assets.py` 会在两边不一致时拦下来（还校验提交的 SVG 就是当前代码的产物） |
+| 工位按层摆 | `OFFICE_ROW_SIZES = [1, 1, 4, 4]`：第 0 行留给入口领导者（一人一桌，在房间最里面），第 1 行是它直接派活的人（通常是 CTO），再往外的两排并排坐干活的人。`seatFlowRows()` 把 `buildFlowRows()` 分好的层一一落到对应的桌子排上；一层的人比桌子多时从这排第一张桌重新坐起并整圈错开（`LAP_OFFSET`），标记不会叠在一起 |
+| 缩放 / 平移 | 数学都在 `collabOffice.ts` 里（纯函数、可单测）：`fitOffice`（铺满居中）、`zoomOfficeAt`（**以指针为锚点**缩放，缩放前后指针下的内容不动）、`panOffice` + `clampOffice`（拖不出空白、比视口小就居中）。滚轮用**原生监听**挂 `{ passive: false }` —— React 的 `onWheel` 是 passive 的，`preventDefault` 不生效，页面会跟着一起滚 |
+| 标记不跟着画布缩放 | 底图放在 `transform: translate3d() scale()` 的 `.office-map-stage` 里，标记**另算**：`officeToViewport(view, desk)` 得到视口坐标，再用 `left/top` 绝对定位。于是放大地图时标记不会变成巨无霸，名字始终清晰可读 |
+| 点击弹信息卡 | 点标记弹出 `.office-popover`：谁 / 职责 / 状态、粗略进度条、`summary`、跑了多少步、几张工单在处理，以及「查看实时对话 →」（接的是原来的 `RoleConversationPanel`）。缩略图里放的还是 `WorkerAtDesk`，那个会动的 3D 小人没有白做 |
+| 粗略进度是怎么来的 | 后端没有真实百分比，`roleProgressPercent()` 按状态给底数（干活中 45%、等你决定 62%、出错 30%），再按跑过的步数往上抬，停在 96% —— 界面上明写「粗略进度」，不假装精确 |
+| 状态色 | 绿=在线工作（`active`，带脉冲动画）、红=忙碌 / 出问题（`error`）、黄=等你决定（`waiting`）、灰=闲置（`pending`）、绿勾=已完成（`done`）。映射表 `OFFICE_STATUS_TONE` 只有一份，两端取同一个 |
+| 触屏 | 容器上 `touch-action: none`（整页外壳仍然是 `pan-x pan-y`，不锁死），`pointerdown/move/up` 里同时处理单指平移与双指捏合（按两指距离比例缩放，锚点是两指中点），`setPointerCapture` 保证手指划出画布也不丢；`tests/test_mobile_web.py` 的守卫相应收紧为「只有办公室画布能锁触摸手势」 |
+| 无障碍 | 标记是 `<button>`（可 Tab、可回车）、带 `aria-label`；画布是 `role="application"` 并说明操作方式；图例把五种颜色写成文字；`prefers-reduced-motion` 下停掉脉冲与进度条动画 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `scripts/gen_office_bg.py`（新增） | 生成等距办公室底图：地板 / 两面墙（落地窗 + 白板）/ 地毯 / 书柜 / 饮水机 / 绿植 / 按 `OFFICE_DESKS` 摆的桌子与转椅；`box()` 是「底面落地、向上长 h」的画法，`z` 用来叠放（显示器立在桌面上、水桶坐在机身上） |
+| `frontend/public/office/iso-office.svg`（新增，产物） | 底图本体；每张桌子带 `data-desk` / `data-x` / `data-y` |
+| `frontend/src/lib/collabOffice.ts`（新增） | 工位坐标与行布局、`OFFICE_STATUS_TONE`、缩放 / 平移 / 命中数学 |
+| `frontend/src/components/CollabOfficeMap.tsx`（新增） | 画布交互 + 热区标记 + 进度信息卡（两端共用一份） |
+| `frontend/src/lib/collabProgress.ts` | 新增 `roleProgressPercent()` |
+| `frontend/src/components/CollabProgressBoard.tsx` | 流程图区块 → `CollabOfficeMap`；删掉 `FlowConnector` 与工位卡 |
+| `frontend/src/mobile/components/MobileCollabProgress.tsx` | 同一间办公室（双指缩放 / 单指拖动），画布矮一点 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | `.office-*` 样式（各端一份）；删掉被替换的 `.collab-flow*` / `.collab-station*` / `.m-station*` 死样式 |
+| `backend/tests/test_frontend_assets.py`（新增） | 守卫：底图必须是最新产物、每张桌子都画了且落在地板内、行布局之和等于工位数 |
+| `frontend/public/m/sw.js` | 外壳缓存名 v14 → v15（样式表与移动端产物都变了） |
+
+验证：`bash scripts/test.sh` → **205 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
+用构建出的真实 CSS 渲染核对办公室形态（桌椅 / 显示器 / 标记落位 / 信息卡 / 图例 / 工具条）。
+
+### M13 工位上的 3D 小人 · 工牌 · 会走的挂钟（V0.14）
+
+**关注点**：上一版只有「钉子一样的热区标记」，看不出有人在干活。这一版让每个工位真的坐着人。
+
+| 关注点 | 做法 |
+| --- | --- |
+| 人在工位上 | 每个座位渲染一个 `CollabWorker`（和工位卡同一个 3D 小人），落在 `officeChairPoint(desk)` —— 底图那把转椅上，**整层跟着底图一起缩放**（`.office-worker > .collab-station-scene` 用 `translate(-50%, 0) scale(0.72)`，原点压在椅子落点），所以放大地图时人不会浮起来、也不会掉到桌子外面 |
+| 干活时真的在动 | 状态挂在场景根上（`state-pending / active / waiting / error / done`），沿用 M11 那套关键帧：敲键盘（手臂 + 手）、呼吸、点头、眨眼、气泡浮动；**只有「干活」才动**，闲置打盹的人不动，不白烧 CPU。一排人各走各的节拍（`:nth-child` 给 `animation-delay` 错开），不会像机器人一样同频呼吸 |
+| 工牌（这是谁） | 工牌挂在人的**头顶**，卡片上是「照片位 + 名字 + 职责」：名字取 `node.label`（CEO / CTO / 程序员…），职责取 `dutyLabel(node.duty)`（领导者 / 协调者 / 实施者 / 审查者），一眼看出这个工位归谁。工牌**不跟着缩放**（放大了也不会变成巨无霸）：位置按 `officeToViewport(view, 椅子点)` 算，头顶高度是 `PERSON_HEAD * zoom + BADGE_GAP`，缩放时始终贴着人 |
+| 工牌分级显示 | 缩到 `LABEL_ZOOM`(0.58) 以下只剩头像气泡；到 `DETAIL_ZOOM`(0.64) 以上才把职责也写出来 —— 一排 4 个工位也不会糊成一片。点开还是那张信息卡（速度、进度条、summary、跳实时对话） |
+| 挂钟按真实时间走 | 钟**面**（挂钉 + 钟壳 + 表盘 + 12 个刻度）画在底图里，圆心与半径是 `collabOffice.ts` 的 `OFFICE_CLOCK`（生成脚本读它，守卫测试比对）；钟**针**由 `components/OfficeClock.tsx` 读系统时钟画，秒针一秒一跳。钟面和指针共用同一个圆心，所以永远对得上 |
+| 手机端看得清 | 窄屏默认视角改成「工位特写」：`OFFICE_FOCUS` 框住「人 + 工牌 + 桌子」那一块（原来框得太松，小人缩成一小团），桌面端仍然是「整间办公室」 |
+| 谁压谁 | `.office-map-layer`（工牌）`z-index: 2` 压住图例 / 提示，`.office-map-tools`（＋ − ⤢）`z-index: 4` 压住工牌 —— 工牌永远看得见，按钮永远点得到 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/components/CollabWorker.tsx`（新增） | 只画「人」这一层（转椅 + 头 + 身体 + 手臂 + 气泡），桌子由使用方安排 |
+| `frontend/src/components/WorkerAtDesk.tsx` | 改成 `CollabWorker` + 一张桌子（信息卡缩略图用） |
+| `frontend/src/components/OfficeClock.tsx`（新增） | 按真实时间画挂钟的时针 / 分针 / 秒针（对齐到整秒跳） |
+| `frontend/src/components/CollabOfficeMap.tsx` | 每个工位多一层「人」（跟底图缩放）+ 工牌（不缩放、分级显示）；信息卡锚到人身上 |
+| `frontend/src/lib/collabOffice.ts` | 新增 `OFFICE_CHAIR_OFFSET` / `officeChairPoint()`（人坐哪）、`OFFICE_CLOCK`（挂钟圆心与半径）；`OFFICE_FOCUS` 收到工位上 |
+| `scripts/gen_office_bg.py` | 新增 `read_clock()` / `clock_face()`：只画钟面；挂钟不再画指针 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | `.office-worker`（人跟图缩放 + 节拍错开）、`.office-clock*`（指针）、工牌样式（照片位 / 名字 / 职责 / 状态点 + 分级显示）。这一段两端**各写一份**（移动端不加载 `index.css`），所以有守卫测试盯着「两份逐字一致」 |
+| `backend/tests/test_frontend_assets.py` | 新增守卫：底图里的钟面圆心 / 半径必须等于 `OFFICE_CLOCK`、钟挂在左墙的墙面上；小人与工牌都钉在椅子上、且跟着底图缩放 |
+| `backend/tests/test_mobile_web.py` | 新增守卫：两端的「协作办公室」样式段必须逐字一致（改了一边忘另一边，手机上就会走样） |
+| `frontend/public/m/sw.js` | 外壳缓存名 v15 → v16（样式表与移动端产物都变了） |
+
+验证：`bash scripts/test.sh` → **208 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
+用构建出的真实 CSS 渲染核对：每个工位都坐着会动的小人、工牌写对名字与职责、挂钟秒针在跳，
+桌面端与手机端各看一遍（手机端默认就是工位特写）。
