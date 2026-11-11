@@ -112,22 +112,32 @@ registry = StepRegistry()
 # --- 工作目录 ---------------------------------------------------------------
 
 
-def _shared_workspace_dir(run: CollabRun) -> Path:
+def workspace_root(run: CollabRun) -> Path:
+    """本次协作任务的工作路径（不落盘）：创建任务时即已确定（任务指定 > 团队默认 > 按运行 ID 分配）。"""
     raw = run.workspace_dir or str(get_settings().workspaces_root / f"collab-{run.id}")
-    path = Path(raw).expanduser().resolve()
-    path.mkdir(parents=True, exist_ok=True)
+    return Path(raw).expanduser().resolve()
+
+
+def ensure_workspace(run: CollabRun) -> Path:
+    """确保工作路径存在且可用；不可用时给出面向用户的中文错误。"""
+    path = workspace_root(run)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StepError(f"工作路径不可用：{path}（{exc}）") from exc
+    if not path.is_dir():
+        raise StepError(f"工作路径不是目录：{path}")
     return path
 
 
-def _step_cwd(run: CollabRun, node: NodeSpec, step_id: str) -> tuple[str, WorkspaceScope]:
-    """按节点的 ``workspace_scope`` 决定这一步的 cwd。"""
+def _step_cwd(run: CollabRun, node: NodeSpec) -> tuple[str, WorkspaceScope]:
+    """所有岗位都以团队工作路径为 cwd；读写范围由 ``workspace_scope`` 约束。
+
+    路径统一后，角色之间不会各自落到不同的临时目录；``none`` / ``read`` 仍按原语义
+    通过提示词约束并对共享目录做越权审计，违反时不会静默放过。
+    """
     scope = effective_workspace_scope(node)
-    if scope is WorkspaceScope.NONE:
-        # 协调者拿不到共享工作目录，也就没有代码可写。
-        scratch = get_settings().data_dir / "collab-scratch" / run.id / step_id
-        scratch.mkdir(parents=True, exist_ok=True)
-        return str(scratch), scope
-    return str(_shared_workspace_dir(run)), scope
+    return str(ensure_workspace(run)), scope
 
 
 def snapshot_workspace(root: Path) -> dict[str, Any]:
@@ -216,7 +226,7 @@ async def prepare_step(
 
     model = (role.parameters or {}).get("model") or definition.resolve_model(agent.model)
     gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(agent.gateway_url)
-    cwd, scope = _step_cwd(run, node, step_id)
+    cwd, scope = _step_cwd(run, node)
 
     text = prompt
     system_prompt = role.system_prompt or None
@@ -259,7 +269,7 @@ async def prepare_step(
         warnings=warnings,
     )
     if scope is not WorkspaceScope.WRITE:
-        prepared.audit_root = str(_shared_workspace_dir(run))
+        prepared.audit_root = cwd
         prepared.audit_before = snapshot_workspace(Path(prepared.audit_root))
     return prepared
 

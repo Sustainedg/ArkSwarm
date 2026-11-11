@@ -42,7 +42,13 @@ from .graph import (
     validate_graph,
 )
 from .prompt import HistoryEntry, TicketView, build_step_prompt, ticket_code
-from .tickets import extract_body, parse_work_order, validate_order
+from .tickets import (
+    ensure_ask_options,
+    extract_body,
+    parse_work_order,
+    resolve_order_targets,
+    validate_order,
+)
 from .schemas import (
     DeliveryMode,
     GraphSpec,
@@ -201,6 +207,19 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     elif text and root.state == TicketState.BLOCKED.value:
         # 入口角色问过话，用户现在回答了 → 工单重新回到提问者（当前持有者）手里
         root.state = TicketState.OPEN.value
+        # 上一轮的提问已经答复，清掉卡片数据；否则下一次因别的原因挂起时会把旧卡片带出来
+        result = dict(root.result or {})
+        result.pop("question", None)
+        result.pop("options", None)
+        root.result = result
+    elif text and root.state == TicketState.DONE.value:
+        # 运行完成后用户仍可继续找入口角色：重新打开根工单，让领导者接手这次追问。
+        # 历史工单与产出保留，后续派活会继续挂在同一棵工单树上。
+        root.state = TicketState.OPEN.value
+        root.holder_key = entry.key
+        root.to_role_id = entry.role_id
+        root.closed_at = None
+        root.verdict = None
 
     run.status = RunStatus.RUNNING.value
     run.error = None
@@ -289,9 +308,12 @@ def _budget_reason(run: CollabRun, prepared: PreparedTurn) -> str | None:
         used = sum(v for v in (run.usage or {}).values() if isinstance(v, (int, float)))
         if used >= budget.max_tokens:
             return f"已达 token 上限（{budget.max_tokens}）"
-    elapsed = _elapsed_seconds(run.created_at)
+    # 交互式协作的时限按「多久没有进展」计算，而不是从创建时间起累计：
+    # 用户隔一段时间回来继续、或运行在 waiting_user 停留很久，都不该让它永久失效。
+    # prepare_turn 会刷新 updated_at；每一步成功落库也会刷新它。
+    elapsed = _elapsed_seconds(run.updated_at)
     if elapsed > budget.timeout_seconds:
-        return f"已超过运行时限（{budget.timeout_seconds} 秒）"
+        return f"距上次进展已超过运行时限（{budget.timeout_seconds} 秒）"
     return None
 
 
@@ -313,10 +335,21 @@ async def _run_step(
     reviewer = reviewer_of(graph, node.key)
     rework = rework_targets(graph, node.key)
     labels = {key: (spec.label or key) for key, spec in node_map(graph).items()}
+    label_counts: dict[str, int] = {}
+    for label in labels.values():
+        if label:
+            label_counts[label] = label_counts.get(label, 0) + 1
+    # 只接受唯一的显示名映射；同名节点必须由模型写 key，避免猜错接收人
+    aliases = {
+        label: key
+        for key, label in labels.items()
+        if label and label != key and label_counts[label] == 1
+    }
 
     history = await _ticket_history(session, ticket.id)
     prompt_text = build_step_prompt(
         team_name=prepared.team.name,
+        workspace_path=str(execution.workspace_root(run)),
         node=node,
         ticket=TicketView(
             id=ticket.id,
@@ -405,6 +438,7 @@ async def _run_step(
     raw_text = "".join(text_parts)
     body = ""
     order = None
+    parse_warning: str | None = None
 
     if step_status == "complete" and error_text is None:
         parsed = parse_work_order(raw_text)
@@ -413,6 +447,10 @@ async def _run_step(
             step_status = "error"
         else:
             body = extract_body(raw_text)
+            parse_warning = parsed.warning
+            resolve_order_targets(parsed.order, aliases)
+            # ask_user 漏给 options 时不把用户堵在协议错误上：补成可点卡片继续推进。
+            ensure_ask_options(parsed.order)
             semantic = validate_order_ctx(
                 parsed.order, node, assignees, rework, is_entry=node.key == prepared.entry.key
             )
@@ -429,6 +467,8 @@ async def _run_step(
     step.status = step_status
     step.audit = audit
     step.action = order.action.value if order is not None else ""
+    # 记下这一步把活交给了谁：岗位会话据此还原「谁对谁说了什么」的交接链
+    step.target_key = (order.assignee or "") if order is not None and order.action is TicketAction.DELEGATE else ""
     step.gist = _order_gist(order) if order is not None else (error_text or "")[:160]
     step.finished_at = utcnow()
 
@@ -438,6 +478,9 @@ async def _run_step(
     run.updated_at = utcnow()
     session.add(run)
     await session.commit()
+
+    if parse_warning:
+        yield protocol.notice(parse_warning, "warn", step_id=step.id)
 
     if audit and not audit.get("unchanged", True):
         yield protocol.notice(
@@ -793,14 +836,16 @@ async def _apply_action(
         return
 
     if action is TicketAction.ASK_USER:
+        question = order.question or "入口角色需要你补充信息"
+        options = [option.to_dict() for option in order.options]
         ticket.state = TicketState.BLOCKED.value
-        ticket.result = {**(ticket.result or {}), "question": order.question or ""}
+        ticket.result = {**(ticket.result or {}), "question": question, "options": options}
         ticket.updated_at = utcnow()
         session.add(ticket)
         await session.commit()
         await session.refresh(ticket)
         yield protocol.ticket_updated(_ticket_payload(ticket))
-        yield protocol.notice(order.question or "入口角色需要你补充信息", "ask")
+        yield protocol.notice(question, "ask", question=question, options=options)
         return
 
     if action is TicketAction.REJECT:

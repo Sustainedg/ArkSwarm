@@ -290,6 +290,106 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- 对话：消息气泡（复用 MessageView 的类名） ---------- */
 .m-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 16px; }
+
+/* ---------- 协作：进度卡与岗位实时会话 ---------- */
+.m-collab-progress { flex: none; padding: 10px 12px 0; }
+.m-collab-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; font-size: 12px; font-weight: 600; }
+.m-collab-progress-head .dim { font-size: 10.5px; font-weight: 400; }
+.m-collab-progress-track { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding-bottom: 3px; -webkit-overflow-scrolling: touch; }
+.m-collab-progress-arrow { align-self: center; color: var(--text-dim); flex: none; font-size: 13px; }
+.m-collab-progress-node {
+  flex: 0 0 142px; display: flex; flex-direction: column; gap: 3px; padding: 8px 9px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel);
+  color: inherit; text-align: left;
+}
+.m-collab-progress-node.state-active { border-color: rgba(217, 79, 208, 0.5); box-shadow: 0 0 0 2px var(--brand-soft); }
+.m-collab-progress-node.state-waiting { border-color: rgba(251, 191, 36, 0.48); }
+.m-collab-progress-node.state-error { border-color: rgba(248, 113, 113, 0.48); }
+.m-collab-progress-node.state-done { border-color: rgba(74, 222, 128, 0.28); }
+.m-collab-progress-node.live { animation: m-collab-live-glow 1.8s ease-in-out infinite; }
+@keyframes m-collab-live-glow {
+  0%, 100% { box-shadow: 0 0 0 2px var(--brand-soft); }
+  50% { box-shadow: 0 0 0 4px rgba(217, 79, 208, 0.18); }
+}
+.m-collab-progress-node-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.m-collab-progress-node-head .avatar { width: 22px; height: 22px; font-size: 11px; }
+.m-collab-progress-label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-collab-progress-state { font-size: 10.5px; color: var(--text-muted); }
+.state-active .m-collab-progress-state, .state-waiting .m-collab-progress-state { color: var(--brand); }
+.state-error .m-collab-progress-state { color: var(--danger); }
+.state-done .m-collab-progress-state { color: var(--ok); }
+.m-collab-progress-meta { font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-collab-progress-links { display: flex; gap: 5px; overflow-x: auto; margin-top: 7px; padding-bottom: 2px; }
+.m-collab-progress-link {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px;
+  font-size: 10px; color: var(--text-dim); border: 1px solid var(--border); background: var(--bg-input);
+}
+.m-collab-progress-link b { color: var(--text-muted); font-weight: 600; }
+.m-collab-progress-link.kind-review b { color: var(--accent); }
+.m-collab-progress-link.kind-rework b { color: var(--warn); }
+
+.m-collab-running-bar { display: flex; align-items: center; gap: 10px; }
+.m-collab-running-bar .dim { flex: 1; line-height: 1.5; }
+.m-composer-secondary { margin-top: 7px; min-height: 32px; }
+
+.m-sheet-body.m-collab-role-body { overflow: hidden; min-height: 0; gap: 10px; }
+.m-collab-role-meta { display: flex; align-items: center; gap: 10px; flex: none; }
+.m-collab-role-name { font-size: 15px; font-weight: 600; }
+/* 共享对话线程（ConversationThread / CollabRoleThread）：与桌面端同一份组件，这里按触屏重做尺寸 */
+.conversation-thread { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.conversation-turn { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.conversation-turn-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 10.5px; color: var(--text-dim); }
+.conversation-turn.live .bubble-body { border-color: rgba(217, 79, 208, 0.35); }
+
+.m-collab-role-thread {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding-bottom: calc(10px + var(--safe-bottom)); -webkit-overflow-scrolling: touch;
+}
+.collab-role-placeholder {
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  padding: 11px 12px; font-size: 13px; line-height: 1.6; color: var(--text-muted); background: var(--bg-input);
+}
+.collab-role-placeholder.live { border-style: solid; border-color: rgba(217, 79, 208, 0.4); }
+.collab-role-placeholder.live::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%;
+  background: var(--brand); vertical-align: middle; animation: m-collab-live-glow 1.4s ease-in-out infinite;
+}
+
+/* 岗位收到的交接卡：上游把这个岗位的活交过来时说的话 + 工单要点 */
+.collab-role-handoff {
+  border: 1px solid rgba(123, 92, 255, 0.35); border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(123, 92, 255, 0.1), rgba(123, 92, 255, 0.03));
+  padding: 11px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.m-collab-role-thread .collab-role-handoff-row .collab-role-handoff {
+  border-color: rgba(217, 79, 208, 0.38);
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.24), rgba(123, 92, 255, 0.15));
+}
+.m-collab-role-thread .collab-role-handoff-row .collab-role-handoff-ticket {
+  border-top-color: rgba(255, 255, 255, 0.14);
+}
+.collab-role-handoff-text { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.collab-role-handoff-ticket {
+  border-top: 1px dashed var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 3px;
+}
+.collab-role-handoff-title { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+
+/* 协作「需要你决定」：选项在时间线末尾，点一项直接作为答复 */
+.m-ask-card {
+  border: 1px solid rgba(217, 79, 208, 0.34); border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.1), rgba(123, 92, 255, 0.06));
+  padding: 12px; display: flex; flex-direction: column; gap: 9px;
+}
+.m-ask-question { font-size: 15px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
+.m-ask-options { display: flex; flex-direction: column; gap: 7px; }
+.m-ask-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text); text-align: left; font-size: 14.5px;
+}
+.m-ask-option:disabled { opacity: 0.55; }
+.m-ask-option.freeform { border-style: dashed; }
+.m-ask-option > span:first-child { font-weight: 550; }
 .bubble-row { display: flex; gap: 8px; }
 .bubble-row.user { flex-direction: row-reverse; }
 .bubble { min-width: 0; max-width: 100%; }

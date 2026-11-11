@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
-import { api, streamPost } from '../../lib/api'
+import { api, streamGet, streamPost } from '../../lib/api'
+import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
 import { applyCollabEvent, makeCollabTurn, type CollabTurnState } from '../../lib/collabStream'
-import type { CollabEvent, CollabRunDetail, CollabTeam, Role } from '../../lib/types'
+import { buildCollabProgress } from '../../lib/collabProgress'
+import type {
+  CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
+} from '../../lib/types'
+import { useAutoRefresh } from '../../lib/useAutoRefresh'
+import { MobileCollabProgress } from '../components/MobileCollabProgress'
+import { MobileRoleConversationSheet } from '../components/MobileRoleConversationSheet'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -34,6 +41,12 @@ interface TimelineEntry {
 }
 
 /** 协作运行详情：步骤时间线 + 预算进度，可叫停、继续、回复入口岗位。 */
+/** 一次订阅可能收到协作信封，也可能收到传输层的 ``stream.closed`` 收尾标记。 */
+type RunEvent = CollabEvent | StreamClosedEvent
+
+/** 重连前的等待：每次退避一点，避免断线时疯狂重试。 */
+const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
 export function MobileCollabRunPage() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
@@ -46,22 +59,43 @@ export function MobileCollabRunPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [selectedRoleKey, setSelectedRoleKey] = useState<string | null>(null)
+  const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
+  const [reconnecting, setReconnecting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  const busyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
+  const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
+  const leaderLabel = team?.graph.nodes.find((node) => node.key === leaderKey)?.label || leaderKey || '领导者'
+  const visibleSteps = useMemo(
+    () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
+    [detail?.steps, leaderKey],
+  )
+  const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
 
   const load = useCallback(async (id: string) => {
     try {
       const next = await api.getCollabRun(id)
       setDetail(next)
-      setTurn((prev) =>
-        prev
-          ? { ...prev, status: next.status, reason: next.error ?? null, live: null }
-          : makeCollabTurn(next, next.tickets),
-      )
-      setError(null)
+      setTurn((prev) => {
+        const base = prev ?? makeCollabTurn(next, next.tickets)
+        return {
+          ...base,
+          status: next.status,
+          reason: next.error ?? null,
+          live: null,
+          completed: [],
+          tickets: Object.fromEntries(next.tickets.map((ticket) => [ticket.id, ticket])),
+        }
+      })
+      return next
     } catch (e) {
       setError(describeError(e))
+      return null
     }
   }, [])
 
@@ -78,46 +112,92 @@ export function MobileCollabRunPage() {
     })()
   }, [])
 
-  useEffect(() => {
-    if (runId) void load(runId)
-  }, [runId, load])
-
+  // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  // 运行时定时对齐后端详情：SSE 只负责增量，最终结果以落库详情为准。
-  useEffect(() => {
-    if (!runId || !detail) return
-    if (detail.status !== 'running' && detail.status !== 'waiting_user') return
-    const timer = setInterval(() => void load(runId), 5000)
-    return () => clearInterval(timer)
-  }, [runId, detail, load])
+  // SSE 只负责本设备发起的增量；运行详情以落库结果为准，并定时对齐其他设备。
+  useAutoRefresh(() => (runId ? load(runId) : undefined), {
+    intervalMs: 4000,
+    enabled: Boolean(runId) && !busy,
+  })
 
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [detail?.steps.length, turn?.live?.agent.text])
+  }, [visibleSteps.length, leaderLive?.agent.text])
 
-  const stream = useCallback(
-    async (path: string, body: unknown) => {
-      if (!detail) return
-      setError(null)
+  /**
+   * 订阅一次运行的实时事件并渲染。
+   *
+   * 推进跑在服务端独立任务里：连接被切断（手机锁屏、切后台、换网络）时这里会自动
+   * 重连订阅续看，而不是把运行打断；`kickoff` 用于「发消息 / 继续」这类先启动再订阅的场景。
+   */
+  const subscribe = useCallback(
+    async (
+      target: string,
+      kickoff?: (onEvent: (event: RunEvent) => void, signal: AbortSignal) => Promise<void>,
+    ) => {
+      if (busyRef.current) return
+      busyRef.current = true
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
+      let closed = false
+      const onEvent = (event: RunEvent) => {
+        if (event.type === 'stream.closed') {
+          closed = true
+          return
+        }
+        setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev))
+      }
       try {
-        await streamPost<CollabEvent>(path, body, (event) =>
-          setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev)),
-          controller.signal,
-        )
+        if (kickoff) await kickoff(onEvent, controller.signal)
+        let attempt = 0
+        while (!closed && !controller.signal.aborted && attempt < 5) {
+          attempt += 1
+          setReconnecting(true)
+          await delay(Math.min(800 * attempt, 3000))
+          if (controller.signal.aborted) break
+          await streamGet<RunEvent>(`/api/collab/runs/${target}/stream`, onEvent, controller.signal)
+        }
       } catch (e) {
         if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
       } finally {
+        busyRef.current = false
         abortRef.current = null
+        setReconnecting(false)
         setBusy(false)
-        await load(detail.id)
+        await load(target)
       }
     },
-    [detail, load],
+    [load],
+  )
+
+  useEffect(() => {
+    abortRef.current?.abort()
+    if (!runId) return
+    setError(null)
+    setSelectedRoleKey(null)
+    void (async () => {
+      const next = await load(runId)
+      // 这次运行在跑就订阅实时事件：本页发起的、或别的设备/上次会话发起的都一样。
+      if (next && next.status === 'running' && !busyRef.current) void subscribe(runId)
+    })()
+  }, [runId, load, subscribe])
+
+  const stream = useCallback(
+    async (path: string, body: unknown, userText?: string) => {
+      if (!detail) return
+      const pending = userText ? { id: `local-user-${Date.now()}`, text: userText } : null
+      if (pending) setPendingUser(pending)
+      setError(null)
+      try {
+        await subscribe(detail.id, (onEvent, signal) => streamPost<RunEvent>(path, body, onEvent, signal))
+      } finally {
+        if (pending) setPendingUser(null)
+      }
+    },
+    [detail, subscribe],
   )
 
   const resumeWithRetry = async (stepId: string) => {
@@ -128,6 +208,17 @@ export function MobileCollabRunPage() {
       return
     }
     await stream(`/api/collab/runs/${detail?.id}/resume`, {})
+  }
+
+  const answerAsk = (choice: CollabChoice) => {
+    if (!detail || busy) return
+    const text = collabChoiceAnswer(choice)
+    if (!text) {
+      composerRef.current?.focus()
+      return
+    }
+    setDraft('')
+    void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
   }
 
   const stop = async () => {
@@ -147,11 +238,9 @@ export function MobileCollabRunPage() {
     navigate('/collab', { replace: true })
   }
 
-  const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
-
   const timeline = useMemo<TimelineEntry[]>(() => {
     if (!detail) return []
-    return detail.steps.map((step) => {
+    const entries = visibleSteps.map((step): TimelineEntry => {
       if (step.role_key === 'user') {
         return {
           id: step.id,
@@ -176,32 +265,86 @@ export function MobileCollabRunPage() {
         },
       }
     })
-  }, [detail, team, roles])
+    if (pendingUser) {
+      entries.push({
+        id: pendingUser.id,
+        label: '你',
+        message: { id: pendingUser.id, role: 'user', content: pendingUser.text, parts: [], status: 'complete' },
+      })
+    }
+    const persisted = new Set(visibleSteps.map((step) => step.id))
+    for (const step of turn?.completed ?? []) {
+      if (step.nodeKey !== leaderKey || persisted.has(step.stepId)) continue
+      const node = team?.graph.nodes.find((item) => item.key === step.nodeKey)
+      const role = roles.find((item) => item.id === node?.role_id)
+      entries.push({
+        id: step.stepId,
+        avatar: role?.avatar ?? '🤖',
+        label: node?.label ?? step.roleName,
+        message: {
+          id: step.stepId,
+          role: 'assistant',
+          content: step.agent.text,
+          parts: step.agent.parts,
+          status: step.error ? 'error' : step.status,
+          error: step.error ?? step.agent.error,
+          usage: step.agent.usage,
+          logs: step.agent.logs,
+        },
+      })
+    }
+    return entries
+  }, [detail, team, roles, visibleSteps, pendingUser, turn?.completed, leaderKey])
 
-  const liveEntry: TimelineEntry | null = turn?.live
+  const liveEntry: TimelineEntry | null = leaderLive
     ? {
         id: 'live',
         avatar: roles.find(
-          (role) => role.id === team?.graph.nodes.find((node) => node.key === turn.live!.nodeKey)?.role_id,
+          (role) => role.id === team?.graph.nodes.find((node) => node.key === leaderLive.nodeKey)?.role_id,
         )?.avatar ?? '🤖',
-        label: `${turn.live.roleName} · ${turn.live.duty}`,
+        label: leaderLive.roleName,
         message: {
           id: 'live',
           role: 'assistant',
-          content: turn.live.agent.text,
-          parts: turn.live.agent.parts,
-          status: turn.live.agent.error ? 'error' : 'streaming',
-          error: turn.live.agent.error,
-          usage: turn.live.agent.usage,
-          streaming: turn.live.agent.status === 'running',
-          logs: turn.live.agent.logs,
+          content: leaderLive.agent.text,
+          parts: leaderLive.agent.parts,
+          status: leaderLive.agent.error ? 'error' : 'streaming',
+          error: leaderLive.agent.error,
+          usage: leaderLive.agent.usage,
+          streaming: leaderLive.agent.status === 'running',
+          logs: leaderLive.agent.logs,
         },
       }
     : null
 
-  const status = detail?.status ?? 'running'
+  const status = turn?.status ?? detail?.status ?? 'running'
   const canResume = ['waiting_user', 'error', 'interrupted', 'cancelled'].includes(status)
-  const canReply = status === 'waiting_user'
+  const remoteRunning = status === 'running' && !busy
+  const progress = useMemo(
+    () =>
+      buildCollabProgress({
+        graph: team?.graph,
+        entryKey: leaderKey,
+        steps: detail?.steps ?? [],
+        tickets: detail?.tickets ?? [],
+        roles,
+        live: turn?.live ?? null,
+        streamed: turn?.completed ?? [],
+        runStatus: status,
+      }),
+    [team?.graph, leaderKey, detail?.steps, detail?.tickets, roles, turn?.live, turn?.completed, status],
+  )
+  const selectedRole = progress.nodes.find((node) => node.key === selectedRoleKey) ?? null
+  const besideLeader = turn?.live && turn.live.nodeKey !== leaderKey ? turn.live : null
+  const pendingAsks = useMemo(
+    () =>
+      status === 'waiting_user'
+        ? findPendingCollabAsks(
+            Object.values(turn?.tickets ?? {}).filter((ticket) => !detail || ticket.run_id === detail.id),
+          )
+        : [],
+    [detail, status, turn?.tickets],
+  )
 
   return (
     <div className="m-page">
@@ -233,16 +376,24 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
+      <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenRole={setSelectedRoleKey} />
+
+      {reconnecting && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <div className="banner info">连接断了，正在自动重连订阅；协作仍在服务端继续推进。</div>
+        </div>
+      )}
+
       {error && (
         <div style={{ padding: '8px 12px 0' }}>
           <div className="banner err">{error}</div>
         </div>
       )}
 
-      {turn && turn.notices.length > 0 && (
+      {turn && turn.notices.filter((notice) => notice.level !== 'ask').length > 0 && (
         <div style={{ padding: '8px 12px 0' }}>
           <div className="stack" style={{ gap: 6 }}>
-            {turn.notices.slice(-3).map((notice) => (
+            {turn.notices.filter((notice) => notice.level !== 'ask').slice(-3).map((notice) => (
               <div className={`banner${notice.level === 'error' ? ' err' : ''}`} key={notice.id}>
                 <div className="row" style={{ gap: 8 }}>
                   <span style={{ flex: 1 }}>{notice.text}</span>
@@ -262,63 +413,112 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
+      {besideLeader && (
+        <div style={{ padding: '8px 12px 0' }}>
+          <div className="banner info">
+            协作正在由「{besideLeader.roleName}」处理，点上方进度可查看实时输出。
+          </div>
+        </div>
+      )}
+
       <div className="m-thread" ref={scrollRef}>
-        {timeline.length === 0 && !liveEntry && !busy && (
+        {timeline.length === 0 && !liveEntry && pendingAsks.length === 0 && !busy && (
           <div className="m-empty">
             <div className="m-empty-icon">🤝</div>
-            <p>运行尚未产生步骤</p>
-            <p className="dim small">点下方按钮推进协作。</p>
+            <p>和领导者开始对话</p>
+            <p className="dim small">先告诉领导者这次协作要完成什么。</p>
           </div>
         )}
         {timeline.map((entry) => (
           <MessageView key={entry.id} message={entry.message} avatar={entry.avatar} label={entry.label} />
         ))}
         {liveEntry && <MessageView message={liveEntry.message} avatar={liveEntry.avatar} label={liveEntry.label} />}
+        {pendingAsks.map((ask) => (
+          <div key={ask.ticketId} className="m-ask-card">
+            <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="pill warn">需要你决定</span>
+              <span className="dim small">点一项作为答复，或直接在下方输入</span>
+            </div>
+            <div className="m-ask-question">{ask.question}</div>
+            <div className="m-ask-options">
+              {ask.options.map((choice, index) => (
+                <button
+                  key={`${ask.ticketId}-${index}-${choice.label}`}
+                  className={`m-ask-option${choice.freeform ? ' freeform' : ''}`}
+                  disabled={busy}
+                  onClick={() => answerAsk(choice)}
+                >
+                  <span>{choice.label}</span>
+                  {choice.description && <span className="dim small">{choice.description}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="m-composer">
-        {canReply ? (
-          <div className="m-composer-box">
-            <textarea
-              rows={1}
-              value={draft}
-              disabled={busy}
-              placeholder="回答入口岗位的问题…"
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <button
-              className="btn primary"
-              disabled={busy || !draft.trim()}
-              onClick={() => {
-                const text = draft
-                setDraft('')
-                void stream(`/api/collab/runs/${detail?.id}/messages`, { content: text })
-              }}
-            >
-              回复
+        {remoteRunning ? (
+          <div className="m-collab-running-bar">
+            <span className="dim small">
+              领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}，完成后可继续对话
+            </span>
+            <button className="btn sm danger" onClick={() => void stop()}>
+              叫停
             </button>
           </div>
         ) : (
-          <div className="row" style={{ gap: 8 }}>
-            {canResume && (
-              <button
-                className="btn primary"
-                style={{ flex: 1 }}
+          <>
+            <div className="m-composer-box">
+              <textarea
+                ref={composerRef}
+                rows={1}
+                value={draft}
                 disabled={busy}
+                placeholder={busy ? '协作正在推进…' : `和领导者「${leaderLabel}」对话…`}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              {busy ? (
+                <button className="btn danger" onClick={() => void stop()}>
+                  ■ 停止
+                </button>
+              ) : (
+                <button
+                  className="btn primary"
+                  disabled={!draft.trim()}
+                  onClick={() => {
+                    const text = draft
+                    setDraft('')
+                    void stream(`/api/collab/runs/${detail?.id}/messages`, { content: text }, text)
+                  }}
+                >
+                  发送
+                </button>
+              )}
+            </div>
+            {canResume && !busy && (
+              <button
+                className="btn ghost block m-composer-secondary"
                 onClick={() => void stream(`/api/collab/runs/${detail?.id}/resume`, {})}
               >
-                {busy ? '推进中…' : '继续推进'}
+                让领导者继续推进（不补充内容）
               </button>
             )}
-            {status === 'running' && (
-              <button className="btn danger" style={{ flex: 1 }} disabled={busy} onClick={() => void stop()}>
-                ■ 叫停
-              </button>
-            )}
-            {status === 'done' && <span className="dim small">本次协作已完成。</span>}
-          </div>
+          </>
         )}
       </div>
+
+      {selectedRole && detail && (
+        <MobileRoleConversationSheet
+          node={selectedRole}
+          roster={progress.nodes}
+          steps={detail.steps}
+          tickets={detail.tickets}
+          live={turn?.live ?? null}
+          streamed={turn?.completed ?? []}
+          onClose={() => setSelectedRoleKey(null)}
+        />
+      )}
 
       {menuOpen && detail && (
         <MobileSheet title="运行操作" onClose={() => setMenuOpen(false)}>

@@ -9,6 +9,8 @@
   看不到上游的对话原文」。
 * 每个角色都会输出一句固定的闲聊「（<key>）我来处理。」——如果隔离被破坏，
   这句话就会出现在别人的 prompt 里，测试立刻能发现。
+* ``<state_dir>/gate-<key>`` 存在时会先阻塞，直到该文件被删除（10 秒兜底），
+  供测试把某一步稳稳停在运行中。
 """
 import json
 import os
@@ -36,12 +38,25 @@ if os.path.exists(counter_path):
         index = int((handle.read().strip() or "0"))
 with open(counter_path, "w", encoding="utf-8") as handle:
     handle.write(str(index + 1))
-payload = steps[min(index, len(steps) - 1)] if steps else {"action": "ask_user", "question": "？"}
+payload = steps[min(index, len(steps) - 1)] if steps else {
+    "action": "ask_user",
+    "question": "要继续吗？",
+    "options": [{"label": "继续", "value": "继续"}, {"label": "停止", "value": "停止"}],
+}
 
 
 def emit(obj):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
     time.sleep(0.002)
+
+
+# 可选「闸门」：``<state_dir>/gate-<key>`` 存在时先卡住，直到测试删掉它（10 秒兜底）。
+# 用来让某一步稳稳停在运行中，测试可据此确定性地验证「断线后重连订阅」。
+gate_path = os.path.join(state_dir, f"gate-{node_key}")
+if os.path.exists(gate_path):
+    deadline = time.time() + 10
+    while os.path.exists(gate_path) and time.time() < deadline:
+        time.sleep(0.02)
 
 
 emit({"type": "session", "session_id": f"fake-{node_key}-{index}"})

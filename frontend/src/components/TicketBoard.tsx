@@ -1,5 +1,5 @@
 /**
- * 工单看板抽屉：左边是「父工单 → 子工单」的树，右边是选中工单的细节。
+ * 工单看板（全屏）：左边是「父工单 → 子工单」的树，右边是选中工单的细节。
  *
  * 工单是角色之间**唯一**的交接物，所以这张抽屉就是「谁把什么交给了谁」的全貌：
  * 工单字段（目标 / 要求 / 验收 / 约束）、产出与文件、审查意见与返工轮次，
@@ -92,8 +92,8 @@ export function TicketBoard({ tickets, steps, nodeLabel, onClose }: Props) {
   }
 
   return (
-    <div className="collab-drawer-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="collab-drawer" role="dialog" aria-modal="true" aria-label="工单看板">
+    <div className="collab-drawer-backdrop collab-ticket-board-backdrop">
+      <aside className="collab-drawer collab-ticket-board" role="dialog" aria-modal="true" aria-label="工单看板">
         <div className="collab-drawer-head">
           <div>
             <div className="collab-inspector-title">工单看板</div>

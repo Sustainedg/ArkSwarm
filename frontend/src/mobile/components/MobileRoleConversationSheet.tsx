@@ -1,0 +1,74 @@
+/** 移动端岗位内部实时会话：全屏底部弹层，线程复用共享的 `CollabRoleThread`。 */
+import { useMemo } from 'react'
+import { CollabRoleThread } from '../../components/CollabRoleThread'
+import { DUTIES } from '../../lib/collabDraft'
+import type { FinishedStep, LiveStep } from '../../lib/collabStream'
+import type { CollabRoleProgress } from '../../lib/collabProgress'
+import type { CollabStep, CollabTicket } from '../../lib/types'
+import { MobileSheet } from './MobileSheet'
+
+interface Props {
+  node: CollabRoleProgress
+  roster: CollabRoleProgress[]
+  steps: CollabStep[]
+  tickets: CollabTicket[]
+  live: LiveStep | null
+  streamed: FinishedStep[]
+  onClose: () => void
+}
+
+export function MobileRoleConversationSheet({ node, roster, steps, tickets, live, streamed, onClose }: Props) {
+  const dutyLabel = useMemo(
+    () => DUTIES.find((item) => item.value === node.duty)?.label ?? node.duty,
+    [node.duty],
+  )
+
+  return (
+    <MobileSheet title={`${node.label} · 实时对话`} onClose={onClose} full bodyClassName="m-collab-role-body">
+      <div className="m-collab-role-meta">
+        <span className="avatar">{node.avatar}</span>
+        <div>
+          <div className="m-collab-role-name">{node.label}</div>
+          <div className="dim small">
+            {dutyLabel} · {node.stepCount} 步 · {node.stateLabel}
+            {node.isEntry ? ' · 入口领导者' : ' · 只读内部对话'}
+          </div>
+        </div>
+      </div>
+      {node.activeTickets.length > 0 && (
+        <div className="row wrap" style={{ gap: 6 }}>
+          {node.activeTickets.map((ticket) => (
+            <span className="pill" key={ticket.id}>
+              当前工单：{ticket.title}
+            </span>
+          ))}
+        </div>
+      )}
+      <CollabRoleThread
+        node={node}
+        roster={roster}
+        steps={steps}
+        tickets={tickets}
+        live={live}
+        streamed={streamed}
+        className="m-collab-role-thread"
+        empty={(
+          <div className="m-empty">
+            <div className="m-empty-icon">{node.avatar}</div>
+            {node.state === 'active' ? (
+              <>
+                <p>「{node.label}」正在处理中…</p>
+                <p className="dim small">输出会在这一步跑完后显示。</p>
+              </>
+            ) : (
+              <>
+                <p>这个岗位还没有开始工作</p>
+                <p className="dim small">协作推进到它时，这里会实时出现输出。</p>
+              </>
+            )}
+          </div>
+        )}
+      />
+    </MobileSheet>
+  )
+}

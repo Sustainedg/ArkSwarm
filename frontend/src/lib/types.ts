@@ -232,9 +232,19 @@ export interface TestResult {
 export type CollabDuty = 'coordinator' | 'engineer' | 'reviewer'
 /** 有向边的类型：派发 / 审查 / 打回 */
 export type CollabEdgeKind = 'assign' | 'review' | 'rework'
+/** 节点端口：输入在左/上，输出在右/下。 */
+export type CollabEdgePort = 'left' | 'right' | 'top' | 'bottom'
 export type CollabWorkspaceScope = 'none' | 'read' | 'write'
 /** 一个节点在一轮里能发起的动作 */
 export type CollabTicketAction = 'delegate' | 'submit' | 'review' | 'done' | 'ask_user' | 'reject'
+
+/** `ask_user` 的一条可点选项；`freeform` 表示点它只是把焦点交给输入框。 */
+export interface CollabChoice {
+  label: string
+  value: string
+  description?: string | null
+  freeform?: boolean
+}
 
 export interface CollabNode {
   key: string
@@ -262,6 +272,9 @@ export interface CollabEdge {
   label: string
   /** 这条边额外的返工轮次上限（0 = 不额外限制）：实际上限取「边 / 节点 / 运行时预算」三者最小 */
   max_rounds: number
+  /** 画布端口方向；旧数据为空时由画布按节点相对位置自动推断。 */
+  from_side?: CollabEdgePort | null
+  to_side?: CollabEdgePort | null
 }
 
 export interface CollabGraph {
@@ -282,6 +295,8 @@ export interface CollabIssue {
   message: string
   node_key?: string | null
   edge_id?: string | null
+  /** 前端归一化后写入的严重级别；服务端已分别放在 errors / warnings 两个数组里 */
+  severity?: 'error' | 'warning'
 }
 
 export interface CollabValidation {
@@ -364,6 +379,8 @@ export interface CollabStep {
   duty: string
   sequence: number
   action: string
+  /** delegate 把活交给了哪个节点 key；空串表示不是派发（用于还原交接链） */
+  target_key?: string
   status: string
   content: string
   /** 引擎派生的结构化摘要（下游看到的是它，而不是 content） */
@@ -408,6 +425,11 @@ export type CollabEventType =
   | 'collab.run.started' | 'collab.step.started' | 'collab.step.event' | 'collab.step.finished'
   | 'collab.ticket.created' | 'collab.ticket.updated' | 'collab.run.status' | 'collab.notice'
 
+/** 传输层在 SSE 收尾时补发的事件（不属于协作信封）：用来区分「正常结束」与「连接被切断」。 */
+export interface StreamClosedEvent {
+  type: 'stream.closed'
+}
+
 export interface CollabEvent {
   type: CollabEventType
   run_id?: string
@@ -432,4 +454,7 @@ export interface CollabEvent {
   text?: string
   /** notice 级别：info / warn / error / ask */
   level?: string
+  /** `collab.notice` 且 level=ask 时一并带上，便于即时渲染决策卡 */
+  question?: string
+  options?: CollabChoice[]
 }

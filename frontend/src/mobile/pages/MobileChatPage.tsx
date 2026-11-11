@@ -4,6 +4,7 @@ import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
 import { api, streamPost } from '../../lib/api'
 import type { Conversation, Message } from '../../lib/types'
+import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
@@ -24,6 +25,7 @@ export function MobileChatPage() {
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [remoteRunning, setRemoteRunning] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
@@ -32,18 +34,26 @@ export function MobileChatPage() {
   const open = useCallback(async (id: string) => {
     try {
       const detail = await api.getConversation(id)
-      setMessages(detail.messages)
+      setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
       setActive(detail.conversation)
       setLive(null)
-      setError(null)
+      setRemoteRunning(Boolean(detail.active_run))
     } catch (e) {
       setError(describeError(e))
     }
   }, [])
 
   useEffect(() => {
-    if (conversationId) void open(conversationId)
+    if (!conversationId) return
+    setError(null)
+    void open(conversationId)
   }, [conversationId, open])
+
+  // 跨设备同步：另一台设备写入的消息与运行状态会在这里自动出现。
+  useAutoRefresh(() => (conversationId ? open(conversationId) : undefined), {
+    intervalMs: 3000,
+    enabled: Boolean(conversationId) && !busy,
+  })
 
   // 离开页面（返回或切换对话）时终止正在进行的流，避免后台空转。
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -55,10 +65,12 @@ export function MobileChatPage() {
 
   const send = async (content: string, regenerate = false) => {
     if (!active) return
+    if (remoteRunning) return
     if (!regenerate && !content.trim()) return
 
     setError(null)
     setBusy(true)
+    setRemoteRunning(false)
     setLive({ ...emptyAgentStream(), userText: regenerate ? '' : content })
     if (!regenerate) setDraft('')
 
@@ -203,13 +215,25 @@ export function MobileChatPage() {
         </div>
       )}
 
+      {remoteRunning && !busy && (
+        <div style={{ padding: '0 12px 8px' }}>
+          <div className="banner info">另一台设备正在运行这个对话，完成后会自动同步。</div>
+        </div>
+      )}
+
       <div className="m-composer">
         <div className="m-composer-box">
           <textarea
             rows={1}
             value={draft}
-            placeholder={busy ? '智能体正在工作…' : `发消息给 ${active?.role_name ?? '智能体'}`}
-            disabled={busy}
+            placeholder={
+              busy
+                ? '智能体正在工作…'
+                : remoteRunning
+                  ? '另一台设备正在运行…'
+                  : `发消息给 ${active?.role_name ?? '智能体'}`
+            }
+            disabled={busy || remoteRunning}
             onChange={(event) => {
               setDraft(event.target.value)
               const node = event.target
@@ -222,7 +246,7 @@ export function MobileChatPage() {
               ■ 停止
             </button>
           ) : (
-            <button className="btn primary" onClick={() => void send(draft)} disabled={!draft.trim()}>
+            <button className="btn primary" onClick={() => void send(draft)} disabled={!draft.trim() || remoteRunning}>
               发送
             </button>
           )}
@@ -251,7 +275,7 @@ export function MobileChatPage() {
           <div className="stack" style={{ gap: 8 }}>
             <button
               className="btn block"
-              disabled={busy || messages.length === 0}
+              disabled={busy || remoteRunning || messages.length === 0}
               onClick={() => {
                 setMenuOpen(false)
                 void send('', true)

@@ -168,10 +168,11 @@ async def count_runs(session: AsyncSession, team_id: str | None = None) -> int:
 
 
 async def recover_interrupted(session: AsyncSession) -> int:
-    """启动时把残留的 ``running`` 运行标记为 ``interrupted``。
+    """启动时把残留的 ``running`` 运行与 ``streaming`` 步骤标记为 ``interrupted``。
 
     进程重启后内存里的运行句柄一定已经失效，因此启动时看到 ``running`` 就是残留；
     工单与步骤原样保留，用户可以在界面上「继续」（铁律 9：绝不删库重建）。
+    残留的 ``streaming`` 步骤同样要收尾：否则界面会一直显示「处理中」，点开却看不到任何输出。
     """
     rows: Sequence[CollabRun] = (
         await session.execute(select(CollabRun).where(CollabRun.status == RunStatus.RUNNING.value))
@@ -181,7 +182,15 @@ async def recover_interrupted(session: AsyncSession) -> int:
         row.error = row.error or "服务重启，这次协作被中断；可以点「继续」从当前工单接着跑"
         row.updated_at = utcnow()
         session.add(row)
-    if rows:
+    steps: Sequence[CollabStep] = (
+        await session.execute(select(CollabStep).where(CollabStep.status == "streaming"))
+    ).scalars().all()
+    for step in steps:
+        step.status = "interrupted"
+        step.error = step.error or "服务重启，这一步被中断，没有留下输出"
+        step.finished_at = utcnow()
+        session.add(step)
+    if rows or steps:
         await session.commit()
     return len(rows)
 
@@ -196,7 +205,12 @@ def _ticket_read(ticket: CollabTicket) -> TicketRead:
 async def create_run(session: AsyncSession, payload: RunCreate) -> CollabRun:
     team = await get_team(session, payload.team_id)
     run_id = new_id()
-    workspace = team.workspace_dir or str(get_settings().workspaces_root / f"collab-{run_id}")
+    # 优先级：本次任务显式指定 > 协作组默认 > 按运行 ID 自动分配
+    workspace = (
+        payload.workspace_dir
+        or team.workspace_dir
+        or str(get_settings().workspaces_root / f"collab-{run_id}")
+    )
     run = CollabRun(
         id=run_id,
         team_id=team.id,
@@ -250,7 +264,7 @@ async def delete_run(session: AsyncSession, run_id: str) -> None:
 
 
 async def mark_interrupted(session: AsyncSession, run_id: str, reason: str) -> None:
-    """客户端断开或服务重启后，把这次运行标记为中断（不删数据）。"""
+    """叫停或服务重启后，把这次运行连同残留步骤标记为中断（不删数据）。"""
     run = await session.get(CollabRun, run_id)
     if run is None:
         return
@@ -338,6 +352,7 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
                 duty=step.duty,
                 sequence=step.sequence,
                 action=step.action,
+                target_key=step.target_key or "",
                 status=step.status,
                 content=step.content,
                 gist=step.gist,

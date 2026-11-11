@@ -108,7 +108,7 @@ export const api = {
     const suffix = teamId ? `?team_id=${encodeURIComponent(teamId)}` : ''
     return request<{ items: CollabRun[] }>(`/api/collab/runs${suffix}`).then((r) => r.items)
   },
-  createCollabRun: (body: { team_id: string; title?: string }) =>
+  createCollabRun: (body: { team_id: string; title?: string; workspace_dir?: string | null }) =>
     request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
   getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),
   deleteCollabRun: (id: string) => request<void>(`/api/collab/runs/${id}`, { method: 'DELETE' }),
@@ -123,16 +123,16 @@ export const api = {
  * 原生 `EventSource` 无法携带请求体，因此这里手动读取流，
  * 把每个解析出的事件交给 `onEvent`。
  */
-export async function streamPost<T = AgentEvent>(
+/** 消费一条 SSE 事件流（POST 推进 / GET 订阅共用这一份读取逻辑）。 */
+async function streamRequest<T>(
   path: string,
-  body: unknown,
+  init: RequestInit,
   onEvent: (event: T) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify(body),
+    ...init,
+    headers: { Accept: 'text/event-stream', ...(init.headers ?? {}) },
     signal,
   })
   if (!response.ok || !response.body) {
@@ -172,4 +172,27 @@ export async function streamPost<T = AgentEvent>(
       boundary = buffer.indexOf('\n\n')
     }
   }
+}
+
+export function streamPost<T = AgentEvent>(
+  path: string,
+  body: unknown,
+  onEvent: (event: T) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamRequest<T>(
+    path,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    onEvent,
+    signal,
+  )
+}
+
+/** 订阅一条 GET SSE（用于断开后重连协作运行、或在另一台设备上实时围观）。 */
+export function streamGet<T = AgentEvent>(
+  path: string,
+  onEvent: (event: T) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamRequest<T>(path, { method: 'GET' }, onEvent, signal)
 }

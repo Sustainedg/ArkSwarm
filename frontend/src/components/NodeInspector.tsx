@@ -7,7 +7,7 @@
 import type { ReactNode } from 'react'
 import { DynamicForm } from './DynamicForm'
 import type { CollabSelection } from './CollabCanvas'
-import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, type TeamDraft } from '../lib/collabDraft'
+import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, isWarningIssue, type TeamDraft } from '../lib/collabDraft'
 import type {
   AgentType, CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
   CollabWorkspaceScope, CollabDuty as Duty, Role,
@@ -103,7 +103,7 @@ function NodePanel({
       {nodeIssues.length > 0 && (
         <div className="stack" style={{ gap: 6 }}>
           {nodeIssues.map((issue, index) => (
-            <div key={`${issue.code}-${index}`} className={`banner ${issue.code.startsWith('warn') ? 'info' : 'err'}`}>
+            <div key={`${issue.code}-${index}`} className={`banner ${isWarningIssue(issue) ? 'info' : 'err'}`}>
               {issue.message}
             </div>
           ))}
@@ -284,6 +284,12 @@ function EdgePanel({
           <span className="field-help">{EDGE_KINDS.find((item) => item.value === edge.kind)?.hint}</span>
         </label>
         {edge.kind === 'rework' && (
+          <div className="field-help">
+            这条线本身已经指定打回目标，运行时不需要额外的 rework_to。只有当同一审查者画了多条
+            rework 出边时，审查者才需要在工单里写明 rework_to 来选择退路。
+          </div>
+        )}
+        {edge.kind === 'rework' && (
           <label className="field">
             <span className="field-label">这条边的返工上限</span>
             <input
@@ -333,7 +339,7 @@ function TeamPanel({
       {issues.length > 0 && (
         <div className="stack" style={{ gap: 6 }}>
           {issues.slice(0, 6).map((issue, index) => (
-            <div key={`${issue.code}-${index}`} className={`banner ${issue.code.startsWith('warn') ? 'info' : 'err'}`}>
+            <div key={`${issue.code}-${index}`} className={`banner ${isWarningIssue(issue) ? 'info' : 'err'}`}>
               {issue.message}
             </div>
           ))}
@@ -372,14 +378,16 @@ function TeamPanel({
           <span className="field-help">唯一能与用户对话的节点，必须是协调者。</span>
         </label>
         <label className="field">
-          <span className="field-label">团队共享工作目录</span>
+          <span className="field-label">工作路径</span>
           <input
             className="input mono"
             value={draft.workspace_dir}
             onChange={(e) => onPatchTeam({ workspace_dir: e.target.value })}
-            placeholder="留空则为每次运行分配 data/workspaces/collab-<运行 ID>"
+            placeholder="例如 /vol1/projects/my-app；留空自动分配"
           />
-          <span className="field-help">一期所有实施者共用这一个目录（串行推进，不会有并发写冲突）。</span>
+          <span className="field-help">
+            作为这个团队的默认工作路径；新建协作任务时可以覆盖。留空则每次运行自动分配。
+          </span>
         </label>
       </Section>
 

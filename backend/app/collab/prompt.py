@@ -33,9 +33,9 @@ DUTY_DEFAULT_SCOPE: dict[Duty, str] = {
 }
 
 WORKSPACE_NOTES: dict[WorkspaceScope, str] = {
-    WorkspaceScope.NONE: "本次没有给你工作目录，你看不到任何代码，也不应该尝试写代码。",
-    WorkspaceScope.READ: "工作目录是只读的；你的产出只能是文字（审查意见），写文件会被审计记录。",
-    WorkspaceScope.WRITE: "工作目录可写；请在目录内完成改动。",
+    WorkspaceScope.NONE: "没有该路径的读写权限；只依据工单信息工作，不要读取、写入或执行命令。",
+    WorkspaceScope.READ: "只读；只能读取该路径内的文件，禁止创建、修改、删除，也禁止访问该路径之外的位置。",
+    WorkspaceScope.WRITE: "可读写；所有读取与写入都必须在该路径内完成，禁止访问该路径之外的位置。",
 }
 
 
@@ -104,6 +104,7 @@ def _history_text(history: Sequence[HistoryEntry]) -> str:
 def build_step_prompt(
     *,
     team_name: str,
+    workspace_path: str,
     node: NodeSpec,
     ticket: TicketView,
     history: Sequence[HistoryEntry],
@@ -131,7 +132,8 @@ def build_step_prompt(
         f"[协作任务] 协作组「{team_name}」· 你的岗位：{duty_label}（{node.key}）",
         f"职责：{node.instructions.strip() or DUTY_DEFAULT_INSTRUCTIONS[node.duty]}",
         f"能力边界（必须遵守）：{node.capability_scope.strip() or DUTY_DEFAULT_SCOPE[node.duty]}",
-        f"工作目录：{WORKSPACE_NOTES[scope]}",
+        f"工作路径（本次协作唯一允许访问的目录）：{workspace_path}",
+        f"路径权限（必须遵守）：{WORKSPACE_NOTES[scope]}",
         "",
         "输出协议：",
         render_protocol_guide(
@@ -204,9 +206,11 @@ def expected_instruction(node: NodeSpec, ticket: TicketView, *, user_message: st
         return (
             "用户刚刚说：" + user_message.strip() + "\n"
             "请据此更新工单：能派下去就 delegate（handoff 转交 / split 拆子工单）；"
-            "信息不足就 ask_user 提问；整件事都完成了用 done。"
+            "信息不足就 ask_user 提问（必须带 2-6 个可点 options）；"
+            "整件事都完成了用 done。"
         )
     return (
         "请推进这张工单：把任务派给合适的下游（delegate），"
-        "或者确认它已经完成（done）；需要用户补充信息时用 ask_user。"
+        "或者确认它已经完成（done）；"
+        "需要用户补充信息时用 ask_user（必须带可点 options）。"
     )

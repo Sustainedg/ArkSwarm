@@ -44,11 +44,14 @@ async def test_optional_columns_are_added_to_an_existing_table():
     async with engine.begin() as conn:
         columns = {row[1] for row in (await conn.exec_driver_sql("PRAGMA table_info(collab_steps)")).all()}
         assert "gist" in columns, "旧库缺 gist 列时 init_db 应当自动补上"
+        assert "target_key" in columns, "旧库缺 target_key 列时 init_db 应当自动补上"
         row = (
-            await conn.exec_driver_sql("SELECT role_key, content, gist FROM collab_steps WHERE id = '旧行'")
+            await conn.exec_driver_sql(
+                "SELECT role_key, content, gist, target_key FROM collab_steps WHERE id = '旧行'"
+            )
         ).one()
 
-    assert tuple(row) == ("se", "历史正文", ""), "补列不能改动旧行"
+    assert tuple(row) == ("se", "历史正文", "", ""), "补列不能改动旧行"
     await _restore_full_schema()
 
 
@@ -61,4 +64,5 @@ async def test_migration_is_idempotent():
     async with engine.begin() as conn:
         columns = [row[1] for row in (await conn.exec_driver_sql("PRAGMA table_info(collab_steps)")).all()]
     assert columns.count("gist") == 1
+    assert columns.count("target_key") == 1
     await _restore_full_schema()

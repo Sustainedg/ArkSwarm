@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { MessageView, type RenderMessage } from '../components/MessageView'
+import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
+import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, streamPost } from '../lib/api'
 import type { Conversation, Message, Role } from '../lib/types'
+import { sameConversationList, sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn extends AgentStreamState {
@@ -26,6 +28,7 @@ export function ChatPage() {
   const [error, setError] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [remoteRunning, setRemoteRunning] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -34,7 +37,7 @@ export function ChatPage() {
   const loadConversations = useCallback(async () => {
     try {
       const [list, roleList] = await Promise.all([api.listConversations(), api.listRoles()])
-      setConversations(list)
+      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
       setRoles(roleList)
       return list
     } catch (e) {
@@ -47,9 +50,10 @@ export function ChatPage() {
     async (id: string) => {
       try {
         const detail = await api.getConversation(id)
-        setMessages(detail.messages)
+        setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
         setActive(detail.conversation)
         setLive(null)
+        setRemoteRunning(Boolean(detail.active_run))
       } catch (e) {
         setError(describe(e))
       }
@@ -74,13 +78,31 @@ export function ChatPage() {
     if (node) node.scrollTop = node.scrollHeight
   }, [messages, live?.text, live?.parts.length])
 
+  const refreshActive = useCallback(async () => {
+    if (!conversationId) return
+    try {
+      const detail = await api.getConversation(conversationId)
+      setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
+      setActive(detail.conversation)
+      setRemoteRunning(Boolean(detail.active_run))
+    } catch (e) {
+      setError(describe(e))
+    }
+  }, [conversationId])
+
+  // 跨设备同步：另一台设备发出的消息与最后状态会在这里自动出现。
+  useAutoRefresh(refreshActive, { intervalMs: 3000, enabled: Boolean(conversationId) && !busy })
+  useAutoRefresh(loadConversations, { intervalMs: 8000 })
+
   const send = async (content: string, regenerate = false) => {
     const conversation = active
     if (!conversation) return
+    if (remoteRunning) return
     if (!regenerate && !content.trim()) return
 
     setError(null)
     setBusy(true)
+    setRemoteRunning(false)
     setLive({
       ...emptyAgentStream(),
       userText: regenerate ? '' : content,
@@ -158,6 +180,27 @@ export function ChatPage() {
         logs: live.logs,
       }
     : null
+
+  const threadItems: ConversationThreadItem[] = [
+    ...chatMessages.map((message) => ({
+      id: message.id,
+      message,
+      avatar: active?.role_avatar ?? undefined,
+    })),
+    ...(live?.userText
+      ? [{
+          id: 'live-user',
+          message: {
+            id: 'live-user',
+            role: 'user' as const,
+            content: live.userText,
+            parts: [],
+            status: 'complete',
+          },
+        }]
+      : []),
+    ...(liveMessage ? [{ id: liveMessage.id, message: liveMessage, avatar: live?.avatar }] : []),
+  ]
 
   // 整段对话（含正在流式输出的这一轮）累计的 token 消耗。
   const usageSummary = useMemo(
@@ -253,8 +296,10 @@ export function ChatPage() {
             </div>
 
             <div className="chat-scroll" ref={scrollRef}>
-              <div className="chat-thread">
-                {chatMessages.length === 0 && !liveMessage && (
+              <ConversationThread
+                centered
+                items={threadItems}
+                empty={chatMessages.length === 0 && !liveMessage ? (
                   <div className="empty">
                     <div className="empty-icon">{active.role_avatar}</div>
                     <p>与「{active.role_name}」的对话已就绪</p>
@@ -262,31 +307,19 @@ export function ChatPage() {
                       智能体：{active.agent_name} · 工作目录：{active.workspace_dir ?? '默认'}
                     </p>
                   </div>
-                )}
-
-                {chatMessages.map((message) => (
-                  <MessageView key={message.id} message={message} avatar={active.role_avatar ?? undefined} />
-                ))}
-
-                {live && live.userText && (
-                  <MessageView
-                    message={{
-                      id: 'live-user',
-                      role: 'user',
-                      content: live.userText,
-                      parts: [],
-                      status: 'complete',
-                    }}
-                  />
-                )}
-
-                {liveMessage && <MessageView message={liveMessage} avatar={live?.avatar} />}
-              </div>
+                ) : undefined}
+              />
             </div>
 
             {error && (
               <div style={{ padding: '0 26px' }}>
                 <div className="banner err">{error}</div>
+              </div>
+            )}
+
+            {remoteRunning && !busy && (
+              <div style={{ padding: '8px 26px 0' }}>
+                <div className="banner info">另一台设备正在运行这个对话，完成后会自动同步。</div>
               </div>
             )}
 
@@ -297,7 +330,13 @@ export function ChatPage() {
                     ref={textareaRef}
                     rows={1}
                     value={draft}
-                    placeholder={busy ? '智能体正在工作…' : `发消息给 ${active.role_name}（Enter 发送，Shift+Enter 换行）`}
+                    placeholder={
+                      remoteRunning
+                        ? '另一台设备正在运行…'
+                        : busy
+                          ? '智能体正在工作…'
+                          : `发消息给 ${active.role_name}（Enter 发送，Shift+Enter 换行）`
+                    }
                     onChange={(e) => {
                       setDraft(e.target.value)
                       const node = e.target
@@ -307,17 +346,17 @@ export function ChatPage() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                         e.preventDefault()
-                        if (!busy) void send(draft)
+                        if (!busy && !remoteRunning) void send(draft)
                       }
                     }}
-                    disabled={busy}
+                    disabled={busy || remoteRunning}
                   />
                   {busy ? (
                     <button className="btn danger" onClick={() => void stop()}>
                       ■ 停止
                     </button>
                   ) : (
-                    <button className="btn primary" onClick={() => void send(draft)} disabled={!draft.trim()}>
+                    <button className="btn primary" onClick={() => void send(draft)} disabled={!draft.trim() || remoteRunning}>
                       发送 ↵
                     </button>
                   )}

@@ -13,6 +13,8 @@ import { api, ApiError } from '../lib/api'
 import {
   addNodeToDraft,
   collabTeamPayload,
+  isWarningIssue,
+  issuesFromValidation,
   removeNodeFromDraft,
   renameNodeInDraft,
   sanitizeKey,
@@ -45,7 +47,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
     try {
       const loaded = await api.getCollabTeam(id)
       setDraft(toTeamDraft(loaded))
-      setIssues([...loaded.validation.errors, ...loaded.validation.warnings])
+      setIssues(issuesFromValidation(loaded.validation))
       setDirty(false)
       setSelection(null)
       setError(null)
@@ -75,7 +77,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
           entry_key: draft.entry_key,
         })
         if (version !== versionRef.current) return
-        setIssues([...validation.errors, ...validation.warnings])
+        setIssues(issuesFromValidation(validation))
         setError(null)
       } catch (e) {
         if (version !== versionRef.current) return
@@ -137,7 +139,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
     try {
       const saved = await api.saveCollabTeam(teamId, collabTeamPayload(draft))
       setDraft(toTeamDraft(saved))
-      setIssues([...saved.validation.errors, ...saved.validation.warnings])
+      setIssues(issuesFromValidation(saved.validation))
       setDirty(false)
       await onTeamsChanged()
     } catch (e) {
@@ -159,8 +161,8 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
     }
   }
 
-  const errors = issues.filter((issue) => !issue.code.startsWith('warn'))
-  const warnings = issues.filter((issue) => issue.code.startsWith('warn'))
+  const errors = issues.filter((issue) => !isWarningIssue(issue))
+  const warnings = issues.filter(isWarningIssue)
 
   return (
     <div className="collab-settings">
@@ -193,7 +195,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
       {draft && teamId ? (
         <div className="collab-editor">
           <div className="collab-toolbar">
-            <div className="collab-role-drawer">
+            <div className="collab-role-palette">
               <span className="dim small">角色</span>
               <div className="collab-role-chips">
                 {roles.map((role) => (
@@ -262,7 +264,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
           {(errors.length > 0 || warnings.length > 0) && (
             <div className="collab-issues">
               {[...errors, ...warnings].slice(0, 6).map((issue, index) => (
-                <div key={`${issue.code}-${index}`} className={`banner ${issue.code.startsWith('warn') ? 'info' : 'err'}`}>
+                <div key={`${issue.code}-${index}`} className={`banner ${isWarningIssue(issue) ? 'info' : 'err'}`}>
                   {issue.message}
                 </div>
               ))}
@@ -309,7 +311,9 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
               placeholder="例如：客户端研发组"
             />
           </label>
-          <span className="field-help">创建后进入画布：从上方角色抽屉拖入（或点选）角色，再从节点右侧圆点拖到下一个节点连线。</span>
+          <span className="field-help">
+            创建后进入画布：从上方角色抽屉拖入（或点选）角色，再从节点右/下输出圆点拖到目标左/上输入圆点。
+          </span>
         </Modal>
       )}
     </div>

@@ -121,23 +121,46 @@ code, pre, .mono { font-family: var(--mono); }
 .chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
 .chat-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
-.chat-thread { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+/* ---------- 对话：全局唯一一份气泡布局 ----------
+   单聊、协作主对话、协作岗位实时对话都渲染同一个 `ConversationThread`，
+   这里定义的 `.conversation-*` / `.bubble-*` 就是它们共同的外观，禁止在别处再写一份。 */
+.conversation-thread { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+/* 居中限宽：单聊与协作主对话用；岗位进度面板铺满整个面板所以不加这个类。 */
+.conversation-thread.centered { width: 100%; max-width: 880px; margin: 0 auto; }
+.conversation-turn { display: flex; flex-direction: column; align-items: stretch; gap: 9px; min-width: 0; }
+.conversation-turn-meta {
+  display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
+  font-size: 10.5px; color: var(--text-dim);
+}
+.conversation-turn.live .bubble-body { border-color: rgba(217, 79, 208, 0.35); }
 
-.bubble-row { display: flex; gap: 12px; }
+.bubble-row { display: flex; gap: 12px; align-items: flex-start; }
 .bubble-row.user { flex-direction: row-reverse; }
 .avatar {
   width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center;
   font-size: 15px; background: var(--bg-panel); border: 1px solid var(--border);
 }
 .avatar.user { background: linear-gradient(135deg, #3b3760, #2b2844); }
-.bubble { min-width: 0; max-width: 100%; }
-.bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11.5px; color: var(--text-dim); }
+.bubble { min-width: 0; }
+.bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 11.5px; color: var(--text-dim); }
 .bubble-row.user .bubble-head { justify-content: flex-end; }
 .bubble-body {
   background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 15px; white-space: pre-wrap; word-break: break-word; line-height: 1.62;
 }
 .bubble-row.user .bubble-body { background: linear-gradient(135deg, rgba(217, 79, 208, 0.16), rgba(123, 92, 255, 0.12)); border-color: rgba(217, 79, 208, 0.3); }
+
+/* 对话线程里的气泡：只占内容宽度，发送方靠右并换底色，形成「微信」式对话。 */
+.conversation-thread .bubble { flex: 0 1 auto; max-width: min(76%, 620px); }
+.conversation-thread .bubble-row.user .bubble { max-width: min(70%, 540px); }
+.conversation-thread .bubble-body {
+  border-radius: 4px 15px 15px 15px; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+.conversation-thread .bubble-row.user .bubble-body {
+  border-radius: 15px 4px 15px 15px;
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.24), rgba(123, 92, 255, 0.15));
+  border-color: rgba(217, 79, 208, 0.3);
+}
 .bubble-body.streaming::after { content: '▍'; color: var(--brand); animation: blink 1s steps(2) infinite; margin-left: 2px; }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -420,7 +443,270 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-run-title { font-weight: 600; font-size: 14px; }
 .collab-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
 
-/* ---------- 协作：工单看板抽屉 ---------- */
+/* ---------- 协作：进度按钮与全屏进度页 ---------- */
+.collab-progress-trigger {
+  display: inline-flex; align-items: center; gap: 7px;
+  border-color: rgba(110, 231, 209, 0.24);
+  background: linear-gradient(135deg, rgba(110, 231, 209, 0.08), rgba(217, 79, 208, 0.08));
+}
+.collab-progress-trigger:hover:not(:disabled) { border-color: var(--accent); background: var(--bg-hover); }
+.collab-progress-trigger.attention { border-color: rgba(251, 191, 36, 0.35); }
+.collab-progress-trigger-count {
+  font-family: var(--mono); font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  color: var(--text-muted); background: rgba(255, 255, 255, 0.06);
+}
+.collab-progress-trigger-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.14); animation: collab-progress-pulse 1.6s ease-in-out infinite;
+}
+@keyframes collab-progress-pulse {
+  0%, 100% { opacity: 0.55; box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.1); }
+  50% { opacity: 1; box-shadow: 0 0 0 5px rgba(110, 231, 209, 0.16); }
+}
+.collab-progress-board-backdrop {
+  background: rgba(5, 4, 10, 0.86); justify-content: stretch; align-items: stretch;
+  backdrop-filter: blur(10px);
+}
+.collab-progress-board {
+  width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;
+  background:
+    radial-gradient(900px 480px at 8% -10%, rgba(217, 79, 208, 0.17), transparent 58%),
+    radial-gradient(820px 520px at 96% 0%, rgba(110, 231, 209, 0.1), transparent 52%),
+    var(--bg);
+}
+.collab-progress-board-head {
+  min-height: 92px; display: flex; align-items: center; gap: 16px; padding: 20px 38px;
+  border-bottom: 1px solid var(--border); background: rgba(23, 22, 42, 0.78); backdrop-filter: blur(16px);
+}
+.collab-progress-board-head > div { min-width: 0; }
+.collab-progress-eyebrow { font-size: 11px; font-weight: 650; letter-spacing: 0.12em; color: var(--accent); }
+.collab-progress-title-row { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
+.collab-progress-title-row h2 { font-size: 26px; letter-spacing: -0.025em; }
+.collab-progress-subtitle { margin-top: 4px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.collab-progress-close { margin-left: auto; flex: none; }
+.collab-progress-board-body {
+  flex: 1; min-height: 0; overflow: hidden; padding: 24px 32px 30px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px;
+}
+.collab-progress-board-body.has-conversation {
+  grid-template-columns: minmax(0, 1fr) minmax(430px, 43vw);
+}
+.collab-progress-board-main {
+  min-width: 0; min-height: 0; overflow: auto; padding-right: 6px;
+  display: flex; flex-direction: column; gap: 28px;
+}
+.collab-progress-conversation {
+  min-width: 0; min-height: 0; display: flex; overflow: hidden;
+  border: 1px solid rgba(123, 92, 255, 0.38); border-radius: 20px;
+  background: linear-gradient(180deg, rgba(27, 25, 45, 0.98), rgba(14, 13, 24, 0.98));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.collab-progress-overview {
+  display: grid; grid-template-columns: 138px minmax(0, 1fr); align-items: center; gap: 28px;
+  padding: 24px 30px; border: 1px solid rgba(217, 79, 208, 0.25); border-radius: 20px;
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.11), rgba(110, 231, 209, 0.05));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 18px 50px rgba(0, 0, 0, 0.2);
+}
+.collab-progress-ring {
+  width: 124px; height: 124px; border-radius: 50%; display: grid; place-items: center;
+  box-shadow: 0 0 34px rgba(217, 79, 208, 0.14);
+}
+.collab-progress-ring-inner {
+  width: 92px; height: 92px; border-radius: 50%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+}
+.collab-progress-ring-inner strong { font-size: 26px; font-family: var(--mono); letter-spacing: -0.04em; }
+.collab-progress-ring-inner span { font-size: 10.5px; color: var(--text-dim); }
+.collab-progress-overview-main { min-width: 0; }
+.collab-progress-overview-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--text-dim); }
+.collab-progress-overview-title { margin-top: 5px; font-size: 21px; font-weight: 620; }
+.collab-progress-overview-summary {
+  margin-top: 7px; max-width: 900px; font-size: 13.5px; line-height: 1.65; color: var(--text-muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.collab-progress-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 17px; }
+.collab-progress-stat {
+  min-width: 118px; padding: 10px 14px; border: 1px solid var(--border); border-top: 2px solid var(--border-strong);
+  border-radius: 12px; background: rgba(11, 10, 18, 0.36); display: flex; align-items: baseline; gap: 7px;
+}
+.collab-progress-stat strong { font-size: 20px; font-family: var(--mono); }
+.collab-progress-stat span { font-size: 11px; color: var(--text-muted); }
+.collab-progress-stat.state-active { border-top-color: var(--brand); }
+.collab-progress-stat.state-active strong { color: var(--brand); }
+.collab-progress-stat.state-waiting { border-top-color: var(--warn); }
+.collab-progress-stat.state-waiting strong { color: var(--warn); }
+.collab-progress-stat.state-done { border-top-color: var(--ok); }
+.collab-progress-stat.state-done strong { color: var(--ok); }
+.collab-progress-stat.state-error { border-top-color: var(--danger); }
+.collab-progress-stat.state-error strong { color: var(--danger); }
+.collab-progress-section { display: flex; flex-direction: column; gap: 14px; }
+.collab-progress-section-head { display: flex; align-items: flex-end; gap: 14px; }
+.collab-progress-section-head > div { min-width: 0; flex: 1; }
+.collab-progress-section-head h3 { font-size: 16px; }
+.collab-progress-section-head p { margin-top: 4px; font-size: 12px; color: var(--text-dim); }
+.collab-progress-count {
+  flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 11px; color: var(--text-muted); background: var(--bg-input);
+}
+.collab-progress-stage-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px;
+}
+.collab-progress-stage {
+  position: relative; min-width: 0; min-height: 210px; display: flex; flex-direction: column; gap: 10px;
+  padding: 17px 18px 14px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+  color: inherit; text-align: left; cursor: pointer;
+  background: linear-gradient(180deg, rgba(28, 26, 46, 0.94), rgba(19, 18, 32, 0.88));
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.collab-progress-stage::before {
+  content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--border-strong);
+}
+.collab-progress-stage.state-active::before { background: linear-gradient(90deg, var(--brand), #9d54ff); }
+.collab-progress-stage.state-waiting::before { background: var(--warn); }
+.collab-progress-stage.state-error::before { background: var(--danger); }
+.collab-progress-stage.state-done::before { background: var(--ok); }
+.collab-progress-stage:hover {
+  transform: translateY(-2px); border-color: var(--border-strong);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+.collab-progress-stage.live { border-color: rgba(217, 79, 208, 0.45); animation: collab-progress-card-glow 2s ease-in-out infinite; }
+.collab-progress-stage.selected {
+  border-color: var(--accent); background: linear-gradient(180deg, rgba(32, 34, 55, 0.98), rgba(19, 24, 34, 0.94));
+  box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.13), 0 18px 42px rgba(0, 0, 0, 0.32);
+}
+@keyframes collab-progress-card-glow {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(217, 79, 208, 0.12); }
+  50% { box-shadow: 0 0 0 4px rgba(217, 79, 208, 0.1); }
+}
+.collab-progress-stage-index { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); letter-spacing: 0.08em; }
+.collab-progress-stage-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.collab-progress-stage-avatar {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+  font-size: 20px; border-radius: 11px; background: var(--bg-input); border: 1px solid var(--border);
+}
+.collab-progress-stage-identity { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.collab-progress-stage-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-progress-stage-duty { font-size: 10.5px; color: var(--text-dim); }
+.collab-progress-stage-state { margin-left: auto; flex: none; font-size: 10.5px; color: var(--text-muted); }
+.state-active .collab-progress-stage-state { color: var(--brand); }
+.state-waiting .collab-progress-stage-state { color: var(--warn); }
+.state-error .collab-progress-stage-state { color: var(--danger); }
+.state-done .collab-progress-stage-state { color: var(--ok); }
+.collab-progress-stage-meta { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-progress-stage-summary {
+  flex: 1; font-size: 12.5px; line-height: 1.62; color: var(--text-dim); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.collab-progress-stage-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted);
+}
+.collab-progress-stage-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; }
+.collab-progress-stage-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); }
+.collab-progress-stage-badge.state-active { color: var(--brand); }
+.collab-progress-stage-badge.state-active::before { background: var(--brand); }
+.collab-progress-stage-badge.state-waiting { color: var(--warn); }
+.collab-progress-stage-badge.state-waiting::before { background: var(--warn); }
+.collab-progress-stage-badge.state-error { color: var(--danger); }
+.collab-progress-stage-badge.state-error::before { background: var(--danger); }
+.collab-progress-stage-badge.state-done { color: var(--ok); }
+.collab-progress-stage-badge.state-done::before { background: var(--ok); }
+.collab-progress-flow-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.collab-progress-flow {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-muted); font-size: 11.5px;
+}
+.collab-progress-flow b { font-weight: 620; color: var(--text-dim); }
+.collab-progress-flow.kind-review b { color: var(--accent); }
+.collab-progress-flow.kind-rework b { color: var(--warn); }
+
+/* ---------- 协作：岗位内部实时会话 ---------- */
+.collab-role-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.collab-role-panel-head {
+  flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 18px;
+  border-bottom: 1px solid var(--border); background: rgba(23, 22, 42, 0.72);
+}
+.collab-role-panel-title { min-width: 0; flex: 1; }
+.collab-role-panel-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-role-panel-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.collab-role-live-pill { flex: none; }
+.collab-role-panel-close { flex: none; }
+.collab-role-tickets {
+  display: flex; gap: 6px; flex-wrap: wrap; padding: 9px 20px;
+  border-bottom: 1px solid var(--border); background: rgba(123, 92, 255, 0.04);
+}
+/* 岗位面板只负责自己的容器外观（铺满 + 滚动 + 渐变底），气泡与间距统一由 `.conversation-*` 提供。 */
+.collab-role-thread {
+  flex: 1; min-height: 0; overflow: auto; padding: 22px 22px 34px;
+  background:
+    radial-gradient(480px 260px at 100% 0%, rgba(110, 231, 209, 0.045), transparent 70%),
+    radial-gradient(520px 300px at 0% 100%, rgba(217, 79, 208, 0.055), transparent 68%),
+    rgba(8, 8, 14, 0.38);
+}
+.collab-role-thread .tool-card { max-width: 100%; }
+.collab-role-placeholder {
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-size: 12.5px; color: var(--text-muted); background: var(--bg-input);
+}
+.collab-role-placeholder.live { border-style: solid; border-color: rgba(217, 79, 208, 0.4); color: var(--text-muted); }
+.collab-role-placeholder.live::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%;
+  background: var(--brand); vertical-align: middle; animation: collab-live-glow 1.4s ease-in-out infinite;
+}
+.collab-role-empty {
+  margin: auto; max-width: 420px; display: flex; flex-direction: column; align-items: center;
+  gap: 7px; padding: 34px 20px; text-align: center; color: var(--text-muted);
+}
+.collab-role-empty-icon {
+  width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 5px;
+  border-radius: 18px; font-size: 30px; background: var(--bg-input); border: 1px solid var(--border);
+}
+
+/* ---------- 协作：岗位收到的交接卡（上游把这个岗位的活交过来时说的话） ---------- */
+.collab-role-handoff {
+  border: 1px solid rgba(123, 92, 255, 0.35); border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(123, 92, 255, 0.1), rgba(123, 92, 255, 0.03));
+  padding: 11px 13px; display: flex; flex-direction: column; gap: 8px;
+}
+.collab-role-thread .collab-role-handoff-row .collab-role-handoff {
+  border-color: rgba(217, 79, 208, 0.38); border-radius: 15px 4px 15px 15px;
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.24), rgba(123, 92, 255, 0.15));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+.collab-role-thread .collab-role-handoff-row .collab-role-handoff-ticket {
+  border-top-color: rgba(255, 255, 255, 0.14);
+}
+.collab-role-thread .collab-role-handoff-row .collab-role-handoff-title { color: var(--text); }
+.collab-role-handoff-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.collab-role-handoff-ticket {
+  border-top: 1px dashed var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 3px;
+}
+.collab-role-handoff-title { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+
+/* ---------- 协作：等待用户决定的选项卡片 ---------- */
+.collab-ask-stack { padding: 6px 22px 10px; display: flex; flex-direction: column; gap: 8px; }
+.collab-ask-card {
+  border: 1px solid rgba(217, 79, 208, 0.34); border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(217, 79, 208, 0.1), rgba(123, 92, 255, 0.06));
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 9px;
+}
+.collab-ask-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.collab-ask-question { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.collab-ask-options { display: flex; gap: 7px; flex-wrap: wrap; }
+.collab-ask-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%;
+  padding: 8px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text); text-align: left; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.collab-ask-option:hover:not(:disabled) { border-color: var(--brand); background: var(--bg-hover); }
+.collab-ask-option:disabled { opacity: 0.55; cursor: not-allowed; }
+.collab-ask-option.freeform { border-style: dashed; }
+.collab-ask-option-label { font-size: 12.5px; font-weight: 550; }
+.collab-ask-option-desc { font-size: 11px; color: var(--text-dim); }
+
+/* ---------- 协作：工单看板（全屏）与角色抽屉 ---------- */
 .collab-drawer-backdrop {
   position: fixed; inset: 0; background: rgba(5, 4, 10, 0.55); z-index: 50;
   display: flex; justify-content: flex-end;
@@ -429,6 +715,29 @@ code, pre, .mono { font-family: var(--mono); }
   width: min(760px, 94vw); height: 100%; display: flex; flex-direction: column;
   background: var(--bg-panel); border-left: 1px solid var(--border-strong); box-shadow: var(--shadow);
 }
+.collab-ticket-board-backdrop { background: var(--bg); justify-content: stretch; align-items: stretch; }
+.collab-ticket-board {
+  width: 100%; height: 100%; max-width: none; border-left: none; border-radius: 0; box-shadow: none;
+  background: var(--bg-panel);
+}
+.collab-ticket-board .collab-drawer-head {
+  min-height: 66px; padding: 18px 30px; background: var(--bg-panel); box-shadow: 0 1px 0 var(--border);
+}
+.collab-ticket-board .collab-drawer-head .collab-inspector-title { font-size: 20px; }
+.collab-ticket-board .collab-drawer-head .dim { font-size: 12.5px; }
+.collab-ticket-board .collab-drawer-body { grid-template-columns: 340px minmax(0, 1fr); }
+.collab-ticket-board .collab-tree { padding: 16px 18px; gap: 6px; background: var(--bg-input); }
+.collab-ticket-board .collab-tree-item { padding-top: 10px; padding-bottom: 10px; }
+.collab-ticket-board .collab-tree-item .pill { flex: none; white-space: nowrap; }
+.collab-ticket-board .collab-tree-title { flex: 1; min-width: 0; font-size: 13.5px; }
+.collab-ticket-board .collab-detail { padding: 28px 40px 56px; gap: 20px; }
+.collab-ticket-board .collab-detail-title { font-size: 20px; }
+.collab-ticket-board .collab-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 36px; }
+.collab-ticket-board .collab-detail-field { gap: 8px; font-size: 14px; line-height: 1.65; }
+.collab-ticket-board .collab-detail-label { font-size: 12px; }
+.collab-ticket-board .collab-detail-list { padding-left: 20px; gap: 5px; }
+.collab-ticket-board .collab-detail-step { padding: 12px 14px; gap: 7px; }
+.collab-ticket-board .collab-detail-step-role { font-size: 13.5px; }
 .collab-drawer-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .collab-drawer-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 .collab-tree { border-right: 1px solid var(--border); overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 3px; }
@@ -456,7 +765,7 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---------- 协作：编排编辑器 ---------- */
 .collab-editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .collab-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.collab-role-drawer { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.collab-role-palette { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .collab-role-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
 .collab-role-chip {
   display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px; cursor: grab;
@@ -472,10 +781,21 @@ code, pre, .mono { font-family: var(--mono); }
   background-image: radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
   background-size: 22px 22px;
 }
+.collab-canvas-legend {
+  position: sticky; left: 12px; top: 12px; z-index: 3; width: max-content; max-width: calc(100% - 24px);
+  display: flex; align-items: center; gap: 13px; padding: 7px 11px; margin: 12px 0 -39px 12px;
+  border: 1px solid rgba(59, 55, 96, 0.8); border-radius: 999px;
+  background: rgba(13, 12, 22, 0.82); backdrop-filter: blur(10px);
+  pointer-events: none; font-size: 10.5px; color: var(--text-muted);
+}
+.collab-canvas-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.collab-canvas-legend i { width: 7px; height: 7px; border-radius: 50%; }
+.collab-canvas-legend i.in { background: var(--accent); box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.12); }
+.collab-canvas-legend i.out { background: var(--brand); box-shadow: 0 0 0 2px rgba(217, 79, 208, 0.12); }
 .collab-canvas-inner { position: relative; }
 
 .collab-links { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
-.collab-link { fill: none; stroke-width: 2; opacity: 0.9; }
+.collab-link { fill: none; stroke-width: 2; opacity: 0.9; stroke-linecap: round; stroke-linejoin: round; }
 .collab-link.active { stroke-width: 3; opacity: 1; }
 .collab-link.err { stroke: var(--danger); }
 .collab-link.preview { stroke: var(--brand); stroke-dasharray: 5 5; opacity: 0.8; }
@@ -485,11 +805,12 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-node {
   position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-panel);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); cursor: grab; user-select: none; overflow: hidden;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); cursor: grab; user-select: none; overflow: visible;
 }
 .collab-node:hover { border-color: var(--brand); }
 .collab-node.active { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
 .collab-node.err { border-color: var(--danger); }
+.collab-node.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.15); }
 .collab-node-head { display: flex; align-items: center; gap: 7px; }
 .collab-node-avatar { font-size: 16px; line-height: 1; }
 .collab-node-label { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -498,12 +819,15 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-node-desc { font-size: 11px; color: var(--text-dim); line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 .collab-port {
-  position: absolute; top: 50%; width: 12px; height: 12px; margin-top: -6px; border-radius: 50%;
-  background: var(--bg); border: 2px solid var(--border-strong);
+  position: absolute; z-index: 4; width: 12px; height: 12px; border-radius: 50%;
+  background: transparent; border: 0; box-shadow: none;
 }
-.collab-port-in { left: -7px; }
-.collab-port-out { right: -7px; cursor: crosshair; }
-.collab-port-out:hover { border-color: var(--brand); background: var(--brand-soft); }
+.collab-port::after { content: ''; position: absolute; inset: -8px; border-radius: 50%; }
+.collab-port-left { left: -7px; top: 50%; transform: translateY(-50%); }
+.collab-port-right { right: -7px; top: 50%; transform: translateY(-50%); }
+.collab-port-top { left: 50%; top: -7px; transform: translateX(-50%); }
+.collab-port-bottom { left: 50%; bottom: -7px; transform: translateX(-50%); }
+.collab-port-out { cursor: crosshair; }
 
 .collab-inspector {
   border-left: 1px solid var(--border); overflow: auto; padding: 16px 16px 30px;
@@ -535,6 +859,20 @@ code, pre, .mono { font-family: var(--mono); }
   .collab-drawer-body { grid-template-columns: 1fr; }
   .collab-tree { border-right: none; border-bottom: 1px solid var(--border); max-height: 38%; }
   .collab-detail-grid { grid-template-columns: 1fr; }
+  .collab-progress-board-head { padding: 18px 22px; }
+  .collab-progress-board-body { padding: 22px 22px 48px; }
+  .collab-progress-board-body.has-conversation {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(340px, 48%);
+    padding-bottom: 22px;
+  }
+  .collab-progress-overview { grid-template-columns: 1fr; justify-items: center; padding: 22px; }
+  .collab-progress-overview-main { width: 100%; }
+  .collab-progress-ring { width: 108px; height: 108px; }
+  .collab-progress-ring-inner { width: 80px; height: 80px; }
+  .collab-progress-stage-list { grid-template-columns: 1fr; }
+  .collab-role-panel-head { flex-wrap: wrap; }
+  .collab-role-panel-close { margin-left: auto; }
   .collab-inspector { border-left: none; border-top: 1px solid var(--border); }
   .chat-list { display: none; }
   .form-grid { grid-template-columns: 1fr; }

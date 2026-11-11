@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, TicketAction
 
@@ -28,6 +28,9 @@ FENCE = "work_order"
 MAX_SCAN_CHARS = 200_000
 #: 截断修复时最多回退尝试的 ``}`` 个数
 MAX_REPAIR_TRIES = 200
+#: ask_user 的可点选项数量：少于 2 条就不叫「选择」，多到用户看不完也没有意义
+MIN_ASK_OPTIONS = 2
+MAX_ASK_OPTIONS = 12
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SMART_QUOTES = {
@@ -57,6 +60,10 @@ _COERCE = {
     "rework_to": "rework_to",
     "rework_target": "rework_to",
     "handoff_to": "rework_to",
+    "options": "options",
+    "choices": "options",
+    "suggestions": "options",
+    "ask_options": "options",
 }
 
 
@@ -111,6 +118,8 @@ class WorkOrder:
     summary: str | None = None
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     question: str | None = None
+    #: 仅 ask_user 时有意义：给用户点选的选项（不是一段写在正文里的清单）
+    options: list[AskOption] = field(default_factory=list)
     reason: str | None = None
     remark: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -129,6 +138,184 @@ class ParseResult:
     error: str | None = None
     #: 命中哪一级容错：fence / inline / None
     source: str | None = None
+    #: 可继续但需要提醒用户的偏差（例如一轮里出现多个工单块，已取最后一个）
+    warning: str | None = None
+
+
+@dataclass(slots=True)
+class AskOption:
+    """``ask_user`` 的一条可点选项。
+
+    ``freeform=True`` 表示这条不直接发送，而是把输入框交给用户自己补充
+    （例如「我来指定目录」）。这样既能保证卡片始终可用，又不把开放式回答硬塞成单选题。
+    """
+
+    label: str
+    value: str
+    description: str | None = None
+    freeform: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"label": self.label, "value": self.value, "freeform": self.freeform}
+        if self.description:
+            data["description"] = self.description
+        return data
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+    return False
+
+
+def _strip_option_bullet(text: str) -> str:
+    """去掉 ``1)``、``-``、``•`` 这类列表前缀，只留下选项正文。"""
+    cleaned = re.sub(r"^\s*(?:[-+*•·]|\d+[.)、]|[（(]\d+[）)])\s*", "", text)
+    return cleaned.strip()
+
+
+def _ask_option(value: Any) -> AskOption | None:
+    if isinstance(value, str):
+        label = _strip_option_bullet(value)
+        return AskOption(label=label, value=label) if label else None
+    if isinstance(value, (int, float, bool)):
+        label = _text(value)
+        return AskOption(label=label, value=label) if label else None
+    if not isinstance(value, dict):
+        return None
+
+    label = _text(
+        value.get("label")
+        or value.get("title")
+        or value.get("text")
+        or value.get("name")
+        or value.get("option")
+    )
+    reply = _text(
+        value.get("value")
+        or value.get("reply")
+        or value.get("answer")
+        or value.get("content")
+    )
+    description = _text(
+        value.get("description")
+        or value.get("detail")
+        or value.get("help")
+        or value.get("hint")
+    ) or None
+    freeform = _truthy(
+        value.get("freeform")
+        if "freeform" in value
+        else value.get("free_text")
+        if "free_text" in value
+        else value.get("allow_text")
+    )
+    if not label:
+        label = reply
+    if not reply and not freeform:
+        reply = label
+    if freeform and not label:
+        label = "我来补充说明"
+    if not label:
+        return None
+    return AskOption(label=label, value=reply, description=description, freeform=freeform)
+
+
+def _ask_options(value: Any) -> list[AskOption]:
+    """把模型常见的 ``["A","B"]`` / ``[{label,value}]`` / ``{"A":"说明"}`` 统一成选项列表。"""
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        known = {"label", "title", "text", "name", "option", "value", "reply", "answer", "content"}
+        if known & set(value):
+            candidates: list[Any] = [value]
+        else:
+            candidates = [{"label": key, "value": _text(item)} for key, item in value.items()]
+    elif isinstance(value, str):
+        lines = [_strip_option_bullet(line) for line in value.splitlines() if line.strip()]
+        candidates = lines or [value]
+    elif isinstance(value, (list, tuple)):
+        candidates = list(value)
+    else:
+        return []
+
+    options: list[AskOption] = []
+    for item in candidates:
+        option = _ask_option(item)
+        if option is not None:
+            options.append(option)
+    return options
+
+
+def _options_from_question(question: str) -> list[AskOption]:
+    """从模型写在问题正文里的编号/项目符号中，尽量恢复出可点选项。"""
+    options: list[AskOption] = []
+    for line in question.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        cleaned = _strip_option_bullet(raw)
+        if cleaned and cleaned != raw:
+            options.append(AskOption(label=cleaned, value=cleaned))
+    if len(options) >= 2:
+        return options[:MAX_ASK_OPTIONS]
+
+    # 「暗色还是亮色？」这类二选一问题也能直接落成两张卡。
+    sentence = question.strip().rstrip("。？?！!")
+    parts = re.split(r"\s*(?:还是|或者)\s*", sentence, maxsplit=1)
+    if len(parts) == 2:
+        left, right = (_strip_option_bullet(part).strip() for part in parts)
+        if left and right:
+            return [AskOption(label=left, value=left), AskOption(label=right, value=right)]
+    return []
+
+
+def ensure_ask_options(order: WorkOrder) -> bool:
+    """保证 ``ask_user`` 一定能渲染成可操作卡片。
+
+    提示词要求模型给结构化 ``options``；但模型仍可能漏掉或只写在正文里。这里做一次
+    运行期补救：优先从问题正文提取，再至少补「按推荐方案继续」和「我来补充说明」。
+    返回是否改动了选项，调用方可据此决定是否给出提示。
+    """
+    if order.action is not TicketAction.ASK_USER:
+        return False
+
+    original = [option.to_dict() for option in order.options]
+    options = list(order.options)[:MAX_ASK_OPTIONS]
+    labels = {option.label.strip().lower() for option in options if option.label.strip()}
+    has_direct = any(not option.freeform and option.value for option in options)
+    # 模型已经给出完整选项时以它为准；只有漏给/只给自由填写时才从正文恢复。
+    if not has_direct or len(options) < MIN_ASK_OPTIONS:
+        for option in _options_from_question(order.question or ""):
+            if option.label.lower() in labels:
+                continue
+            options.append(option)
+            labels.add(option.label.lower())
+            if len(options) >= MAX_ASK_OPTIONS:
+                break
+        has_direct = any(not option.freeform and option.value for option in options)
+
+    has_freeform = any(option.freeform for option in options)
+    if not has_direct:
+        label = "按你的推荐方案继续"
+        if label.lower() not in labels:
+            options.append(
+                AskOption(
+                    label=label,
+                    value=label,
+                    description="让入口角色按它建议的方案继续推进。",
+                )
+            )
+            labels.add(label.lower())
+    if not has_freeform and len(options) < MIN_ASK_OPTIONS:
+        options.append(AskOption(label="我来补充说明", value="", freeform=True))
+
+    order.options = options[:MAX_ASK_OPTIONS]
+    return [option.to_dict() for option in order.options] != original
 
 
 # --- 文本工具 ---------------------------------------------------------------
@@ -317,6 +504,10 @@ def _build_order(obj: dict[str, Any]) -> WorkOrder:
 
     fields = {_COERCE[key]: value for key, value in obj.items() if key in _COERCE}
     ticket_value = obj.get("ticket") or obj.get("tickets") or obj.get("work_order")
+    options_value = next(
+        (obj[key] for key in ("options", "choices", "suggestions", "ask_options") if key in obj),
+        None,
+    )
 
     verdict = _text(fields.get("verdict")).lower() or None
     if verdict and verdict not in VERDICTS:
@@ -349,6 +540,7 @@ def _build_order(obj: dict[str, Any]) -> WorkOrder:
         summary=_text(fields.get("summary")) or None,
         artifacts=artifacts,
         question=_text(fields.get("question")) or None,
+        options=_ask_options(options_value),
         reason=_text(fields.get("reason")) or None,
         remark=_text(fields.get("remark")) or None,
         raw=obj,
@@ -378,11 +570,14 @@ def parse_work_order(text: str) -> ParseResult:
         elif reason:
             reasons.append(reason)
 
+    warning: str | None = None
     if len(found) > 1:
-        return ParseResult(False, None, f"检测到多个 {FENCE} 代码块：一轮只允许输出一个工单块", "fence")
+        # 工具型内核（Claude Code 等）常把「草稿」和「最终答复」写进同一轮：草稿在前、结论在后。
+        # 取最后一个而不是把整轮判死，同时把偏差显式写进 warning，由引擎提示用户（铁律 11）。
+        warning = f"检测到 {len(found)} 个 {FENCE} 代码块，已按最后一个执行（模型应当只输出一个）"
 
     if found:
-        source, obj = found[0]
+        source, obj = found[-1]
     else:
         obj, reason = _extract(text)
         if obj is None:
@@ -393,7 +588,45 @@ def parse_work_order(text: str) -> ParseResult:
         order = _build_order(obj)
     except ValueError as exc:
         return ParseResult(False, None, str(exc), source)
-    return ParseResult(True, order, None, source)
+    return ParseResult(True, order, None, source, warning)
+
+
+def resolve_order_targets(order: WorkOrder, aliases: Mapping[str, str]) -> None:
+    """把岗位显示名归一成节点 key。
+
+    模型经常把 ``assignee`` 写成「CTO」而不是图上的 ``dev``；提示词里虽然同时给了两者，
+    但校验与派发都只认 key。这里只做**唯一匹配**的归一（同名节点不猜），
+    避免为了一个显示名把整轮工单打回。
+    """
+    normalized: dict[str, str] = {}
+    for alias, key in aliases.items():
+        if alias and alias not in normalized:
+            normalized[alias] = key
+            normalized[alias.lower()] = key
+
+    def resolve(value: str | None) -> str | None:
+        if not value:
+            return value
+        text = value.strip()
+        if not text:
+            return value
+        exact = normalized.get(text) or normalized.get(text.lower())
+        if exact:
+            return exact
+        for alias, key in aliases.items():
+            if not alias or alias == key:
+                continue
+            wrapped = {f"{alias}（{key}）", f"{alias}({key})", f"{key}（{alias}）", f"{key}({alias})"}
+            if text in wrapped:
+                return key
+        return value
+
+    assignee = resolve(order.assignee)
+    rework_to = resolve(order.rework_to)
+    if assignee != order.assignee:
+        order.assignee = assignee
+    if rework_to != order.rework_to:
+        order.rework_to = rework_to
 
 
 def validate_order(
@@ -436,8 +669,20 @@ def validate_order(
                     f"{'、'.join(targets) if targets else '（你没有 rework 出边）'}"
                 )
 
-    if order.action is TicketAction.ASK_USER and not is_entry:
-        return "只有入口节点能向用户提问（ask_user）"
+    if order.action is TicketAction.ASK_USER:
+        if not is_entry:
+            return "只有入口节点能向用户提问（ask_user）"
+        if not order.question:
+            return "ask_user 必须给 question（说明要用户决定什么）"
+        if len(order.options) < MIN_ASK_OPTIONS:
+            return (
+                f"ask_user 必须给至少 {MIN_ASK_OPTIONS} 条 options 供用户点选；"
+                "不要把可选项只写在 question 正文里"
+            )
+        if len(order.options) > MAX_ASK_OPTIONS:
+            return f"ask_user 的 options 最多 {MAX_ASK_OPTIONS} 条，请收敛到用户能快速比较的范围"
+        if not any(not option.freeform and option.value for option in order.options):
+            return "ask_user 的 options 至少要有一条可直接点选的答复（freeform 只用于让用户自己补充）"
 
     if order.action is TicketAction.DELEGATE and order.ticket is not None and not order.ticket.acceptance:
         # 不拦死，但这是最常见的返工根因，提示得更明确一些。
@@ -470,13 +715,14 @@ def render_protocol_guide(
 
     rules: list[str] = [
         "先写给人看的说明（可用 Markdown）。",
-        f"最后必须附一个以 {FENCE} 标记的围栏代码块，内容是**一个** JSON 对象，整轮只能有一个。",
+        f"最后必须附**一个**以 {FENCE} 标记的围栏代码块，内容是一个 JSON 对象；整轮只能出现一个，"
+        "正文里不要粘贴草稿或示例。",
         f"你本轮的岗位是「{duty_label}」，允许的动作：{action_list}。",
         f"允许派发的对象：{assignee_text}。{reviewer_text}",
     ]
     if TicketAction.DELEGATE in actions:
         rules.append(
-            "delegate 必须给 assignee；mode 决定语义——"
+            "delegate 必须给 assignee（填括号里的节点 key，例如 dev）；mode 决定语义——"
             "handoff（转交：同一件活换人做，我继续等结果，ticket 可省略）；"
             "split（拆子工单：我是子工单的发起人，等它完成后我来汇总，必须给 ticket.title）。"
         )
@@ -492,18 +738,48 @@ def render_protocol_guide(
     if TicketAction.SUBMIT in actions:
         rules.append("submit 要给 summary（一句话结论）与 artifacts（改动的文件路径清单）。")
     if TicketAction.ASK_USER in actions:
-        rules.append("需要用户补充信息时用 ask_user，把问题写进 question，不要自己猜。")
+        rules.append(
+            "需要用户拍板时用 ask_user：question 写清要决定什么；options 给 2-6 条可点选项，"
+            "每条形如 {\"label\":\"选项标题\",\"value\":\"点选后回传给角色的完整答复\","
+            "\"description\":\"可选的一句说明\"}；需要用户自由填写时再加一条 "
+            "{\"label\":\"我来补充\",\"value\":\"\",\"freeform\":true}。不要把选项只写在正文里。"
+        )
 
-    example = _example_for(actions, assignees)
+    examples = [_example_for(actions, assignees)]
+    if TicketAction.ASK_USER in actions and examples[0].get("action") != TicketAction.ASK_USER.value:
+        examples.append(_ask_example())
     lines = [f"{index}. {rule}" for index, rule in enumerate(rules, start=1)]
     return (
         "\n".join(lines)
-        + "\n\n示例（仅示意格式，内容别照抄）：\n\n````\n```"
-        + FENCE
-        + "\n"
-        + json.dumps(example, ensure_ascii=False, indent=2)
-        + "\n```\n````"
+        + "\n\n示例（仅示意格式，内容别照抄）：\n\n"
+        + "\n\n".join(
+            "````\n```"
+            + FENCE
+            + "\n"
+            + json.dumps(example, ensure_ascii=False, indent=2)
+            + "\n```\n````"
+            for example in examples
+        )
     )
+
+
+def _ask_example() -> dict[str, Any]:
+    return {
+        "action": "ask_user",
+        "question": "首期先做材料与人工台账，还是连报表导出一起做？",
+        "options": [
+            {
+                "label": "先做最小闭环",
+                "value": "先做材料与人工台账，报表导出放到下一阶段",
+                "description": "最快拿到可用版本",
+            },
+            {
+                "label": "一次做全首期范围",
+                "value": "材料、人工、成本汇总、报表导出一起做",
+            },
+            {"label": "我来补充", "value": "", "freeform": True},
+        ],
+    }
 
 
 def _example_for(actions: Sequence[TicketAction], assignees: Sequence[str]) -> dict[str, Any]:

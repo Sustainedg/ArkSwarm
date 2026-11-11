@@ -37,7 +37,7 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
       <div className={`avatar${isUser ? ' user' : ''}`}>{isUser ? '🙋' : (avatar ?? '🤖')}</div>
-      <div className="bubble" style={{ flex: 1 }}>
+      <div className="bubble">
         <div className="bubble-head">
           <span>{isUser ? '你' : (label ?? '智能体')}</span>
           {outputTokens > 0 && <span className="dim">{`${outputTokens.toLocaleString()} tok`}</span>}

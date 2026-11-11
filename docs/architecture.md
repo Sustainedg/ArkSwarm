@@ -36,7 +36,8 @@
  │    └─ service.consume_run()
  │         └─ runner.stream_run()
  │              ├─ Runtime.CLI → create_subprocess_exec(argv, env, cwd, stdin)
- │              │     ├─ 逐行读取 stdout → definition.parse_line() → 规范化事件
+ │              │     ├─ 逐行读取 stdout（自建行缓冲，不受 asyncio 64 KiB 上限约束）
+ │              │     │     → definition.parse_line() → 规范化事件
  │              │     ├─ 物化 Invocation.files（如 gemini 的系统提示词文件）
  │              │     ├─ 每秒检查取消信号 / 全局超时
  │              │     └─ stderr 汇总，非 0 退出时作为 error 事件上报
@@ -50,6 +51,11 @@
 
 客户端断开连接时，`StreamingResponse` 的生成器被关闭，`guarded()` 捕获
 `CancelledError` 并调用 `registry.cancel(run_id)`，子进程被 kill，消息落地为 `interrupted`。
+
+CLI 的 stdout 由 `runner._StreamLines` 拆行：`asyncio.StreamReader.readline()` 在单行超过 64 KiB
+缓冲上限时会抛 `ValueError`（「Separator is found, but chunk is longer than limit」），而内核常常把整段代码
+或工具结果塞进一行 JSONL，所以框架层不能把行长当成已知量。超过 64 MiB 的单行只丢该行并补一条
+`log(warn)`，不会把整轮运行判成 error（铁律 10 / 11）。
 
 **协作域**（`app/collab/`，见 `docs/collaboration-design.md`）是第二个编排器：它**不重写执行链路**，
 每一步仍然调用 `runtime.runner.stream_run()`，因此取消、超时、脱敏、`run_timeout_seconds` 全都复用。
@@ -248,7 +254,8 @@ frontend/
 ```
 
 - **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
-  与三个纯展示组件（`DynamicForm` / `MessageView` / `MarkdownView`）；页面、路由、样式表各自独立
+  与纯展示组件（`DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` /
+  `CollabRoleThread`）；页面、路由、样式表各自独立
   （移动端用底部弹层替代桌面端的居中 Modal）。
 - **后端只保留一个 SPA 兜底**：`main.py:resolve_spa_target()` 按前缀把深链分派到 `dist/index.html`
   或 `dist/m/index.html`，其余静态文件原样返回；`/assets` 由两端口共享。

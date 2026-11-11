@@ -2,16 +2,29 @@
  * 「协作运行」页签：左栏是运行列表，主区是时间线（复用 `MessageView`）与工单状态摘要，
  * 底部输入框直接和入口角色说话（走协作 SSE）。
  *
- * 工单的细节（子工单树、产出文件、审查意见、越权审计）在右侧抽屉 `TicketBoard` 里。
+ * 工单的细节（子工单树、产出文件、审查意见、越权审计）在点击后打开的全屏 `TicketBoard` 里。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MessageView, type RenderMessage } from './MessageView'
+import { CollabProgressBoard } from './CollabProgressBoard'
+import { ConversationThread, type ConversationThreadItem } from './ConversationThread'
+import type { RenderMessage } from './MessageView'
 import { TicketBoard } from './TicketBoard'
 import { Modal } from './Modal'
-import { api, ApiError, streamPost } from '../lib/api'
+import { api, ApiError, streamGet, streamPost } from '../lib/api'
+import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import { applyCollabEvent, makeCollabTurn, type CollabTurnState } from '../lib/collabStream'
+import { buildCollabProgress } from '../lib/collabProgress'
+import { useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
-import type { CollabEvent, CollabRun, CollabRunDetail, CollabTeam, Role } from '../lib/types'
+import type {
+  CollabChoice, CollabEvent, CollabRun, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
+} from '../lib/types'
+
+/** 一次订阅可能收到协作信封，也可能收到传输层的 ``stream.closed`` 收尾标记。 */
+type RunEvent = CollabEvent | StreamClosedEvent
+
+/** 重连前的等待：每次退避一点，避免断线时疯狂重试。 */
+const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
 const RUN_STATUS: Record<string, { label: string; pill: string }> = {
   running: { label: '进行中', pill: 'brand' },
@@ -48,12 +61,26 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
+  const [startTeamId, setStartTeamId] = useState('')
+  const [startTitle, setStartTitle] = useState('')
+  const [startWorkspace, setStartWorkspace] = useState('')
   const [boardOpen, setBoardOpen] = useState(false)
+  const [progressOpen, setProgressOpen] = useState(false)
+  const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
+  const [reconnecting, setReconnecting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  const busyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
   const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
+  const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
+  const visibleSteps = useMemo(
+    () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
+    [detail?.steps, leaderKey],
+  )
+  const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
 
   const loadRuns = useCallback(async () => {
     try {
@@ -67,12 +94,26 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     try {
       const next = await api.getCollabRun(id)
       setDetail(next)
-      setTurn((prev) =>
-        prev ? { ...prev, status: next.status, reason: next.error ?? null, live: null } : makeCollabTurn(next, next.tickets),
-      )
+      setTurn((prev) => {
+        const base = prev ?? makeCollabTurn(next, next.tickets)
+        return {
+          ...base,
+          status: next.status,
+          reason: next.error ?? null,
+          live: null,
+          completed: [],
+          tickets: Object.fromEntries(next.tickets.map((ticket) => [ticket.id, ticket])),
+        }
+      })
+      return next
     } catch (e) {
       setError(describe(e))
-      setDetail(null)
+      // 定时刷新遇到网络抖动时保留当前详情；只有运行确实被删除才清空。
+      if (e instanceof ApiError && e.status === 404) {
+        setDetail(null)
+        setTurn(null)
+      }
+      return null
     }
   }, [])
 
@@ -80,44 +121,116 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     void loadRuns()
   }, [loadRuns])
 
-  useEffect(() => {
-    if (runId) void loadDetail(runId)
-    else setDetail(null)
-  }, [runId, loadDetail])
+  // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
+  useEffect(() => () => abortRef.current?.abort(), [])
+
+  // 两台设备看同一次协作时，以落库详情为准定时对齐；本机 SSE 推进期间暂停轮询。
+  useAutoRefresh(() => (runId ? loadDetail(runId) : undefined), {
+    intervalMs: 3000,
+    enabled: Boolean(runId) && !busy,
+  })
+  useAutoRefresh(loadRuns, { intervalMs: 8000 })
 
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [detail?.steps.length, turn?.live?.agent.text, turn?.notices.length])
+  }, [visibleSteps.length, leaderLive?.agent.text, turn?.notices.length])
 
-  /** 跑一轮 SSE（发消息或继续）；结束后以后端详情为准刷新。 */
-  const stream = async (path: string, body: unknown) => {
-    if (!detail) return
+  /**
+   * 订阅一次运行的实时事件并渲染。
+   *
+   * 推进跑在服务端独立任务里，所以连接被切断（手机锁屏、切后台、隧道抖动）时这里
+   * 会自动重连订阅续看，而不是把运行打断；`kickoff` 用于「发消息 / 继续」这类先启动再订阅的场景。
+   */
+  const subscribe = useCallback(
+    async (
+      runId: string,
+      kickoff?: (onEvent: (event: RunEvent) => void, signal: AbortSignal) => Promise<void>,
+    ) => {
+      if (busyRef.current) return
+      busyRef.current = true
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+      let closed = false
+      const onEvent = (event: RunEvent) => {
+        if (event.type === 'stream.closed') {
+          closed = true
+          return
+        }
+        setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev))
+      }
+      try {
+        if (kickoff) await kickoff(onEvent, controller.signal)
+        let attempt = 0
+        while (!closed && !controller.signal.aborted && attempt < 5) {
+          // 第一次订阅（刚打开页面就围观在跑的运行）不算「断线」；只有重连才提示并退避。
+          if (attempt > 0 || kickoff) {
+            setReconnecting(true)
+            await delay(Math.min(800 * attempt, 3000))
+            if (controller.signal.aborted) break
+          }
+          attempt += 1
+          await streamGet<RunEvent>(`/api/collab/runs/${runId}/stream`, onEvent, controller.signal)
+        }
+      } catch (e) {
+        if ((e as Error)?.name !== 'AbortError') setError(describe(e))
+      } finally {
+        busyRef.current = false
+        abortRef.current = null
+        setReconnecting(false)
+        setBusy(false)
+        await loadDetail(runId)
+        await loadRuns()
+      }
+    },
+    [loadDetail, loadRuns],
+  )
+
+  useEffect(() => {
+    abortRef.current?.abort()
+    if (!runId) {
+      setDetail(null)
+      setTurn(null)
+      return
+    }
+    setDetail(null)
+    setTurn(null)
     setError(null)
-    setBusy(true)
-    const controller = new AbortController()
-    abortRef.current = controller
+    void (async () => {
+      const next = await loadDetail(runId)
+      // 这次运行在跑就订阅实时事件：不管它是本页发起，还是另一台设备/上次会话发起的。
+      if (next && next.status === 'running' && !busyRef.current) void subscribe(runId)
+    })()
+  }, [runId, loadDetail, subscribe])
+
+  /** 发消息（或空内容触发重跑）并订阅这一轮的推进。 */
+  const stream = async (path: string, body: unknown, userText?: string) => {
+    if (!detail) return
+    const pending = userText ? { id: `local-user-${Date.now()}`, text: userText } : null
+    if (pending) setPendingUser(pending)
+    setError(null)
     try {
-      await streamPost<CollabEvent>(
-        path,
-        body,
-        (event) => setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev)),
-        controller.signal,
-      )
-    } catch (e) {
-      if ((e as Error)?.name !== 'AbortError') setError(describe(e))
+      await subscribe(detail.id, (onEvent, signal) => streamPost<RunEvent>(path, body, onEvent, signal))
     } finally {
-      abortRef.current = null
-      setBusy(false)
-      await loadDetail(detail.id)
-      await loadRuns()
+      if (pending) setPendingUser(null)
     }
   }
 
-  const start = async (teamId: string, title: string) => {
+  const start = async () => {
+    if (!startTeamId) {
+      setError('请选择对应的协作团队')
+      return
+    }
     try {
-      const run = await api.createCollabRun({ team_id: teamId, title: title.trim() || undefined })
+      const run = await api.createCollabRun({
+        team_id: startTeamId,
+        title: startTitle.trim() || undefined,
+        workspace_dir: startWorkspace.trim() || null,
+      })
       setPicking(false)
+      setStartTitle('')
+      setStartWorkspace('')
       await loadRuns()
       onOpenRun(run.id)
     } catch (e) {
@@ -143,6 +256,17 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     await stream(`/api/collab/runs/${detail.id}/resume`, {})
   }
 
+  const answerAsk = (choice: CollabChoice) => {
+    if (!detail || busy) return
+    const text = collabChoiceAnswer(choice)
+    if (!text) {
+      composerRef.current?.focus()
+      return
+    }
+    setDraft('')
+    void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
   const roleAvatar = (roleId?: string | null, nodeKey?: string) => {
     const node = team?.graph.nodes.find((item) => item.key === nodeKey)
     const role = roles.find((item) => item.id === (roleId ?? node?.role_id))
@@ -151,36 +275,100 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
   const roleLabel = (nodeKey: string, fallback?: string | null) =>
     team?.graph.nodes.find((item) => item.key === nodeKey)?.label || fallback || nodeKey
 
-  const timeline: RenderMessage[] = detail
-    ? detail.steps.map((step) =>
-        step.role_key === 'user'
-          ? { id: step.id, role: 'user' as const, content: step.content, parts: [], status: 'complete' }
-          : {
-              id: step.id,
-              role: 'assistant' as const,
-              content: step.content,
-              parts: step.parts,
-              status: step.status,
-              error: step.error,
-              usage: step.usage,
-            },
-      )
-    : []
+  const persistedIds = useMemo(() => new Set(visibleSteps.map((step) => step.id)), [visibleSteps])
+  const streamedLeader = useMemo(
+    () => (turn?.completed ?? []).filter((step) => step.nodeKey === leaderKey && !persistedIds.has(step.stepId)),
+    [leaderKey, persistedIds, turn?.completed],
+  )
+  const timeline: RenderMessage[] = [
+    ...visibleSteps.map((step) =>
+      step.role_key === 'user'
+        ? { id: step.id, role: 'user' as const, content: step.content, parts: [], status: 'complete' }
+        : {
+            id: step.id,
+            role: 'assistant' as const,
+            content: step.content,
+            parts: step.parts,
+            status: step.status,
+            error: step.error,
+            usage: step.usage,
+          },
+    ),
+    ...(pendingUser
+      ? [{ id: pendingUser.id, role: 'user' as const, content: pendingUser.text, parts: [], status: 'complete' }]
+      : []),
+    ...streamedLeader.map((step) => ({
+      id: step.stepId,
+      role: 'assistant' as const,
+      content: step.agent.text,
+      parts: step.agent.parts,
+      status: step.error ? 'error' : step.status,
+      error: step.error ?? step.agent.error,
+      usage: step.agent.usage,
+    })),
+  ]
 
-  const liveMessage: RenderMessage | null = turn?.live
+  const liveMessage: RenderMessage | null = leaderLive
     ? {
-        id: `live-${turn.live.stepId}`,
+        id: `live-${leaderLive.stepId}`,
         role: 'assistant',
-        content: turn.live.agent.text,
-        parts: turn.live.agent.parts,
-        status: turn.live.agent.error ? 'error' : 'streaming',
-        error: turn.live.agent.error,
-        usage: turn.live.agent.usage,
+        content: leaderLive.agent.text,
+        parts: leaderLive.agent.parts,
+        status: leaderLive.agent.error ? 'error' : 'streaming',
+        error: leaderLive.agent.error,
+        usage: leaderLive.agent.usage,
         streaming: true,
       }
     : null
 
+  const threadItems: ConversationThreadItem[] = [
+    ...timeline.map((message) => ({
+      id: message.id,
+      message,
+      avatar: message.role === 'user' ? undefined : roleAvatar(undefined, leaderKey),
+      label: message.role === 'user' ? undefined : roleLabel(leaderKey, detail?.entry_key),
+    })),
+    ...(liveMessage && leaderLive
+      ? [{
+          id: liveMessage.id,
+          message: liveMessage,
+          avatar: roleAvatar(undefined, leaderLive.nodeKey),
+          label: roleLabel(leaderLive.nodeKey, leaderLive.roleName),
+        }]
+      : []),
+  ]
+
   const status = turn?.status ?? detail?.status ?? 'waiting_user'
+  const progress = useMemo(
+    () =>
+      buildCollabProgress({
+        graph: team?.graph,
+        entryKey: leaderKey,
+        steps: detail?.steps ?? [],
+        tickets: detail?.tickets ?? [],
+        roles,
+        live: turn?.live ?? null,
+        streamed: turn?.completed ?? [],
+        runStatus: status,
+      }),
+    [team?.graph, leaderKey, detail?.steps, detail?.tickets, roles, turn?.live, turn?.completed, status],
+  )
+  const progressDone = progress.nodes.filter((node) => node.state === 'done').length
+  const progressLive = progress.nodes.some((node) => node.isLive)
+  const progressAttention = progress.nodes.some(
+    (node) => node.state === 'waiting' || node.state === 'error' || node.state === 'active',
+  )
+  const besideLeader = turn?.live && turn.live.nodeKey !== leaderKey ? turn.live : null
+  const remoteRunning = status === 'running' && !busy
+  const pendingAsks = useMemo(
+    () =>
+      status === 'waiting_user'
+        ? findPendingCollabAsks(
+            Object.values(turn?.tickets ?? {}).filter((ticket) => !detail || ticket.run_id === detail.id),
+          )
+        : [],
+    [detail, status, turn?.tickets],
+  )
   const runUsage = summarizeUsage([detail?.usage])
   // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
   const ticketCounts = useMemo(() => {
@@ -193,7 +381,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     <div className="collab-shell">
       <aside className="collab-list">
         <button className="btn primary" style={{ justifyContent: 'center' }} onClick={() => setPicking(true)}>
-          + 新建协作
+          + 新建协作任务
         </button>
         {runs.map((run) => (
           <button
@@ -248,12 +436,21 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
               </div>
               <div className="spacer" style={{ flex: 1 }} />
               <div className="row" style={{ gap: 6 }}>
+                <button
+                  className={`btn sm collab-progress-trigger${progressAttention ? ' attention' : ''}`}
+                  onClick={() => setProgressOpen(true)}
+                  title="查看岗位推进、实时状态与内部对话入口"
+                >
+                  <span>🧭 协作进度</span>
+                  <span className="collab-progress-trigger-count">{progressDone}/{progress.nodes.length}</span>
+                  {progressLive && <span className="collab-progress-trigger-dot" aria-label="有岗位正在实时输出" />}
+                </button>
                 <button className="btn sm" onClick={() => setBoardOpen(true)}>
                   📋 工单看板 {detail.tickets.length}
                 </button>
-                {busy ? (
+                {busy || remoteRunning ? (
                   <button className="btn sm danger" onClick={() => void stop()}>
-                    ■ 停止
+                    {busy ? '■ 停止' : '■ 叫停'}
                   </button>
                 ) : (
                   (status === 'waiting_user' || status === 'interrupted' || status === 'error') && (
@@ -276,10 +473,10 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
               </div>
             </div>
 
-            {turn && turn.notices.length > 0 && (
+            {turn && turn.notices.filter((notice) => notice.level !== 'ask').length > 0 && (
               <div className="stack" style={{ gap: 6, padding: '0 22px 6px' }}>
-                {turn.notices.slice(-4).map((notice) => (
-                  <div key={notice.id} className={`banner ${notice.level === 'error' ? 'err' : notice.level === 'ask' ? 'info' : 'info'}`}>
+                {turn.notices.filter((notice) => notice.level !== 'ask').slice(-4).map((notice) => (
+                  <div key={notice.id} className={`banner ${notice.level === 'error' ? 'err' : 'info'}`}>
                     <div className="row" style={{ gap: 8 }}>
                       <span style={{ flex: 1 }}>{notice.text}</span>
                       {notice.level === 'error' && notice.stepId && !busy && (
@@ -293,9 +490,27 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
               </div>
             )}
 
+            {reconnecting && (
+              <div style={{ padding: '8px 22px 0' }}>
+                <div className="banner info">
+                  本页的连接断了，正在自动重连订阅；协作仍在服务端继续推进，不会中断。
+                </div>
+              </div>
+            )}
+
+            {besideLeader && (
+              <div style={{ padding: '8px 22px 0' }}>
+                <div className="banner info">
+                  协作正在由「{besideLeader.roleName}」处理，可在「协作进度」按钮里点开查看实时输出。
+                </div>
+              </div>
+            )}
+
             <div className="collab-scroll" ref={scrollRef}>
-              <div className="chat-thread">
-                {timeline.length === 0 && !liveMessage && (
+              <ConversationThread
+                centered
+                items={threadItems}
+                empty={timeline.length === 0 && !liveMessage ? (
                   <div className="empty">
                     <div className="empty-icon">🤝</div>
                     <p>这次协作还没有开始</p>
@@ -303,20 +518,39 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                       在下面告诉入口角色「{detail.entry_key}」你想做什么
                     </p>
                   </div>
-                )}
-                {timeline.map((message, index) => (
-                  <MessageView
-                    key={message.id}
-                    message={message}
-                    avatar={message.role === 'user' ? undefined : roleAvatar(detail.steps[index]?.role_id, detail.steps[index]?.role_key)}
-                    label={message.role === 'user' ? undefined : roleLabel(detail.steps[index]?.role_key ?? '', detail.steps[index]?.role_name)}
-                  />
-                ))}
-                {liveMessage && turn?.live && (
-                  <MessageView message={liveMessage} avatar={roleAvatar(undefined, turn.live.nodeKey)} label={roleLabel(turn.live.nodeKey, turn.live.roleName)} />
-                )}
-              </div>
+                ) : undefined}
+              />
             </div>
+
+            {pendingAsks.length > 0 && (
+              <div className="collab-ask-stack">
+                {pendingAsks.map((ask) => (
+                  <div key={ask.ticketId} className="collab-ask-card">
+                    <div className="collab-ask-head">
+                      <span className="pill warn">需要你决定</span>
+                      <span className="dim small">入口角色在等你的答复</span>
+                    </div>
+                    <div className="collab-ask-question">{ask.question}</div>
+                    <div className="collab-ask-options">
+                      {ask.options.map((choice, index) => (
+                        <button
+                          key={`${ask.ticketId}-${index}-${choice.label}`}
+                          className={`collab-ask-option${choice.freeform ? ' freeform' : ''}`}
+                          disabled={busy}
+                          onClick={() => answerAsk(choice)}
+                        >
+                          <span className="collab-ask-option-label">{choice.label}</span>
+                          {choice.description && (
+                            <span className="collab-ask-option-desc">{choice.description}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="dim small">也可以直接在下方输入其他答复。</div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {error && (
               <div style={{ padding: '0 22px 6px' }}>
@@ -328,9 +562,16 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
               <div className="composer-inner">
                 <div className="composer-box">
                   <textarea
+                    ref={composerRef}
                     rows={1}
                     value={draft}
-                    placeholder={busy ? '协作正在推进…' : detail.goal ? '补充需求 / 回答追问（Enter 发送）' : '这次协作要做什么？'}
+                    placeholder={
+                      busy || remoteRunning
+                        ? '协作正在推进，可在「协作进度」按钮里查看实时输出…'
+                        : detail.goal
+                          ? `和领导者「${roleLabel(leaderKey, detail.entry_key)}」继续对话…`
+                          : '告诉领导者这次协作要做什么…'
+                    }
                     onChange={(e) => {
                       setDraft(e.target.value)
                       const node = e.target
@@ -340,29 +581,29 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                         e.preventDefault()
-                        if (!busy && draft.trim()) {
+                        if (!busy && !remoteRunning && draft.trim()) {
                           const text = draft
                           setDraft('')
-                          void stream(`/api/collab/runs/${detail.id}/messages`, { content: text })
+                          void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
                         }
                       }
                     }}
-                    disabled={busy}
+                    disabled={busy || remoteRunning}
                   />
                   <button
                     className="btn primary"
-                    disabled={busy || !draft.trim()}
+                    disabled={busy || remoteRunning || !draft.trim()}
                     onClick={() => {
                       const text = draft
                       setDraft('')
-                      void stream(`/api/collab/runs/${detail.id}/messages`, { content: text })
+                      void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
                     }}
                   >
                     发送 ↵
                   </button>
                 </div>
                 <div className="composer-hint">
-                  <span>角色之间只传工单，不共享对话记忆</span>
+                  <span>主会话只展示你和领导者；内部角色输出在「协作进度」按钮里点开查看</span>
                   <span>工作目录：{detail.workspace_dir ?? '默认'}</span>
                 </div>
               </div>
@@ -372,8 +613,8 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
           <div className="empty" style={{ margin: 'auto' }}>
             <div className="empty-icon">🤝</div>
             <p>选择一次协作，或新建一次</p>
-            <button className="btn primary" style={{ marginTop: 14 }} onClick={() => setPicking(true)}>
-              + 新建协作
+              <button className="btn primary" style={{ marginTop: 14 }} onClick={() => setPicking(true)}>
+              + 新建协作任务
             </button>
           </div>
         )}
@@ -388,39 +629,80 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
         />
       )}
 
+      {progressOpen && detail && (
+        <CollabProgressBoard
+          nodes={progress.nodes}
+          edges={progress.edges}
+          steps={detail.steps}
+          tickets={detail.tickets}
+          live={turn?.live ?? null}
+          streamed={turn?.completed ?? []}
+          runTitle={detail.title}
+          teamName={detail.team_name ?? team?.name ?? '协作组'}
+          statusLabel={RUN_STATUS[status]?.label ?? status}
+          statusPill={RUN_STATUS[status]?.pill ?? ''}
+          onClose={() => setProgressOpen(false)}
+        />
+      )}
+
       {picking && (
         <Modal
-          title="选择协作组"
+          title="新建协作任务"
           onClose={() => setPicking(false)}
           footer={
-            <button className="btn ghost" onClick={() => setPicking(false)}>
-              取消
-            </button>
+            <>
+              <button className="btn ghost" onClick={() => setPicking(false)}>
+                取消
+              </button>
+              <button className="btn primary" onClick={() => void start()} disabled={!startTeamId}>
+                创建并开始对话
+              </button>
+            </>
           }
         >
           {teams.length === 0 ? (
             <div className="banner info">还没有协作组。请先到「协作设置」页画一张编排图。</div>
           ) : (
-            <div className="stack" style={{ gap: 8 }}>
-              {teams.map((item) => (
-                <div
-                  key={item.id}
-                  className={`agent-type-row${item.validation.ok ? '' : ' disabled'}`}
-                  onClick={() => void start(item.id, '')}
+            <div className="stack" style={{ gap: 12 }}>
+              <label className="field">
+                <span className="field-label">协作团队</span>
+                <select
+                  className="select"
+                  value={startTeamId}
+                  onChange={(event) => setStartTeamId(event.target.value)}
                 >
-                  <span className="collab-node-avatar">🤝</span>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="agent-type-name">{item.name}</div>
-                    <div className="agent-type-desc">
-                      {item.node_count} 个岗位
-                      {item.validation.ok ? ' · 可以运行' : ` · 还不能跑：${item.validation.errors[0]?.message ?? ''}`}
-                    </div>
-                  </div>
-                  <span className={`pill ${item.validation.ok ? 'ok' : 'err'}`}>
-                    {item.validation.ok ? '就绪' : '有问题'}
-                  </span>
-                </div>
-              ))}
+                  <option value="">请选择…</option>
+                  {teams.map((item) => (
+                    <option key={item.id} value={item.id} disabled={!item.validation.ok}>
+                      {item.name}（{item.node_count} 个岗位）
+                      {item.validation.ok ? '' : ' · 暂不可运行'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field-label">任务标题</span>
+                <input
+                  className="input"
+                  value={startTitle}
+                  onChange={(event) => setStartTitle(event.target.value)}
+                  placeholder="例如：把登录页改成暗色主题"
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">工作路径</span>
+                <input
+                  className="input mono"
+                  value={startWorkspace}
+                  onChange={(event) => setStartWorkspace(event.target.value)}
+                  placeholder="例如 /vol1/projects/my-app；留空用默认路径"
+                />
+                <span className="field-help">
+                  {teams.find((item) => item.id === startTeamId)?.workspace_dir
+                    ? `留空则使用团队默认路径：${teams.find((item) => item.id === startTeamId)?.workspace_dir}`
+                    : '留空则使用每次运行自动分配的默认路径。填写后所有角色只能在该路径内读写。'}
+                </span>
+              </label>
             </div>
           )}
         </Modal>

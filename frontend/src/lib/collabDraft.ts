@@ -13,10 +13,13 @@ import type {
   CollabDuty,
   CollabEdge,
   CollabEdgeKind,
+  CollabEdgePort,
+  CollabIssue,
   CollabNode,
   CollabTeam,
   CollabTeamUpdate,
   CollabTicketAction,
+  CollabValidation,
   CollabWorkspaceScope,
   Role,
 } from './types'
@@ -90,6 +93,19 @@ export function toTeamDraft(team: CollabTeam): TeamDraft {
     // 旧数据里没有 max_rounds，补 0（前端不依赖后端一定回传新字段）
     edges: team.graph.edges.map((edge) => ({ ...edge, max_rounds: edge.max_rounds ?? 0 })),
   }
+}
+
+/** 把服务端的 errors / warnings 合成一份画布可用的列表，并保留严重级别。 */
+export function issuesFromValidation(validation: CollabValidation): CollabIssue[] {
+  return [
+    ...validation.errors.map((issue) => ({ ...issue, severity: 'error' as const })),
+    ...validation.warnings.map((issue) => ({ ...issue, severity: 'warning' as const })),
+  ]
+}
+
+/** 旧接口可能没有 severity；兼容历史 ``warn.*`` code。 */
+export function isWarningIssue(issue: CollabIssue): boolean {
+  return issue.severity === 'warning' || issue.code.startsWith('warn')
 }
 
 /** 草稿 → 保存载荷：名称兜底、预算夹紧、空工作目录转 null。 */
@@ -183,6 +199,7 @@ export function addEdgeToGraph(
   fromKey: string,
   toKey: string,
   kind?: CollabEdgeKind,
+  ports?: { fromSide?: CollabEdgePort | null; toSide?: CollabEdgePort | null },
 ): CollabEdge[] {
   const resolved = kind ?? inferEdgeKind(
     nodes.find((node) => node.key === fromKey),
@@ -193,7 +210,10 @@ export function addEdgeToGraph(
   }
   return [
     ...edges,
-    { id: newEdgeId(), from_key: fromKey, to_key: toKey, kind: resolved, label: '', max_rounds: 0 },
+    {
+      id: newEdgeId(), from_key: fromKey, to_key: toKey, kind: resolved, label: '', max_rounds: 0,
+      from_side: ports?.fromSide ?? null, to_side: ports?.toSide ?? null,
+    },
   ]
 }
 

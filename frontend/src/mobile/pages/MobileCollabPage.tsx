@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import type { CollabRun, CollabTeam } from '../../lib/types'
+import { useAutoRefresh } from '../../lib/useAutoRefresh'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError, relativeTime } from '../util'
@@ -32,6 +33,7 @@ export function MobileCollabPage() {
   const [newName, setNewName] = useState('')
   const [teamId, setTeamId] = useState('')
   const [title, setTitle] = useState('')
+  const [workspace, setWorkspace] = useState('')
   const [busy, setBusy] = useState(false)
 
   const reload = useCallback(async () => {
@@ -50,6 +52,8 @@ export function MobileCollabPage() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useAutoRefresh(reload, { intervalMs: 8000 })
 
   const createTeam = async () => {
     setBusy(true)
@@ -71,9 +75,14 @@ export function MobileCollabPage() {
     setBusy(true)
     setError(null)
     try {
-      const run = await api.createCollabRun({ team_id: teamId, title: title.trim() || undefined })
+      const run = await api.createCollabRun({
+        team_id: teamId,
+        title: title.trim() || undefined,
+        workspace_dir: workspace.trim() || null,
+      })
       setStartOpen(false)
       setTitle('')
+      setWorkspace('')
       navigate(`/collab/runs/${run.id}`)
     } catch (e) {
       setError(describeError(e))
@@ -213,6 +222,16 @@ export function MobileCollabPage() {
               onChange={(event) => setTitle(event.target.value)}
               placeholder="这次协作要达成什么"
             />
+          </div>
+          <div className="field">
+            <label className="field-label">工作路径</label>
+            <input
+              className="input mono"
+              value={workspace}
+              onChange={(event) => setWorkspace(event.target.value)}
+              placeholder="例如 /vol1/projects/my-app；留空用默认路径"
+            />
+            <span className="field-help">不填写就使用协作组默认路径；填写后所有角色只能在这个路径内读写。</span>
           </div>
           <button className="btn primary block" onClick={() => void start()} disabled={busy || !teamId}>
             {busy ? '创建中…' : '创建并进入运行'}

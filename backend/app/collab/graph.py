@@ -307,8 +307,8 @@ def validate_graph(
         errors.append(GraphIssue(code="graph.no_engineer", message="至少要有一个实施者节点，否则没人真正干活"))
 
     # 审查闭环：有 review 边就必须有退路（rework），有 rework 边就必须有来路（review）。
-    # 打回目标允许不是提交者本人 —— 例如「审查员把意见交回 CTO，由 CTO 再派给 SE」，
-    # 但此时审查者有多条退路，运行时必须显式给出 rework_to（否则报错，不猜）。
+    # 打回目标允许不是提交者本人 —— 例如「审查员把意见交回 CTO，由 CTO 再派给 SE」。
+    # 只有一条退路时引擎按它自动打回，不需要 rework_to；有多条退路才要求显式指定（不猜）。
     review_edges = [e for e in graph.edges if e.kind is EdgeKind.REVIEW]
     rework_edges = [e for e in graph.edges if e.kind is EdgeKind.REWORK]
     for edge in review_edges:
@@ -326,13 +326,13 @@ def validate_graph(
                 )
             )
         for exit_edge in exits:
-            if exit_edge.to_key != edge.from_key:
+            if exit_edge.to_key != edge.from_key and len(rework_targets(graph, edge.to_key)) > 1:
                 warnings.append(
                     GraphIssue(
                         code="edge.rework_target_not_submitter",
                         message=(
                             f"打回目标「{exit_edge.to_key}」不是提交者「{edge.from_key}」："
-                            "审查者给出 changes_requested 时必须用 rework_to 指明打给谁"
+                            "该审查者有多条退路，给出 changes_requested 时必须用 rework_to 指明打给谁"
                         ),
                         edge_id=exit_edge.id,
                     )

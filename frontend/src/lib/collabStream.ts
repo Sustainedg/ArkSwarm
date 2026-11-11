@@ -19,6 +19,13 @@ export interface LiveStep {
   agent: AgentStreamState
 }
 
+/** 已经结束但还没随运行详情落回界面的步骤；用于在整轮推进期间保持会话连续。 */
+export interface FinishedStep extends LiveStep {
+  status: string
+  action: string
+  error?: string | null
+}
+
 export interface CollabNotice {
   id: number
   level: string
@@ -31,6 +38,8 @@ export interface CollabTurnState {
   status: CollabRunStatus
   reason?: string | null
   live: LiveStep | null
+  /** 本轮 SSE 已完成的步骤，详情刷新后清空，避免和落库步骤重复。 */
+  completed: FinishedStep[]
   tickets: Record<string, CollabTicket>
   notices: CollabNotice[]
   nextNoticeId: number
@@ -42,6 +51,7 @@ export function makeCollabTurn(run: CollabRun, tickets: CollabTicket[] = []): Co
     status: run.status,
     reason: run.error ?? null,
     live: null,
+    completed: [],
     tickets: Object.fromEntries(tickets.map((ticket) => [ticket.id, ticket])),
     notices: [],
     nextNoticeId: 1,
@@ -80,9 +90,21 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
 
     case 'collab.step.finished': {
       const failed = event.status === 'error'
+      const completed = state.live
+        ? [
+            ...state.completed,
+            {
+              ...state.live,
+              status: event.status ?? 'complete',
+              action: event.action ?? '',
+              error: event.error ?? state.live.agent.error,
+            },
+          ].slice(-60)
+        : state.completed
       return {
         ...state,
         live: null,
+        completed,
         notices: failed
           ? [...state.notices, {
               id: state.nextNoticeId,

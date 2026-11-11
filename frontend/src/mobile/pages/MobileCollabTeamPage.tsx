@@ -6,6 +6,8 @@ import {
   EDGE_KINDS,
   addNodeToDraft,
   collabTeamPayload,
+  isWarningIssue,
+  issuesFromValidation,
   newEdgeId,
   removeNodeFromDraft,
   renameNodeInDraft,
@@ -57,7 +59,7 @@ export function MobileCollabTeamPage() {
     try {
       const team = await api.getCollabTeam(teamId)
       setDraft(toTeamDraft(team))
-      setIssues([...team.validation.errors, ...team.validation.warnings])
+      setIssues(issuesFromValidation(team.validation))
       setDirty(false)
       setError(null)
     } catch (e) {
@@ -94,7 +96,7 @@ export function MobileCollabTeamPage() {
           entry_key: draft.entry_key,
         })
         if (version !== versionRef.current) return
-        setIssues([...validation.errors, ...validation.warnings])
+        setIssues(issuesFromValidation(validation))
       } catch (e) {
         if (version !== versionRef.current) return
         setError(describeError(e))
@@ -168,7 +170,7 @@ export function MobileCollabTeamPage() {
     try {
       const saved = await api.saveCollabTeam(teamId, collabTeamPayload(draft))
       setDraft(toTeamDraft(saved))
-      setIssues([...saved.validation.errors, ...saved.validation.warnings])
+      setIssues(issuesFromValidation(saved.validation))
       setDirty(false)
     } catch (e) {
       setError(describeError(e))
@@ -220,8 +222,8 @@ export function MobileCollabTeamPage() {
     }
   }
 
-  const errors = issues.filter((issue) => !issue.code.startsWith('warn'))
-  const warnings = issues.filter((issue) => issue.code.startsWith('warn'))
+  const errors = issues.filter((issue) => !isWarningIssue(issue))
+  const warnings = issues.filter(isWarningIssue)
   const node = draft && nodeKey ? draft.nodes.find((item) => item.key === nodeKey) : undefined
   const edge = draft && edgeId ? draft.edges.find((item) => item.id === edgeId) : undefined
   const roleById = new Map(roles.map((role) => [role.id, role]))
@@ -282,7 +284,7 @@ export function MobileCollabTeamPage() {
                   {[...errors, ...warnings].slice(0, 8).map((issue, index) => (
                     <div
                       key={`${issue.code}-${index}`}
-                      className={`banner ${issue.code.startsWith('warn') ? 'info' : 'err'}`}
+                      className={`banner ${isWarningIssue(issue) ? 'info' : 'err'}`}
                     >
                       {issue.message}
                     </div>
@@ -329,13 +331,16 @@ export function MobileCollabTeamPage() {
                     <span className="field-help">唯一能与用户对话的节点，必须是协调者。</span>
                   </div>
                   <div className="field">
-                    <label className="field-label">团队共享工作目录</label>
+                    <label className="field-label">工作路径</label>
                     <input
                       className="input mono"
                       value={draft.workspace_dir}
                       onChange={(event) => patch({ workspace_dir: event.target.value })}
-                      placeholder="留空则为每次运行分配 data/workspaces/collab-<运行 ID>"
+                      placeholder="例如 /vol1/projects/my-app；留空自动分配"
                     />
+                    <span className="field-help">
+                      作为这个团队的默认工作路径；新建协作任务时可以覆盖。留空则每次运行自动分配。
+                    </span>
                   </div>
                 </div>
               </div>

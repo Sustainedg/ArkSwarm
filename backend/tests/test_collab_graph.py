@@ -1,14 +1,22 @@
 """编排图校验：能跑起来的硬约束 + 提醒类的软约束。"""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
 from app.collab import graph as g
 from app.collab.schemas import (
     BudgetSpec,
     Duty,
     EdgeKind,
+    EdgePort,
     EdgeSpec,
     GraphSpec,
     NodeSpec,
+    TeamCreate,
+    TeamUpdate,
     TicketAction,
     WorkspaceScope,
 )
@@ -93,6 +101,17 @@ def test_rework_may_go_back_to_an_upper_node():
     assert g.rework_targets(graph, "qa") == ["cto", "se"]
 
 
+def test_single_rework_to_upper_node_needs_no_rework_to():
+    """审查者只有一条退路时，引擎按这条边自动打回，不应提示还必须填 rework_to。"""
+    graph = canonical()
+    graph.edges = [e for e in graph.edges if not (e.kind is EdgeKind.REWORK and e.from_key == "qa")]
+    graph.edges.append(EdgeSpec(from_key="qa", to_key="cto", kind=EdgeKind.REWORK, id="qa-to-cto"))
+    result = g.validate_graph(graph, "ceo", ROLES)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert result.warnings == [], [issue.message for issue in result.warnings]
+    assert g.rework_targets(graph, "qa") == ["cto"]
+
+
 def test_assign_cycle_is_rejected_but_review_loop_is_allowed():
     graph = canonical()
     graph.edges.append(EdgeSpec(from_key="se", to_key="cto", kind=EdgeKind.ASSIGN))
@@ -170,3 +189,28 @@ def test_storable_round_trip():
     assert isinstance(data["nodes"][0]["duty"], str)
     assert g.from_storable(data) == graph
     assert g.budget_from_storable({"max_steps": 3}).max_steps == 3
+
+
+def test_edge_ports_round_trip_without_changing_semantics():
+    graph = canonical()
+    graph.edges[0].from_side = EdgePort.BOTTOM
+    graph.edges[0].to_side = EdgePort.TOP
+    stored = g.to_storable(graph)
+    assert stored["edges"][0]["from_side"] == "bottom"
+    assert stored["edges"][0]["to_side"] == "top"
+    restored = g.from_storable(stored)
+    assert restored.edges[0].from_side is EdgePort.BOTTOM
+    assert restored.edges[0].to_side is EdgePort.TOP
+    assert g.validate_graph(restored, "ceo", ROLES).ok
+
+
+def test_workspace_dir_must_be_absolute_and_blank_means_default():
+    assert TeamCreate(name="测试组", workspace_dir="  ").workspace_dir is None
+    assert TeamUpdate(workspace_dir="").workspace_dir is None
+    assert TeamCreate(name="测试组", workspace_dir="~/project").workspace_dir == str(
+        Path("~/project").expanduser()
+    )
+    with pytest.raises(ValidationError):
+        TeamCreate(name="测试组", workspace_dir="relative/path")
+    with pytest.raises(ValidationError):
+        TeamUpdate(workspace_dir="relative/path")

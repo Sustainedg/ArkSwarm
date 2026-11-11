@@ -82,7 +82,8 @@ frontend/src/
   pages/CollabPage.tsx             协作页骨架：页内两个页签 + 数据加载（M2 ✅）
   components/CollabRunsPanel.tsx   协作运行页签：运行列表 + 时间线 + 工单条 + 输入框（M2 ✅）
   components/CollabSettingsPanel.tsx 协作设置页签：协作组列表 + 画布 + 属性面板（M2 ✅）
-  components/CollabCanvas.tsx      画布：节点拖动 + SVG 贝塞尔连线 + 拖放添加节点（M2 ✅）
+  components/CollabCanvas.tsx      画布：节点拖动 + 四向端口 + 正交避障连线 + 拖放添加节点（M2 ✅）
+  lib/collabRouting.ts            连线端口推断与正交避障路由（纯函数）
   components/NodeInspector.tsx     节点 / 边 / 团队属性面板（复用 DynamicForm）（M2 ✅）
   lib/agentStream.ts               从 ChatPage 抽出的智能体事件纯归约器（两页共用，M2 ✅）
   lib/collabStream.ts              协作信封事件归约（时间线 + 工单，M2 ✅）
@@ -111,7 +112,7 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 | 运行句柄 | 复用 `runtime.manager.ActiveRun` 这个数据类（`cancel_event` / `process`），协作层自己持句柄表 |
 | 角色与智能体 | 直接外键引用 `roles` / `agent_instances`，不复制、不派生 |
 | 技能 | 角色的技能分配（`role_skills`）→ `runtime.skills.prepare_skill_home()`（§2.4 第 4 条） |
-| 前端渲染 | `MessageView` / `MarkdownView` / `DynamicForm` / `Modal` |
+| 前端渲染 | `ConversationThread`（内部 `MessageView`）/ `MarkdownView` / `DynamicForm` / `Modal` |
 | 前端流式 | `lib/api.ts:streamPost()` + 从 `ChatPage` 提取出的 `applyEvent` 归约器（§7.4） |
 | SSE 传输 | `transport/sse.py:sse_stream()`（M0 已下沉为通用设施，`api/` 与 `collab/` 共用） |
 
@@ -144,6 +145,8 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 | 10 | `frontend/src/pages/ChatPage.tsx` | 把 `applyEvent` 提到 `lib/agentStream.ts` 复用（协作页也要用它，所以提前到 M2 做） | ✅ M2 |
 | 11 | `frontend/src/components/MessageView.tsx` | 加可选 `label` 属性（时间线上显示岗位名，默认仍是「智能体」） | ✅ M2 |
 | 11 | `docs/architecture.md` | §7 扩展点表加一行指向本文档 | ✅ M0 |
+| 12 | `backend/app/collab/schemas.py` `store.py` `execution.py` `prompt.py` | 新建协作任务（run）时可指定工作路径：留空 → 团队默认 → 自动分配；所有岗位统一 cwd，`workspace_scope` 只约束读写权限与越权审计 | ✅ |
+| 13 | `frontend/src/components/ConversationThread.tsx` `CollabRoleThread.tsx` `RoleConversationPanel.tsx`、`src/mobile/components/MobileRoleConversationSheet.tsx` | 对话只有一份展示模块：单聊 / 协作主对话 / 协作看板岗位实时对话（含移动端岗位弹层）共用同一线程与气泡样式 | ✅ |
 
 改动总量：后端 4 处（M0 约 7 行；M1 又在 `db.py` 追加约 20 行的"补列"工具）、前端约 6 行，
 全部是"挂载"性质，不含任何业务分支注入。
@@ -170,7 +173,7 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 Team {
   id, name, description,
   entry_key,              # 唯一入口节点（唯一能和用户对话的角色）
-  workspace_dir,          # 团队共享工作目录（实施者的 cwd）
+  workspace_dir,          # 团队默认工作路径；新建协作任务时可覆盖，留空则用团队默认
   graph: { nodes[], edges[] },        # 可视化编排结果，整图 JSON 存储
   budget: { max_steps, max_tickets, max_rounds_per_ticket, max_tokens, timeout_seconds }
 }
@@ -181,7 +184,7 @@ Node {
   label, duty,            # duty ∈ coordinator | engineer | reviewer
   instructions,           # 职责说明（追加到人格之后）
   capability_scope,       # 能力边界文字（"不得写代码、不得访问工作目录"）
-  workspace_scope,        # none | read | write   → 决定 cwd 与越权审计
+  workspace_scope,        # none | read | write → 权限声明与越权审计（cwd 统一为本次运行的工作路径）
   output_contract,        # 该节点必须产出的动作集合（delegate/review/…）
   options_override,       # 节点级适配器参数覆盖（复用 DynamicForm 渲染）
   x, y,                   # 画布坐标
@@ -214,15 +217,25 @@ Edge {
 | `review` + `verdict=pass` | reviewer | 工单 `→ done`；父工单（若有）回到拆解者手里汇总 | 父工单的拆解者（`owner_key`）/ 运行收尾 |
 | `review` + `verdict=changes_requested` | reviewer | `→ rework`，追加审查意见，`round += 1` | `rework_to` 指明的节点；缺省退回最近提交者（`submitter_key`） |
 | `done` 确认 | coordinator / engineer | 工单 `→ done`（含子工单全通过） | 父工单发起者 / 运行收尾 |
-| `ask_user` 提问 | 仅入口节点 | 运行 `→ waiting_user` | 用户 |
+| `ask_user` 提问 | 仅入口节点 | 运行 `→ waiting_user`；工单落库 `question + options`，界面渲染决策卡 | 用户 |
 | `reject` 否决 | coordinator / reviewer | `→ rejected`，向上抛错误 | 父工单发起者（分支终止） |
 
 **运行状态**：`running` · `waiting_user` · `done` · `error` · `cancelled` · `interrupted`。
 
 **打回目标**：`rework` 的终点允许是**协调者**（把审查意见交回 CTO 重新拆解），不限于原实施者。
 图校验只强制"有 `review` 边就必须有 `rework` 回边"；具体退回给谁由审查者在工单里用 `rework_to`
-指明，不指明时默认退回最近的提交者（`submitter_key`）。审查者有多条退路又没指明 → 挂起等人
-指定，**引擎不替你猜**。
+指明，不指明时默认退回最近的提交者（`submitter_key`）。如果最近的提交者不在退路里、但审查者
+只有一条 `rework` 出边，就按这条唯一退路自动打回（例如审查意见交回 CTO，不需要额外填
+`rework_to`）。审查者有多条退路又没指明 → 挂起等人指定，**引擎不替你猜**。
+
+**用户决策卡**：`ask_user` 不再只给一段问题文本，而是应当带 2~12 条 `options`（推荐 2~6 条）：
+`{"label": "选项标题", "value": "点选后回传给角色的完整答复", "description": "可选说明"}`。
+需要用户自由填写时追加一条 `{"label": "我来补充", "value": "", "freeform": true}`，点它只把焦点交给输入框。
+`question` 与 `options` 一起落进 `collab_tickets.result`，`collab.notice(level=ask)` 也携带同样字段；
+桌面端与移动端都据此在输入框上方渲染可点卡片。旧记录只有 `question` 时，界面会补出「按你的默认方案来」
+（问题里提到默认方案时）与「我来补充说明」两张兼容卡片，不要求重跑历史。模型漏给结构化选项时，
+引擎还会从问题正文的项目符号或「A 还是 B」句式中恢复选项，并至少补出可继续的推荐项，
+保证 `waiting_user` 不会退化成一张只有协议错误的死路。
 
 **防死循环（必须显式；M1 落底座，M3 收口）**：
 - 返工轮次上限：工单建立时先按 `min(节点 max_rounds, 运行预算 max_rounds_per_ticket)` 定
@@ -234,7 +247,8 @@ Edge {
   直接交给实施者（防"拆子工单再拆子工单"无穷套娃）；
 - **重名子工单上限** `MAX_DUPLICATE_CHILD_TITLES = 2`：同一个父工单下第三次拆出**同名**子工单会被拒绝，
   提示换更具体的标题或由用户拍板（防"复读式拆解"空转烧钱）；
-- `max_steps` / `max_tickets` / `max_tokens` / `timeout_seconds` 任一超限 → 挂起并明确提示；
+- `max_steps` / `max_tickets` / `max_tokens` 任一超限 → 挂起并明确提示；`timeout_seconds`
+  按「距上次进展」的时长判断，用户隔一段时间回来继续不会因创建时间较早而永久失效；
 - 单次推进的防御性硬上限 `MAX_STEPS_PER_TURN = 200`，杜绝一条消息内无限自转。
 
 上述任何一条触发时，动作**整体被拒**：不会先建子工单再挂起，也不会留下半截状态。
@@ -277,6 +291,22 @@ Edge {
 ```
 ````
 
+需要用户拍板时输出决策卡数据，而不是把选项写进正文：
+
+````
+```work_order
+{
+  "action": "ask_user",
+  "question": "首期先做最小闭环，还是一次做全？",
+  "options": [
+    {"label": "先做最小闭环", "value": "先做材料与人工台账，报表导出下一阶段再做", "description": "最快可用"},
+    {"label": "一次做全", "value": "材料、人工、成本汇总、报表导出一起做"},
+    {"label": "我来补充", "value": "", "freeform": true}
+  ]
+}
+```
+````
+
 **解析容错（`tickets.py`，已实现）**，按优先级依次尝试：
 
 1. **严格 JSON**：` ```work_order ` 围栏（围栏缺失/被截断时按"到文本末尾"处理）→ 直接 `json.loads`。
@@ -288,7 +318,11 @@ Edge {
 
 三级都失败 → 产出 `error` 事件（"「CTO」的产出不符合工单协议，已暂停等待你介入/重试"），
 工单**不推进**、运行置 `waiting_user`。**绝不猜、绝不静默**（铁律 11）。
-特别地：**一轮出现多个合法工单块时不选"最后一个"**，而是直接报错——猜错一次就会把工单发给错误的角色。
+特别地：**一轮出现多个合法工单块时取最后一个**，并额外产出一条 `collab.notice(warn)` 说明这次偏差。
+工具型内核（Claude Code 等）会把「中间轮次的草稿」与「最终答复」拼进同一段输出，
+一律判死会让整条链路白跑（实测：码农写完草稿又补了一份最终 `done`，运行被迫挂起）。
+取最后一版与"模型改了主意"的语义一致，而且 `assignee` 仍要过边的白名单校验，
+取错的代价被限制在**合法**对象之间（铁律 11 的可观测性由 notice 保证）。
 
 解析后再做**语义校验**：`action` 是否在节点的 `output_contract` 内、`assignee` 是否在边的白名单内、
 `pass` 是否带 `review_comment`、必填字段是否齐全。任一不通过 → 同上，作为显式错误。
@@ -332,7 +366,7 @@ Edge {
 | 层 | 机制 | 覆盖面 | 说明 |
 | --- | --- | --- | --- |
 | L1 提示词 | `capability_scope` + 输出契约注入 | 所有内核 | 只是约束，不是保证 |
-| L2 工作目录 | `workspace_scope`：`none` 用一次性空目录；`read`/`write` 用团队共享目录作为 cwd | 所有内核 | 协调者拿不到工作目录 → 没有代码可写 |
+| L2 工作目录 | 协作组在新建时可填「工作路径」；留空则按运行 ID 分配默认目录。所有岗位都拿到同一个绝对路径并作为 cwd，prompt 明确它是唯一允许访问的目录 | 所有内核 | 路径不再因角色而异；`none` / `read` 仍由提示词约束 + 越权审计兜底 |
 | L3 参数覆盖 | 节点级 `options_override`（复用 `DynamicForm` 按该智能体类型的 `config_fields` 渲染），如只读/计划模式、关闭工具 | 支持相应能力的内核 | 框架**不写任何内核分支**，纯透传 |
 | L4 越权审计 | 运行前后对共享工作目录做指纹快照（文件路径 + 大小 + mtime + 内容哈希，带文件数/体积上限）；`read`/`none` 节点被检出改动 → `error` 事件 + 卡片标红 + 工单打回 | 所有内核 | 通用、无需内核知识 |
 
@@ -359,7 +393,8 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
  ├─ 载入 Role / AgentInstance → get_agent(type_id) → 组装 AgentContext
  │    ├─ ctx.prompt / system_prompt：由 prompt.py 拼装（人格 + 协作段 + 工单载荷）
  │    ├─ ctx.history=[]、ctx.session_id=None            ← 不共享记忆
- │    ├─ ctx.workspace_dir：按 workspace_scope 决定
+ │    ├─ ctx.workspace_dir：所有岗位统一为「本次协作任务」的工作路径（任务指定 > 团队默认；
+ │    │                     workspace_scope 只约束读写权限与越权审计）
  │    └─ ctx.skills / ctx.skill_home_dir：按节点绑定的角色分配物化（scope_id = 运行内的作用域）
  ├─ async for event in execution.stream(node, ctx, handle):
  │    ├─ 原始 AgentEvent → 包进 collab.step.event 信封 → 立刻 SSE 推给前端（逐字打字效果）
@@ -383,7 +418,7 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 | `collab.step.finished` | `step_id, status, action, usage` | 卡片收尾 |
 | `collab.ticket.created` / `collab.ticket.updated` | 工单快照 | 看板增改 |
 | `collab.run.status` | `status, reason` | 运行终态 / 等待用户 |
-| `collab.notice` | `text, level` | 预算、审计、解析失败等提示 |
+| `collab.notice` | `text, level, question?, options?` | 预算、审计、解析失败等提示；`level=ask` 时带决策卡数据 |
 
 > 注意用词：这两个协议"层次不同"是刻意的 —— 铁律 5 约束的是**适配器协议**，
 > 协作信封属于协作域自有传输协议，因此不需要改 `consume_run` / `applyEvent` / `architecture.md` 的事件表。
@@ -392,18 +427,23 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 
 - 取消：`POST /api/collab/runs/{id}/cancel` → 置 `handle.cancel_event` + kill 子进程；
   当前步骤落库为 `cancelled`，运行置 `cancelled`，未完成工单保留（便于查看与续跑）。
-- 超时：`budget.timeout_seconds` 作为整轮运行上限；单步超时沿用 `settings.run_timeout_seconds`。
+- 超时：`budget.timeout_seconds` 是两次进展之间的空闲时限，不是从创建时间起累计的整轮上限；
+  每次用户输入与步骤落库都会刷新 `run.updated_at`，因此 `waiting_user` 期间隔再久，用户回来继续时
+  也会获得新的推进窗口。单步超时仍沿用 `settings.run_timeout_seconds`。
 - 异常：任何步骤异常 → `error` 事件 + 运行置 `error`（工单保留现场，可重试该步）。
 - 解析失败 / 语义非法：不抛异常、不猜 —— 当前步骤落库 `error`、工单置 `blocked`、运行置
   `waiting_user`；用户修好模型/剧本后 `POST /api/collab/steps/{id}/retry` 把工单放回队列，再
   `POST /api/collab/runs/{id}/resume` 续跑（后端 M1 已实现，UI 按钮留到 M4）。
-- 客户端断开：SSE 生成器被关闭 → 取消子进程并把运行标记 `interrupted`（与现有对话一致）。
+- 客户端断开：**不再打断运行**。推进跑在 `collab/bus.py` 的独立后台任务里，SSE 只是它的一个订阅者；
+  连接被关闭（手机锁屏、切后台、隧道抖动）只退订，重新打开页面或换设备用
+  `GET /api/collab/runs/{id}/stream` 订阅同一份实时事件即可续看。前端在检测到流被切断时（没收到
+  `stream.closed`）会自动重连订阅并提示「正在自动重连」。
 
 ### 5.4 重启恢复
 
-`collab.recover_interrupted()`：把所有 `running` / `waiting_user` 状态下**没有活跃句柄**的运行
-标记为 `interrupted`（与现有消息 `interrupted` 语义一致），工单保留原状态，UI 提供「继续」按钮
-（从就绪队列重新推进）。不删数据、不重建库（铁律 9）。
+`collab.recover_interrupted()`：启动时把所有 `running` 运行标记为 `interrupted`，并把残留的
+`streaming` 步骤一并收尾（否则界面会一直显示「处理中」却点不出任何输出）。工单保留原状态，
+UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、不重建库（铁律 9）。
 
 ---
 
@@ -422,6 +462,7 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 | `POST` | `/api/collab/runs` | 创建运行 `{team_id, title?}`；目标由第一条 `messages` 给出（保持"用户在跟入口角色对话"的语义） |
 | `GET` | `/api/collab/runs/{id}` | 运行详情（工单 + 时间线 + 状态 + 预算消耗） |
 | `POST` | `/api/collab/runs/{id}/messages` | **SSE**：用户对入口角色说话 / 回复提问 |
+| `GET` | `/api/collab/runs/{id}/stream` | **SSE**：订阅一次运行的实时事件（断开后重连、或在另一台设备上围观） |
 | `POST` | `/api/collab/runs/{id}/cancel` | 停止 |
 | `POST` | `/api/collab/runs/{id}/resume` | 从就绪队列继续推进 |
 | `POST` | `/api/collab/steps/{id}/retry` | 把某一步所在的工单放回队列（解析失败/中断后修复，随后 `resume` 续跑） |
@@ -451,9 +492,9 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 
 ```
 ┌ 左栏（复用 chat-list 样式） ┐┌ 主区 ────────────────────────────────────────┐
-│ 🤝 客户端研发组              ││ 顶栏：组名 · 目标 · 状态 · 预算 · [停止][继续] │
+│ 🤝 客户端研发组              ││ 顶栏：组名 · 目标 · 状态 · [🧭进度][📋工单][停止] │
 │   · 登录页暗色主题  进行中    │├──────────────────────────────────────────────┤
-│   · 支付流程重构    完成      ││ 时间线（复用 bubble/MessageView 渲染）        │
+│   · 支付流程重构    完成      ││ 主会话只展示用户 ⇄ 入口领导者                  │
 │ 协作组切换 ▾                 ││  👤 你：把登录页改成暗色主题                  │
 │                              ││  🧑💼 CEO：…（说明文字）+ 📋 工单卡 T-12 →CTO │
 │                              ││  🧑🔧 CTO：…（拆解）+ 📋 子工单 T-13 →SE      │
@@ -464,13 +505,36 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 │                              │├──────────────────────────────────────────────┤
 │                              ││ 底部输入框：直接和入口角色对话（走 SSE）        │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
-                                    右侧抽屉：工单看板（按状态分列）+ 工单详情
+                                    岗位抽屉：内部步骤与实时输出；工单看板：工单详情
 ```
 
-**M2 已落地的部分**：左栏运行列表、主区时间线（复用 `MessageView`，每条卡片带岗位名与头像）、
+> 上图中 CTO、SE、审查员的发言现在只出现在各自岗位抽屉里；主会话只保留用户与入口领导者的往来。
+
+**M2 已落地的部分**：左栏运行列表、主区只展示「用户 ⇄ 入口领导者」的对话、顶栏「协作进度」按钮、
 横向的工单摘要条（状态 / 持有者 / 返工轮次 / 审查意见）、底部输入框直接和入口角色说话、
 顶部状态与预算消耗、停止 / 继续 / 重试 / 删除，以及 `collab.notice` 的即时提示。
+`waiting_user` 且存在 `ask_user` 工单时，输入框上方显示决策卡；点选项等价于发送一条用户消息。
+点击「协作进度」打开全屏进度页；每个岗位都可继续点开，查看该角色在本次协作里的历史步骤与当前流式输出；其他角色的发言不会
+混进主会话。流式推进期间，用户刚发出的消息和入口领导者已完成的回复会先以临时步骤显示，
+整轮结束后再由落库详情替换，避免“领导者明明回复了，主会话却空着”的断层。
 **留到 M4**：右侧工单抽屉（子工单树、产出文件、越权审计）、按状态分列的看板、卡片视觉细化。
+
+**跨设备同步**：桌面端与移动端共用 `lib/useAutoRefresh.ts`。当前页可见时，对话/运行详情每
+3~4 秒、列表每 8 秒从后端对齐一次；切回标签页或应用回到前台时立即刷新。本机正在跑 SSE 时暂停
+轮询，避免把尚未落库的流式内容清掉。对话详情若发现 `active_run` 属于另一台设备，输入区会暂时
+禁用并提示等待完成，防止两端同时提交。
+
+**岗位会话的交接链**：一个岗位的抽屉按时间顺序展示「谁对我说了什么 → 我做了什么」——入口领导者
+先显示用户的开场消息，其余岗位显示上游角色派工时的发言（步骤 `content`，即角色说的人话）与该工单
+的要点（`brief`）。派工步骤落库 `target_key`（把活交给了哪个节点），据此把交接卡精确挂到接收方；
+旧数据没有 `target_key` 时退化为只显示本岗位自己的步骤（不影响展示，只是少了上游那句话）。
+
+**岗位内部会话的「进行中」表达**：角色的输出只在**这一步跑完时**才落库，所以非本机发起的会话
+（另一台设备、刷新后的页面）拿不到逐字流，只能看到该步落库后的结果。为了避免「进度显示处理中、
+点开却什么都没有」，岗位抽屉对没有产出的步骤渲染明确的占位：`streaming` → 「正在处理中……」，
+`interrupted` / 无产出 → 「被中断、没有留下输出，可点继续重跑」。服务重启时
+（`collab.store.recover_interrupted`）除把残留 `running` 运行标记为 `interrupted` 外，也会把残留的
+`streaming` 步骤一并收尾为 `interrupted`，否则这些步骤会永远停在「处理中」。
 
 - 时间线卡片类型：用户发言 / 角色发言 / **工单卡**（`delegate`）/ **审查卡**（`verdict`）/ **系统提示**（预算、审计、解析失败）。
 - 工单卡可点击 → 抽屉展示工单字段、子工单树、历史轮次、产出文件、token 用量。
@@ -499,9 +563,13 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
   或由第一个节点自动当入口。新节点默认 `engineer`，第一个节点自动设为 `coordinator` + 入口。
 - 连线：SVG `<path>` + 箭头 marker；三种边用颜色/线型区分
   （assign 灰实线 · review 青实线 · rework 黄虚线）。
-- **只做最简单的连接方式**（评审建议，采纳）：从节点**右侧连接点**拖到目标节点松开即连成一条
-  **三次贝塞尔曲线**；不做折线避让/路由，也不做自动布局。边类型由两端岗位自动推断
-  （目标是审查者→`review`；来源是审查者→`rework`；其余→`assign`），随后可在右侧面板改。
+- 端口：输入在节点左/上，输出在右/下；从任一出输出端口拖到目标输入端口即可。端口方向写进
+  `edges[].from_side/to_side`，旧图没有该字段时按节点相对位置自动推断（上下排列走「下→上」，
+  左右排列走「右→左」）。
+- 走线：采用正交折线并做避障；路径避开所有节点卡片，且对既有连线的重叠、交叉施加额外代价，
+  因此审查者从下方回接上方组织时，线路会沿空白通道绕回，而不是穿过节点或叠在别的线上。
+  不做自动布局；边类型仍由两端岗位自动推断（目标是审查者→`review`；来源是审查者→`rework`；
+  其余→`assign`），随后可在右侧面板改。
 - 删除：选中节点/边后按 `Delete`、或点面板里的删除按钮；删节点会级联删掉它的边。
 - 校验：每次改动**防抖 500ms** 调一次 `POST /api/collab/teams/{id}/validate`（与运行时同一套规则），
   错误/提醒就地高亮节点、连线和面板，并把「人话提示」列在画布下方；前端不重复实现一遍规则。
@@ -579,7 +647,7 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
 
 **单元（纯函数，不启 DB）**
 - `tickets.parse()`：标准围栏 / 无围栏裸 JSON / 缺字段 / 非法 `action` / 越权 `assignee` /
-  多人格同时吐多个块 / 完全无法解析（必须产出显式错误而非猜）。
+  同一轮出现多个块（取最后一个 + `warning`）/ 完全无法解析（必须产出显式错误而非猜）。
 - `tickets.render()`：**断言下游 prompt 不含上游对话原文**（C5 的守护测试）、只含本工单历史。
 - `graph.validate()`：无入口 / 双入口 / 孤立节点 / `assign` 成环 / `review` 无边 / 缺 `rework` 回边 /
   reviewer 带 assign 出边 / 引用不存在的角色。
@@ -632,6 +700,12 @@ curl -s http://127.0.0.1:8010/api/health
 | **M2 编排设置** ✅ | 画布编辑器（拖角色/拖节点/连线/实时校验/整图保存）+ 协作设置页；另建了「协作运行」页签的最小可用形态 | 已完成，见 §13（前端 `npm run build` 通过 + 后端契约已按前端调用顺序冒烟） |
 | **M3 防死循环收尾** ✅ | 边级 `max_rounds`、工单树深度上限与重名子工单去重、`run.error` 与提示的统一表达 | 已完成：`test_collab_guards.py` 覆盖 §3.3 全表（4 项端到端） |
 | **M4 协作运行页打磨** ✅ | 工单看板抽屉（子工单树 + 工单字段 + 产出文件 + 审查意见 + 越权审计）、顶栏预算「已用 / 上限」与工单状态摘要、编辑器里的边级返工上限 | 已完成：`npm run build` 通过 + 抽屉 SSR 冒烟（空/嵌套/脏数据）；时间线仍复用 `MessageView`（未拆出独立"工单卡"组件） |
+| **M4b 用户决策卡** ✅ | `ask_user` 的 `question + options` 协议、解析与语义校验；桌面端与移动端把等待用户拍板渲染成可点选项；旧记录无选项时按默认方案/自由填写兼容；移动端外壳缓存版本 v6 | 已完成：后端协议/引擎测试；`bash scripts/test.sh` + `npm run build` |
+| **M4c 领导者主会话 + 协作进度** ✅ | 主会话只显示用户与入口领导者；进度条展示岗位顺序、当前执行者、工单与连线；点岗位打开只读实时会话；流式期间即时回显；完成后可继续追问并重新打开根工单；空闲超时而非创建时长超时 | 已完成：桌面/移动端共用进度模型、两端 build、协作引擎与 API 测试 |
+| **M4d 进行中岗位可见性修复** ✅ | 岗位抽屉对未产出步骤渲染「正在处理中 / 已中断」占位；进度对「运行已停但步骤还停在 streaming／被中断」的岗位标为「已中断」而非「处理中」；启动恢复同时收尾残留 `streaming` 步骤 | 已完成：`test_recover_interrupted_also_settles_streaming_steps`；`bash scripts/test.sh` + `npm run build` |
+| **M4e 运行与连接解耦 + 岗位交接链** ✅ | 推进改跑后台任务（`collab/bus.py`），SSE 断开只退订、不再打断运行；新增 `GET /runs/{id}/stream` 订阅与前端自动重连；步骤记录 `target_key`（把活交给谁），岗位抽屉按时间还原「上游对我说了什么 → 我做了什么」 | 已完成：`test_client_disconnect_does_not_stop_the_run`、`test_stream_endpoint_replays_buffered_events_after_disconnect`（重连先补发再续看）、`test_delegate_step_records_target_for_handoff_chain`、`backend/tests/test_collab_bus.py`（补发 / 断线退订 / 缓冲回收）；`bash scripts/test.sh` + `npm run build` |
+| **M4f 超长单行输出不再打断运行** ✅ | 执行层自建行缓冲（`runtime/runner.py` 的 `_StreamLines`）：内核把整段代码或工具结果塞进一行 JSONL 时，不再抛 「Separator is found, but chunk is longer than limit」把整轮运行判成 error；单行越过 64 MiB 上限只丢该行并补一条 `log(warn)`，stdout 与 stderr 同一条路径 | 已完成：`backend/tests/test_runner.py`（默认 `readline` 会炸的前提、整行读出、内存上限兜底、端到端超长单行跑通）；`bash scripts/test.sh` |
+| **M4g 一轮多个工单块不再判死** ✅ | 同一轮里出现多个 `work_order` 块时取最后一个，并产出一条 `collab.notice(warn)` 说明偏差；草稿块不再进正文；提示词同步要求「整轮只输出一个、正文里不要粘贴草稿」 | 已完成：`test_parse_takes_the_last_block_when_a_round_has_several`、`test_round_with_two_work_order_blocks_uses_the_last_one`；`bash scripts/test.sh` |
 | **M5 打磨** | 技能物化接入协作运行、用量统计与导出、运行复制/模板 | `pytest` + 前端 build；技能端到端确认"仅分配生效" |
 
 每个里程碑单独提交、单独验证（铁律 8），M1 完成前不碰前端画布。
@@ -650,7 +724,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 用户干预 | **一期必须支持** `waiting_user` 挂起与续跑（关键节点/出错时人能踩刹车） | §5.3、§5.4；M1/M3 |
 | `sse.py` | **平移到 `app/transport/sse.py`**，成为与业务无关的通用传输设施（已落地） | §2.3、§2.5；M0 已完成 |
 | JSON 容错 | 在第 1 级失败后先做**正则清理**（控制字符、智能引号、尾随逗号），再做截断补齐 | §4.1；M0 已实现 |
-| 画布实现 | **只做最简单的连接**（左右连接点 + 三次贝塞尔），不做折线避让与自动布局；前端不重复实现校验规则，一律调服务端 `validate` | §7.3；✅ M2 |
+| 画布实现 | 四向端口（左/上入、右/下出）+ 正交避障折线；不做自动布局；前端不重复实现校验规则，一律调服务端 `validate` | §7.3；✅ M2，端口/避障已升级 |
 
 ---
 
@@ -707,7 +781,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `frontend/src/lib/api.ts` | 追加 `/api/collab/**` 的 14 个方法；`streamPost` 加泛型参数（协作复用同一份 SSE 读取逻辑） |
 | `frontend/src/lib/agentStream.ts` | 从 `ChatPage` 抽出的纯归约器（两页共用，行为不变） |
 | `frontend/src/lib/collabStream.ts` | 协作信封事件的归约：进行中的步骤、工单、运行状态、提示 |
-| `frontend/src/components/CollabCanvas.tsx` | 手写画布：拖节点、右连接点拖拽连线、三次贝塞尔、拖放添加节点、Delete 删除 |
+| `frontend/src/components/CollabCanvas.tsx` | 手写画布：拖节点、左/上输入与右/下输出端口、正交避障连线、拖放添加节点、Delete 删除 |
 | `frontend/src/components/NodeInspector.tsx` | 节点/边/团队三种上下文的属性面板；节点「参数覆盖」直接复用 `DynamicForm` |
 | `frontend/src/components/CollabSettingsPanel.tsx` | 协作组列表 + 画布 + 面板；防抖实时校验、整图保存、放弃改动 |
 | `frontend/src/components/CollabRunsPanel.tsx` | 运行列表 + 时间线（复用 `MessageView`）+ 工单条 + 直接和入口角色说话 |
@@ -754,3 +828,72 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 
 **下一步（M5）**：技能物化接入协作运行（按角色分配物化技能）、用量统计与导出、运行复制/模板；
 以及 M4 留白的时间线独立「工单卡 / 审查卡」（目前沿用 `MessageView` + `gist` 表达）。
+
+**M4b · 用户决策卡 —— 已完成。**
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/tickets.py` | `AskOption` 与 `WorkOrder.options`；容错解析 `options/choices/suggestions`、字符串列表、`{label,value,description,freeform}`；`ask_user` 语义校验要求 `question` + 2~12 条选项，且至少一条可直接点选；运行时 `ensure_ask_options()` 可从正文项目符号/「A 还是 B」恢复选项并补兜底项 |
+| `backend/app/collab/prompt.py` / `tickets.render_protocol_guide()` | 输出协议明确要求决策必须给 `options`，并为协调者追加一份 `ask_user` 示例 |
+| `backend/app/collab/engine.py` / `tickets.resolve_order_targets()` | 把 `question/options` 落进 `collab_tickets.result`，`collab.notice(level=ask)` 同时携带同样字段；用户答复后续跑时清掉旧卡片，避免下一次挂起误显示。另把模型常写的岗位显示名（如「CTO」）在唯一匹配时归一成节点 key（如 `dev`），避免点完选项后继续推进时卡在 `assignee` 校验。`timeout_seconds` 改为按 `updated_at` 计算「距上次进展」，用户隔一段时间回来仍可续跑 |
+| `frontend/src/lib/collabAsk.ts` | 两端共用的纯视图逻辑：规整选项；旧记录只有 `question` 时补「按你的默认方案来」（提到默认方案时）与「我来补充说明」兜底 |
+| `frontend/src/components/CollabRunsPanel.tsx` / `frontend/src/mobile/pages/MobileCollabRunPage.tsx` | `waiting_user` 且工单带 `question` 时渲染决策卡；点普通选项等于发送一条用户消息，点 `freeform` 选项只聚焦输入框；详情刷新时同步工单，避免旧卡片残留 |
+| `frontend/src/lib/useAutoRefresh.ts` / `frontend/src/pages/ChatPage.tsx` / `frontend/src/mobile/pages/MobileChatPage.tsx` / 协作运行页 | 桌面与移动端定时对齐会话/运行详情和列表；回到前台立即刷新；另一台设备运行中的对话暂时禁用本机输入 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` / `frontend/public/m/sw.js` | 桌面/移动决策卡样式；移动端外壳缓存名从 v2 升到 v4 |
+
+验证：`backend/.venv/bin/python -m pytest tests/test_collab_tickets.py tests/test_collab_engine.py -q` →
+19 passed；全量 `bash scripts/test.sh`（150 passed, 1 skipped）与 `cd frontend && npm run build` 通过。
+
+**M4c · 领导者主会话 + 协作进度 —— 已完成。**
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/lib/collabProgress.ts` | 从入口节点做广度遍历得到用户可理解的推进顺序；按落库步骤、SSE 临时步骤、当前实时步骤、工单持有者与运行状态计算每个岗位的「未开始 / 执行中 / 等你决定 / 需处理 / 已完成」，并保留协作连线语义 |
+| `frontend/src/components/CollabProgressBoard.tsx` / `RoleConversationDrawer.tsx` | 桌面端顶栏「协作进度」按钮与全屏进度页；主线程只渲染 `role_key in (user, entry_key)`，其他角色输出只在岗位抽屉里出现 |
+| `frontend/src/mobile/components/MobileCollabProgress.tsx` / `MobileRoleConversationSheet.tsx` | 移动端横向滑动进度与全屏岗位实时会话；不引用桌面画布，符合移动端独立入口约束 |
+| `frontend/src/lib/collabStream.ts` | SSE 完成的步骤先进入 `completed` 临时队列；用户发送中的消息也即时回显，详情刷新后清空临时队列并去重 |
+| `backend/app/collab/engine.py` | 根工单完成后续追问会重新打开并交回入口节点；`timeout_seconds` 按 `run.updated_at` 的「距上次进展」计时；`ask_user` 漏选项时补卡片 |
+| `frontend/public/m/sw.js` | 移动端外壳缓存名升到 v6，确保已添加到主屏的应用能拿到新样式与交互 |
+
+验证：`bash scripts/test.sh`（156 passed, 1 skipped，含漏选项兜底、完成后续跑、断开不打断、派发目标记录等测试）与
+`cd frontend && npm run build` 通过。
+
+**M4f · 超长单行输出不再打断运行 —— 已完成。**
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/runtime/runner.py` | 新增 `_StreamLines`：按块读取子进程输出并自行拆行，单行长度不受 `asyncio.StreamReader` 默认 64 KiB 上限约束；`_MAX_LINE_BYTES`（64 MiB）越界时丢弃该行并置位 `overflowed`，调用方产出 `log(warn)` 告知用户；stdout 与 stderr 都走这条路径，取消/超时/脱敏逻辑不变 |
+| `backend/tests/test_runner.py` / `backend/tests/fakes/fake_long_line_agent.py` | 替身 CLI 输出一行 200 000 字符的 JSONL；用例覆盖「默认 `readline` 会炸」的前提、整行读出、内存上限兜底、端到端整轮运行完整落库 |
+
+真实故障：`dev-2` 岗位（Claude Code 内核）在写大文件时，工具调用被放在一行 JSONL 里，
+该行超过 64 KiB，`process.stdout.readline()` 抛 `ValueError` 把整轮运行判成
+`error`，运行卡在 `waiting_user`，界面上只看到一句英文报错。
+
+验证：`backend/.venv/bin/python -m pytest tests/test_runner.py -q` → 5 passed；
+全量 `bash scripts/test.sh`（161 passed, 1 skipped）与 `cd frontend && npm run build` 通过。
+
+**M4g · 一轮多个工单块不再判死 —— 已完成。**
+
+真实故障：`dev-2`（码农）在 Claude Code 内核里先写了一份「草稿」工单块（同一轮的中间输出），
+又在最终答复里补了一份完整工单块；`parse_work_order` 直接以「检测到多个 work_order 代码块」把整轮判成
+`error`，运行挂在 `waiting_user`，用户只看到一条协议错误。
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/tickets.py` | 多个合法块改为**取最后一个**，并把偏差写进新的 `ParseResult.warning`；`render_protocol_guide` 的规则 2 补上「正文里不要粘贴草稿或示例」 |
+| `backend/app/collab/engine.py` | 解析带 `warning` 时产出 `collab.notice(warn)`（带 `step_id`），与越权提醒同一条可见通道 |
+| `backend/tests/test_collab_tickets.py` / `backend/tests/test_collab_engine.py` | 断言「取最后一个 + 有 warning」与「草稿块不进正文」；单块输出不得产生噪声 |
+
+验证：`backend/.venv/bin/python -m pytest tests/test_collab_tickets.py tests/test_collab_engine.py -q` →
+25 passed；全量 `bash scripts/test.sh`（162 passed, 1 skipped）与 `cd frontend && npm run build` 通过。
+
+**M4h · 协作进度改为顶栏按钮 + 全屏页 —— 已完成。**
+
+| 文件 | 内容 |
+| --- | --- |
+| `frontend/src/components/CollabRunsPanel.tsx` | 移除运行页内嵌进度条；顶栏新增「🧭 协作进度」按钮，显示已完成岗位数与实时输出指示点 |
+| `frontend/src/components/CollabProgressBoard.tsx` | 全屏进度页：完成率环形摘要、推进中 / 等你决定 / 已完成 / 需处理统计、当前焦点、岗位卡片与协作流向；点岗位直接打开内部实时会话 |
+| `frontend/src/index.css` | 进度按钮、全屏页背景、概览卡、岗位卡片状态色与流转向导样式 |
+
+验证：桌面端 `tsc --noEmit`、`npm run build`、`bash scripts/test.sh` 通过；无头浏览器在 `1440×900`
+实际点击按钮，确认页面铺满视口、5 个岗位卡片与流转关系正常渲染。

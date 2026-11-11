@@ -312,13 +312,17 @@ class AcmeHarness(OpenAIHarnessBase):
 - 请求必须走 `src/lib/api.ts`；组件里禁止裸 `fetch`。
 - 类型集中在 `src/lib/types.ts`，字段名与后端 `schemas.py` 保持一致。
 - 表单统一用 `DynamicForm`（读 `config_fields`）；消息统一用 `MessageView`（读 `MessagePart`）。
+- **对话只有一份展示模块**：所有对话（单聊、协作主对话、协作岗位实时对话，含移动端）都渲染
+  `ConversationThread`（内部只用 `MessageView` 画气泡）；岗位线程的装配逻辑只有
+  `CollabRoleThread` 一份。禁止再写第二套气泡 / 线程布局。
 - 事件并入状态统一在 `ChatPage.applyEvent`，新增事件类型在这里加一个 `case`。
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
 - **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、底部 Tab 与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
-  `DynamicForm` / `MessageView` / `MarkdownView` 三个纯展示组件，以及 `lib/agentStream` 里的事件归约。
+  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread`
+  等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用
   `m-` 前缀（`m-tabbar` / `m-sheet` / `m-item` / `m-thread`…）。

@@ -1,18 +1,16 @@
 /**
  * 协作编排画布：手写的「拖节点 + 连有向边」，不引入任何图库（铁律 12）。
  *
- * 交互刻意保持简单（评审结论）：节点是 `position: absolute` 的 div，连线是节点**右侧连接点**
- * 拖到另一个节点松手后画出的**三次贝塞尔曲线**；不做折线避让、不做自动布局。
+ * 节点是 `position: absolute` 的 div；输入端口在左/上，输出端口在右/下。
+ * 连线采用正交折线，并绕开其他节点与既有连线，适合横向和纵向两种组织视角。
  */
-import { useEffect, useRef, useState } from 'react'
-import { addEdgeToGraph } from '../lib/collabDraft'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { addEdgeToGraph, isWarningIssue } from '../lib/collabDraft'
+import {
+  COLLAB_CANVAS_H, COLLAB_CANVAS_W, COLLAB_NODE_H, COLLAB_NODE_W,
+  previewRoute, routeEdge, routeLabelPoint, routePath, type CanvasPoint,
+} from '../lib/collabRouting'
 import type { CollabEdge, CollabEdgeKind, CollabIssue, CollabNode, Role } from '../lib/types'
-
-/** 节点卡片的固定尺寸：连线端点按它计算（M2 只做等宽等高卡片） */
-const NODE_W = 190
-const NODE_H = 92
-const CANVAS_W = 1400
-const CANVAS_H = 900
 
 export interface CollabSelection {
   kind: 'node' | 'edge'
@@ -35,7 +33,7 @@ interface Props {
 
 type DragState =
   | { kind: 'node'; key: string; offsetX: number; offsetY: number }
-  | { kind: 'link'; fromKey: string }
+  | { kind: 'link'; fromKey: string; fromSide: 'right' | 'bottom' }
 
 const DUTY_LABEL: Record<string, string> = {
   coordinator: '协调者',
@@ -54,31 +52,65 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
-/** 端点坐标：从源节点右侧中点出发，到目标节点左侧中点 */
-function anchorRight(node: CollabNode) {
-  return { x: node.x + NODE_W, y: node.y + NODE_H / 2 }
-}
-function anchorLeft(node: CollabNode) {
-  return { x: node.x, y: node.y + NODE_H / 2 }
-}
-function curve(from: { x: number; y: number }, to: { x: number; y: number }): string {
-  const bend = Math.max(36, Math.abs(to.x - from.x) / 2)
-  return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`
-}
-
 export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, onChange, onSelect, onDropRole }: Props) {
   const innerRef = useRef<HTMLDivElement | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
-  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
+  const [cursor, setCursor] = useState<CanvasPoint | null>(null)
+  const [hoverInput, setHoverInput] = useState<{ nodeKey: string; side: 'left' | 'top' } | null>(null)
 
   const byKey = new Map(nodes.map((node) => [node.key, node]))
   const roleById = new Map(roles.map((role) => [role.id, role]))
-  const nodeErrorKeys = new Set(issues.filter((issue) => issue.node_key).map((issue) => issue.node_key))
-  const edgeErrorIds = new Set(issues.filter((issue) => issue.edge_id).map((issue) => issue.edge_id))
+  const nodeErrorKeys = new Set(
+    issues.filter((issue) => issue.node_key && !isWarningIssue(issue)).map((issue) => issue.node_key),
+  )
+  const edgeErrorIds = new Set(
+    issues.filter((issue) => issue.edge_id && !isWarningIssue(issue)).map((issue) => issue.edge_id),
+  )
+
+  // 按边的顺序逐条路由；后画的线会避开前面线已经占用的通道。
+  const routes = useMemo(() => {
+    const nodeMap = new Map(nodes.map((node) => [node.key, node]))
+    const previousRoutes: CanvasPoint[][] = []
+    return edges.map((edge) => {
+      const from = nodeMap.get(edge.from_key)
+      const to = nodeMap.get(edge.to_key)
+      if (!from || !to) return null
+      const points = routeEdge({
+        edge,
+        from,
+        to,
+        nodes,
+        existingRoutes: previousRoutes,
+        width: COLLAB_CANVAS_W,
+        height: COLLAB_CANVAS_H,
+      })
+      previousRoutes.push(points)
+      return { edge, points, path: routePath(points), label: routeLabelPoint(points) }
+    }).filter((item): item is NonNullable<typeof item> => item !== null)
+  }, [nodes, edges])
+  const routeById = new Map(routes.map((route) => [route.edge.id, route]))
+  const linkFrom = drag?.kind === 'link' ? byKey.get(drag.fromKey) : undefined
+  const previewPoints = drag?.kind === 'link' && linkFrom && cursor
+    ? previewRoute({ from: linkFrom, fromSide: drag.fromSide, cursor, nodes })
+    : null
 
   const toCanvas = (clientX: number, clientY: number) => {
     const rect = innerRef.current?.getBoundingClientRect()
     return { x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) }
+  }
+
+  /** 根据指针下方元素决定接到哪个输入端口；拖到卡片空白处时按输出方向选择默认输入。 */
+  const resolveInputTarget = (event: PointerEvent, fromSide: 'right' | 'bottom') => {
+    const under = document.elementFromPoint(event.clientX, event.clientY)
+    const nodeElement = under?.closest('[data-node-key]') as HTMLElement | null
+    const nodeKey = nodeElement?.dataset.nodeKey
+    if (!nodeKey) return null
+    const portElement = under?.closest('[data-input-side]') as HTMLElement | null
+    const explicit = portElement?.dataset.inputSide
+    const side: 'left' | 'top' = explicit === 'top' || explicit === 'left'
+      ? explicit
+      : (fromSide === 'bottom' ? 'top' : 'left')
+    return { nodeKey, side }
   }
 
   // 拖动 / 连线期间在 window 上监听，鼠标移出画布也不会卡住
@@ -95,20 +127,25 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
         onChange({ nodes: next, edges })
       } else {
         setCursor(point)
+        setHoverInput(resolveInputTarget(event, drag.fromSide))
       }
     }
     const onUp = (event: PointerEvent) => {
       if (drag.kind === 'link') {
-        const target = document
-          .elementFromPoint(event.clientX, event.clientY)
-          ?.closest('[data-node-key]') as HTMLElement | null
-        const targetKey = target?.dataset.nodeKey
-        if (targetKey && targetKey !== drag.fromKey) {
-          onChange({ nodes, edges: addEdgeToGraph(nodes, edges, drag.fromKey, targetKey) })
+        const target = resolveInputTarget(event, drag.fromSide)
+        if (target && target.nodeKey !== drag.fromKey) {
+          onChange({
+            nodes,
+            edges: addEdgeToGraph(nodes, edges, drag.fromKey, target.nodeKey, undefined, {
+              fromSide: drag.fromSide,
+              toSide: target.side,
+            }),
+          })
         }
       }
       setDrag(null)
       setCursor(null)
+      setHoverInput(null)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -116,7 +153,7 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [drag, nodes, edges, onChange, byKey])
+  }, [drag, nodes, edges, onChange])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -137,14 +174,17 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
     return () => window.removeEventListener('keydown', onKey)
   }, [selected, nodes, edges, onChange, onSelect])
 
-  const linkFrom = drag?.kind === 'link' ? byKey.get(drag.fromKey) : undefined
-
   return (
     <div className="collab-canvas">
+      <div className="collab-canvas-legend" aria-hidden="true">
+        <span><i className="in" />输入：左 / 上</span>
+        <span><i className="out" />输出：右 / 下</span>
+        <span className="dim">从输出端口拖到目标输入端口</span>
+      </div>
       <div
-        className="collab-canvas-inner"
         ref={innerRef}
-        style={{ width: CANVAS_W, height: CANVAS_H }}
+        className="collab-canvas-inner"
+        style={{ width: COLLAB_CANVAS_W, height: COLLAB_CANVAS_H }}
         onPointerDown={(event) => {
           if (event.target === event.currentTarget) onSelect(null)
         }}
@@ -156,10 +196,10 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
           if (!roleId || !onDropRole) return
           event.preventDefault()
           const point = toCanvas(event.clientX, event.clientY)
-          onDropRole(roleId, { x: Math.max(0, point.x - NODE_W / 2), y: Math.max(0, point.y - 24) })
+          onDropRole(roleId, { x: Math.max(0, point.x - COLLAB_NODE_W / 2), y: Math.max(0, point.y - 24) })
         }}
       >
-        <svg className="collab-links" width={CANVAS_W} height={CANVAS_H}>
+        <svg className="collab-links" width={COLLAB_CANVAS_W} height={COLLAB_CANVAS_H}>
           <defs>
             {(['assign', 'review', 'rework'] as CollabEdgeKind[]).map((shape) => (
               <marker
@@ -177,15 +217,13 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
             ))}
           </defs>
           {edges.map((edge) => {
-            const from = byKey.get(edge.from_key)
-            const to = byKey.get(edge.to_key)
-            if (!from || !to) return null
-            const path = curve(anchorRight(from), anchorLeft(to))
+            const route = routeById.get(edge.id)
+            if (!route) return null
             const active = selected?.kind === 'edge' && selected.id === edge.id
             return (
               <g key={edge.id}>
                 <path
-                  d={path}
+                  d={route.path}
                   className="collab-link-hit"
                   onPointerDown={(event) => {
                     event.stopPropagation()
@@ -193,34 +231,34 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
                   }}
                 />
                 <path
-                  d={path}
+                  d={route.path}
                   className={`collab-link${active ? ' active' : ''}${edgeErrorIds.has(edge.id) ? ' err' : ''}`}
                   stroke={edgeColor(edge.kind)}
                   strokeDasharray={edge.kind === 'rework' ? '7 5' : undefined}
                   markerEnd={`url(#collab-arrow-${edge.kind})`}
                 />
                 {edge.label && (
-                  <text className="collab-link-label" x={(anchorRight(from).x + anchorLeft(to).x) / 2} y={(anchorRight(from).y + anchorLeft(to).y) / 2 - 8}>
+                  <text className="collab-link-label" x={route.label.x} y={route.label.y}>
                     {edge.label}
                   </text>
                 )}
               </g>
             )
           })}
-          {linkFrom && cursor && (
-            <path d={curve(anchorRight(linkFrom), cursor)} className="collab-link preview" />
-          )}
+          {previewPoints && <path d={routePath(previewPoints)} className="collab-link preview" />}
         </svg>
 
         {nodes.map((node) => {
           const role = roleById.get(node.role_id)
           const active = selected?.kind === 'node' && selected.id === node.key
+          const leftInputActive = hoverInput?.nodeKey === node.key && hoverInput.side === 'left'
+          const topInputActive = hoverInput?.nodeKey === node.key && hoverInput.side === 'top'
           return (
             <div
               key={node.key}
               data-node-key={node.key}
-              className={`collab-node${active ? ' active' : ''}${nodeErrorKeys.has(node.key) ? ' err' : ''}`}
-              style={{ left: node.x, top: node.y, width: NODE_W, height: NODE_H }}
+              className={`collab-node${active ? ' active' : ''}${nodeErrorKeys.has(node.key) ? ' err' : ''}${hoverInput?.nodeKey === node.key ? ' drop-target' : ''}`}
+              style={{ left: node.x, top: node.y, width: COLLAB_NODE_W, height: COLLAB_NODE_H }}
               onPointerDown={(event) => {
                 event.stopPropagation()
                 onSelect({ kind: 'node', id: node.key })
@@ -240,18 +278,41 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
                 <span className="mono-sm dim">{node.key}</span>
               </div>
               <div className="collab-node-desc">{node.capability_scope || role?.name || '（未设置能力边界）'}</div>
+
               <span
-                className="collab-port collab-port-out"
-                title="拖到另一个节点即可连线"
+                className={`collab-port collab-port-in collab-port-left${leftInputActive ? ' drop-target' : ''}`}
+                data-input-side="left"
+                title="输入端口：从其他节点的输出端拖到这里"
+              />
+              <span
+                className={`collab-port collab-port-in collab-port-top${topInputActive ? ' drop-target' : ''}`}
+                data-input-side="top"
+                title="输入端口：从其他节点的输出端拖到这里"
+              />
+              <span
+                className="collab-port collab-port-out collab-port-right"
+                data-output-side="right"
+                title="输出端口：从这里拖到目标输入端口"
                 onPointerDown={(event) => {
                   event.stopPropagation()
                   event.preventDefault()
                   onSelect({ kind: 'node', id: node.key })
-                  setDrag({ kind: 'link', fromKey: node.key })
+                  setDrag({ kind: 'link', fromKey: node.key, fromSide: 'right' })
                   setCursor(toCanvas(event.clientX, event.clientY))
                 }}
               />
-              <span className="collab-port collab-port-in" />
+              <span
+                className="collab-port collab-port-out collab-port-bottom"
+                data-output-side="bottom"
+                title="输出端口：从这里拖到目标输入端口"
+                onPointerDown={(event) => {
+                  event.stopPropagation()
+                  event.preventDefault()
+                  onSelect({ kind: 'node', id: node.key })
+                  setDrag({ kind: 'link', fromKey: node.key, fromSide: 'bottom' })
+                  setCursor(toCanvas(event.clientX, event.clientY))
+                }}
+              />
             </div>
           )
         })}
@@ -259,4 +320,3 @@ export function CollabCanvas({ nodes, edges, roles, entryKey, selected, issues, 
     </div>
   )
 }
-

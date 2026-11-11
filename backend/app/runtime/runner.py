@@ -15,6 +15,65 @@ from ..settings import get_settings
 from .manager import ActiveRun
 
 
+#: 读取子进程输出时每次取回的字节数。
+_STREAM_CHUNK_SIZE = 1 << 16
+
+#: 单行输出的内存上限。内核（如 Claude Code）会把整段代码或工具结果塞进一行 JSONL，
+#: 远超 :class:`asyncio.StreamReader` 默认的 64 KiB，因此这里自己拆行并把水位放宽到 64 MiB；
+#: 真越界时丢弃该行剩余内容而不是让整轮运行崩掉（铁律 10：长任务不能因一处噪声中断）。
+_MAX_LINE_BYTES = 64 << 20
+
+
+class _StreamLines:
+    """按行切分子进程输出，单行长度不受 ``StreamReader`` 默认 64 KiB 缓冲上限约束。
+
+    ``StreamReader.readline()`` 在单行超过缓冲区上限时会抛 ``ValueError``
+    （消息即「Separator is found, but chunk is longer than limit」），一次工具调用就能踩中，
+    所以框架层必须自己拆行，不能把内核输出的行长当成已知量。
+    """
+
+    __slots__ = ("_buffer", "_stream", "overflowed")
+
+    def __init__(self, stream: asyncio.StreamReader) -> None:
+        self._stream = stream
+        self._buffer = bytearray()
+        #: 上一次读取是否因单行过大丢弃了内容；调用方据此产出 log 事件，不静默吞掉。
+        self.overflowed = False
+
+    async def readline(self) -> bytes | None:
+        """返回一行（不含换行符）；流已结束且无残留内容时返回 ``None``。"""
+        while True:
+            index = self._buffer.find(b"\n")
+            if index >= 0:
+                line = bytes(self._buffer[:index])
+                del self._buffer[: index + 1]
+                return line
+            if len(self._buffer) >= _MAX_LINE_BYTES:
+                await self._drop_overlong_line()
+                continue
+            chunk = await self._stream.read(_STREAM_CHUNK_SIZE)
+            if not chunk:
+                if not self._buffer:
+                    return None
+                line = bytes(self._buffer)
+                self._buffer.clear()
+                return line
+            self._buffer.extend(chunk)
+
+    async def _drop_overlong_line(self) -> None:
+        """丢弃超长行的剩余内容（读到下一处换行），保证内存占用有上限。"""
+        self._buffer.clear()
+        self.overflowed = True
+        while True:
+            chunk = await self._stream.read(_STREAM_CHUNK_SIZE)
+            if not chunk:
+                return
+            index = chunk.find(b"\n")
+            if index >= 0:
+                self._buffer.extend(chunk[index + 1 :])
+                return
+
+
 async def stream_run(
     definition: AgentDefinition,
     ctx: AgentContext,
@@ -105,14 +164,15 @@ async def stream_cli_run(
             pass
 
     stderr_chunks: list[str] = []
+    assert process.stderr is not None
+    stderr_lines = _StreamLines(process.stderr)
 
     async def drain_stderr() -> None:
-        assert process.stderr is not None
         while True:
-            line = await process.stderr.readline()
-            if not line:
+            line = await stderr_lines.readline()
+            if line is None:
                 break
-            stderr_chunks.append(line.decode("utf-8", "replace"))
+            stderr_chunks.append(line.decode("utf-8", "replace") + "\n")
 
     stderr_task = asyncio.create_task(drain_stderr())
     settings = get_settings()
@@ -121,6 +181,7 @@ async def stream_cli_run(
 
     try:
         assert process.stdout is not None
+        stdout_lines = _StreamLines(process.stdout)
         while True:
             if run.cancel_event.is_set():
                 cancelled = True
@@ -131,10 +192,16 @@ async def stream_cli_run(
                 yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
                 break
             try:
-                line = await asyncio.wait_for(process.stdout.readline(), timeout=1.0)
+                line = await asyncio.wait_for(stdout_lines.readline(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
-            if not line:
+            if stdout_lines.overflowed:
+                stdout_lines.overflowed = False
+                yield log(
+                    f"内核单行输出超过 {_MAX_LINE_BYTES >> 20} MiB，该行内容过长已丢弃",
+                    "warn",
+                )
+            if line is None:
                 break
             for event in agent_run.feed(line.decode("utf-8", "replace").rstrip("\n")):
                 yield event

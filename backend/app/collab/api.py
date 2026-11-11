@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -15,6 +14,7 @@ from sqlmodel import select
 from ..db import SessionLocal, get_session
 from ..models import Role, utcnow
 from ..transport.sse import sse_stream
+from .bus import bus
 from . import engine, execution, graph as graph_service, store
 from .schemas import (
     GraphSpec,
@@ -152,6 +152,7 @@ async def get_run(run_id: str, session: AsyncSession = Depends(get_session)) -> 
 @router.delete("/runs/{run_id}", status_code=204)
 async def delete_run(run_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     execution.cancel_run(run_id)
+    bus.cancel(run_id)
     try:
         await store.delete_run(session, run_id)
     except store.RunNotFound as exc:
@@ -165,33 +166,28 @@ async def cancel_run(run_id: str, session: AsyncSession = Depends(get_session)) 
         run = await store.get_run(session, run_id)
     except store.RunNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    cancelled = execution.cancel_run(run_id)
-    if not cancelled and run.status == "running":
+    execution.cancel_run(run_id)
+    cancelled = bus.cancel(run_id)
+    if run.status == "running":
         await store.mark_interrupted(session, run_id, "已停止")
     return {"ok": True, "cancelled": cancelled}
 
 
-def _stream_turn(prepared: engine.PreparedTurn) -> StreamingResponse:
-    """把一次推进包装成 SSE；客户端断开时同步取消子进程并标记中断。"""
-    run_id = prepared.run.id
+async def _drive_turn(prepared: engine.PreparedTurn) -> AsyncIterator[dict]:
+    """后台推进一个 turn：自己开数据库会话，生命周期与 HTTP 请求无关。"""
+    async with SessionLocal() as session:
+        run = await session.get(CollabRun, prepared.run.id)
+        if run is not None:
+            prepared.run = run
+        async for event in engine.consume_turn(session, prepared):
+            yield event.to_dict()
 
-    async def event_source() -> AsyncIterator[dict]:
-        async with SessionLocal() as session:
-            run = await session.get(CollabRun, run_id)
-            if run is not None:
-                prepared.run = run
-            async for event in engine.consume_turn(session, prepared):
-                yield event.to_dict()
 
+def _sse(source: AsyncIterator[dict]) -> StreamingResponse:
+    """把事件源包成 SSE 响应（心跳与 ``stream.closed`` 由传输层补）。"""
     async def guarded() -> AsyncIterator[str]:
-        try:
-            async for chunk in sse_stream(event_source()):
-                yield chunk
-        except asyncio.CancelledError:
-            execution.cancel_run(run_id)
-            async with SessionLocal() as session:
-                await store.mark_interrupted(session, run_id, "客户端断开连接，这次协作被中断")
-            raise
+        async for chunk in sse_stream(source):
+            yield chunk
 
     return StreamingResponse(
         guarded(),
@@ -200,10 +196,33 @@ def _stream_turn(prepared: engine.PreparedTurn) -> StreamingResponse:
     )
 
 
+def _stream_turn(prepared: engine.PreparedTurn) -> StreamingResponse:
+    """启动后台推进并返回 SSE。
+
+    推进跑在独立任务里，客户端断开只会退订、**不会**打断它；重新打开页面用
+    ``GET /runs/{id}/stream`` 订阅同一份实时事件即可续看。
+    """
+    run_id = prepared.run.id
+    bus.start(run_id, lambda: _drive_turn(prepared))
+    return _sse(bus.subscribe(run_id))
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+    """订阅一次运行的实时事件：用于断开后重连，或在另一台设备上实时围观。"""
+    try:
+        await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return _sse(bus.subscribe(run_id))
+
+
 @router.post("/runs/{run_id}/messages")
 async def send_message(
     run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
 ) -> StreamingResponse:
+    if bus.is_running(run_id):
+        raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
     try:
         prepared = await engine.prepare_turn(session, run_id, payload.content)
     except store.RunNotFound as exc:
@@ -216,6 +235,8 @@ async def send_message(
 @router.post("/runs/{run_id}/resume")
 async def resume_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
     """从中断处继续（不追加用户消息）。"""
+    if bus.is_running(run_id):
+        raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
     try:
         prepared = await engine.prepare_turn(session, run_id, None)
     except store.RunNotFound as exc:

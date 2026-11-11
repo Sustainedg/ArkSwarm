@@ -34,6 +34,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     },
     "collab_steps": {
         "gist": "VARCHAR(300) NOT NULL DEFAULT ''",
+        # 这一步把活派给了哪个节点（delegate 用）；用来在岗位会话里还原「谁把活交给了谁」
+        "target_key": "VARCHAR(64) NOT NULL DEFAULT ''",
     },
 }
 
@@ -184,6 +186,8 @@ class CollabStep(SQLModel, table=True):
     sequence: int = Field(default=0)
     #: 解析出的动作；解析失败时存空串，并由 error 字段说明原因
     action: str = Field(default="", sa_column=Column(String(24), nullable=False))
+    #: delegate 时的目标节点 key（即这一步把活交给了谁）；其他动作为空串
+    target_key: str = Field(default="", sa_column=Column(String(64), nullable=False, default=""))
     #: streaming / complete / error / cancelled
     status: str = Field(default="streaming", sa_column=Column(String(16), nullable=False, index=True))
     content: str = Field(default="", sa_column=Column(Text, nullable=False))

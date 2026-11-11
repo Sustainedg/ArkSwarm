@@ -22,13 +22,18 @@ export function CollabEdgeForm({
 }) {
   const [form, setForm] = useState<Omit<CollabEdge, 'id'>>(
     edge
-      ? { from_key: edge.from_key, to_key: edge.to_key, kind: edge.kind, label: edge.label, max_rounds: edge.max_rounds }
+      ? {
+          from_key: edge.from_key, to_key: edge.to_key, kind: edge.kind, label: edge.label,
+          max_rounds: edge.max_rounds, from_side: edge.from_side ?? null, to_side: edge.to_side ?? null,
+        }
       : {
           from_key: defaultFrom,
           to_key: nodes.find((item) => item.key !== defaultFrom)?.key ?? '',
           kind: 'assign',
           label: '',
           max_rounds: 0,
+          from_side: null,
+          to_side: null,
         },
   )
   const [error, setError] = useState<string | null>(null)
@@ -83,17 +88,23 @@ export function CollabEdgeForm({
       </div>
 
       {form.kind === 'rework' && (
-        <div className="field">
-          <label className="field-label">这条边的返工上限</label>
-          <input
-            className="input mono"
-            type="number"
-            min={0}
-            value={form.max_rounds}
-            onChange={(event) => set({ max_rounds: Math.max(0, Number(event.target.value) || 0) })}
-          />
-          <span className="field-help">0 表示按团队默认；实际取「边 / 节点 / 团队」三者最小。</span>
-        </div>
+        <>
+          <div className="field-help">
+            这条线本身已经指定打回目标，运行时不需要额外的 rework_to。只有当同一审查者画了多条
+            rework 出边时，审查者才需要在工单里写明 rework_to 来选择退路。
+          </div>
+          <div className="field">
+            <label className="field-label">这条边的返工上限</label>
+            <input
+              className="input mono"
+              type="number"
+              min={0}
+              value={form.max_rounds}
+              onChange={(event) => set({ max_rounds: Math.max(0, Number(event.target.value) || 0) })}
+            />
+            <span className="field-help">0 表示按团队默认；实际取「边 / 节点 / 团队」三者最小。</span>
+          </div>
+        </>
       )}
 
       <div className="field">

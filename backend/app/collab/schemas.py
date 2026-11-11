@@ -14,9 +14,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Duty(str, Enum):
@@ -33,6 +34,15 @@ class EdgeKind(str, Enum):
     ASSIGN = "assign"  # 派发 / 交付
     REVIEW = "review"  # 提交给审查者
     REWORK = "rework"  # 审查者打回给实施者（必须与 review 边成对出现）
+
+
+class EdgePort(str, Enum):
+    """连线在节点卡片上使用的端口；输入只允许左/上，输出只允许右/下。"""
+
+    LEFT = "left"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
 
 
 class WorkspaceScope(str, Enum):
@@ -128,6 +138,9 @@ class EdgeSpec(BaseModel):
     label: str = Field(default="", max_length=120)
     #: 这条边额外的返工轮次上限（0 = 不额外限制）：实际上限取「边 / 节点 / 运行时预算」三者最小
     max_rounds: int = Field(default=0, ge=0)
+    #: 画布端口方向（只影响编排图的外观，不参与运行语义）；旧图为空时由前端自动推断。
+    from_side: EdgePort | None = None
+    to_side: EdgePort | None = None
 
 
 class GraphSpec(BaseModel):
@@ -165,6 +178,22 @@ class GraphValidation(BaseModel):
         return cls(ok=not errors, errors=errors, warnings=warnings)
 
 
+def _clean_workspace_dir(value: str | None) -> str | None:
+    """规整协作组的工作路径：留空 = 默认目录，填写则必须是绝对路径。"""
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        path = Path(raw).expanduser()
+    except RuntimeError as exc:
+        raise ValueError("工作路径里的 `~` 无法展开，请直接填写绝对路径") from exc
+    if not path.is_absolute():
+        raise ValueError("工作路径必须是绝对路径，例如 /vol1/projects/my-app")
+    return str(path)
+
+
 class TeamCreate(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -174,6 +203,8 @@ class TeamCreate(BaseModel):
     workspace_dir: str | None = None
     graph: GraphSpec = Field(default_factory=GraphSpec)
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
+
+    _clean_create_workspace = field_validator("workspace_dir", mode="before")(_clean_workspace_dir)
 
 
 class TeamUpdate(BaseModel):
@@ -186,6 +217,8 @@ class TeamUpdate(BaseModel):
     #: 整图替换：编辑器保存的就是完整的一张图
     graph: GraphSpec | None = None
     budget: BudgetSpec | None = None
+
+    _clean_update_workspace = field_validator("workspace_dir", mode="before")(_clean_workspace_dir)
 
 
 class TeamRead(BaseModel):
@@ -219,6 +252,10 @@ class RunCreate(BaseModel):
 
     team_id: str = Field(min_length=1, max_length=64)
     title: str | None = None
+    #: 本次任务的工作路径；为空时回落到团队的默认路径，再为空则按运行 ID 分配
+    workspace_dir: str | None = None
+
+    _clean_run_workspace = field_validator("workspace_dir", mode="before")(_clean_workspace_dir)
 
 
 class RunMessage(BaseModel):
@@ -259,6 +296,8 @@ class StepRead(BaseModel):
     duty: str = ""
     sequence: int = 0
     action: str = ""
+    #: delegate 把活交给了哪个节点；空串表示不是派发或未知
+    target_key: str = ""
     status: str
     content: str = ""
     #: 引擎派生的结构化摘要（交接给下游的就是它，而不是 content）

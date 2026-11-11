@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import type { Conversation, Role } from '../../lib/types'
+import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { useInstallController } from '../pwa'
@@ -25,7 +26,7 @@ export function MobileConversationsPage({ version }: { version: string }) {
   const load = useCallback(async () => {
     try {
       const [list, roleList] = await Promise.all([api.listConversations(), api.listRoles()])
-      setConversations(list)
+      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
       setRoles(roleList)
       setError(null)
     } catch (e) {
@@ -38,6 +39,8 @@ export function MobileConversationsPage({ version }: { version: string }) {
   useEffect(() => {
     void load()
   }, [load])
+
+  useAutoRefresh(load, { intervalMs: 8000 })
 
   const dismissHint = () => {
     localStorage.setItem(INSTALL_HINT_KEY, '1')
