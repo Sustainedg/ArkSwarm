@@ -255,9 +255,16 @@ code, pre, .mono { font-family: var(--mono); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- 布局 ---------- */
-.app-shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; overflow: hidden; }
+/* 行高锁死在一屏内（minmax(0, 1fr)）：侧边栏里的对话列表再长也不能把这一行撑高。
+   否则 grid 行按内容自动伸缩，列表变长会把整行顶到 100vh 之外 —— 右侧的输入区跟着被
+   推出屏幕，越攒越看不到。行有界之后，超出的对话在 `.sidebar-scroll` 里自己滚。 */
+.app-shell {
+  display: grid; grid-template-columns: 232px 1fr; grid-template-rows: minmax(0, 1fr);
+  height: 100vh; overflow: hidden;
+}
 
 .sidebar {
+  min-height: 0;
   display: flex; flex-direction: column; gap: 6px;
   padding: 18px 14px; border-right: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(23, 22, 42, 0.85), rgba(11, 10, 18, 0.6));
