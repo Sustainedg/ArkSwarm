@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { Skill, SkillDetail } from '../lib/types'
+import { SkillsMarket } from '../components/SkillsMarket'
 
 /**
  * 技能页：把各智能体内核的技能目录统一编目后集中展示。
  * 技能只能通过「智能体 → 技能」的分配被某个智能体使用，这里只负责查看与重新扫描。
  */
 export function SkillsPage() {
+  const [tab, setTab] = useState<'local' | 'market'>('local')
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [sourceKind, setSourceKind] = useState('')
@@ -82,36 +84,63 @@ export function SkillsPage() {
           </p>
         </div>
         <div className="spacer" />
-        <input
-          className="input"
-          style={{ maxWidth: 220 }}
-          value={query}
-          placeholder="搜索技能名或说明"
-          onChange={(e) => {
-            setQuery(e.target.value)
-            void applyFilter({ q: e.target.value, source_kind: sourceKind || undefined })
-          }}
-        />
-        <select
-          className="select"
-          style={{ maxWidth: 170 }}
-          value={sourceKind}
-          onChange={(e) => {
-            setSourceKind(e.target.value)
-            void applyFilter({ source_kind: e.target.value || undefined, q: query || undefined })
-          }}
-        >
-          <option value="">全部来源</option>
-          <option value="user">个人技能</option>
-          <option value="project">项目技能</option>
-          <option value="plugin">插件技能</option>
-          <option value="system">内核系统技能</option>
-        </select>
-        <button className="btn" onClick={() => void rescan()} disabled={scanning}>
-          {scanning ? '扫描中…' : '重新扫描'}
-        </button>
+        <div className="tabs">
+          <button
+            className={`tab${tab === 'local' ? ' active' : ''}`}
+            onClick={() => setTab('local')}
+          >
+            本地技能
+          </button>
+          <button
+            className={`tab${tab === 'market' ? ' active' : ''}`}
+            onClick={() => setTab('market')}
+          >
+            技能市场
+          </button>
+        </div>
+        {tab === 'local' && (
+          <>
+          <input
+            className="input"
+            style={{ maxWidth: 220 }}
+            value={query}
+            placeholder="搜索技能名或说明"
+            onChange={(e) => {
+              setQuery(e.target.value)
+              void applyFilter({ q: e.target.value, source_kind: sourceKind || undefined })
+            }}
+          />
+          <select
+            className="select"
+            style={{ maxWidth: 170 }}
+            value={sourceKind}
+            onChange={(e) => {
+              setSourceKind(e.target.value)
+              void applyFilter({ source_kind: e.target.value || undefined, q: query || undefined })
+            }}
+          >
+            <option value="">全部来源</option>
+            <option value="user">个人技能</option>
+            <option value="project">项目技能</option>
+            <option value="plugin">插件技能</option>
+            <option value="system">内核系统技能</option>
+            <option value="market">市场技能</option>
+          </select>
+          <button className="btn" onClick={() => void rescan()} disabled={scanning}>
+            {scanning ? '扫描中…' : '重新扫描'}
+          </button>
+          </>
+        )}
       </header>
 
+      {tab === 'market' ? (
+        <SkillsMarket
+          onInstalled={async (message) => {
+            setNotice(message)
+            await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+          }}
+        />
+      ) : (
       <div className="skill-shell">
         <div className="skill-list">
           {error && <div className="banner err">{error}</div>}
@@ -157,6 +186,7 @@ export function SkillsPage() {
           )}
         </div>
       </div>
+      )}
     </>
   )
 }

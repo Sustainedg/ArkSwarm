@@ -281,6 +281,10 @@ export interface Skill {
   file_count: number
   note?: string | null
   used_by_agents: number
+  /** 由「技能市场」装入的技能为 true（可在技能页卸载），其余只读 */
+  is_market: boolean
+  /** 市场技能对应的市场页地址 */
+  source_url?: string | null
 }
 
 export interface SkillDetail extends Skill {
@@ -300,6 +304,60 @@ export interface SkillRescanResult {
   updated: number
   missing: number
   total: number
+}
+
+/** 技能市场（SkillHub）里的一个技能。 */
+export interface MarketSkill {
+  slug: string
+  name: string
+  description: string
+  version?: string | null
+  author?: string | null
+  category?: string | null
+  downloads: number
+  stars: number
+  score: number
+  owner?: string | null
+  source?: string | null
+  verified: boolean
+  requires_api_key: boolean
+  security?: string | null
+  icon_url?: string | null
+  updated_at?: number | null
+  url: string
+}
+
+export interface MarketSkillList {
+  items: MarketSkill[]
+  page: number
+  page_size: number
+  total: number
+  has_more: boolean
+}
+
+/** 可安装技能的内核（声明了可写技能根的适配器）。 */
+export interface MarketKernel {
+  type_id: string
+  name: string
+  path?: string | null
+}
+
+/** 安装市场技能的请求体。 */
+export interface MarketInstallInput {
+  slug: string
+  type_id: string
+  version?: string | null
+}
+
+/** 安装市场技能的结果。 */
+export interface MarketInstallResult {
+  skill_id: string
+  name: string
+  slug: string
+  type_id: string
+  version?: string | null
+  requires_api_key: boolean
+  warnings: string[]
 }
 
 /** 单条对话的完整读取结果：对话本身 + 全部消息 + 正在跑的那次运行（若有）。 */

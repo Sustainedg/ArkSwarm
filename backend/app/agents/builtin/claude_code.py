@@ -30,7 +30,13 @@ from ..events import (
     usage,
 )
 from ..registry import register_agent
-from ..skills import SkillMount, SkillSpec, scan_skill_root
+from ..skills import (
+    MARKET_SOURCE,
+    SkillMount,
+    SkillRoot,
+    SkillSpec,
+    scan_skill_roots,
+)
 from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, truthy
 
 
@@ -69,6 +75,9 @@ _RESIDUAL_BUNDLED_SKILLS = ("doctor",)
 
 #: 插件市场目录的扫描深度：plugins/<市场>/plugins/<插件>/skills/<技能>。
 _PLUGIN_SKILL_DEPTH = 8
+
+#: 平台「技能市场」安装目录（``<config>/skills/.skillhub/<skill>``），可卸载。
+_MARKET_DIRNAME = ".skillhub"
 
 
 def config_dir(home: str | Path | None = None) -> Path:
@@ -212,14 +221,27 @@ class ClaudeCodeAgent(AgentDefinition):
             defaults["api_key"] = api_key
         return defaults
 
-    def discover_skills(self) -> list[SkillSpec]:
-        """扫描 Claude Code 的技能根：个人技能 + 插件市场里的插件技能。"""
+    def skill_roots(self) -> list[SkillRoot]:
+        """Claude Code 的技能根：平台技能市场 + 个人技能 + 插件市场的插件技能。
+
+        「技能放在哪」只在这里声明（框架据此编目与安装）；``.skillhub`` 是平台自己的
+        技能市场目录，装进来的技能（``source_kind=market``）可以卸载，其余只读编目。
+        """
         root = config_dir()
-        specs = scan_skill_root(root / "skills", type_id=self.id, source_kind="user")
-        specs += scan_skill_root(
-            root / "plugins", type_id=self.id, source_kind="plugin", max_depth=_PLUGIN_SKILL_DEPTH
-        )
-        return specs
+        return [
+            SkillRoot(str(root / "skills" / _MARKET_DIRNAME), source_kind=MARKET_SOURCE),
+            SkillRoot(str(root / "skills"), source_kind="user"),
+            SkillRoot(
+                str(root / "plugins"),
+                source_kind="plugin",
+                installable=False,
+                max_depth=_PLUGIN_SKILL_DEPTH,
+            ),
+        ]
+
+    def discover_skills(self) -> list[SkillSpec]:
+        """扫描本内核声明的技能根（个人技能 + 插件技能 + 平台市场技能）。"""
+        return scan_skill_roots(self.skill_roots(), type_id=self.id)
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
         """严格仅分配：只让内核看到智能体分配到的技能。

@@ -3,6 +3,10 @@ import type {
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
   ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  MarketInstallInput,
+  MarketInstallResult,
+  MarketKernel,
+  MarketSkillList,
   SkillDetail,
   SkillRescanResult, TestResult,
 } from './types'
@@ -152,6 +156,38 @@ export const api = {
   },
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
+
+  /** 技能市场（SkillHub）：浏览 / 安装 / 卸载。安装需指定目标内核（type_id）。 */
+  listMarketSkills: (params?: {
+    page?: number
+    page_size?: number
+    sort_by?: string
+    order?: string
+    keyword?: string
+    category?: string
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.page) search.set('page', String(params.page))
+    if (params?.page_size) search.set('page_size', String(params.page_size))
+    if (params?.sort_by) search.set('sort_by', params.sort_by)
+    if (params?.order) search.set('order', params.order)
+    if (params?.keyword) search.set('keyword', params.keyword)
+    if (params?.category) search.set('category', params.category)
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<MarketSkillList>(`/api/skillhub/skills${suffix}`)
+  },
+  marketKernels: () =>
+    request<{ items: MarketKernel[] }>('/api/skillhub/kernels').then((r) => r.items),
+  installMarketSkill: (body: MarketInstallInput) =>
+    request<MarketInstallResult>('/api/skillhub/install', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  uninstallMarketSkill: (skillId: string) =>
+    request<{ ok: boolean; name: string }>('/api/skillhub/uninstall', {
+      method: 'POST',
+      body: JSON.stringify({ skill_id: skillId }),
+    }),
 
   listConversations: () => request<{ items: Conversation[] }>('/api/conversations').then((r) => r.items),
   createConversation: (body: unknown) =>

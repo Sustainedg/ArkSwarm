@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,16 +18,22 @@ from typing import Any, Iterable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ..agents import AgentContext, AgentDefinition, all_agents
+from ..agents import AgentContext, AgentDefinition, all_agents, get_agent
 from ..agents.skills import (
+    MARKET_SOURCE,
     MAX_SKILL_BYTES,
     SKILL_FILE,
+    MarketInstallInfo,
     SkillMount,
+    SkillRoot,
     SkillSpec,
+    read_market_marker,
     safe_skill_dirname,
+    write_market_marker,
 )
 from ..models import AgentProfile, AgentSkill, Conversation, Skill
 from ..settings import get_settings
+from ..skillhub import extract_skill_archive
 
 logger = logging.getLogger("magenta")
 
@@ -37,10 +44,18 @@ SOURCE_LABELS = {
     "plugin": "插件技能",
     "system": "内核系统技能",
     "manual": "平台技能",
+    MARKET_SOURCE: "市场技能",
 }
 
-#: 同名技能的去重优先级（越小越优先）
-SOURCE_PRECEDENCE = {"manual": 0, "user": 1, "project": 2, "plugin": 3, "system": 4}
+#: 同名技能的去重优先级（越小越优先）；市场技能是用户显式安装的，优先级最高
+SOURCE_PRECEDENCE = {
+    "manual": 0,
+    MARKET_SOURCE: 1,
+    "user": 2,
+    "project": 3,
+    "plugin": 4,
+    "system": 5,
+}
 
 #: 详情页读取 SKILL.md 正文的上限
 MAX_BODY_BYTES = 200_000
@@ -161,9 +176,13 @@ async def agents_using(session: AsyncSession, skill_id: str) -> list[AgentProfil
 
 
 def read_body(skill_path: str) -> tuple[str, bool]:
-    """读取 SKILL.md 正文（供详情页展示）；返回 ``(正文, 是否被截断)``。"""
+    """读取 SKILL.md 正文（供详情页展示）；返回 ``(正文, 是否被截断)``。
+
+    ``skill_path`` 既接受技能目录（读目录下的 ``SKILL.md``），也接受 ``SKILL.md`` 文件本身。
+    """
+    base = Path(skill_path)
+    target = base / SKILL_FILE if base.is_dir() or not base.suffix else base
     try:
-        target = Path(skill_path) / SKILL_FILE
         data = target.read_bytes()
     except OSError:
         return "", False
@@ -245,6 +264,8 @@ def spec_from_row(row: Skill) -> SkillSpec:
         total_bytes=row.total_bytes or 0,
         fingerprint=row.fingerprint or "",
         note=row.note,
+        source_slug=row.slug if row.source_kind == MARKET_SOURCE else None,
+        source_url=(row.source_url or None),
     )
 
 
@@ -381,3 +402,145 @@ def cleanup_conversation(conversation_id: str) -> None:
     """删除对话时清掉它的隔离配置目录（尽力而为）。"""
     home = get_settings().agent_homes_root / conversation_id
     shutil.rmtree(home, ignore_errors=True)
+
+
+# --- 技能市场（安装 / 卸载）--------------------------------------------------
+
+
+class SkillError(Exception):
+    """技能操作失败：消息面向用户。"""
+
+
+def skill_roots_for_type(type_id: str) -> list[SkillRoot]:
+    """某个内核声明的技能根；未知内核或该内核不支持技能时抛 :class:`SkillError`。"""
+    try:
+        definition = get_agent(type_id)
+    except KeyError:
+        raise SkillError(f"未知的智能体类型：{type_id}") from None
+    roots = definition.skill_roots()
+    if not roots:
+        raise SkillError(f"{definition.name} 不支持技能：没有声明技能目录")
+    return roots
+
+
+def install_root_for_type(type_id: str) -> SkillRoot:
+    """某个内核用来安装「市场技能」的技能根（`installable` 中最靠前的一个）。"""
+    roots = skill_roots_for_type(type_id)
+    for root in roots:
+        if root.installable:
+            return root
+    raise SkillError(f"该内核（{type_id}）没有可写入的技能目录，无法安装技能")
+
+
+def market_install_root(type_id: str) -> str:
+    """市场技能要落到的目录（按内核声明的技能根解析；找不到时按 ``<可写根>/.skillhub``）。"""
+    roots = skill_roots_for_type(type_id)
+    for root in roots:
+        if root.source_kind == MARKET_SOURCE and root.installable:
+            return root.path
+    base = install_root_for_type(type_id).path
+    return str(Path(base) / ".skillhub")
+
+
+def _is_under(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _remove_installed_skill(type_id: str, row: Skill) -> None:
+    """卸载一个市场技能：只删「我们装进去的目录」，越界或非市场技能一律拒绝。
+
+    判据有两条，缺一不可：目录里有市场安装标记（``.skillhub.json``），且目录落在
+    该内核声明的可写技能根内。这样即便数据库被改成指向别处，也不会误删内核自带技能。
+    """
+    if row.source_kind != MARKET_SOURCE:
+        raise SkillError(f"「{row.name}」不是市场技能，不能卸载")
+    target = Path(row.path)
+    if not target.is_dir():
+        return
+    if read_market_marker(target) is None:
+        raise SkillError(
+            f"「{row.name}」缺少市场安装标记，拒绝删除（可能不是平台安装的技能）"
+        )
+    if not any(
+        root.installable and _is_under(Path(root.path), target)
+        for root in skill_roots_for_type(type_id)
+    ):
+        raise SkillError(f"「{row.name}」不在可写入的技能目录内，拒绝删除")
+    shutil.rmtree(target, ignore_errors=True)
+
+
+async def wait_for_market_registration(
+    session: AsyncSession, skill_id: str, *, attempts: int = 3, interval: float = 0.4
+) -> Skill | None:
+    """安装落盘后等编目把它登记进 ``skills`` 表（文件系统可见性有轻微延迟）。"""
+    for _ in range(max(1, attempts)):
+        row = await get_row(session, skill_id)
+        if row is not None:
+            return row
+        await asyncio.sleep(interval)
+    return await get_row(session, skill_id)
+
+
+async def install_market_skill(
+    session: AsyncSession,
+    *,
+    type_id: str,
+    slug: str,
+    version: str | None,
+    archive: bytes,
+    source_url: str | None = None,
+    display_slug: str | None = None,
+) -> dict[str, Any]:
+    """把一个市场技能的 zip 落盘到内核的原生技能根，并把它同步进统一编目。
+
+    步骤：安全解压到 ``<market_root>/<slug>`` → 写入市场安装标记 → 触发一次重扫。
+    返回 ``{"skill_id", "name", "warnings"}``；失败抛 :class:`SkillError`。
+    """
+    safe = safe_skill_dirname(slug)
+    if safe is None:
+        raise SkillError(f"技能标识不合法：{slug}")
+    root = Path(market_install_root(type_id))
+    target = root / safe
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        extract_skill_archive(archive, target)
+    except OSError as exc:
+        raise SkillError(f"安装失败：无法写入技能目录（{exc}）") from None
+
+    write_market_marker(
+        target,
+        MarketInstallInfo(
+            slug=display_slug or safe,
+            version=version,
+            source_url=source_url,
+            installed_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    await rescan(session)
+    skill_id = f"{type_id}:{safe}"
+    row = await wait_for_market_registration(session, skill_id)
+    if row is None:
+        # 目录已落盘，但编目还没收录（通常是该目录被别的技能根重复覆盖）——给出可操作提示。
+        raise SkillError(
+            f"技能已解压到 {target}，但编目未收录；"
+            "请到「技能」页点一次「重新扫描」"
+        )
+    return {"skill_id": row.id, "name": row.name, "warnings": []}
+
+
+async def uninstall_market_skill(session: AsyncSession, skill_id: str) -> str:
+    """卸载一个市场技能：删掉安装目录并标记失效，触发一次重扫。返回被删技能名。"""
+    row = await get_row(session, skill_id)
+    if row is None:
+        raise SkillError(f"技能不存在：{skill_id}")
+    _remove_installed_skill(row.type_id, row)
+    row.available = False
+    row.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await rescan(session)
+    return row.name

@@ -29,12 +29,21 @@ from ..events import (
     usage,
 )
 from ..registry import register_agent
-from ..skills import SkillMount, SkillSpec, scan_skill_root
+from ..skills import (
+    MARKET_SOURCE,
+    SkillMount,
+    SkillRoot,
+    SkillSpec,
+    scan_skill_roots,
+)
 from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, truthy
 
 
 #: Codex 的登录态与配置文件名；隔离运行时要一并带过去，否则会丢登录或丢自定义供应商。
 _CARRY_FILES = ("config.toml", "auth.json")
+
+#: 平台「技能市场」安装目录（``$CODEX_HOME/skills/.skillhub/<skill>``），可卸载。
+_MARKET_DIRNAME = ".skillhub"
 
 #: 给自定义网关生成的 ``model_provider`` 的默认名（用户可用「自定义供应商名称」覆盖）。
 #: 新版 Codex 不再读 ``OPENAI_BASE_URL``（内置 provider 会直奔 api.openai.com），
@@ -178,12 +187,22 @@ class CodexAgent(AgentDefinition):
         ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
-    def discover_skills(self) -> list[SkillSpec]:
-        """扫描 Codex 的技能根：``$CODEX_HOME/skills``（含 ``.system`` 系统技能）。"""
+    def skill_roots(self) -> list[SkillRoot]:
+        """Codex 的技能根：平台技能市场 + 用户技能 + ``.system`` 系统技能。
+
+        ``.skillhub`` 是平台自己的市场目录（其中的技能可卸载）；``.system`` 归内核所有，
+        只读编目、不作为安装目标。
+        """
         root = codex_home() / "skills"
-        specs = scan_skill_root(root, type_id=self.id, source_kind="user")
-        specs += scan_skill_root(root / ".system", type_id=self.id, source_kind="system")
-        return specs
+        return [
+            SkillRoot(str(root / _MARKET_DIRNAME), source_kind=MARKET_SOURCE),
+            SkillRoot(str(root), source_kind="user"),
+            SkillRoot(str(root / ".system"), source_kind="system", installable=False),
+        ]
+
+    def discover_skills(self) -> list[SkillSpec]:
+        """扫描本内核声明的技能根（用户技能 + 系统技能 + 平台市场技能）。"""
+        return scan_skill_roots(self.skill_roots(), type_id=self.id)
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
         """严格仅分配：把运行环境指向只含「智能体分配到的技能」的隔离 ``CODEX_HOME``。

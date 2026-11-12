@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import type { Skill, SkillDetail } from '../../lib/types'
+import { SkillsMarket } from '../../components/SkillsMarket'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -13,8 +14,35 @@ const SOURCE_OPTIONS = [
   { value: 'system', label: '内核系统技能' },
 ]
 
-/** 技能：各内核自带技能的统一编目视图；技能只有被智能体分配后才生效。 */
+/** 技能：本地编目 + 技能市场两个页签；技能只有被智能体分配后才生效。 */
 export function MobileSkillsPage() {
+  const [tab, setTab] = useState<'local' | 'market'>('local')
+  return (
+    <div className="m-page">
+      <MobileTopBar title="技能" subtitle="统一编目 · 通过智能体分配生效" />
+      <div className="m-page-body">
+        <div className="tabs" style={{ marginBottom: 12 }}>
+          <button
+            className={`tab${tab === 'local' ? ' active' : ''}`}
+            onClick={() => setTab('local')}
+          >
+            本地技能
+          </button>
+          <button
+            className={`tab${tab === 'market' ? ' active' : ''}`}
+            onClick={() => setTab('market')}
+          >
+            技能市场
+          </button>
+        </div>
+        {tab === 'market' ? <SkillsMarket variant="mobile" /> : <MobileSkillsLocal />}
+      </div>
+    </div>
+  )
+}
+
+/** 本地技能：各内核自带技能的统一编目视图（原来的实现）。 */
+function MobileSkillsLocal() {
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [sourceKind, setSourceKind] = useState('')
@@ -74,19 +102,16 @@ export function MobileSkillsPage() {
   }, [skills])
 
   return (
-    <div className="m-page">
-      <MobileTopBar
-        title="技能"
-        subtitle="统一编目 · 通过智能体分配生效"
-        actions={
-          <button className="m-icon-btn" onClick={() => void rescan()} disabled={scanning} aria-label="重新扫描">
-            {scanning ? '◌' : '↻'}
-          </button>
-        }
-      />
-
-      <div className="m-page-body">
-        <div className="stack">
+    <div className="stack">
+      <div className="row" style={{ gap: 8 }}>
+        <span className="dim small" style={{ flex: 1 }}>
+          各内核自带技能的统一编目
+        </span>
+        <button className="btn" onClick={() => void rescan()} disabled={scanning}>
+          {scanning ? '扫描中…' : '重新扫描'}
+        </button>
+      </div>
+      <div className="stack">
           <input
             className="input"
             value={query}
@@ -120,7 +145,7 @@ export function MobileSkillsPage() {
             <div className="m-empty">
               <div className="m-empty-icon">🧩</div>
               <p>没有扫描到技能</p>
-              <p className="dim small">点右上角「↻」重新扫描各内核的技能目录。</p>
+              <p className="dim small">点上方「重新扫描」刷新各内核的技能目录。</p>
             </div>
           ) : (
             groups.map(([typeId, group]) => (
@@ -142,7 +167,6 @@ export function MobileSkillsPage() {
             ))
           )}
         </div>
-      </div>
 
       {selected && (
         <MobileSheet full title={`技能 · ${selected.name}`} onClose={() => setSelected(null)}>

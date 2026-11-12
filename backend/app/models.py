@@ -29,6 +29,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # 「默认智能体」这一列是后加的：老行一律按「不是默认」补上，由 bootstrap 在启动时补一颗星
     "agent_profiles": {"is_default": "BOOLEAN NOT NULL DEFAULT 0"},
     "gateways": {},
+    # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）
+    "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
 }
 
 
@@ -150,6 +152,8 @@ class Skill(SQLModel, table=True):
     )
     available: bool = Field(default=True)
     note: str | None = Field(default=None, sa_column=Column(String(400)))
+    #: 来源是「技能市场」时，市场技能页地址；其余来源为空
+    source_url: str = Field(default="", sa_column=Column(String(500), nullable=False))
     discovered_at: datetime = Field(
         default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
     )

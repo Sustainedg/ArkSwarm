@@ -250,6 +250,10 @@ class SkillRead(BaseModel):
     file_count: int = 0
     note: str | None = None
     used_by_agents: int = 0
+    #: 由「技能市场」装入的技能为 True（可以卸载），其余只读
+    is_market: bool = False
+    #: 市场技能对应的市场页地址
+    source_url: str | None = None
 
 
 class SkillDetail(SkillRead):
@@ -270,6 +274,26 @@ class SkillRescanResult(BaseModel):
     updated: int = 0
     missing: int = 0
     total: int = 0
+
+
+# --- 技能市场（SkillHub）-----------------------------------------------------
+
+
+class SkillHubInstallIn(BaseModel):
+    """把一个市场技能安装到某个内核的原生技能根。"""
+
+    #: 市场里的技能标识（slug）
+    slug: str
+    #: 目标内核 id（如 claude-code / codex）；装到该内核声明的技能目录里
+    type_id: str
+    #: 指定版本；留空装最新版
+    version: str | None = None
+
+
+class SkillHubUninstallIn(BaseModel):
+    """卸载一个由市场装入的技能（``skill_id`` 形如 ``claude-code:foo``）。"""
+
+    skill_id: str
 
 
 # --- 对话 -------------------------------------------------------------------

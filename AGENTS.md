@@ -205,8 +205,11 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   `fingerprint` / `files` …），`id` 固定为 `<type_id>:<slug>`。
 - `SkillMount`：适配器声明的**物化计划**（`home_name`、`skills_subdir`、`carry` 要携带的配置文件、
   `patch` 配置文件补丁、`notes` 用户提示）。框架只按这份声明执行，不认识具体内核。
-- 适配器钩子：`discover_skills()`（只读扫描本内核的技能根，尽力而为、不得抛错）与
-  `skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）。
+- 适配器钩子：`skill_roots()`（声明本内核的技能根：路径 + 来源 + 是否可安装；框架据此
+  统一扫描与安装技能）、`discover_skills()`（只读扫描，尽力而为、不得抛错；常见实现是
+  `scan_skill_roots(self.skill_roots(), ...)`）与 `skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）。
+  技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
+  但落盘路径仍由适配器声明、框架不硬编码。
 - `AgentContext.skills` / `AgentContext.skill_home_dir`：框架注入的「本次运行生效的技能」与
   「物化好的隔离目录」，适配器在 `build_invocation()` 里据此设置自己的配置目录环境变量。
 - 声明了 `Capabilities.skills=True` 的适配器**必须**实现 `skill_mount()`（有架构守卫测试）。
@@ -237,8 +240,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 
 ### 4.6 让某个适配器支持技能
 1. `capabilities` 里声明 `skills=True`。
-2. 实现 `discover_skills()`：用 `agents/skills.py` 的 `scan_skill_root()` 扫描本内核的技能根，
-   标注来源（`user` / `project` / `plugin` / `system`），**只读、不得抛错**。
+2. 实现 `skill_roots()` 声明本内核的技能根（`SkillRoot(path, source_kind, installable, max_depth)`；
+   平台「技能市场」的安装目录是其中 `installable` 的一个，通常把 `.skillhub` 单独列一条、
+   `source_kind=MARKET_SOURCE`），再用 `agents/skills.py` 的 `scan_skill_roots()` 实现 `discover_skills()`，
+   标注来源（`user` / `project` / `plugin` / `system` / `market`），**只读、不得抛错**。
 3. 实现 `skill_mount(ctx)`：声明隔离目录名、需要携带的配置文件、要关闭的内核自带技能，
    并在 `build_invocation()` 里把 `ctx.skill_home_dir` 写进对应环境变量（如 `CLAUDE_CONFIG_DIR`）。
 4. 加测试：参考 `backend/tests/test_skills.py`（解析、物化、隔离变量）。

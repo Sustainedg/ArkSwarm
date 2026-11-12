@@ -12,10 +12,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -62,6 +63,10 @@ class SkillSpec:
     fingerprint: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
     note: str | None = None
+    #: 来源是「技能市场」时，市场里的技能标识（slug）；其余来源为空
+    source_slug: str | None = None
+    #: 来源是「技能市场」时，市场技能页地址
+    source_url: str | None = None
 
     @property
     def id(self) -> str:
@@ -86,6 +91,7 @@ class SkillSpec:
             "total_bytes": self.total_bytes,
             "meta": self.extra,
             "note": self.note,
+            "source_url": self.source_url or "",
         }
 
 
@@ -110,6 +116,113 @@ class SkillMount:
     carry: list[tuple[str, str]] = field(default_factory=list)
     patch: dict[str, dict[str, Any]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+
+
+#: 「技能市场」来源：平台从远程技能库下载、安装进内核原生技能根的技能。
+#: 只有这种来源的技能是「由平台装入」的，可以卸载；其余来源（user/plugin/system…）只读。
+MARKET_SOURCE = "market"
+
+
+@dataclass(slots=True)
+class SkillRoot:
+    """适配器声明的「本内核的技能根」之一。
+
+    这是「哪个内核把技能放在哪」的权威声明：适配器用 :meth:`AgentDefinition.skill_roots`
+    列出自己的技能根，框架据此**统一扫描**（编目）、并在安装技能时落到
+    ``installable`` 的那个根里。框架不认识任何具体内核，也不硬编码任何路径。
+
+    * ``path``：技能根目录的绝对路径（每个技能是它下面的一个子目录）。
+    * ``source_kind``：从该根扫出来的技能归为什么来源（``user`` / ``plugin`` /
+      ``system`` / ``market``…），用于界面分组与「能否卸载」判定。
+    * ``installable``：新技能装到这个根是否合适。插件市场那种由别人托管的目录为
+      ``False``（只读编目），平台自己的市场目录与个人技能目录为 ``True``。
+    """
+
+    path: str
+    source_kind: str = "user"
+    installable: bool = True
+    max_depth: int = 1
+
+
+@dataclass(slots=True)
+class MarketInstallInfo:
+    """一个由「技能市场」装入的技能在磁盘上的凭据（写在技能目录内的标记文件里）。
+
+    它的存在就是「这个技能是平台从市场装进来的、可以卸载」的判据——不依赖数据库，
+    因为技能目录本身是权威来源（删掉目录，编目自然会把它标成失效）。
+    """
+
+    #: 市场里对应的技能标识（slug）
+    slug: str = ""
+    #: 安装时的版本
+    version: str | None = None
+    #: 市场技能页地址
+    source_url: str | None = None
+    #: 安装时间（ISO8601 文本）
+    installed_at: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "slug": self.slug,
+            "version": self.version,
+            "source_url": self.source_url or "",
+            "installed_at": self.installed_at,
+        }
+
+
+#: 市场安装标记文件名（放在技能目录内）
+MARKET_MARKER_FILE = ".skillhub.json"
+
+
+def scan_skill_roots(roots: Iterable[SkillRoot], *, type_id: str) -> list[SkillSpec]:
+    """按适配器声明的技能根统一扫描，返回其中所有技能。
+
+    这是「适配器只声明路径、框架负责扫描」的落点：适配器给出 :class:`SkillRoot`，
+    这里逐个调用 :func:`scan_skill_root`，来源与深度都照根的声明来。
+    """
+    specs: list[SkillSpec] = []
+    for root in roots:
+        scanned = scan_skill_root(
+            root.path, type_id=type_id, source_kind=root.source_kind, max_depth=root.max_depth
+        )
+        for spec in scanned:
+            _annotate_market(spec, root.source_kind)
+        specs.extend(scanned)
+    return specs
+
+
+def _annotate_market(spec: SkillSpec, source_kind: str) -> None:
+    """把「由市场装入」的技能补上来源信息（读取目录内的标记文件，尽力而为）。"""
+    if source_kind != MARKET_SOURCE:
+        return
+    info = read_market_marker(spec.path)
+    if info is None:
+        return
+    spec.source_slug = info.slug or spec.slug
+    spec.source_url = info.source_url
+
+
+def read_market_marker(directory: str | os.PathLike[str]) -> MarketInstallInfo | None:
+    """读取技能目录内的市场安装标记；不是市场安装的技能返回 ``None``。"""
+    path = Path(directory) / MARKET_MARKER_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return MarketInstallInfo(
+        slug=str(data.get("slug") or ""),
+        version=data.get("version") or None,
+        source_url=data.get("source_url") or None,
+        installed_at=data.get("installed_at") or None,
+    )
+
+
+def write_market_marker(directory: str | os.PathLike[str], info: MarketInstallInfo) -> None:
+    """把市场安装标记写进技能目录（幂等；写入失败不致命）。"""
+    path = Path(directory) / MARKET_MARKER_FILE
+    path.write_text(json.dumps(info.to_json(), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:

@@ -1623,6 +1623,9 @@ code, pre, .mono { font-family: var(--mono); }
   .board-col-list .board-col-body { max-height: 40vh; overflow: auto; }
 }
 
+/* 技能市场卡片：描述限高，避免长文案把卡片撑得很高 */
+.skills-market-cards .card > p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
 /* ================= 工单看板：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴 ================= */
 /* 移动端不加载 index.css，这一段两端**各写一份**、必须逐字一致（有测试守着）。
    改配色或尺寸时两边一起改；只有「工单卡 / 动作徽章 / 流转卡片 / 规则手风琴」这几个原子在这里，
@@ -1929,4 +1932,5 @@ code, pre, .mono { font-family: var(--mono); }
   z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
   border: 1px solid var(--border); background: var(--office-glass); pointer-events: none;
 }
+
 

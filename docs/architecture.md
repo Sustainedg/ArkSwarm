@@ -119,7 +119,8 @@ class AgentDefinition(ABC):
     def parse_line(line, run) -> Iterable[Event] # CLI：逐行解析（run.state 存放解析状态）
     async def stream(ctx) -> AsyncIterator[Event]# API：进程内直接产事件
 
-    def discover_skills() -> list[SkillSpec]     # 技能：本内核的技能根（只读扫描）
+    def skill_roots() -> list[SkillRoot]         # 技能：本内核的技能根（路径 + 来源 + 是否可安装）
+    def discover_skills() -> list[SkillSpec]     # 技能：扫描上面这些根（默认由框架 scan_skill_roots 完成）
     def skill_mount(ctx) -> SkillMount | None    # 技能：把分配到的技能物化到哪里
 
     logo                                          # 官方 Logo（/icons/kernels/*.svg，前端当遮罩染色）
@@ -264,18 +265,21 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 
 ## 5. 技能（Skill）
 
-技能是各智能体内核自带的能力包（一个目录 + ``SKILL.md``）。平台把它们**统一编目**，
-再通过**智能体分配**决定某个智能体能用哪些技能：
+技能是各智能体内核的能力包（一个目录 + ``SKILL.md``）。平台把它们**统一编目**，
+再通过**智能体分配**决定某个智能体能用哪些技能。技能在磁盘上是**按内核就地维护**的：
+一份技能只对写它的那个内核成立（`allowed-tools`、`scripts/`、依赖的插件都是内核特有的），
+因此平台不存储技能内容，只做编目与分配，外加一个「技能市场」把远程技能**装进对应内核**。
 
 ```
 各内核技能根 ──discover_skills()──▶ 统一目录(skills 表) ──分配──▶ agent_skills ──▶ 运行时物化
-  ~/.claude/skills                        （只读索引）       （智能体弹窗）      agent-homes/<对话>/…
-  $CODEX_HOME/skills
+  ~/.claude/skills(+ .skillhub)            （只读索引）       （智能体弹窗）      agent-homes/<对话>/…
+  $CODEX_HOME/skills(+ .skillhub)
 ```
 
-- **编目**：适配器的 `discover_skills()` 只读扫描自己内核的技能根（个人 / 项目 / 插件 / 系统），
-  框架去重（同名技能按「个人 > 项目 > 插件 > 系统」取优先级最高的一份）后写入 `skills` 表。
-  目录消失时只把 `available` 置 False，**不删行**，智能体分配不会断链。
+- **编目**：适配器用 `skill_roots()` 声明自己的技能根（路径 + 来源 + 是否可安装），框架用
+  `scan_skill_roots()` 统一扫描，去重（同名技能按「平台技能 > 市场技能 > 个人 > 项目 > 插件 > 系统」
+  取优先级最高的一份）后写入 `skills` 表。目录消失时只把 `available` 置 False，**不删行**，
+  智能体分配不会断链。来源标签见 `runtime/skills.py:SOURCE_LABELS`。
 - **分配**：`agent_skills` 是智能体能用的技能的**唯一来源**；`PUT /api/agents/{id}/skills` 整表替换。
   类型与智能体的内核不一致的技能，界面直接禁止选择，服务端再兜底返回 422。
 - **物化（严格仅分配）**：适配器的 `skill_mount(ctx)` 声明「我的内核从哪里读技能」——
@@ -289,6 +293,25 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 
 - **边界**：内核自带的少量技能（如 Claude Code 的 `doctor`）需要通过 `skillOverrides` 逐个关闭；
   内核还会读取工作目录下的 `<工作目录>/.claude/skills`，这类技能不在分配范围内，运行时会给出提示。
+
+### 5.1 技能市场（SkillHub）
+
+平台的「技能」页可以把第三方技能社区 [skillhub.cn](https://skillhub.cn) 的技能**装进某个内核**：
+
+```
+skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏览
+           └─/api/v1/download?slug=…（zip）──▶ 安全解压到 <内核技能根>/<slug>
+```
+
+- **安装 = 写内核的原生技能根**（不是物化隔离目录）：Claude Code 落到 `~/.claude/skills/.skillhub/`，
+  Codex 落到 `$CODEX_HOME/skills/.skillhub/`。落地点来自适配器声明的、`installable` 的那个
+  `SkillRoot`，框架不硬编码路径。
+- **装完仍需分配**：安装只是把技能放进了内核的编目范围（`source_kind=market`），要
+  智能体真正用上，还得在「智能体 → 技能」里分配——与内核自带技能同一套「严格仅分配」规则。
+- **可卸载，但有护栏**：只有当技能目录内有市场安装标记（``.skillhub.json``）**且**目录落在
+  `installable` 技能根内时，卸载才允许删；内核自带技能永远不会被市场卸载接口删掉。
+- **解压安全**：拒绝 zip-slip（绝对路径 / `..`）、跳过符号链接、限制文件数与解压后总字节数。
+- **接口**：`GET/POST /api/skillhub/*`（列表 / 内核 / 详情 / 安装 / 卸载），见 ``api/skillhub.py``。
 
 ## 6. 数据模型
 
@@ -304,7 +327,7 @@ conversations(id, title, agent_profile_id→agent_profiles, session_id, workspac
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
-       available, note)
+       available, note, source_url)   # source_kind 含 market（市场技能，可卸载）
 agent_skills(agent_profile_id→agent_profiles, skill_id→skills，复合主键 + position)
 
 -- 协作域（独立于对话域，见 docs/collaboration-design.md）
@@ -364,7 +387,8 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 | 让运行时可由平台安装 / 更新 | 在该适配器声明 `provisioner`（`RuntimeProvisioner`），界面自动出现按钮 |
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |
 | 新增移动端页面 | 在 `frontend/src/mobile/` 加页面并在 `MobileApp.tsx` 注册路由（桌面端不受影响） |
-| 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `discover_skills()` 与 `skill_mount()` |
+| 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `skill_roots()`、`discover_skills()` 与 `skill_mount()` |
+| 从技能市场安装 / 卸载技能 | 框架已内置（`app/skillhub.py` + `api/skillhub.py`）；只要适配器声明了 `installable` 的技能根 |
 | 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |

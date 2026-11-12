@@ -42,6 +42,8 @@ def _describe(row: Skill, counts: dict[str, int]) -> SkillRead:
         file_count=len(row.files or []),
         note=row.note,
         used_by_agents=counts.get(row.id, 0),
+        is_market=row.source_kind == skill_service.MARKET_SOURCE,
+        source_url=(row.source_url or None),
     )
 
 
