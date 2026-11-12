@@ -29,6 +29,7 @@ from ..events import (
     tool_result,
     usage,
 )
+from ..mcp import McpMount, McpServerSpec, parse_json_servers, to_json_config
 from ..registry import register_agent
 from ..skills import (
     MARKET_SOURCE,
@@ -79,11 +80,27 @@ _PLUGIN_SKILL_DEPTH = 8
 #: 平台「技能市场」安装目录（``<config>/skills/.skillhub/<skill>``），可卸载。
 _MARKET_DIRNAME = ".skillhub"
 
+#: 分配到的 MCP 服务器写成的独立配置文件（隔离目录内），配合 ``--mcp-config`` 使用。
+_MCP_FILE = "mcp.json"
+
 
 def config_dir(home: str | Path | None = None) -> Path:
     """Claude Code 的配置目录（默认 ``~/.claude``）。"""
     base = Path(home).expanduser() if home else Path.home()
     return base / ".claude"
+
+
+def user_config_file(home: str | Path | None = None) -> Path:
+    """Claude Code 的用户级配置文件（``~/.claude.json``）。
+
+    ``CLAUDE_CONFIG_DIR`` 会把配置目录整个挪走，这份文件也跟着走；
+    因此扫描 MCP 服务器时要认这个环境变量，否则「界面看到的」和「CLI 用的」会对不上。
+    """
+    if home:
+        return Path(home).expanduser() / ".claude.json"
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(override).expanduser() if override else Path.home()
+    return base / ".claude.json"
 
 
 def read_system_settings(home: str | Path | None = None) -> dict[str, Any]:
@@ -270,6 +287,33 @@ class ClaudeCodeAgent(AgentDefinition):
             notes=notes,
         )
 
+    def discover_mcp_servers(self) -> list[McpServerSpec]:
+        """扫描用户级配置 ``~/.claude.json`` 里的 ``mcpServers``（只读、尽力而为）。"""
+        try:
+            raw = json.loads(user_config_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return parse_json_servers(raw, type_id=self.id, source_kind="user")
+
+    def mcp_mount(self, ctx: AgentContext) -> McpMount:
+        """把分配到的服务器写成隔离目录里的一份配置，并关掉其它所有 MCP 配置。
+
+        ``--strict-mcp-config`` 与 ``--mcp-config`` 一起用时，Claude Code **只**认这份文件：
+        本机 ``~/.claude.json``、工作目录的 ``.mcp.json`` 都不会被加载。
+        """
+        notes: list[str] = []
+        if ctx.workspace_dir:
+            project = Path(ctx.workspace_dir) / ".mcp.json"
+            if project.is_file():
+                notes.append(
+                    f"工作目录自带的 {project} 不会生效（本次运行只认平台分配到的 MCP 服务器）"
+                )
+        return McpMount(
+            home_name="claude-home",
+            files={_MCP_FILE: to_json_config(ctx.mcp_servers)},
+            notes=notes,
+        )
+
     # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
@@ -317,10 +361,14 @@ class ClaudeCodeAgent(AgentDefinition):
             env.setdefault("IS_SANDBOX", sandbox_escape)
         env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         env.setdefault("CI", "1")
-        if ctx.skill_home_dir:
+        if ctx.home_dir:
             # 严格仅分配：内核只从隔离配置目录里的 skills/ 读取技能。
-            env["CLAUDE_CONFIG_DIR"] = ctx.skill_home_dir
+            env["CLAUDE_CONFIG_DIR"] = ctx.home_dir
             env.setdefault("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS", "1")
+            # 严格仅分配：MCP 也只认平台写下的那份配置（见 mcp_mount）。
+            mcp_file = Path(ctx.home_dir) / _MCP_FILE
+            if mcp_file.is_file():
+                argv += ["--mcp-config", str(mcp_file), "--strict-mcp-config"]
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=ctx.prompt)
 
     def _apply_auth_style(self, env: dict[str, str], ctx: AgentContext) -> None:

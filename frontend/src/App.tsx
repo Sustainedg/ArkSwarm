@@ -5,6 +5,7 @@ import { api } from './lib/api'
 import { ChatPage } from './pages/ChatPage'
 import { CollabPage } from './pages/CollabPage'
 import { AgentsPage } from './pages/AgentsPage'
+import { McpPage } from './pages/McpPage'
 import { RuntimesPage } from './pages/RuntimesPage'
 import { SkillsPage } from './pages/SkillsPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -16,6 +17,7 @@ const NAV = [
   { to: '/agents', icon: '🤖', label: '智能体' },
   { to: '/collab', icon: '🤝', label: '协作组' },
   { to: '/skills', icon: '🧩', label: '技能' },
+  { to: '/mcp', icon: '🔌', label: 'MCP' },
   { to: '/settings', icon: '⚙️', label: '设置' },
 ]
 
@@ -117,6 +119,7 @@ export default function App() {
           <Route path="/collab/runs/:runId" element={<CollabPage />} />
           <Route path="/roles" element={<Navigate to="/agents" replace />} />
           <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/mcp" element={<McpPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/runtimes" element={<RuntimesPage />} />
           <Route path="/settings" element={<SettingsPage />} />

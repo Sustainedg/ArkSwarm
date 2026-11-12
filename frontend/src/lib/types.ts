@@ -197,6 +197,18 @@ export interface AgentSkillBrief {
   available: boolean
 }
 
+/** 智能体挂着的 MCP 服务器摘要（密钥永不回传）。 */
+export interface AgentMcpBrief {
+  id: string
+  name: string
+  slug: string
+  transport: string
+  /** 来源内核 id；为空表示平台通用 */
+  type_id?: string | null
+  available: boolean
+  enabled: boolean
+}
+
 /** 智能体：人格 + 内核 + 网关 + 模型（原「角色」与「智能体实例」合并而来）。 */
 /** 凭据库里的凭据：全局一份，智能体按引用使用。值永不回传，只有掩码。 */
 export interface Credential {
@@ -262,6 +274,9 @@ export interface AgentProfile {
   /** 该智能体分配到的技能（技能只能通过分配获得） */
   skill_ids: string[]
   skills: AgentSkillBrief[]
+  /** 该智能体挂着的 MCP 服务器（同样只能通过分配获得） */
+  mcp_ids: string[]
+  mcp_servers: AgentMcpBrief[]
 }
 
 export interface Skill {
@@ -300,6 +315,51 @@ export interface SkillDetail extends Skill {
 }
 
 export interface SkillRescanResult {
+  added: number
+  updated: number
+  missing: number
+  total: number
+}
+
+/**
+ * 统一编目的一个 MCP 服务器。
+ *
+ * 两类来源：平台新建的「通用」服务器（`type_id` 为空，可分配给任意内核的智能体），
+ * 以及从某个内核自己的配置里只读扫出来的（`type_id` 是那个内核，只能在同内核里分配）。
+ */
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  description: string
+  type_id?: string | null
+  type_name?: string | null
+  source_kind: string
+  source_label: string
+  /** stdio / http / sse */
+  transport: string
+  command?: string | null
+  args: string[]
+  url?: string | null
+  /** 只给键名与掩码，永远没有明文 */
+  env_keys: string[]
+  env_preview: Record<string, string | null>
+  header_keys: string[]
+  header_preview: Record<string, string | null>
+  enabled: boolean
+  available: boolean
+  note?: string | null
+  /** 平台是否接管它的内容（平台新建的为 true，从内核配置扫来的为 false） */
+  editable: boolean
+  used_by_agents: number
+}
+
+export interface McpServerDetail extends McpServer {
+  /** 挂着这个服务器的智能体 */
+  agents: { id: string; name: string; avatar: string }[]
+}
+
+export interface McpRescanResult {
   added: number
   updated: number
   missing: number

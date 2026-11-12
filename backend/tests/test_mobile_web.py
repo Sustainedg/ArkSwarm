@@ -523,7 +523,32 @@ def test_agents_own_the_configuration_and_runtimes_own_the_install():
     settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
     assert "运行时" in settings and "技能" in settings
     assert "网关" in settings, "设置页要有自定义网关入口"
+    assert "'/mcp'" in settings, "设置页要有 MCP 入口"
     # 运行概览 / 版本记录这些信息不再占小屏（只认小节标题，注释里提到不算）。
     for label in ("运行概览", "版本记录"):
         assert f'card-section-title">{label}' not in settings, f"设置页不该再有「{label}」小节"
     assert "refreshShell" in settings, "「更新到最新版本」是独立应用唯一的重载出口，必须留着"
+
+
+#: 主导航项的字面形态（两端各写一遍，这里把它抽出来比对）。
+NAV_ENTRY = re.compile(
+    r"\{\s*to:\s*'(?P<to>[^']+)',\s*icon:\s*'(?P<icon>[^']+)',\s*label:\s*'(?P<label>[^']+)'\s*\}"
+)
+
+
+@needs_frontend
+def test_main_nav_is_the_same_menu_on_both_ends():
+    """主导航两端是**同一份菜单**：顺序、图标、命名都对齐（MCP 也各占一项），不能一边有一边没有。"""
+    desktop = [
+        match.groupdict()
+        for match in NAV_ENTRY.finditer((FRONTEND / "src" / "App.tsx").read_text(encoding="utf-8"))
+    ]
+    mobile = [
+        match.groupdict()
+        for match in NAV_ENTRY.finditer(
+            (MOBILE_SRC / "components" / "MobileDrawer.tsx").read_text(encoding="utf-8")
+        )
+    ]
+    assert desktop and mobile, "两端的主导航都要能被解析出来"
+    assert desktop == mobile, "两端主导航必须是同一份菜单（顺序 / 图标 / 命名对齐）"
+    assert "/mcp" in {item["to"] for item in desktop}, "MCP 页要在主导航里占一项（两端一致）"

@@ -28,6 +28,7 @@ from ..events import (
     tool_result,
     usage,
 )
+from ..mcp import McpMount, McpServerSpec, parse_toml_servers, render_toml_servers, strip_toml_table
 from ..registry import register_agent
 from ..skills import (
     MARKET_SOURCE,
@@ -44,6 +45,9 @@ _CARRY_FILES = ("config.toml", "auth.json")
 
 #: 平台「技能市场」安装目录（``$CODEX_HOME/skills/.skillhub/<skill>``），可卸载。
 _MARKET_DIRNAME = ".skillhub"
+
+#: Codex 的 MCP 服务器表名（``[mcp_servers.<name>]``）。
+_MCP_TABLE = "mcp_servers"
 
 #: 给自定义网关生成的 ``model_provider`` 的默认名（用户可用「自定义供应商名称」覆盖）。
 #: 新版 Codex 不再读 ``OPENAI_BASE_URL``（内置 provider 会直奔 api.openai.com），
@@ -215,6 +219,30 @@ class CodexAgent(AgentDefinition):
 
     # -- 构造启动命令 --------------------------------------------------------
 
+    def discover_mcp_servers(self) -> list[McpServerSpec]:
+        """扫描本机 ``config.toml`` 里的 ``[mcp_servers.*]``（只读、尽力而为）。"""
+        try:
+            text = (codex_home() / "config.toml").read_text(encoding="utf-8")
+        except OSError:
+            return []
+        return parse_toml_servers(text, type_id=self.id, source_kind="user")
+
+    def mcp_mount(self, ctx: AgentContext) -> McpMount:
+        """严格仅分配：隔离 ``CODEX_HOME`` 的 config.toml 里只留分配到的 MCP 服务器。
+
+        技能物化会把本机 config.toml 原样带进隔离目录（登录态与自定义供应商都靠它），
+        这里再写一遍：剥掉本机自带的 ``[mcp_servers.*]``，追加分配到的那些。
+        """
+        try:
+            base = (codex_home() / "config.toml").read_text(encoding="utf-8")
+        except OSError:
+            base = ""
+        content = strip_toml_table(base, table=_MCP_TABLE)
+        sections = render_toml_servers(ctx.mcp_servers, table=_MCP_TABLE)
+        if sections:
+            content = f"{content}\n{sections}" if content else sections
+        return McpMount(home_name="codex-home", files={"config.toml": content})
+
     def build_invocation(self, ctx: AgentContext) -> Invocation:
         if self._transport(ctx) == _TRANSPORT_EXEC:
             return self._exec_invocation(ctx)
@@ -269,9 +297,9 @@ class CodexAgent(AgentDefinition):
 
         env = self.effective_env(ctx)
         env.setdefault("CODEX_DISABLE_TELEMETRY", "1")
-        if ctx.skill_home_dir:
+        if ctx.home_dir:
             # 严格仅分配：Codex 只从隔离 CODEX_HOME 的 skills/ 读取技能。
-            env["CODEX_HOME"] = ctx.skill_home_dir
+            env["CODEX_HOME"] = ctx.home_dir
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=prompt)
 
     def _app_server_invocation(self, ctx: AgentContext) -> Invocation:
@@ -287,8 +315,8 @@ class CodexAgent(AgentDefinition):
 
         env = self.effective_env(ctx)
         env.setdefault("CODEX_DISABLE_TELEMETRY", "1")
-        if ctx.skill_home_dir:
-            env["CODEX_HOME"] = ctx.skill_home_dir
+        if ctx.home_dir:
+            env["CODEX_HOME"] = ctx.home_dir
         initialize = {
             "jsonrpc": "2.0",
             "id": 1,

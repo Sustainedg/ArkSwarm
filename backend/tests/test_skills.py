@@ -236,7 +236,7 @@ def test_claude_isolates_skills_strictly(tmp_path: Path, monkeypatch: pytest.Mon
     assert "CLAUDE_CONFIG_DIR" not in plain.env
 
     home = tmp_path / "home" / "claude-home"
-    ctx = context(skill_home_dir=str(home), workspace_dir=str(tmp_path / "ws"))
+    ctx = context(home_dir=str(home), workspace_dir=str(tmp_path / "ws"))
     invocation = definition.build_invocation(ctx)
     assert invocation.env["CLAUDE_CONFIG_DIR"] == str(home)
     assert invocation.env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] == "1"
@@ -291,7 +291,7 @@ def test_codex_uses_isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert found["codex:sys-skill"].source_kind == "system"
 
     home = tmp_path / "home" / "codex-home"
-    ctx = context(skill_home_dir=str(home))
+    ctx = context(home_dir=str(home))
     assert definition.build_invocation(ctx).env["CODEX_HOME"] == str(home)
     mount = definition.skill_mount(ctx)
     assert sorted(name for _, name in mount.carry) == ["auth.json", "config.toml"]

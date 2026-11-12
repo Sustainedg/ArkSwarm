@@ -23,7 +23,7 @@ from sqlmodel import func, select
 from ..agents import AgentContext, AgentDefinition, get_agent
 from ..agents.events import AgentEvent
 from ..credentials import with_notice
-from ..models import AgentProfile, AgentSkill, Gateway, new_id
+from ..models import AgentMcpServer, AgentProfile, AgentSkill, Gateway, new_id
 from ..runtime.credentials import decrypt_for_profile
 from ..runtime.gateway import bind_gateway
 from ..runtime.manager import ActiveRun
@@ -206,6 +206,13 @@ async def _profile_skill_count(session: AsyncSession, profile_id: str) -> int:
     return int((await session.execute(query)).scalar() or 0)
 
 
+async def _profile_mcp_count(session: AsyncSession, profile_id: str) -> int:
+    query = select(func.count()).select_from(AgentMcpServer).where(
+        AgentMcpServer.agent_profile_id == profile_id
+    )
+    return int((await session.execute(query)).scalar() or 0)
+
+
 @dataclass(slots=True)
 class ResolvedProfile:
     """一个岗位解析出来的智能体与运行参数（工单步骤与聊天共用）。"""
@@ -256,6 +263,11 @@ async def _resolve_profile(
         warnings.append(
             f"智能体「{profile.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
             "（技能物化安排在 M5，见 docs/collaboration-design.md §11）"
+        )
+    mcp_count = await _profile_mcp_count(session, profile.id)
+    if mcp_count:
+        warnings.append(
+            f"智能体「{profile.name}」挂着 {mcp_count} 个 MCP 服务器，但协作运行暂未注入 MCP 配置"
         )
     return ResolvedProfile(
         profile=profile,

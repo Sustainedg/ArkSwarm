@@ -176,6 +176,18 @@ class AgentSkillBrief(BaseModel):
     available: bool = True
 
 
+class AgentMcpBrief(BaseModel):
+    """智能体卡片上展示的 MCP 服务器摘要（永远没有密钥明文）。"""
+
+    id: str
+    name: str
+    slug: str
+    transport: str
+    type_id: str | None = None
+    available: bool = True
+    enabled: bool = True
+
+
 class AgentProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -205,6 +217,8 @@ class AgentProfileRead(BaseModel):
     credentials: list[AgentCredentialBrief] = Field(default_factory=list)
     skill_ids: list[str] = Field(default_factory=list)
     skills: list[AgentSkillBrief] = Field(default_factory=list)
+    mcp_ids: list[str] = Field(default_factory=list)
+    mcp_servers: list[AgentMcpBrief] = Field(default_factory=list)
 
 
 class AgentTestResult(BaseModel):
@@ -217,6 +231,12 @@ class AgentSkillsUpdate(BaseModel):
     """整表替换智能体的技能分配。"""
 
     skill_ids: list[str] = Field(default_factory=list)
+
+
+class AgentMcpUpdate(BaseModel):
+    """整表替换智能体的 MCP 分配。"""
+
+    mcp_ids: list[str] = Field(default_factory=list)
 
 
 class RuntimeAction(BaseModel):
@@ -294,6 +314,82 @@ class SkillHubUninstallIn(BaseModel):
     """卸载一个由市场装入的技能（``skill_id`` 形如 ``claude-code:foo``）。"""
 
     skill_id: str
+
+
+# --- MCP 服务器 -------------------------------------------------------------
+
+
+class McpServerCreate(BaseModel):
+    """新建一个「平台通用」的 MCP 服务器（可分配给任意内核的智能体）。"""
+
+    name: str
+    slug: str | None = None
+    description: str | None = None
+    #: stdio / http / sse
+    transport: str = "stdio"
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    url: str | None = None
+    #: 启动命令的环境变量 / 请求头；值会加密保存，接口只回掩码
+    env: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class McpServerUpdate(BaseModel):
+    """更新一个平台通用的 MCP 服务器；留空的值表示不改（界面回显的是掩码）。"""
+
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    transport: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    url: str | None = None
+    env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
+
+
+class McpServerRead(BaseModel):
+    """MCP 目录项：只回键名与掩码，永远没有明文密钥。"""
+
+    id: str
+    name: str
+    slug: str
+    description: str = ""
+    #: 来源内核 id；为空表示平台通用（可分配给任意内核）
+    type_id: str | None = None
+    type_name: str | None = None
+    source_kind: str
+    source_label: str = ""
+    transport: str
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    url: str | None = None
+    env_keys: list[str] = Field(default_factory=list)
+    env_preview: dict[str, str | None] = Field(default_factory=dict)
+    header_keys: list[str] = Field(default_factory=list)
+    header_preview: dict[str, str | None] = Field(default_factory=dict)
+    enabled: bool = True
+    available: bool = True
+    note: str | None = None
+    #: 平台是否接管它的内容（平台新建的为 True；扫描来的为 False）
+    editable: bool = False
+    used_by_agents: int = 0
+
+
+class McpServerDetail(McpServerRead):
+    """MCP 服务器详情：附上引用了它的智能体。"""
+
+    agents: list[dict[str, str]] = Field(default_factory=list)
+
+
+class McpRescanResult(BaseModel):
+    added: int = 0
+    updated: int = 0
+    missing: int = 0
+    total: int = 0
 
 
 # --- 对话 -------------------------------------------------------------------

@@ -24,6 +24,7 @@
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
+| MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
 
 ---
@@ -33,8 +34,8 @@
 1. **新增智能体只能走适配器。** 在 `agents/builtin/` 新增模块并 `@register_agent`。
    禁止在 `runtime/`、`api/`、前端里为某个具体 `type_id` 写分支。
 2. **适配器是叶子节点。** 适配器**禁止** `import` 任何 `app.api.*`、`app.runtime.*`、`app.db.*`、`app.models`。
-   它只能依赖 `agents/base.py`、`agents/events.py`、`agents/skills.py`、`agents/builtin/util.py`、
-   标准库与 `httpx`。
+   它只能依赖 `agents/base.py`、`agents/events.py`、`agents/skills.py`、`agents/mcp.py`、
+   `agents/builtin/util.py`、标准库与 `httpx`。
 3. **适配器无状态、不碰数据库。** 一次运行所需的一切都从 `AgentContext` 取；解析过程的状态放进 `AgentRun.state`。
 4. **所有可配置项必须声明为 `ConfigField`。** 禁止在 React 里为某个智能体硬编码表单字段。
 5. **事件协议是框架与适配器之间唯一的方言。** 新增事件类型必须**同时**改：
@@ -63,7 +64,7 @@
 
 ```
  ┌ 前端 frontend/src ────────────────────────────────────────────────┐
- │  pages/ (Chat·Collab·Agents·Roles·Skills·Settings) ·              │
+ │  pages/ (Chat·Collab·Agents·Skills·MCP·Settings) ·                 │
  │  mobile/ (独立入口：/m/ 的页面与样式表，PWA) ·                      │
  │  components/ (DynamicForm·MessageView·Modal·CollabCanvas…) ·       │
  │  lib/ (api·types·agentStream·collabStream)                         │
@@ -77,10 +78,11 @@
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
  │                 manager=运行表(注册/取消/追踪) · skills=技能编目/分配/物化 │
+ │                 mcp=MCP 编目/分配/物化                              │
  │                 provisioning=运行时(CLI 内核)的安装/更新/卸载执行   │
  ├───────────────────────────────────────────────────────────────────┤
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
- │                 registry(注册) · skills(技能契约) · builtin/*(实现) │
+ │                 registry(注册) · skills(技能契约) · mcp(MCP 契约) · builtin/*(实现) │
  ├───────────────────────────────────────────────────────────────────┤
  │ models/db · schemas · settings · security · attachments · bootstrap│
  └───────────────────────────────────────────────────────────────────┘
@@ -104,10 +106,11 @@
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
 | `agents/builtin/*` | 怎么调用某个智能体、怎么把它的输出翻译成事件 | 存储、HTTP、UI、取消（框架统一做） |
-| `agents/base.py` `events.py` `registry.py` `skills.py` | 契约与协议（改动影响面最大，慎改） | 具体产品逻辑 |
+| `agents/base.py` `events.py` `registry.py` `skills.py` `mcp.py` | 契约与协议（改动影响面最大，慎改） | 具体产品逻辑 |
 | `runtime/runner.py` | 起子进程/发 HTTP、读流、超时、取消、脱敏 | 业务规则 |
 | `runtime/service.py` | 载入 对话→智能体→适配器（网关提供密钥与地址）、能力决策、历史回放、落库 | 具体命令拼装 |
 | `runtime/skills.py` | 技能统一编目、智能体分配、物化进内核隔离目录 | 哪个内核把技能放哪（那是适配器的事） |
+| `runtime/mcp.py` | MCP 服务器统一编目、新建/编辑/删除、智能体分配、写进内核隔离目录 | 哪个内核把 MCP 配置放哪、长什么形状（那是适配器的事） |
 | `api/*` | 参数校验、状态码、把 service 的结果转成响应/SSE | 业务决策（尽量薄） |
 | `models.py` `schemas.py` | 表结构与请求/响应契约 | 编排逻辑 |
 | 前端 | 展示与交互 | 任何智能体特异逻辑 |
@@ -164,7 +167,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 ### 3.5 `AgentContext` / `AgentRun`
 `AgentContext` 是框架→适配器的唯一输入（`agent_id/name`、`options`、`gateway_url`、`api_key`、
 `credentials`、`auth_style`、`model`、`system_prompt`、`workspace_dir`、`session_id`、`history`、
-`prompt`、`skills`、`skill_home_dir`），用 `ctx.option(key, default)` 取值。
+`prompt`、`skills`、`mcp_servers`、`home_dir`），用 `ctx.option(key, default)` 取值。
 `gateway_url` / `api_key` / `auth_style` 由框架从智能体引用的**网关**解密后注入（`runtime/gateway.py:bind_gateway`）；
 `credentials` 是智能体自己的凭据（解密后的「环境变量名 → 明文」），由框架合并进子进程环境变量，
 适配器不需要自己处理，也**不得**把它写进提示词、日志或事件。
@@ -210,9 +213,26 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   `scan_skill_roots(self.skill_roots(), ...)`）与 `skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）。
   技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
   但落盘路径仍由适配器声明、框架不硬编码。
-- `AgentContext.skills` / `AgentContext.skill_home_dir`：框架注入的「本次运行生效的技能」与
-  「物化好的隔离目录」，适配器在 `build_invocation()` 里据此设置自己的配置目录环境变量。
+- `AgentContext.skills` / `AgentContext.home_dir`：框架注入的「本次运行生效的技能」与
+  「物化好的隔离目录」（技能与 MCP 共用同一个「家」），适配器在 `build_invocation()` 里据此
+  设置自己的配置目录环境变量。
 - 声明了 `Capabilities.skills=True` 的适配器**必须**实现 `skill_mount()`（有架构守卫测试）。
+
+### 3.9 MCP 契约（`agents/mcp.py`）
+- `McpServerSpec`：一个 MCP 服务器的只读描述（`name` / `slug` / `transport`(stdio|http|sse) /
+  `command` / `args` / `url` / `env` / `headers` / `type_id` / `source_kind`），`source_id` 为
+  `<内核 id>:<slug>`（平台通用的服务器没有）。`env` / `headers` 的值可能含密钥。
+- `McpMount`：适配器声明的**物化计划**（`home_name`、写进隔离目录的 `files`、写进工作目录的
+  `workspace_files`、`notes`）。`home_name` 必须与同一适配器 `skill_mount()` 声明的一致：
+  技能与 MCP 共用同一个隔离目录。
+- 适配器钩子：`discover_mcp_servers()`（只读扫描本机已有的 MCP 配置，尽力而为、不得抛错）与
+  `mcp_mount(ctx)`（返回 `None` 表示该内核不支持 MCP）。解析 / 渲染的共享工具（JSON / TOML 两种
+  形状、`safe_slug`）在 `agents/mcp.py`；**「哪个内核把配置放哪、长什么形状」是适配器的知识**，
+  框架不硬编码路径、键名或命令行开关（有架构守卫测试）。
+- `AgentContext.mcp_servers` / `AgentContext.home_dir`：框架解密后注入的「本次运行生效的服务器」与
+  「物化好的隔离目录」。密钥只能写进配置物化的产物（`files` / `workspace_files`），
+  **禁止写进提示词、日志或事件**。
+- 声明了 `Capabilities.mcp=True` 的适配器**必须**实现 `mcp_mount()`（有架构守卫测试）。
 
 ## 4. 扩展手册（照着做，别自创路径）
 
@@ -245,7 +265,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
    `source_kind=MARKET_SOURCE`），再用 `agents/skills.py` 的 `scan_skill_roots()` 实现 `discover_skills()`，
    标注来源（`user` / `project` / `plugin` / `system` / `market`），**只读、不得抛错**。
 3. 实现 `skill_mount(ctx)`：声明隔离目录名、需要携带的配置文件、要关闭的内核自带技能，
-   并在 `build_invocation()` 里把 `ctx.skill_home_dir` 写进对应环境变量（如 `CLAUDE_CONFIG_DIR`）。
+   并在 `build_invocation()` 里把 `ctx.home_dir` 写进对应环境变量（如 `CLAUDE_CONFIG_DIR`）。
 4. 加测试：参考 `backend/tests/test_skills.py`（解析、物化、隔离变量）。
 
 ### 4.7 新增前端页面
@@ -255,8 +275,8 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   样式写进 `src/mobile/mobile.css`。移动端页面**不得**引用 `src/pages/`、`src/App.tsx` 或
   `src/index.css`（有守卫测试 `tests/test_mobile_web.py`），但可以复用 `src/lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabAgentThread` /
-  `KernelLogo` /
-  `TicketBoardKit`
+  `KernelLogo` / `TicketBoardKit` / `Composer` / `Icons` / `McpPicker` / `McpServerForm` /
+  `McpAssignPanel`
   这些纯展示组件（对话气泡只有 `MessageView` 一份，线程装配只有 `ConversationThread` 一份）。
 - **两端功能对齐、交互各表**：桌面端有的能力（例如协作组编排）移动端也要能用，但按触屏重做交互 ——
   移动端**不引用**桌面端的编排画布（`components/CollabCanvas` 等），协作组改用表单式编辑
@@ -317,9 +337,12 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   配置页 `mobile/pages/MobileAgentsPage.tsx`。适配器选项仍由 `DynamicForm` 渲染，**不要**在前端硬编码字段。
 - **网关是 API 密钥的唯一来源**：移动端设 `mobile/pages/MobileGatewaysPage.tsx`（自定义网关 CRUD +
   获取模型 + 手动旁路）。官方链路由启动播种生成，用户在智能体配置里直接选。
-- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（网关 / 技能 / 运行时 / 智能体）+ 一行「更多」。
-  运行概览、版本记录这些信息看桌面端即可；「更新到最新版本」（`pwa.ts:refreshShell()`）必须留着 ——
-  独立应用里没有刷新按钮，那是卡在旧外壳时的唯一出口。
+- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（网关 / 技能 / MCP / 运行时 / 智能体）+
+  一行「更多」。运行概览、版本记录这些信息看桌面端即可；「更新到最新版本」
+  （`pwa.ts:refreshShell()`）必须留着 —— 独立应用里没有刷新按钮，那是卡在旧外壳时的唯一出口。
+- **MCP 有两个入口**：主导航里的「MCP」页负责编目（新建 / 编辑 / 停用 / 删除 + 重新扫描），
+  「分配给哪些智能体」既可在 MCP 页做（`McpAssignPanel`），也可在智能体表单里勾（`McpPicker`，
+  两端共用同一份组件）。
 - **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 左侧抽屉 + 内部滚动），入口视口写
   `maximum-scale=1.0, user-scalable=no`，并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底
   （iOS Safari 忽略 `user-scalable=no`，只有 `touch-action` 真正生效）。配套约束：移动端输入框字号
@@ -344,6 +367,18 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 2. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
 3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
    卡片副标题会写明「进程内运行」/「自备可执行文件」。
+
+### 4.10 让某个适配器支持 MCP
+1. `capabilities` 里声明 `mcp=True`。
+2. 实现 `discover_mcp_servers()`：只读扫描本机已有的 MCP 配置，用 `agents/mcp.py` 的
+   `parse_json_servers()` / `parse_toml_servers()` 解析成 `McpServerSpec`，`type_id` 填 `self.id`；
+   **不得抛错**（配置不存在 / 损坏 / 无权限都当没有）。
+3. 实现 `mcp_mount(ctx)`：用 `to_json_config()` / `render_toml_servers()` 把 `ctx.mcp_servers`
+   序列化成自己内核要的形状，落点二选一（可同时用）——
+   `files`（写进隔离配置目录，配 `home_dir` 环境变量使用）或 `workspace_files`（写进工作目录的项目级
+   配置）；`home_name` 必须与 `skill_mount()` 一致。要「只认分配到的服务器」就同时关闭内核的其它来源
+   （例如给内核加一个「只读这份配置」的命令行开关）。
+4. 加测试：参照 `backend/tests/test_mcp.py`（解析、物化、隔离变量、密钥只回掩码）。
 
 ---
 
@@ -422,6 +457,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 数据库结构 | 用**现有** `backend/data/magenta.db` 启动验证旧数据可读，不得重置 |
 | 新增适配器 | `/api/agent-types` 能看到、表单可渲染、连通性测试可用 |
 | 技能（编目/分配/物化） | `pytest` 覆盖解析与物化；端到端跑一次真实对话确认技能生效、未分配的不出现 |
+| MCP（编目/分配/物化） | `pytest` 覆盖解析、物化、密钥只回掩码；端到端跑一次真实对话确认分配到的服务器写进隔离配置、未分配的不出现 |
 
 重启托管服务：
 ```bash
@@ -439,6 +475,8 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | `agents/events.py` | `runtime/service.consume_run`、前端 `applyEvent` + `types.ts`、`docs/architecture.md` |
 | `agents/skills.py` / 技能契约 | 全部声明 `skills=True` 的适配器 + `runtime/skills.py` + `tests/test_skills.py` |
 | `runtime/skills.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端技能页与智能体弹窗 |
+| `agents/mcp.py` / MCP 契约 | 全部声明 `mcp=True` 的适配器 + `runtime/mcp.py` + `api/mcp.py` + `tests/test_mcp.py` |
+| `runtime/mcp.py` · `api/mcp.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端 MCP 页（两端）与智能体弹窗 |
 | `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
@@ -447,6 +485,7 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
 | `AgentProfile` 新增字段 | `schemas.py` 读写、`ADDITIVE_COLUMNS` 登记、前端 `types.ts` 与智能体弹窗、旧数据兼容 |
 | 新增「全局一份 + 多智能体引用」的实体（如凭据） | 独立表 + 引用表（仿 `agent_skills` / `agent_credentials`）、运行时按引用注入、接口只回掩码、设置页与智能体弹窗两条入口 |
+| 新增「统一编目 + 智能体分配」的实体（如 MCP 服务器） | 编目表 + 分配表（仿 `skills` / `agent_skills`）、适配器声明扫描与物化钩子、`runtime/` 的编目/分配/物化、接口只回掩码、两端页面 + 智能体弹窗两条分配入口 |
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
@@ -468,6 +507,10 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 - ❌ 在框架层硬编码某个内核的技能目录或配置变量（应通过 `discover_skills()` / `skill_mount()` 声明）。
 - ❌ 让智能体用到未分配的技能（把本机个人/插件技能顺手带进一次运行）。
 - ❌ 把技能目录删了就顺手删 `skills` 记录（应只把 `available` 置 False，保住智能体分配）。
+- ❌ 在框架层硬编码某个内核的 MCP 配置文件、键名或命令行开关（应通过 `discover_mcp_servers()` /
+  `mcp_mount()` 声明）。
+- ❌ 让智能体连上未分配的 MCP 服务器（把本机配置里的服务器顺手带进一次运行）。
+- ❌ 把 MCP 的 `env` / `headers` 明文写进日志、SSE 事件或接口响应（只能加密落库 + 只回掩码）。
 - ❌ 在网关之外另存 API 密钥（或让智能体直填密钥）——密钥只经网关、只经 `security`。
 - ❌ 把凭据值写进提示词 / 日志 / 事件 / 接口响应（只能以环境变量注入，值一律掩码或擦除）。
 - ❌ 前端改完不 build、不重启就宣称完成。

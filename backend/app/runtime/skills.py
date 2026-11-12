@@ -34,6 +34,7 @@ from ..agents.skills import (
 from ..models import AgentProfile, AgentSkill, Conversation, Skill
 from ..settings import get_settings
 from ..skillhub import extract_skill_archive
+from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
 logger = logging.getLogger("magenta")
 
@@ -278,6 +279,8 @@ async def prepare_skill_home(
     profile: AgentProfile,
     conversation: Conversation,
     ctx: AgentContext,
+    *,
+    scope_id: str | None = None,
 ) -> list[str]:
     """把智能体分配到的技能物化进该内核的隔离目录，并把结果写回 ``ctx``。
 
@@ -287,29 +290,24 @@ async def prepare_skill_home(
     mount = definition.skill_mount(ctx)
     if mount is None:
         return []
-    home = get_settings().agent_homes_root / conversation.id / mount.home_name
+    # 技能与 MCP 共用同一个「家」：MCP 物化（prepare_mcp_home）会写进同一个目录，
+    # 所以这里定下的 home_name 就是内核的隔离配置目录名。
+    home = home_for(scope_id or conversation.id, mount.home_name)
+    if ctx.home_dir and Path(ctx.home_dir) != home:
+        # 上一轮（或另一段物化）已经定过目录：以它为准，避免技能与 MCP 各写一个家。
+        home = Path(ctx.home_dir)
     first_run = not home.exists()
     warnings = materialize(home, mount, ctx.skills)
-    ctx.skill_home_dir = str(home)
-    if first_run and ctx.session_id:
-        # 隔离目录是刚建的：内核侧没有这条对话的历史记录，续接旧会话必然失败
-        # （旧记录还在原来的配置目录里）。这里改为一轮新会话，并明确告知用户。
-        ctx.session_id = None
-        warnings.append(
-            "内核隔离目录里还没有这条对话的历史会话，本轮已改为新会话"
-            "（旧会话记录仍在原配置目录中，如需保留请到「对话」页操作）"
-        )
+    ctx.home_dir = str(home)
+    warnings += note_fresh_home(ctx, first_run=first_run)
     return [*mount.notes, *warnings]
 
 
 def materialize(home: Path, mount: SkillMount, specs: Iterable[SkillSpec]) -> list[str]:
     """按物化计划把技能目录与内核配置写进隔离目录；返回告警列表。"""
-    warnings: list[str] = []
-    try:
-        home.mkdir(parents=True, exist_ok=True)
-        os.chmod(home, 0o700)
-    except OSError as exc:
-        return [f"无法创建内核隔离目录 {home}：{exc}"]
+    warnings = ensure_home(home)
+    if warnings:
+        return warnings
 
     skills_root = home / mount.skills_subdir
     # 每次运行都重建受管技能目录：取消分配后技能必须立刻消失。
@@ -389,13 +387,8 @@ def _patch_json(path: Path, patch: dict[str, Any], warnings: list[str]) -> None:
         warnings.append(f"写入内核配置 {path.name} 失败：{exc}")
 
 
-def _safe_relative(relative: str) -> Path | None:
-    candidate = Path(relative)
-    if candidate.is_absolute() or not candidate.parts:
-        return None
-    if any(part in {"", ".", ".."} for part in candidate.parts):
-        return None
-    return candidate
+#: 兼容旧调用点：路径安全校验的实现已挪到 :mod:`runtime.isolation`（技能与 MCP 共用一份）。
+_safe_relative = safe_relative
 
 
 def cleanup_conversation(conversation_id: str) -> None:

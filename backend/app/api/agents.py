@@ -17,13 +17,25 @@ from ..agents.base import Availability
 from ..credentials import CredentialError
 from ..credentials import reads as credential_reads
 from ..db import get_session
-from ..models import AgentCredential, AgentProfile, AgentSkill, Conversation, Gateway, Skill
+from ..models import (
+    AgentCredential,
+    AgentMcpServer,
+    AgentProfile,
+    AgentSkill,
+    Conversation,
+    Gateway,
+    McpServer,
+    Skill,
+)
 from ..runtime import availability as availability_service
 from ..runtime import credentials as credential_service
+from ..runtime import mcp as mcp_service
 from ..runtime import skills as skill_service
 from ..runtime.gateway import bind_gateway
 from ..schemas import (
     AgentCredentialBrief,
+    AgentMcpBrief,
+    AgentMcpUpdate,
     AgentProfileCreate,
     AgentProfileRead,
     AgentProfileUpdate,
@@ -79,6 +91,41 @@ async def _skill_briefs(profile_id: str, session: AsyncSession) -> list[AgentSki
     return briefs
 
 
+async def _mcp_briefs(profile_id: str, session: AsyncSession) -> list[AgentMcpBrief]:
+    """智能体挂着的 MCP 服务器摘要（只有名字、标识与开关，没有密钥）。"""
+    links = (
+        await session.execute(
+            select(AgentMcpServer)
+            .where(AgentMcpServer.agent_profile_id == profile_id)
+            .order_by(AgentMcpServer.position)
+        )
+    ).scalars().all()
+    if not links:
+        return []
+    ids = [link.mcp_server_id for link in links]
+    rows = {
+        row.id: row
+        for row in (await session.execute(select(McpServer).where(McpServer.id.in_(ids)))).scalars().all()
+    }
+    briefs: list[AgentMcpBrief] = []
+    for mcp_id in ids:
+        row = rows.get(mcp_id)
+        if row is None:
+            continue
+        briefs.append(
+            AgentMcpBrief(
+                id=row.id,
+                name=row.name,
+                slug=row.slug,
+                transport=row.transport,
+                type_id=row.type_id,
+                available=row.available,
+                enabled=row.enabled,
+            )
+        )
+    return briefs
+
+
 async def _credential_briefs(profile_id: str, session: AsyncSession) -> list[AgentCredentialBrief]:
     """智能体引用到的凭据摘要（只有名字、说明与掩码）。"""
     rows = await credential_service.linked_rows(session, profile_id)
@@ -98,6 +145,7 @@ async def _to_read(
         availability = None
     gateway = await _gateway_for(profile, session)
     briefs = await _skill_briefs(profile.id, session)
+    mcp_briefs = await _mcp_briefs(profile.id, session)
     credentials = await _credential_briefs(profile.id, session)
     return AgentProfileRead(
         id=profile.id,
@@ -124,6 +172,8 @@ async def _to_read(
         credentials=credentials,
         skill_ids=[brief.id for brief in briefs],
         skills=briefs,
+        mcp_ids=[brief.id for brief in mcp_briefs],
+        mcp_servers=mcp_briefs,
     )
 
 
@@ -266,8 +316,9 @@ async def update_agent(
         if value is not None or field in {"gateway_id", "model", "tagline", "description"}:
             setattr(profile, field, value)
     if data.get("type_id"):
-        # 换内核后，原来分配的技能可能不属于新型号，直接丢弃并在响应里体现。
+        # 换内核后，原来分配的技能 / 内核专属 MCP 可能不属于新型号，直接丢弃并在响应里体现。
         await _drop_incompatible_skills(profile, session)
+        await _drop_incompatible_mcp_servers(profile, session)
     profile.updated_at = datetime.now(timezone.utc)
     session.add(profile)
     await session.commit()
@@ -312,6 +363,33 @@ async def _drop_incompatible_skills(profile: AgentProfile, session: AsyncSession
     await session.flush()
 
 
+async def _drop_incompatible_mcp_servers(profile: AgentProfile, session: AsyncSession) -> None:
+    """平台通用的 MCP 服务器与内核无关，保留；从某个内核配置扫来的要跟着内核一起换掉。"""
+    for link in (
+        await session.execute(
+            select(AgentMcpServer).where(AgentMcpServer.agent_profile_id == profile.id)
+        )
+    ).scalars().all():
+        row = await session.get(McpServer, link.mcp_server_id)
+        if row is None or (row.type_id is not None and row.type_id != profile.type_id):
+            await session.delete(link)
+    await session.flush()
+
+
+@router.put("/{profile_id}/mcp-servers")
+async def set_agent_mcp_servers(
+    profile_id: str, payload: AgentMcpUpdate, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """整表替换智能体挂着的 MCP 服务器（界面已禁止选错内核，这里是服务端兜底）。"""
+    profile = await _active_profile(profile_id, session)
+    try:
+        await mcp_service.set_agent_mcp_servers(session, profile, payload.mcp_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    statuses = await availability_service.for_types([profile.type_id])
+    return (await _to_read(profile, session, statuses.get(profile.type_id))).model_dump()
+
+
 @router.put("/{profile_id}/skills")
 async def set_agent_skills(
     profile_id: str, payload: AgentSkillsUpdate, session: AsyncSession = Depends(get_session)
@@ -354,6 +432,18 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
     for link in links:
         session.add(
             AgentSkill(agent_profile_id=clone.id, skill_id=link.skill_id, position=link.position)
+        )
+    for link in (
+        await session.execute(
+            select(AgentMcpServer)
+            .where(AgentMcpServer.agent_profile_id == profile.id)
+            .order_by(AgentMcpServer.position)
+        )
+    ).scalars().all():
+        session.add(
+            AgentMcpServer(
+                agent_profile_id=clone.id, mcp_server_id=link.mcp_server_id, position=link.position
+            )
         )
     for link in (
         await session.execute(

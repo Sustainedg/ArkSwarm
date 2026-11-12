@@ -8,9 +8,18 @@ import {
 import { DynamicForm } from '../components/DynamicForm'
 import { Modal } from '../components/Modal'
 import { StarIcon } from '../components/Icons'
+import { McpPicker } from '../components/McpPicker'
 import { SkillPicker } from '../components/SkillPicker'
 import { api, ApiError } from '../lib/api'
-import type { AgentProfile, AgentType, Credential, Gateway, Skill, TestResult } from '../lib/types'
+import type {
+  AgentProfile,
+  AgentType,
+  Credential,
+  Gateway,
+  McpServer,
+  Skill,
+  TestResult,
+} from '../lib/types'
 
 const AVATARS = ['🛠️', '🧪', '🔎', '🐳', '🔗', '🎨', '📚', '🧠', '⚡', '🛰️', '🧭', '🦾']
 const PROMPT_TEMPLATES: { label: string; body: string }[] = [
@@ -41,6 +50,7 @@ export function AgentsPage() {
   const [credentials, setCredentials] = useState<Credential[]>([])
   const [protocolLabels, setProtocolLabels] = useState<Record<string, string>>({})
   const [skills, setSkills] = useState<Skill[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -51,19 +61,22 @@ export function AgentsPage() {
   const reload = async () => {
     setLoading(true)
     try {
-      const [typeList, agentList, gatewayList, skillList, credentialList] = await Promise.all([
-        api.agentTypes(),
-        api.listAgents(),
-        api.listGateways(),
-        api.listSkills(),
-        api.listCredentials(),
-      ])
+      const [typeList, agentList, gatewayList, skillList, credentialList, mcpList] =
+        await Promise.all([
+          api.agentTypes(),
+          api.listAgents(),
+          api.listGateways(),
+          api.listSkills(),
+          api.listCredentials(),
+          api.listMcpServers(),
+        ])
       setTypes(typeList)
       setAgents(agentList)
       setGateways(gatewayList.items)
       setCredentials(credentialList.items)
       setProtocolLabels(Object.fromEntries(gatewayList.protocols.map((item) => [item.value, item.label])))
       setSkills(skillList)
+      setMcpServers(mcpList)
       setError(null)
     } catch (e) {
       setError(describe(e))
@@ -221,6 +234,9 @@ export function AgentsPage() {
                       ))}
                     {agent.enabled ? <span className="pill ok">已启用</span> : <span className="pill warn">已停用</span>}
                     {agent.skills.length > 0 && <span className="pill ok">🧩 {agent.skills.length} 个技能</span>}
+                    {agent.mcp_servers.length > 0 && (
+                      <span className="pill ok">🔌 {agent.mcp_servers.length} 个 MCP</span>
+                    )}
                     {agent.credentials.length > 0 && <span className="pill">🔑 {agent.credentials.length} 条凭据</span>}
                   </div>
 
@@ -265,6 +281,7 @@ export function AgentsPage() {
           gateways={gateways}
           protocolLabels={protocolLabels}
           skills={skills}
+          mcpServers={mcpServers}
           library={credentials}
           agent={editing}
           onClose={() => {
@@ -334,6 +351,7 @@ function AgentModal({
   gateways,
   protocolLabels,
   skills,
+  mcpServers,
   library,
   agent,
   onClose,
@@ -343,6 +361,7 @@ function AgentModal({
   gateways: Gateway[]
   protocolLabels: Record<string, string>
   skills: Skill[]
+  mcpServers: McpServer[]
   library: Credential[]
   agent: AgentProfile | null
   onClose: () => void
@@ -365,6 +384,8 @@ function AgentModal({
   const [credentials, setCredentials] = useState(() => credentialsToDraft(agent?.credentials))
   const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? [])
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [mcpIds, setMcpIds] = useState<string[]>(agent?.mcp_ids ?? [])
+  const [mcpOpen, setMcpOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -396,6 +417,17 @@ function AgentModal({
     [matchingSkills, skillIds],
   )
   const otherSkills = skills.length - matchingSkills.length
+  const supportsMcp = !!selected?.capabilities.mcp
+  // 平台通用的服务器（type_id 为空）可以分配给任意内核；扫描来的只能给同内核。
+  const assignableMcp = useMemo(
+    () => mcpServers.filter((server) => !server.type_id || server.type_id === typeId),
+    [mcpServers, typeId],
+  )
+  const pickedMcp = useMemo(
+    () => assignableMcp.filter((server) => mcpIds.includes(server.id)),
+    [assignableMcp, mcpIds],
+  )
+  const otherMcp = mcpServers.length - assignableMcp.length
 
   const chooseType = (type: AgentType) => {
     if (type.id === typeId) return
@@ -405,11 +437,15 @@ function AgentModal({
     setGatewayId('')
     setModel('')
     setSkillIds([])
+    setMcpIds([])
     if (!agent) setName((prev) => prev || type.name)
   }
 
   const toggleSkill = (id: string) =>
     setSkillIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+
+  const toggleMcp = (id: string) =>
+    setMcpIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
 
   const save = async () => {
     if (!selected) return setError('请先选择内核类型')
@@ -434,6 +470,8 @@ function AgentModal({
       // 技能分配紧随智能体保存：未分配的技能对这次运行不生效。
       const saved = agent ? await api.updateAgent(agent.id, payload) : await api.createAgent(payload)
       await api.setAgentSkills(saved.id, skillIds)
+      // MCP 分配同理：没挂上的服务器对这次运行不生效。
+      await api.setAgentMcpServers(saved.id, mcpIds)
       onSaved()
     } catch (e) {
       setError(describe(e))
@@ -447,7 +485,7 @@ function AgentModal({
       wide
       title={agent ? `编辑智能体 · ${agent.name}` : '新建智能体'}
       onClose={onClose}
-      escapeDisabled={skillsOpen}
+      escapeDisabled={skillsOpen || mcpOpen}
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>
@@ -646,6 +684,56 @@ function AgentModal({
             </div>
 
             <div className="field span-2">
+              <label className="field-label">
+                MCP 服务器
+                <span className="dim small" style={{ marginLeft: 'auto' }}>
+                  已挂 {mcpIds.length} 个
+                </span>
+              </label>
+              {!supportsMcp ? (
+                <div className="banner info">该内核不支持 MCP，这个智能体不会连任何 MCP 服务器。</div>
+              ) : (
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    onClick={() => setMcpOpen(true)}
+                    disabled={assignableMcp.length === 0}
+                  >
+                    {mcpIds.length > 0 ? '管理 MCP' : '选择 MCP'}（可选 {assignableMcp.length} 个）
+                  </button>
+                  {pickedMcp.map((server) => (
+                    <span className="pill" key={server.id}>
+                      🔌 {server.name}
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        onClick={() => toggleMcp(server.id)}
+                        aria-label={`移除 MCP「${server.name}」`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {supportsMcp && assignableMcp.length === 0 && (
+                <span className="field-help">
+                  目录里还没有可分配的服务器，请先到「MCP」页新建或重新扫描。
+                </span>
+              )}
+              <span className="field-help">
+                智能体能连的 MCP 服务器只能来自这里的分配：没挂上的不会被加载。换内核时，
+                来自其它内核配置的服务器会被自动移除，平台通用的保留。
+              </span>
+              {otherMcp > 0 && (
+                <span className="field-help">
+                  另有 {otherMcp} 个服务器来自其它内核的配置，与当前内核不匹配，无法选择。
+                </span>
+              )}
+            </div>
+
+            <div className="field span-2">
               <label className="field-label">备注</label>
               <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
@@ -677,6 +765,21 @@ function AgentModal({
             />
           </div>
         </>
+      )}
+
+      {mcpOpen && selected && (
+        <Modal
+          wide
+          title={`选择 MCP 服务器 · ${selected.name}`}
+          onClose={() => setMcpOpen(false)}
+          footer={
+            <button className="btn primary" onClick={() => setMcpOpen(false)}>
+              完成（已挂 {mcpIds.length}）
+            </button>
+          }
+        >
+          <McpPicker servers={assignableMcp} selected={mcpIds} onChange={setMcpIds} />
+        </Modal>
       )}
 
       {skillsOpen && selected && (

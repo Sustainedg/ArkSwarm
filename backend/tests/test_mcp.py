@@ -1,0 +1,467 @@
+"""MCP 服务器：解析、统一编目、智能体分配与运行时物化。
+
+MCP 的相关约定见 AGENTS.md §3（契约）与 §4（扩展手册）。
+"""
+from __future__ import annotations
+
+import json
+import tomllib
+from pathlib import Path
+
+import httpx
+import pytest
+
+import app.runtime.mcp as mcp_service
+from app.agents import get_agent
+from app.agents.base import AgentContext
+from app.agents.mcp import (
+    McpServerSpec,
+    parse_json_servers,
+    parse_toml_servers,
+    render_toml_servers,
+    safe_slug,
+    strip_toml_table,
+    to_json_config,
+)
+from app.db import SessionLocal
+from app.models import McpServer
+from app.settings import get_settings
+from helpers import make_gateway, make_profile
+
+
+def context(**overrides) -> AgentContext:
+    data: dict = {"agent_id": "a1", "agent_name": "测试智能体", "prompt": "hi"}
+    data.update(overrides)
+    return AgentContext(**data)
+
+
+def spec(name: str, **overrides) -> McpServerSpec:
+    data: dict = {"name": name, "slug": safe_slug(name) or name, "command": "npx"}
+    data.update(overrides)
+    return McpServerSpec(**data)
+
+
+# --- 解析与格式化 ------------------------------------------------------------
+
+
+def test_safe_slug_rejects_empty_and_sanitises():
+    assert safe_slug("context7") == "context7"
+    assert safe_slug("My Server") == "My-Server"
+    assert safe_slug("   ") is None
+    assert safe_slug("../逃逸") == "逃逸"  # 斜杠会被替换掉，标识本身没有路径含义
+    assert safe_slug("通用工具") == "通用工具"
+
+
+def test_parse_json_servers_reads_stdio_and_http():
+    raw = {
+        "mcpServers": {
+            "files": {"command": "npx", "args": ["-y", "server"], "env": {"TOKEN": "x"}},
+            "remote": {"type": "http", "url": "https://mcp.example/sse", "headers": {"A": "b"}},
+        },
+        "其它键": 1,
+    }
+    found = {item.slug: item for item in parse_json_servers(raw, type_id="claude-code")}
+    assert found["files"].transport == "stdio"
+    assert found["files"].env == {"TOKEN": "x"}
+    assert found["files"].source_id == "claude-code:files"
+    assert found["remote"].transport == "http"
+    assert found["remote"].url == "https://mcp.example/sse"
+    assert found["remote"].headers == {"A": "b"}
+
+    assert parse_json_servers({"mcpServers": "坏数据"}, type_id="claude-code") == []
+    assert parse_json_servers(None, type_id="claude-code") == []
+
+
+def test_parse_toml_servers_and_render_round_trip():
+    text = '''
+model = "gpt-5-codex"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+[mcp_servers.context7.env]
+TOKEN = "secret"
+'''
+    found = parse_toml_servers(text, type_id="codex")
+    assert [item.slug for item in found] == ["context7"]
+    assert found[0].args == ["-y", "@upstash/context7-mcp"]
+    assert found[0].env == {"TOKEN": "secret"}
+
+    # 损坏的 TOML 只当没有配置，不允许抛错。
+    assert parse_toml_servers("这不是 TOML = [", type_id="codex") == []
+
+    rendered = render_toml_servers([spec("remote", transport="http", command=None, url="https://x/y")])
+    parsed = tomllib.loads(f"{text}\n{rendered}")
+    assert parsed["mcp_servers"]["remote"]["url"] == "https://x/y"
+
+
+def test_strip_toml_table_removes_host_mcp_config_only():
+    text = '''model = "gpt-5-codex"
+
+[mcp_servers.context7]
+command = "npx"
+
+[projects."/tmp/ws"]
+trust_level = "trusted"
+
+[mcp_servers.context7.env]
+TOKEN = "secret"
+'''
+    stripped = strip_toml_table(text)
+    assert "mcp_servers" not in stripped
+    assert "context7" not in stripped
+    assert "secret" not in stripped
+    assert 'model = "gpt-5-codex"' in stripped
+    assert '[projects."/tmp/ws"]' in stripped
+
+    # 顶层 dotted key 形式也要剥掉。
+    dotted = 'mcp_servers.foo.command = "npx"\nmodel = "x"\n'
+    assert strip_toml_table(dotted).strip() == 'model = "x"'
+
+
+# --- 适配器声明 --------------------------------------------------------------
+
+
+def test_claude_mcp_mount_is_strict_and_scans_user_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    (tmp_path / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"host": {"command": "npx", "args": ["host"]}}}),
+        encoding="utf-8",
+    )
+    definition = get_agent("claude-code")
+
+    found = {item.slug: item for item in definition.discover_mcp_servers()}
+    assert found["host"].command == "npx"
+    assert found["host"].type_id == "claude-code"
+
+    home = tmp_path / "home"
+    ctx = context(home_dir=str(home), mcp_servers=[spec("files")])
+    mount = definition.mcp_mount(ctx)
+    assert mount.home_name == "claude-home"
+    payload = json.loads(mount.files["mcp.json"])
+    assert list(payload["mcpServers"]) == ["files"]
+
+    invocation = definition.build_invocation(ctx)
+    assert invocation.env["CLAUDE_CONFIG_DIR"] == str(home)
+    # 隔离目录里还没有写文件时不能声明 --mcp-config（内核会因为文件不存在直接报错）。
+    assert "--mcp-config" not in invocation.argv
+
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "mcp.json").write_text(mount.files["mcp.json"], encoding="utf-8")
+    invocation = definition.build_invocation(ctx)
+    assert "--strict-mcp-config" in invocation.argv
+    index = invocation.argv.index("--mcp-config")
+    assert invocation.argv[index + 1] == str(home / "mcp.json")
+
+
+def test_codex_mcp_mount_replaces_host_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    root = tmp_path / "codex"
+    root.mkdir()
+    (root / "config.toml").write_text(
+        '[projects."/tmp/ws"]\ntrust_level = "trusted"\n\n'
+        '[mcp_servers.host]\ncommand = "npx"\n',
+        encoding="utf-8",
+    )
+    definition = get_agent("codex")
+
+    found = {item.slug: item for item in definition.discover_mcp_servers()}
+    assert set(found) == {"host"}
+
+    ctx = context(home_dir=str(tmp_path / "home"), mcp_servers=[spec("assigned")])
+    mount = definition.mcp_mount(ctx)
+    content = mount.files["config.toml"]
+    assert "host" not in content
+    assert '[projects."/tmp/ws"]' in content
+    parsed = tomllib.loads(content)
+    assert list(parsed["mcp_servers"]) == ["assigned"]
+    assert parsed["projects"]["/tmp/ws"]["trust_level"] == "trusted"
+
+
+def test_gemini_mcp_mount_writes_project_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".gemini").mkdir()
+    (tmp_path / ".gemini" / "settings.json").write_text(
+        json.dumps({"mcpServers": {"host": {"command": "npx"}}}), encoding="utf-8"
+    )
+    definition = get_agent("gemini-cli")
+    assert [item.slug for item in definition.discover_mcp_servers()] == ["host"]
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    ctx = context(
+        home_dir=str(tmp_path / "home"),
+        workspace_dir=str(workspace),
+        mcp_servers=[spec("assigned")],
+    )
+    mount = definition.mcp_mount(ctx)
+    payload = json.loads(mount.workspace_files[".gemini/settings.json"])
+    assert list(payload["mcpServers"]) == ["assigned"]
+    assert payload["mcp"]["allowed"] == ["assigned"]
+
+    argv = definition.build_invocation(ctx).argv
+    index = argv.index("--allowed-mcp-server-names")
+    assert argv[index + 1] == "assigned"
+
+
+async def test_workspace_only_mount_does_not_create_an_isolated_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """只把配置写进工作目录的内核（Gemini CLI）：不该凭空建「家」，更不该因此把会话当新的一轮。"""
+    definition = get_agent("gemini-cli")
+
+    async def fake_servers(_session, _profile):
+        return [spec("assigned")]
+
+    monkeypatch.setattr(mcp_service, "mcp_servers_for_agent", fake_servers)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    ctx = context(workspace_dir=str(workspace), session_id="会话-1")
+
+    warnings = await mcp_service.prepare_mcp_home(None, definition, None, None, ctx)
+
+    assert warnings == []
+    assert ctx.home_dir is None, "只写工作目录的物化不该给适配器塞一个空的隔离目录"
+    assert ctx.session_id == "会话-1", "没有隔离目录就谈不上「新家」，不能把会话当新的一轮"
+    payload = json.loads((workspace / ".gemini" / "settings.json").read_text(encoding="utf-8"))
+    assert list(payload["mcpServers"]) == ["assigned"]
+
+
+# --- 接口与端到端 ------------------------------------------------------------
+
+
+@pytest.fixture
+def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """把编目结果换成两个「扫描出来的」服务器，避免依赖开发机上的真实配置。"""
+    specs = [
+        McpServerSpec(
+            name="github",
+            slug="github",
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+            env={"GITHUB_TOKEN": "从内核配置读到的值"},
+            type_id="codex",
+            source_kind="user",
+        ),
+        McpServerSpec(
+            name="filesystem",
+            slug="filesystem",
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+            type_id="claude-code",
+            source_kind="user",
+        ),
+    ]
+
+    def fake() -> dict[str, McpServerSpec]:
+        return {item.source_id or item.slug: item for item in specs}
+
+    monkeypatch.setattr(mcp_service, "discover_catalog", fake)
+    return specs
+
+
+async def make_agent(client: httpx.AsyncClient, type_id: str = "custom-cli") -> dict:
+    gateway = await make_gateway(client)
+    return await make_profile(
+        client,
+        name=f"{type_id} 智能体",
+        type_id=type_id,
+        gateway_id=gateway["id"],
+        model=None,
+        options={"command": "echo"} if type_id == "custom-cli" else {},
+    )
+
+
+async def test_mcp_api_create_list_update_and_guards(client: httpx.AsyncClient):
+    assert (await client.get("/api/mcp-servers")).json()["items"] == []
+
+    created = await client.post(
+        "/api/mcp-servers",
+        json={
+            "name": "filesystem",
+            "description": "本地文件系统",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+            "env": {"FS_TOKEN": "super-secret-token"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["transport"] == "stdio"
+    assert body["type_id"] is None
+    assert body["source_label"] == "平台新建"
+    assert body["editable"] is True
+    assert body["env_keys"] == ["FS_TOKEN"]
+    assert body["env_preview"]["FS_TOKEN"] != "super-secret-token"
+    assert "super-secret-token" not in created.text
+
+    # 库里存的必须是密文。
+    async with SessionLocal() as session:
+        row = await session.get(McpServer, body["id"])
+        assert row is not None and row.env_encrypted["FS_TOKEN"] != "super-secret-token"
+
+    # 重名标识会被挡住（重名写进内核配置会互相覆盖）。
+    duplicate = await client.post(
+        "/api/mcp-servers", json={"name": "filesystem", "command": "npx"}
+    )
+    assert duplicate.status_code == 409
+
+    # 校验：传输方式、stdio 缺命令、http 缺地址。
+    bad_transport = await client.post(
+        "/api/mcp-servers", json={"name": "x", "transport": "websocket", "command": "npx"}
+    )
+    assert bad_transport.status_code == 422
+    missing_command = await client.post("/api/mcp-servers", json={"name": "y", "transport": "stdio"})
+    assert missing_command.status_code == 422
+    missing_url = await client.post("/api/mcp-servers", json={"name": "z", "transport": "http"})
+    assert missing_url.status_code == 422
+
+    updated = await client.patch(
+        f"/api/mcp-servers/{body['id']}", json={"name": "文件系统", "enabled": False}
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "文件系统"
+    assert updated.json()["enabled"] is False
+    # 值留空＝不换：掩码没被当成新值写回去。
+    assert updated.json()["env_keys"] == ["FS_TOKEN"]
+
+    assert (await client.delete(f"/api/mcp-servers/{body['id']}")).status_code == 204
+    assert (await client.get(f"/api/mcp-servers/{body['id']}")).status_code == 404
+
+
+async def test_mcp_rescan_and_plain_servers_are_read_only(
+    client: httpx.AsyncClient, catalog: list[McpServerSpec]
+):
+    result = (await client.post("/api/mcp-servers/rescan")).json()
+    assert result == {"added": 2, "updated": 0, "missing": 0, "total": 2}
+
+    items = (await client.get("/api/mcp-servers")).json()["items"]
+    assert [item["slug"] for item in items] == ["filesystem", "github"]
+    assert next(item for item in items if item["slug"] == "github")["editable"] is False
+    assert next(item for item in items if item["slug"] == "github")["source_label"] == "内核配置"
+
+    detail = (await client.get("/api/mcp-servers/codex:github")).json()
+    # 扫描来的密钥同样是密文，接口只回掩码。
+    assert detail["env_keys"] == ["GITHUB_TOKEN"]
+    assert detail["env_preview"]["GITHUB_TOKEN"] != "从内核配置读到的值"
+
+    # 扫描来的服务器不可在平台上改 / 删。
+    assert (await client.patch("/api/mcp-servers/codex:github", json={"name": "x"})).status_code == 403
+    assert (await client.delete("/api/mcp-servers/codex:github")).status_code == 403
+
+    # 配置里消失后只标记失效，不删记录。
+    catalog.remove(next(item for item in catalog if item.slug == "github"))
+    assert (await client.post("/api/mcp-servers/rescan")).json()["missing"] == 1
+    items = (await client.get("/api/mcp-servers")).json()["items"]
+    assert next(item for item in items if item["slug"] == "github")["available"] is False
+
+
+async def test_agent_mcp_assignment_rules(client: httpx.AsyncClient, catalog: list[McpServerSpec]):
+    await client.post("/api/mcp-servers/rescan")
+    platform = (
+        await client.post(
+            "/api/mcp-servers",
+            json={"name": "通用工具", "transport": "stdio", "command": "npx", "args": ["-y", "x"]},
+        )
+    ).json()
+
+    codex_agent = await make_agent(client, "codex")
+    claude_agent = await make_agent(client, "claude-code")
+    assert codex_agent["mcp_ids"] == []
+
+    response = await client.put(
+        f"/api/agents/{codex_agent['id']}/mcp-servers",
+        json={"mcp_ids": ["codex:github", platform["id"]]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["mcp_ids"] == ["codex:github", platform["id"]]
+    assert {brief["slug"] for brief in response.json()["mcp_servers"]} == {"github", "通用工具"}
+
+    # 平台通用的服务器可以分给任意内核；扫描来的只能给同内核。
+    assert (
+        await client.put(
+            f"/api/agents/{claude_agent['id']}/mcp-servers", json={"mcp_ids": [platform["id"]]}
+        )
+    ).status_code == 200
+    mismatch = await client.put(
+        f"/api/agents/{claude_agent['id']}/mcp-servers", json={"mcp_ids": ["codex:github"]}
+    )
+    assert mismatch.status_code == 422
+    assert "不匹配" in mismatch.json()["detail"]
+
+    # 同一次分配里两个重名标识会互相覆盖，直接拒绝。
+    clash = await client.post(
+        "/api/mcp-servers", json={"name": "另一个", "slug": "github", "command": "npx"}
+    )
+    assert clash.status_code == 201
+    clash = await client.put(
+        f"/api/agents/{codex_agent['id']}/mcp-servers",
+        json={"mcp_ids": ["codex:github", clash.json()["id"]]},
+    )
+    assert clash.status_code == 422
+    assert "重名" in clash.json()["detail"]
+
+    # 详情里能看到使用中的智能体；被引用时不允许删除。
+    detail = (await client.get(f"/api/mcp-servers/{platform['id']}")).json()
+    assert sorted(item["name"] for item in detail["agents"]) == ["claude-code 智能体", "codex 智能体"]
+    assert (await client.delete(f"/api/mcp-servers/{platform['id']}")).status_code == 409
+
+    # 复制智能体时一并复制分配；换内核时丢弃内核专属，保留平台通用。
+    clone = (await client.post(f"/api/agents/{codex_agent['id']}/duplicate")).json()
+    assert clone["mcp_ids"] == ["codex:github", platform["id"]]
+    retyped = (await client.patch(f"/api/agents/{codex_agent['id']}", json={"type_id": "gemini-cli"})).json()
+    assert retyped["mcp_ids"] == [platform["id"]]
+
+
+async def test_run_materializes_assigned_mcp_into_isolated_home(
+    client: httpx.AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    root = tmp_path / "codex"
+    root.mkdir()
+    (root / "config.toml").write_text(
+        '[projects."/tmp/ws"]\ntrust_level = "trusted"\n\n'
+        '[mcp_servers.host]\ncommand = "npx"\nargs = ["host-only"]\n',
+        encoding="utf-8",
+    )
+
+    host_specs = get_agent("codex").discover_mcp_servers()
+    monkeypatch.setattr(
+        mcp_service, "discover_catalog", lambda: {item.source_id or "": item for item in host_specs}
+    )
+    await client.post("/api/mcp-servers/rescan")
+
+    agent = await make_agent(client, "codex")
+    await client.put(f"/api/agents/{agent['id']}/mcp-servers", json={"mcp_ids": ["codex:host"]})
+    conversation = (
+        await client.post(
+            "/api/conversations", json={"agent_profile_id": agent["id"], "title": "MCP 验证"}
+        )
+    ).json()
+
+    response = await client.post(
+        f"/api/conversations/{conversation['id']}/messages", json={"content": "你好"}
+    )
+    # 物化发生在启动子进程之前：不管本机装没装 codex，隔离配置都已经写好了。
+    await response.aread()
+
+    home = get_settings().agent_homes_root / conversation["id"] / "codex-home"
+    content = (home / "config.toml").read_text(encoding="utf-8")
+    parsed = tomllib.loads(content)
+    assert list(parsed["mcp_servers"]) == ["host"]
+    assert parsed["mcp_servers"]["host"]["args"] == ["host-only"]
+    assert parsed["projects"]["/tmp/ws"]["trust_level"] == "trusted"
+    # 隔离目录里的配置文件必须收紧权限（可能含 MCP 密钥）。
+    assert (home / "config.toml").stat().st_mode & 0o777 == 0o600
+
+    # 取消分配后，隔离配置里也要立刻消失（每轮重建）。
+    await client.put(f"/api/agents/{agent['id']}/mcp-servers", json={"mcp_ids": []})
+    await (await client.post(
+        f"/api/conversations/{conversation['id']}/messages", json={"reset_session": True, "content": "再问"}
+    )).aread()
+    parsed = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    assert "mcp_servers" not in parsed

@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any, AsyncIterator, ClassVar, Iterable, Sequence
 
 from .events import AgentEvent, EventType
+from .mcp import McpMount, McpServerSpec
 from .skills import SkillMount, SkillRoot, SkillSpec
 
 
@@ -210,8 +211,11 @@ class AgentContext:
     prompt: str = ""
     #: 智能体分配到的技能（框架按内核类型过滤后注入）
     skills: list[SkillSpec] = field(default_factory=list)
-    #: 框架物化好的技能主目录；适配器据此设置内核的配置目录环境变量
-    skill_home_dir: str | None = None
+    #: 智能体分配到的 MCP 服务器（框架解密后注入；值不得写进提示词、日志或事件）
+    mcp_servers: list[McpServerSpec] = field(default_factory=list)
+    #: 框架物化好的内核隔离配置目录（技能与 MCP 共用同一个「家」）；
+    #: 适配器据此设置内核的配置目录环境变量。
+    home_dir: str | None = None
 
     def option(self, key: str, default: Any = None) -> Any:
         value = self.options.get(key, default)
@@ -440,6 +444,25 @@ class AgentDefinition(ABC):
 
         适配器负责声明自己内核的隔离方式（配置目录、需要携带的配置文件、
         需要关闭的内核自带技能）；框架只按声明执行，不关心具体是哪个内核。
+        """
+        return None
+
+    # -- MCP 服务器 ----------------------------------------------------------
+
+    def discover_mcp_servers(self) -> list[McpServerSpec]:
+        """交给平台统一编目的 MCP 服务器（只读扫描本机已有的内核配置）。
+
+        默认没有；能挂 MCP 的内核（Claude Code、Codex、Gemini CLI）覆盖此钩子。
+        实现必须是尽力而为的：配置不存在、损坏、权限不足都不允许抛错。
+        """
+        return []
+
+    def mcp_mount(self, ctx: AgentContext) -> McpMount | None:
+        """声明「把智能体分配到的 MCP 服务器写到哪里」；``None`` 表示该内核不支持 MCP。
+
+        ``ctx.mcp_servers`` 是框架解密后注入的分配结果（含明文密钥），适配器负责按自己
+        内核的配置形状把它序列化进 ``McpMount.files`` / ``workspace_files``；
+        框架只按声明写文件，不关心具体是哪个内核。
         """
         return None
 

@@ -426,7 +426,7 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
  │    ├─ ctx.history=[]、ctx.session_id=None            ← 不共享记忆
  │    ├─ ctx.workspace_dir：所有岗位统一为「本次协作任务」的工作路径（任务指定 > 团队默认；
  │    │                     workspace_scope 只约束读写权限与越权审计）
- │    └─ ctx.skills / ctx.skill_home_dir：按节点绑定的智能体分配物化（scope_id = 运行内的作用域）
+ │    └─ ctx.skills / ctx.home_dir：按节点绑定的智能体分配物化（scope_id = 运行内的作用域）
  ├─ async for event in execution.stream(node, ctx, handle):
  │    ├─ 原始 AgentEvent → 包进 collab.step.event 信封 → 立刻 SSE 推给前端（逐字打字效果）
  │    └─ 同时累积 text / parts / usage（复用 consume_run 同样的累积方式）

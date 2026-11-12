@@ -7,6 +7,7 @@ from . import (
     conversations,
     credentials,
     gateways,
+    mcp,
     runtimes,
     runs,
     skillhub,
@@ -21,6 +22,7 @@ api_router.include_router(agents.router)
 api_router.include_router(gateways.router)
 api_router.include_router(credentials.router)
 api_router.include_router(skills.router)
+api_router.include_router(mcp.router)
 api_router.include_router(skillhub.router)
 api_router.include_router(runtimes.router)
 api_router.include_router(conversations.router)

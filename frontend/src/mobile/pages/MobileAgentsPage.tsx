@@ -7,9 +7,18 @@ import {
 } from '../../components/CredentialEditor'
 import { DynamicForm } from '../../components/DynamicForm'
 import { StarIcon } from '../../components/Icons'
+import { McpPicker } from '../../components/McpPicker'
 import { SkillPicker } from '../../components/SkillPicker'
 import { api } from '../../lib/api'
-import type { AgentProfile, AgentType, Credential, Gateway, Skill, TestResult } from '../../lib/types'
+import type {
+  AgentProfile,
+  AgentType,
+  Credential,
+  Gateway,
+  McpServer,
+  Skill,
+  TestResult,
+} from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -23,6 +32,7 @@ export function MobileAgentsPage() {
   const [credentialLibrary, setCredentialLibrary] = useState<Credential[]>([])
   const [protocolLabels, setProtocolLabels] = useState<Record<string, string>>({})
   const [skills, setSkills] = useState<Skill[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<AgentProfile | null>(null)
@@ -31,18 +41,21 @@ export function MobileAgentsPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [agentList, gatewayList, skillList, typeList, credentialList] = await Promise.all([
-        api.listAgents(),
-        api.listGateways(),
-        api.listSkills(),
-        api.agentTypes(),
-        api.listCredentials(),
-      ])
+      const [agentList, gatewayList, skillList, typeList, credentialList, mcpList] =
+        await Promise.all([
+          api.listAgents(),
+          api.listGateways(),
+          api.listSkills(),
+          api.agentTypes(),
+          api.listCredentials(),
+          api.listMcpServers(),
+        ])
       setAgents(agentList)
       setGateways(gatewayList.items)
       setCredentialLibrary(credentialList.items)
       setProtocolLabels(Object.fromEntries(gatewayList.protocols.map((item) => [item.value, item.label])))
       setSkills(skillList)
+      setMcpServers(mcpList)
       setAgentTypes(typeList)
       setError(null)
     } catch (e) {
@@ -198,6 +211,7 @@ export function MobileAgentsPage() {
             gateways={gateways}
             protocolLabels={protocolLabels}
             skills={skills}
+            mcpServers={mcpServers}
             agentTypes={agentTypes}
             library={credentialLibrary}
             onSaved={async () => {
@@ -254,6 +268,7 @@ function AgentForm({
   gateways,
   protocolLabels,
   skills,
+  mcpServers,
   agentTypes,
   library,
   onSaved,
@@ -262,6 +277,7 @@ function AgentForm({
   gateways: Gateway[]
   protocolLabels: Record<string, string>
   skills: Skill[]
+  mcpServers: McpServer[]
   agentTypes: AgentType[]
   library: Credential[]
   onSaved: () => void
@@ -279,6 +295,8 @@ function AgentForm({
   const [model, setModel] = useState(agent?.model ?? '')
   const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? [])
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [mcpIds, setMcpIds] = useState<string[]>(agent?.mcp_ids ?? [])
+  const [mcpOpen, setMcpOpen] = useState(false)
   const [options, setOptions] = useState<Record<string, unknown>>(agent?.options ?? {})
   const [credentialDrafts, setCredentialDrafts] = useState(() => credentialsToDraft(agent?.credentials))
   const [saving, setSaving] = useState(false)
@@ -308,6 +326,11 @@ function AgentForm({
   const matchingSkills = skills.filter((skill) => skill.type_id === typeId)
   const pickedSkills = matchingSkills.filter((skill) => skillIds.includes(skill.id))
   const otherSkills = skills.length - matchingSkills.length
+  const supportsMcp = selected?.capabilities.mcp ?? false
+  // 平台通用的服务器（type_id 为空）可以分配给任意内核；扫描来的只能给同内核。
+  const assignableMcp = mcpServers.filter((server) => !server.type_id || server.type_id === typeId)
+  const pickedMcp = assignableMcp.filter((server) => mcpIds.includes(server.id))
+  const otherMcp = mcpServers.length - assignableMcp.length
 
   const chooseType = (nextType: AgentType) => {
     if (nextType.id === typeId) return
@@ -316,12 +339,18 @@ function AgentForm({
     setGatewayId('')
     setModel('')
     setSkillIds([])
+    setMcpIds([])
     if (!agent) setName((prev) => prev || nextType.name)
   }
 
   const toggleSkill = (skillId: string) =>
     setSkillIds((current) =>
       current.includes(skillId) ? current.filter((id) => id !== skillId) : [...current, skillId],
+    )
+
+  const toggleMcp = (mcpId: string) =>
+    setMcpIds((current) =>
+      current.includes(mcpId) ? current.filter((id) => id !== mcpId) : [...current, mcpId],
     )
 
   const save = async () => {
@@ -347,6 +376,8 @@ function AgentForm({
       // 技能分配紧随智能体保存：未分配的技能对这次运行不生效。
       const saved = agent ? await api.updateAgent(agent.id, payload) : await api.createAgent(payload)
       await api.setAgentSkills(saved.id, skillIds)
+      // MCP 分配同理：没挂上的服务器对这次运行不生效。
+      await api.setAgentMcpServers(saved.id, mcpIds)
       onSaved()
     } catch (e) {
       setError(describeError(e))
@@ -506,6 +537,48 @@ function AgentForm({
       </div>
 
       <div className="field">
+        <label className="field-label">
+          MCP 服务器<span className="dim small">已挂 {mcpIds.length} 个</span>
+        </label>
+        {!supportsMcp ? (
+          <div className="banner info">该内核不支持 MCP，这个智能体不会连任何 MCP 服务器。</div>
+        ) : (
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => setMcpOpen(true)}
+              disabled={assignableMcp.length === 0}
+            >
+              {mcpIds.length > 0 ? '管理 MCP' : '选择 MCP'}（可选 {assignableMcp.length} 个）
+            </button>
+            {pickedMcp.map((server) => (
+              <span className="pill" key={server.id}>
+                🔌 {server.name}
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() => toggleMcp(server.id)}
+                  aria-label={`移除 MCP「${server.name}」`}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {supportsMcp && assignableMcp.length === 0 && (
+          <span className="field-help">目录里还没有可分配的服务器，请先到「MCP」页新建或重新扫描。</span>
+        )}
+        <span className="field-help">
+          未挂上的 MCP 服务器不会被加载；换内核时来自其它内核配置的会被自动移除，平台通用的保留。
+        </span>
+        {otherMcp > 0 && (
+          <span className="field-help">另有 {otherMcp} 个服务器来自其它内核，无法选择。</span>
+        )}
+      </div>
+
+      <div className="field">
         <label className="field-label">备注</label>
         <input className="input" value={description} onChange={(event) => setDescription(event.target.value)} />
       </div>
@@ -536,6 +609,21 @@ function AgentForm({
       <button className="btn primary block" onClick={() => void save()} disabled={saving}>
         {saving ? '保存中…' : '保存'}
       </button>
+
+      {mcpOpen && selected && (
+        <MobileSheet
+          full
+          title={`选择 MCP 服务器 · ${selected.name}`}
+          onClose={() => setMcpOpen(false)}
+          footer={
+            <button className="btn primary block" onClick={() => setMcpOpen(false)}>
+              完成（已挂 {mcpIds.length}）
+            </button>
+          }
+        >
+          <McpPicker servers={assignableMcp} selected={mcpIds} onChange={setMcpIds} />
+        </MobileSheet>
+      )}
 
       {skillsOpen && selected && (
         <MobileSheet

@@ -107,7 +107,7 @@ class SkillMount:
     * 对 ``patch`` 里列出的文件做顶层键合并（例如关掉内核自带插件）；
     * ``notes`` 是需要提示给用户的一次性说明。
 
-    适配器据此在自己的 ``build_invocation()`` 里用 ``ctx.skill_home_dir``
+    适配器据此在自己的 ``build_invocation()`` 里用 ``ctx.home_dir``
     设置内核的配置目录环境变量。
     """
 

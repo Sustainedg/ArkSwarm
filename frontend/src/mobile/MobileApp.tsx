@@ -13,6 +13,7 @@ import { MobileCredentialsPage } from './pages/MobileCredentialsPage'
 import { MobileGatewaysPage } from './pages/MobileGatewaysPage'
 import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
+import { MobileMcpPage } from './pages/MobileMcpPage'
 import { MobileSkillsPage } from './pages/MobileSkillsPage'
 
 /**
@@ -52,6 +53,7 @@ export function MobileApp() {
         <Route path="/gateways" element={<MobileGatewaysPage />} />
         <Route path="/credentials" element={<MobileCredentialsPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
+        <Route path="/mcp" element={<MobileMcpPage />} />
         <Route path="/runtimes" element={<MobileRuntimesPage />} />
         <Route path="/collab" element={<MobileCollabPage />} />
         <Route path="/collab/teams/:teamId" element={<MobileCollabTeamPage />} />

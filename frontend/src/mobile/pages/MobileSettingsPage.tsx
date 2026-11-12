@@ -78,8 +78,16 @@ export function MobileSettingsPage({ version }: { version: string }) {
               </span>
               <span className="m-item-chevron">›</span>
             </button>
-            <button className="m-item" onClick={() => navigate('/gateways')}>
+            <button className="m-item" onClick={() => navigate('/mcp')}>
               <span style={{ fontSize: 18 }}>🔌</span>
+              <span className="m-item-main">
+                <span className="m-item-title">MCP</span>
+                <span className="m-item-sub">统一编目 MCP 服务器，通过智能体分配生效</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
+            <button className="m-item" onClick={() => navigate('/gateways')}>
+              <span style={{ fontSize: 18 }}>🌐</span>
               <span className="m-item-main">
                 <span className="m-item-title">自定义网关</span>
                 <span className="m-item-sub">API 密钥的唯一来源；官方链路 + 自建网关</span>

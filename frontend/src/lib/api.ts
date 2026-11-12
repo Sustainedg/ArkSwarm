@@ -2,7 +2,8 @@ import type {
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
-  ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
+  McpServerDetail, Overview, ProvisionEvent, RuntimeLatest, Skill,
   MarketInstallInput,
   MarketInstallResult,
   MarketKernel,
@@ -125,6 +126,13 @@ export const api = {
       body: JSON.stringify({ skill_ids: skillIds }),
     }),
 
+  /** 整表替换智能体挂着的 MCP 服务器。 */
+  setAgentMcpServers: (id: string, mcpIds: string[]) =>
+    request<AgentProfile>(`/api/agents/${id}/mcp-servers`, {
+      method: 'PUT',
+      body: JSON.stringify({ mcp_ids: mcpIds }),
+    }),
+
   // --- 运行时（各 CLI 内核的安装 / 更新 / 卸载）-----------------------------
   listRuntimes: () => request<{ items: AgentRuntime[] }>('/api/runtimes').then((r) => r.items),
   /** 强制重测一次运行时的安装状态与版本（「重新检测」按钮；后端会把结果写回缓存）。 */
@@ -156,6 +164,29 @@ export const api = {
   },
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
+
+  // --- MCP 服务器（统一编目 + 通过智能体分配生效）-----------------------------
+  listMcpServers: (params?: {
+    type_id?: string
+    source_kind?: string
+    available?: boolean
+    q?: string
+  }) => {
+    const search = new URLSearchParams()
+    if (params?.type_id) search.set('type_id', params.type_id)
+    if (params?.source_kind) search.set('source_kind', params.source_kind)
+    if (params?.q) search.set('q', params.q)
+    if (params?.available !== undefined) search.set('available', String(params.available))
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<{ items: McpServer[] }>(`/api/mcp-servers${suffix}`).then((r) => r.items)
+  },
+  getMcpServer: (id: string) => request<McpServerDetail>(`/api/mcp-servers/${encodeURIComponent(id)}`),
+  createMcpServer: (body: unknown) =>
+    request<McpServer>('/api/mcp-servers', { method: 'POST', body: JSON.stringify(body) }),
+  updateMcpServer: (id: string, body: unknown) =>
+    request<McpServer>(`/api/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteMcpServer: (id: string) => request<void>(`/api/mcp-servers/${id}`, { method: 'DELETE' }),
+  rescanMcpServers: () => request<McpRescanResult>('/api/mcp-servers/rescan', { method: 'POST' }),
 
   /** 技能市场（SkillHub）：浏览 / 安装 / 卸载。安装需指定目标内核（type_id）。 */
   listMarketSkills: (params?: {

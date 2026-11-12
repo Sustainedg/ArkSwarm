@@ -64,6 +64,8 @@ def _adapter_modules() -> list[Path]:
             AGENTS_DIR / "base.py",
             AGENTS_DIR / "events.py",
             AGENTS_DIR / "registry.py",
+            AGENTS_DIR / "skills.py",
+            AGENTS_DIR / "mcp.py",
             *BUILTIN_DIR.glob("*.py"),
         ]
     )
@@ -186,6 +188,41 @@ def test_framework_layers_do_not_hardcode_kernel_skills():
             if marker in text:
                 offenders.append(f"{path.name} 出现了硬编码的内核技能标识：{marker}")
     assert offenders == [], "\n".join(offenders)
+
+
+#: 内核 MCP 配置的具体知识（配置文件名、命令行开关、JSON/TOML 键）只应存在于适配器里。
+KERNEL_MCP_MARKERS = (
+    ".claude.json",
+    "mcpServers",
+    "--mcp-config",
+    "--strict-mcp-config",
+    "--allowed-mcp-server-names",
+    "[mcp_servers",
+)
+
+
+def test_framework_layers_do_not_hardcode_kernel_mcp():
+    """框架层不得知道「哪个内核把 MCP 配置放在哪、长什么形状」（那是适配器的知识）。"""
+    offenders: list[str] = []
+    framework_files = list((APP_DIR / "api").glob("*.py"))
+    framework_files += list((APP_DIR / "runtime").glob("*.py"))
+    for path in sorted(framework_files):
+        text = path.read_text(encoding="utf-8")
+        for marker in KERNEL_MCP_MARKERS:
+            if marker in text:
+                offenders.append(f"{path.name} 出现了硬编码的内核 MCP 标识：{marker}")
+    assert offenders == [], "\n".join(offenders)
+
+
+def test_mcp_capable_adapters_declare_a_mount():
+    """声明了 mcp 能力的适配器必须声明物化方式，否则「分配的 MCP」无处落地。"""
+    ctx = AgentContext(agent_id="probe", agent_name="probe")
+    for definition in all_agents():
+        if not definition.capabilities.mcp:
+            continue
+        assert definition.mcp_mount(ctx) is not None, (
+            f"{definition.id} 声明了 mcp 能力，但没有实现 mcp_mount()"
+        )
 
 
 def test_skill_capable_adapters_declare_a_mount():

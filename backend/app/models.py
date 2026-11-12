@@ -10,6 +10,8 @@
 * :class:`Conversation` —— 对话，绑定某个智能体并记住内核侧的会话 ID。
 * :class:`Skill`        —— 从各智能体内核扫描出来的技能（统一编目）。
 * :class:`AgentSkill`   —— 智能体与技能的分配关系（智能体能用的技能只能来自这里）。
+* :class:`McpServer`    —— 统一编目的 MCP 服务器（平台新建的「通用」服务器 + 从各内核配置扫出来的）。
+* :class:`AgentMcpServer` —— 智能体与 MCP 服务器的分配关系（智能体能挂的 MCP 只能来自这里）。
 * :class:`RuntimeStatus` —— 各运行时的可用性检测结果（框架层缓存，不是领域实体）。
 """
 from __future__ import annotations
@@ -173,6 +175,76 @@ class AgentSkill(SQLModel, table=True):
     skill_id: str = Field(
         sa_column=Column(
             String(200), ForeignKey("skills.id", ondelete="RESTRICT"), primary_key=True
+        )
+    )
+    position: int = Field(default=0)
+
+
+class McpServer(SQLModel, table=True):
+    """统一编目的一个 MCP 服务器。
+
+    两类来源：
+
+    * ``type_id is None``（``source_kind == "manual"``）—— 用户在「MCP」页新建的**平台通用**
+      服务器，可以分配给任意内核的智能体；
+    * ``type_id`` 非空 —— 从某个内核自己的配置里只读扫描出来的（来源是那个内核），
+      只能分配给同内核的智能体，且不可在平台上编辑 / 删除。
+
+    ``env`` / ``headers`` 的值可能含密钥，只经 :mod:`app.security` 加密保存
+    （明文键有且只有一层：接口永远只回键名与掩码）。
+    """
+
+    __tablename__ = "mcp_servers"
+
+    id: str = Field(sa_column=Column(String(200), primary_key=True))
+    name: str = Field(sa_column=Column(String(160), nullable=False))
+    #: 稳定标识：写进内核配置的键名（扫描来的就是配置里的原始键名）
+    slug: str = Field(sa_column=Column(String(120), nullable=False))
+    description: str = Field(default="", sa_column=Column(Text, nullable=False))
+    #: 来源内核 id；None 表示平台通用（可分配给任意内核）
+    type_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
+    #: 取值：manual（平台新建）/ user（内核配置扫描）
+    source_kind: str = Field(default="manual", sa_column=Column(String(32), nullable=False))
+    #: 取值：stdio / http / sse
+    transport: str = Field(default="stdio", sa_column=Column(String(16), nullable=False))
+    command: str | None = Field(default=None, sa_column=Column(String(500)))
+    args: list[str] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False, default=list)
+    )
+    url: str | None = Field(default=None, sa_column=Column(String(1000)))
+    #: 「环境变量名 → 密文」。键明文、值加密；运行时解密后按内核形状写出
+    env_encrypted: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
+    #: 「请求头名 → 密文」，同 env
+    headers_encrypted: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
+    )
+    enabled: bool = Field(default=True)
+    #: 扫描来的服务器在配置里是否仍存在；平台新建的恒为 True
+    available: bool = Field(default=True)
+    note: str | None = Field(default=None, sa_column=Column(String(400)))
+    discovered_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
+    )
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 软删除时间戳：仅平台新建的服务器可删；历史对话与协作历史照旧可读
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class AgentMcpServer(SQLModel, table=True):
+    """智能体 → MCP 服务器的分配关系。智能体实际能挂的 MCP 只能来自这张表。"""
+
+    __tablename__ = "agent_mcp_servers"
+
+    agent_profile_id: str = Field(
+        sa_column=Column(
+            String(64), ForeignKey("agent_profiles.id", ondelete="CASCADE"), primary_key=True
+        )
+    )
+    mcp_server_id: str = Field(
+        sa_column=Column(
+            String(200), ForeignKey("mcp_servers.id", ondelete="RESTRICT"), primary_key=True
         )
     )
     position: int = Field(default=0)

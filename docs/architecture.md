@@ -24,6 +24,7 @@
  │    └─ service.prepare_run()
  │         ├─ 载入 Conversation → AgentProfile → AgentDefinition（+ Gateway 提供密钥/地址）
  │         ├─ 智能体技能：agent_skills → skills 表 → 物化到 agent-homes/<对话>/<内核配置目录>
+ │         ├─ 智能体 MCP：agent_mcp_servers → mcp_servers 表 → 解密后按内核形状写进同一个隔离目录
  │         ├─ capability 决策：
  │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接
  │         │    不支持 session → 回放数据库里的最近 N 轮（transcript）
@@ -123,6 +124,9 @@ class AgentDefinition(ABC):
     def discover_skills() -> list[SkillSpec]     # 技能：扫描上面这些根（默认由框架 scan_skill_roots 完成）
     def skill_mount(ctx) -> SkillMount | None    # 技能：把分配到的技能物化到哪里
 
+    def discover_mcp_servers() -> list[McpServerSpec]  # MCP：只读扫描本机已有的 MCP 配置
+    def mcp_mount(ctx) -> McpMount | None              # MCP：把分配到的服务器写到哪里
+
     logo                                          # 官方 Logo（/icons/kernels/*.svg，前端当遮罩染色）
     provisioner                                   # 运行时：如何安装 / 更新 / 卸载本内核
 ```
@@ -132,7 +136,9 @@ class AgentDefinition(ABC):
 - `sessions=True` → 平台把 `session_id` 存到对话上，下一轮只发增量。
 - `native_system_prompt=False` → 平台把人格折进 prompt（或按适配器自己的方式注入）。
 - `working_directory=True` → 为每个对话分配独立工作目录作为 cwd。
-- `permission_modes / mcp / tools` → 供前端展示能力徽标，并按需渲染对应配置项。
+- `permission_modes / tools` → 供前端展示能力徽标，并按需渲染对应配置项。
+- `mcp=True` → 该内核支持 MCP：适配器**必须**实现 `discover_mcp_servers()` 与 `mcp_mount()`
+  （有架构守卫测试）；框架据 `mcp_mount` 把智能体分配到的 MCP 服务器写进隔离目录。
 
 `resume_supported(ctx)` 是可选钩子：Codex 老版本没有 `exec resume`，适配器可以在
 选项里让用户切换成「回放 transcript」，框架会据此走另一条分支。
@@ -313,7 +319,49 @@ skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏
 - **解压安全**：拒绝 zip-slip（绝对路径 / `..`）、跳过符号链接、限制文件数与解压后总字节数。
 - **接口**：`GET/POST /api/skillhub/*`（列表 / 内核 / 详情 / 安装 / 卸载），见 ``api/skillhub.py``。
 
-## 6. 数据模型
+## 6. MCP 服务器（Model Context Protocol）
+
+MCP（Model Context Protocol）服务器是内核使用的**外部工具服务**：一个本地进程（stdio）或一个
+HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，再通过**智能体分配**决定某个智能体
+能连哪些服务器；「哪个内核把 MCP 配置放在哪、长什么形状」是**适配器的知识**，框架不硬编码。
+
+```
+各内核 MCP 配置 ──discover_mcp_servers()──▶ 统一目录(mcp_servers) ──分配──▶ agent_mcp_servers ──▶ 运行时物化
+  ~/.claude.json                          （只读索引 + 平台新建通用项） （智能体弹窗）      agent-homes/<对话>/…
+  $CODEX_HOME/config.toml
+  ~/.gemini/settings.json
+```
+
+- **两类来源**：`type_id is None`（`source_kind=manual`）是用户在「MCP」页新建的**平台通用**服务器，
+  可以分配给任意内核的智能体，可编辑 / 停用 / 删除；`type_id` 非空（`source_kind=user`）是从某个
+  内核自己的配置里只读扫出来的，**只能分配给同内核**的智能体，平台不接管它的内容（改 / 删返回 403）。
+- **编目**：适配器用 `discover_mcp_servers()` 只读扫描本机配置（解析 / 渲染的共享工具在
+  `agents/mcp.py`），`POST /api/mcp-servers/rescan` 把结果同步进 `mcp_servers` 表。配置里不再存在的
+  服务器只标记 `available=False`，**不删行**（分配关系不断链）。
+- **分配**：`agent_mcp_servers` 是智能体能挂的 MCP 的**唯一来源**；
+  `PUT /api/agents/{id}/mcp-servers` 整表替换。不在同一内核的扫描项、以及同一次分配里两个重名标识
+  （写进内核配置会互相覆盖）都会被拒（422）。换内核时，来自原内核配置的分配自动丢弃，平台通用的保留。
+- **物化（严格仅分配）**：适配器的 `mcp_mount(ctx)` 声明「把分配到的服务器写到哪里」——写进隔离
+  配置目录的文件（`McpMount.files`）或工作目录里的项目级配置（`McpMount.workspace_files`）：
+
+  | 内核 | 落点 | 隔离手段 |
+  | --- | --- | --- |
+  | Claude Code | 隔离目录的 `mcp.json` | `--mcp-config <file> --strict-mcp-config`（本机 / 项目的其它 MCP 一律不认） |
+  | Codex | 隔离 `CODEX_HOME/config.toml` 的 `[mcp_servers.*]` | 先剥掉技能物化带过来的本机配置，再追加分配到的 |
+  | Gemini CLI | 工作目录 `.gemini/settings.json` | 项目级 `mcpServers` + `--allowed-mcp-server-names` 收窄启用范围（它会合并用户级配置） |
+
+  技能与 MCP **共用同一个「家」**（`AgentContext.home_dir`）：同一个隔离目录里既有分配到的技能，
+  也有分配到的 MCP 声明，每次运行重建，取消分配即立刻消失。（只把配置写进工作目录的内核 ——
+  Gemini CLI —— 没有这个家，框架不会凭空给它建一个空目录。）
+- **密钥只经 `app/security.py`**：`env` / `headers` 的值加密落库（键明文、值密文），接口只回键名与
+  掩码，明文只在「解密后注入适配器」的一瞬间存在。编辑语义：**列出的键留空＝保持原值、删掉整行＝
+  删除、新键必须给值**（`runtime/mcp.py:_merge_pairs`）。
+- **被引用时不可删**：`DELETE /api/mcp-servers/{id}` 在仍有未删除的智能体挂着它时返回 409；
+  平台新建的服务器走软删除（`deleted_at`），历史对话与协作历史照旧可读。
+- **接口**：`GET/POST /api/mcp-servers`、`POST /api/mcp-servers/rescan`、
+  `GET/PATCH/DELETE /api/mcp-servers/{id}`、`PUT /api/agents/{id}/mcp-servers`，见 `api/mcp.py`。
+
+## 7. 数据模型
 
 ```
 gateways(id, name, kind(official|custom), type_id, protocol, auth_style, base_url,
@@ -329,6 +377,10 @@ skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, pat
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
        available, note, source_url)   # source_kind 含 market（市场技能，可卸载）
 agent_skills(agent_profile_id→agent_profiles, skill_id→skills，复合主键 + position)
+mcp_servers(id, name, slug, description, type_id(空=平台通用), source_kind(manual|user),
+            transport(stdio|http|sse), command, args JSON, url, env_encrypted JSON,
+            headers_encrypted JSON, enabled, available, note, discovered_at, updated_at, deleted_at)
+agent_mcp_servers(agent_profile_id→agent_profiles, mcp_server_id→mcp_servers，复合主键 + position)
 
 -- 协作域（独立于对话域，见 docs/collaboration-design.md）
 collab_teams(id, name, description, entry_key, workspace_dir, graph JSON, budget JSON)
@@ -363,6 +415,9 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   `workspace_dir` 只属于 `Conversation` / `collab_*`）。
 - **技能只增不删**：技能是从文件系统扫描出来的，目录消失只标记 `available=false`，
   因此智能体分配（`agent_skills`）永远指向真实存在的记录；智能体被删除时分配关系保留（见下条）。
+- **MCP 也是只增不删 + 严格仅分配**：扫描来的服务器在配置里消失只标记 `available=false`，
+  `agent_mcp_servers` 是智能体能挂什么 MCP 的唯一来源；平台新建的服务器可软删除，
+  但仍被未删除的智能体引用时拒绝删除（409）。
 - **删除智能体 / 网关只做软删除**：外键全是 `RESTRICT`，而历史对话与历史工单都引用着智能体，
   硬删会连历史一起打断。所以 `DELETE /api/agents/{id}` 只写 `deleted_at`：它从所有可选列表里
   消失（新建对话、新建协作节点都拒绝它），但历史对话仍能显示当时的名字 / 头像、也仍能继续对话。
@@ -377,7 +432,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 - **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
-## 7. 扩展点
+## 8. 扩展点
 
 | 想做的事 | 需要改的地方 |
 | --- | --- |
@@ -389,11 +444,13 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 | 新增移动端页面 | 在 `frontend/src/mobile/` 加页面并在 `MobileApp.tsx` 注册路由（桌面端不受影响） |
 | 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `skill_roots()`、`discover_skills()` 与 `skill_mount()` |
 | 从技能市场安装 / 卸载技能 | 框架已内置（`app/skillhub.py` + `api/skillhub.py`）；只要适配器声明了 `installable` 的技能根 |
+| 让某个适配器支持 MCP | 声明 `capabilities.mcp=True`，实现 `discover_mcp_servers()` 与 `mcp_mount()` |
+| 接入一个新的 MCP 服务器 | 平台新建（「MCP」页）或写进内核自己的配置后「重新扫描」；分配在「智能体 → MCP」里做 |
 | 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
 
-## 8. 已知边界
+## 9. 已知边界
 
 - CLI 适配器的多轮依赖各工具自身的会话续接；`custom-cli` 若声明不出 `session_path`，
   平台会退化为 transcript 回放。
@@ -422,11 +479,18 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   `doctor`）要靠 `skillOverrides` 关闭；工作目录自带的 `.claude/skills` 会被内核直接读取，
   平台只提示、不删除用户文件。
 - 技能目前只支持「查看 + 分配」；编辑、安装与上传留待后续（技能目录仍由各内核自己管理）。
+- MCP 的「严格仅分配」同样只保证**平台注入的服务器 == 智能体分配**，各内核的隔离强度不一样：
+  Claude Code 用 `--strict-mcp-config` 能彻底关掉其它 MCP（工作目录自带的 `.mcp.json` 一律不生效，
+  运行时会提示）；Codex 靠改写隔离 `config.toml` 做到；Gemini CLI 没有「换配置目录」的开关，
+  只能把项目级设置与启用白名单收窄 —— 当某次运行**没有分配任何服务器**时，它在用户级
+  `~/.gemini/settings.json` 里自己配的 MCP 仍会被内核加载（内核的合并语义决定，平台无法从外部关掉）。
+- 协作域（`collab/`）与技能一样**暂不注入 MCP**：挂着 MCP 的智能体参加协作运行时，
+  引擎只在工单里给一行提示（要真正用上 MCP，得先按对话运行）。
 - 运行时的安装 / 更新按适配器声明的命令执行（内置 CLI 内核为官方 npm 包）。若某台机器上的
   内核是用别的方式装的（例如发行版包、容器、垫片脚本），平台更新会按声明的包管理器**另装一份**；
   页面会显示当前可执行文件路径供核对，但不会自动识别、也不会去卸载非本平台安装的副本。
 
-## 9. 移动端与 PWA
+## 10. 移动端与 PWA
 
 移动端不是桌面端的「窄屏适配」，而是**另一条物理独立的链接**：`/m/`。
 
@@ -442,7 +506,7 @@ frontend/
     └── mobile/                                       # 移动端（独立页面与样式表）
         ├── main.tsx · MobileApp.tsx · mobile.css
         ├── components/（顶栏 · 左侧抽屉 · 底部弹层）
-        └── pages/（对话 · 智能体 · 技能 · 协作 · 设置）
+        └── pages/（对话 · 智能体 · 技能 · MCP · 协作 · 设置）
 ```
 
 - **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
@@ -467,8 +531,8 @@ frontend/
   注销 SW、清掉 `magenta-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
 - **移动端没有底部 Tab，只有左侧抽屉**：打开就是聊天界面（`/chat` 自动进入最近一次对话，
   一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
-  （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 智能体 / 协作组 / 技能 / 设置，
-  与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选智能体开聊）。
+  （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 智能体 / 协作组 / 技能 / MCP /
+  设置，与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选智能体开聊）。
   桌面端左侧栏（`App.tsx` 的 `NAV` + `components/ConversationList.tsx`）现在是**同一份菜单**
   （顺序、命名、行样式都对齐）；「运行时」与「自定义网关」两边都不占菜单，收在「设置」页的配置入口。
   抽屉由 `MobileApp` 统一持有，任何顶级页面的顶栏默认就是那个 logo 按钮（`MobileTopBar`

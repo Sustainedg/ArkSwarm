@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..base import (
@@ -25,8 +26,14 @@ from ..events import (
     tool_result,
     usage,
 )
+from ..mcp import McpMount, McpServerSpec, parse_json_servers, to_json_servers
 from ..registry import register_agent
 from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv
+
+
+#: Gemini CLI 的 MCP 配置只认用户级 / 项目级 ``settings.json``（没有独立的配置目录开关）。
+#: 平台因此把它写进**工作目录**的项目级设置，并用 ``--allowed-mcp-server-names`` 限定启用范围。
+SETTINGS_RELPATH = ".gemini/settings.json"
 
 
 @register_agent
@@ -104,6 +111,33 @@ class GeminiCliAgent(AgentDefinition):
         ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
+    def discover_mcp_servers(self) -> list[McpServerSpec]:
+        """扫描用户级 ``~/.gemini/settings.json`` 里的 ``mcpServers``（只读、尽力而为）。"""
+        try:
+            raw = json.loads((Path.home() / ".gemini" / "settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return parse_json_servers(raw, type_id=self.id, source_kind="user")
+
+    def mcp_mount(self, ctx: AgentContext) -> McpMount:
+        """把分配到的服务器写进工作目录的项目级设置，并限定只启用它们。
+
+        Gemini CLI 没有「换个配置目录」的开关，MCP 配置只能走它自己的
+        ``settings.json``（用户级 ∪ 项目级）。平台写项目级的一份，并用
+        ``--allowed-mcp-server-names`` 把可用范围收窄到分配到的服务器。
+        """
+        names = [spec.slug for spec in ctx.mcp_servers]
+        content = {
+            "mcpServers": to_json_servers(ctx.mcp_servers),
+            "mcp": {"allowed": names},
+        }
+        return McpMount(
+            home_name="gemini-home",
+            workspace_files={
+                SETTINGS_RELPATH: json.dumps(content, ensure_ascii=False, indent=2) + "\n"
+            },
+        )
+
     # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
@@ -126,6 +160,10 @@ class GeminiCliAgent(AgentDefinition):
             argv.append("--sandbox")
         for ext in as_list(options.get("extensions") or []):
             argv += ["--extensions", ext]
+        # 严格仅分配：只启用智能体分配到的 MCP 服务器（写在工作目录的项目级设置里）。
+        names = [spec.slug for spec in ctx.mcp_servers]
+        if names:
+            argv += ["--allowed-mcp-server-names", *names]
         argv += [str(a) for a in as_list(options.get("extra_args") or [])]
 
         prompt = ctx.prompt

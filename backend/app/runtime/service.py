@@ -19,6 +19,7 @@ from ..settings import get_settings
 from .credentials import decrypt_for_profile
 from .gateway import bind_gateway
 from .manager import ActiveRun, registry
+from .mcp import prepare_mcp_home
 from .runner import stream_run
 from .skills import prepare_skill_home
 
@@ -39,6 +40,8 @@ class PreparedRun:
     assistant_message: Message
     #: 技能物化过程中的说明/告警，运行开始时以 log 事件暴露
     skill_warnings: list[str] = field(default_factory=list)
+    #: MCP 物化过程中的说明/告警，同为 log 事件
+    mcp_warnings: list[str] = field(default_factory=list)
 
 
 class ConfigurationError(Exception):
@@ -228,6 +231,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     history = _clip_history(list(existing))
     ctx = await build_context(session, definition, profile, gateway, conversation, content, history, workspace)
     skill_warnings = await prepare_skill_home(session, definition, profile, conversation, ctx)
+    mcp_warnings = await prepare_mcp_home(session, definition, profile, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -258,6 +262,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
         user_message=user_message,
         assistant_message=assistant_message,
         skill_warnings=skill_warnings,
+        mcp_warnings=mcp_warnings,
     )
 
 
@@ -284,6 +289,8 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
 
     for warning in prepared.skill_warnings:
         yield log(f"技能：{warning}", "warn")
+    for warning in prepared.mcp_warnings:
+        yield log(f"MCP：{warning}", "warn")
 
     try:
         async for event in stream_run(prepared.definition, prepared.ctx, prepared.run):
@@ -377,6 +384,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         session, definition, profile, gateway, conversation, last_user.content, history, workspace
     )
     skill_warnings = await prepare_skill_home(session, definition, profile, conversation, ctx)
+    mcp_warnings = await prepare_mcp_home(session, definition, profile, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -401,6 +409,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         user_message=last_user,
         assistant_message=assistant_message,
         skill_warnings=skill_warnings,
+        mcp_warnings=mcp_warnings,
     )
 
 

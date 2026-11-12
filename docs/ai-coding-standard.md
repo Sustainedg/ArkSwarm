@@ -42,6 +42,8 @@ runtime/manager.py  运行表：注册、查询、取消、快照
 agents/base.py      契约（AgentDefinition/AgentContext/AgentRun/Invocation/ConfigField/Capabilities）
 agents/events.py    事件协议（EventType + 构造器）
 agents/registry.py  插件注册（@register_agent + 自动加载 builtin/*）
+agents/skills.py    技能契约（SkillSpec / SkillRoot / SkillMount + 扫描）
+agents/mcp.py       MCP 契约（McpServerSpec / McpMount + JSON / TOML 解析与渲染）
 agents/builtin/*    ★ 各智能体的实现（唯一的扩展点）
         │
 models.py db.py schemas.py settings.py security.py bootstrap.py   存储 / 契约 / 配置 / 密钥
@@ -141,7 +143,9 @@ POST /api/conversations/{id}/messages
 | `streaming` | 前端按增量渲染（关闭时按整段渲染） |
 | `sessions` | 把 `session_id` 存到对话上，下一轮只发本轮 prompt；否则回放最近 N 轮 transcript |
 | `native_system_prompt` | 人格作为原生 system prompt 传入；为 False 时框架把人格折进 prompt |
-| `tools` / `mcp` / `permission_modes` | 仅作能力徽标展示与对应配置项渲染，并提示用户该适配器能用哪些选项 |
+| `tools` / `permission_modes` | 仅作能力徽标展示与对应配置项渲染，并提示用户该适配器能用哪些选项 |
+| `mcp` | 该内核支持 MCP：适配器**必须**实现 `discover_mcp_servers()` 与 `mcp_mount()`（有架构守卫测试）；框架按 `mcp_mount` 把智能体分配到的 MCP 服务器写进隔离目录 / 工作目录 |
+| `skills` | 该内核支持技能：适配器**必须**实现 `skill_roots()` / `discover_skills()` / `skill_mount()` |
 | `working_directory` | 为每个对话分配独立工作目录并作为 cwd |
 
 可选钩子 `resume_supported(ctx)`：当"声明支持续接、但某些配置下退化为回放"时使用
@@ -164,6 +168,9 @@ POST /api/conversations/{id}/messages
 `credentials`（智能体自己的凭据解密后的「环境变量名 → 明文」，框架合并进子进程环境，
 **适配器不得写进提示词 / 日志 / 事件**）、`agent_name`/`system_prompt`（人格）、
 `workspace_dir`(cwd)、`session_id`（续接或 `None`）、`history`（回放用的历史轮次）、`prompt`（本轮输入）。
+另有 `skills` / `mcp_servers`（框架按分配注入的技能与 MCP 服务器）与 `home_dir`（框架物化好的
+内核隔离配置目录，技能与 MCP 共用同一个「家」）；MCP 的 `env` / `headers` 值可能含密钥，
+**适配器不得写进提示词 / 日志 / 事件**。
 
 `AgentRun` 提供：`state`（本次运行私有字典）、`emitted_text`/`thinking`/`tool_calls`（框架自动累积）、
 `build_invocation()`、`feed(line)`，以及**结束时补发事件的钩子 `finish()`**。
@@ -180,8 +187,8 @@ POST /api/conversations/{id}/messages
 ## 5. 数据模型与存储演进
 
 - 关系链：`Gateway → AgentProfile → Conversation → Message`；技能经 `AgentSkill`、凭据经
-  `AgentCredential` 挂到智能体上（两者都是「全局一份 + 智能体引用」：技能来自身份内核扫描，
-  凭据来自「设置 → 凭据库」）。
+  `AgentCredential`、MCP 服务器经 `AgentMcpServer` 挂到智能体上（三者都是「编目 / 全局一份 +
+  智能体引用」：技能与各内核配置里的 MCP 来自扫描，平台通用 MCP 与凭据来自界面新建）。
 - **Conversation 快照 `agent_profile_id`**：历史对话必须可复现，即使智能体之后改了内核 / 网关 / 模型。
 - 外键 `ON DELETE RESTRICT`：仍被**未删除**的智能体引用的网关删除返回 409（避免历史断裂）；
   智能体与自定义网关本身用 `deleted_at` 软删除 —— 被历史引用时只打标记，从可选列表消失但不打断历史。
@@ -213,6 +220,9 @@ POST /api/conversations/{id}/messages
 │         → 用内置「自定义 CLI」声明式配置（§6.3）
 ├─ 让某个智能体多一个可调参数
 │     → 加一个 ConfigField（§6.4）
+├─ 让某个适配器支持技能 / MCP
+│     → 声明 `capabilities.skills` / `capabilities.mcp`，再实现扫描与物化钩子
+│       （`discover_skills()` / `skill_mount()`，`discover_mcp_servers()` / `mcp_mount()`）
 ├─ 让界面多展示一种内容（例如"计划"）
 │     → 新增规范化事件（§6.5）
 ├─ 换存储 / 换传输
@@ -338,7 +348,7 @@ class AcmeHarness(OpenAIHarnessBase):
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、左侧抽屉与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabAgentThread` /
-  `TicketBoardKit` / `Composer` / `Icons`
+  `TicketBoardKit` / `Composer` / `Icons` / `McpPicker` / `McpServerForm` / `McpAssignPanel`
   等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用

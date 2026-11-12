@@ -18,10 +18,12 @@
 | **智能体**（`AgentProfile`） | 名称 + 头像 + 系统提示词 + 选一个内核 + 引用一个网关 + 从网关白名单里选模型 + 技能 | `agent_profiles` |
 | **对话** | 一次对话：绑定智能体，记住智能体侧会话 id 与工作目录 | `conversations` |
 | **技能** | 从各智能体内核的技能目录（`SKILL.md`）统一编目出来的能力包，**只能通过智能体分配生效** | `skills` + `agent_skills` |
+| **MCP 服务器** | 统一编目的工具服务（stdio / http / sse）：平台新建的「通用」服务器可分配给任意内核，各内核配置里的只读收录、只能同内核分配。**只能通过智能体分配生效** | `mcp_servers` + `agent_mcp_servers` |
 | **消息** | 一轮消息，含工具调用 / 推理过程 / token 用量 | `messages` |
 
 关系：`智能体类型 → 网关（密钥）→ 智能体 → 对话`，技能从各内核编目后由 `智能体 ← 技能` 分配。
 网关是密钥的唯一来源（智能体不另存密钥）；智能体能用的技能只来自它自己的分配。
+MCP 也是一样：目录里的服务器只有在「智能体 → MCP」里分配过，运行时才会被写进该内核的隔离配置。
 
 ---
 
@@ -61,13 +63,17 @@ usage         session         log              error       run.finished
 | --- | --- | --- | --- | --- |
 | `claude-code` | CLI `claude` | ✅ `--session-id` / `--resume` | ✅ `--append-system-prompt` | 支持权限模式、MCP、工具白名单 |
 | `codex` | CLI `codex` | ✅ `codex exec resume` | ➖ 注入到 prompt | 支持 `-c model_providers.*` 指向自定义网关 |
-| `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ `GEMINI_SYSTEM_MD` | 自动把人格写入运行期临时文件 |
+| `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ `GEMINI_SYSTEM_MD` | 自动把人格写入运行期临时文件；支持 MCP |
 | `openai-harness` | 进程内 API | 同上 | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama… |
 | `custom-cli` | CLI 任意命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体 |
 
 > `claude-code` 与 `codex` 支持**技能**：平台只读扫描它们各自的技能目录并统一编目，
 > 智能体勾选哪些技能，运行时就把哪些技能物化进该内核的隔离配置目录（「严格仅分配」，
 > 本机个人/插件技能不会被顺手带进一次运行）。详见 `docs/architecture.md` §5。
+>
+> `claude-code` / `codex` / `gemini-cli` 还支持 **MCP**：各内核已有的 MCP 配置只读收录进统一目录，
+> 与平台新建的「通用」服务器一起，按智能体分配写进该内核的隔离配置（同样「严格仅分配」）。
+> 详见 `docs/architecture.md` §6。
 
 ---
 
@@ -222,6 +228,10 @@ class AcmeAgent(AgentDefinition):
 | PATCH/DELETE | `/api/agents/{id}` | 更新 / 删除（软删除：从列表消失，历史对话保留） |
 | POST | `/api/agents/{id}/test` | 连通性探测（适配器 / 运行时 / 网关三段检查） |
 | PUT | `/api/agents/{id}/skills` | 设置该智能体的技能分配 |
+| PUT | `/api/agents/{id}/mcp-servers` | 设置该智能体的 MCP 分配 |
+| GET/POST | `/api/mcp-servers` | 列出 / 新建 MCP 服务器（统一目录） |
+| POST | `/api/mcp-servers/rescan` | 重新扫描各内核配置里的 MCP 服务器 |
+| GET/PATCH/DELETE | `/api/mcp-servers/{id}` | 查看 / 更新 / 删除（扫描来的不可改；仍被智能体引用时返回 409） |
 | GET/POST | `/api/gateways` | 列出 / 创建网关（含官方链路与自定义网关） |
 | PATCH/DELETE | `/api/gateways/{id}` | 更新 / 删除（官方链路不可删；仍被智能体引用时返回 409） |
 | POST | `/api/gateways/probe` | 按填写的地址 / 协议 / 鉴权 / 密钥**获取模型**（只探测，不落库） |
@@ -267,7 +277,7 @@ backend/
   app/models.py db.py    数据模型与引擎
   tests/                 适配器解析、API 契约、harness 工具循环、架构守卫
 frontend/
-  src/pages/             Chat · Agents · Runtimes · Skills · Settings
+  src/pages/             Chat · Agents · Runtimes · Skills · MCP · Settings
   src/components/        DynamicForm（由 schema 生成表单）· MessageView · Modal
 AGENTS.md                ★ 工程约定（AI/人都要遵守的硬约束）
 docs/architecture.md     深挖：一次运行的完整时序、事件协议、扩展点
