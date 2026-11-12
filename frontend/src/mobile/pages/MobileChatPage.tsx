@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
-import { api, streamPost } from '../../lib/api'
+import { api, ApiError, streamPost } from '../../lib/api'
 import { formatListTime } from '../../lib/datetime'
 import { shareConversationImage } from '../../lib/shareImage'
 import { useThemeMode } from '../../lib/theme'
 import { useSpeechOutput } from '../../lib/tts'
-import type { AttachmentRef, Conversation, Message } from '../../lib/types'
+import type { AttachmentRef, Conversation, ConversationDetail, Message } from '../../lib/types'
 import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
-import { ShareIcon, SpeakerIcon } from '../components/MobileIcons'
-import { MobileComposer } from '../components/MobileComposer'
+import { PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
+import { Composer } from '../../components/Composer'
 import { useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
@@ -45,6 +45,8 @@ export function MobileChatPage() {
   const [live, setLive] = useState<LiveTurn | null>(null)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
+  /** 后台同步（轮询）产生的提示：下一次同步成功就撤掉，不长期占着界面 */
+  const [syncError, setSyncError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [remoteRunning, setRemoteRunning] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -63,20 +65,53 @@ export function MobileChatPage() {
   /** 已经念过的回复 id（切换对话时把历史一次性记为「已念过」，不重念） */
   const spokenRef = useRef<Set<string>>(new Set())
   const primedConversationRef = useRef<string | null>(null)
+  /** 本端刚删掉的对话 id：它引出的 404 是预期行为，不该再当成「这条对话不见了」处理 */
+  const selfDeletedRef = useRef<string | null>(null)
 
-  const open = useCallback(async (id: string) => {
-    try {
-      const detail = await api.getConversation(id)
-      setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
-      setActive(detail.conversation)
-      setLive(null)
-      setRemoteRunning(Boolean(detail.active_run))
-      return detail
-    } catch (e) {
-      setError(describeError(e))
-      return null
-    }
+  const applyDetail = useCallback((detail: ConversationDetail, resetLive: boolean) => {
+    setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
+    setActive(detail.conversation)
+    if (resetLive) setLive(null)
+    setRemoteRunning(Boolean(detail.active_run))
   }, [])
+
+  const open = useCallback(
+    async (id: string) => {
+      try {
+        const detail = await api.getConversation(id)
+        applyDetail(detail, true)
+        return detail
+      } catch (e) {
+        setError(describeError(e))
+        return null
+      }
+    },
+    [applyDetail],
+  )
+
+  /** 后台同步（每 3 秒）：只更新数据，不覆盖用户主动操作产生的提示。 */
+  const syncConversation = useCallback(
+    async (id: string) => {
+      try {
+        applyDetail(await api.getConversation(id), false)
+        setSyncError(null)
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          // 本端刚删的那条：在途的轮询打回来必然是 404，属于预期（删除流程自己会跳走）。
+          if (selfDeletedRef.current === id) return
+          // 在别的设备上被删了：回 /chat 重新落到剩下的最近一条，别留一条消不掉的 404。
+          setError(null)
+          setSyncError(null)
+          setActive(null)
+          setMessages([])
+          navigate('/chat', { replace: true })
+          return
+        }
+        setSyncError(describeError(e))
+      }
+    },
+    [applyDetail, navigate],
+  )
 
   useEffect(() => {
     // 回到 `/chat` 时先重新解析默认对话，避免刚删掉的那条留下一个空状态闪一下。
@@ -115,7 +150,7 @@ export function MobileChatPage() {
   }, [location.state, location.pathname, navigate])
 
   // 跨设备同步：另一台设备写入的消息与运行状态会在这里自动出现。
-  useAutoRefresh(() => (conversationId ? open(conversationId) : undefined), {
+  useAutoRefresh(() => (conversationId ? syncConversation(conversationId) : undefined), {
     intervalMs: 3000,
     enabled: Boolean(conversationId) && !busy,
   })
@@ -243,11 +278,32 @@ export function MobileChatPage() {
     if (!active) return
     setMenuOpen(false)
     if (!confirm(`删除对话「${active.title}」？`)) return
-    await api.deleteConversation(active.id)
+    try {
+      await api.deleteConversation(active.id)
+    } catch (e) {
+      setError(describeError(e))
+      return
+    }
+    selfDeletedRef.current = active.id
+    setError(null)
+    setSyncError(null)
     setActive(null)
     setMessages([])
     // 回到 /chat：由它自动进入剩下的最近一次对话（一条都没有时给空状态）。
     navigate('/chat', { replace: true })
+  }
+
+  const renameConversation = async () => {
+    if (!active) return
+    setMenuOpen(false)
+    const title = prompt('对话名称', active.title)?.trim()
+    if (!title || title === active.title) return
+    try {
+      await api.updateConversation(active.id, { title })
+      await open(active.id)
+    } catch (e) {
+      setError(describeError(e))
+    }
   }
 
   const copyWorkspace = async () => {
@@ -376,9 +432,9 @@ export function MobileChatPage() {
         )}
       </div>
 
-      {error && (
+      {(error ?? syncError) && (
         <div style={{ padding: '0 12px 8px' }}>
-          <div className="banner err">{error}</div>
+          <div className="banner err">{error ?? syncError}</div>
         </div>
       )}
 
@@ -394,7 +450,7 @@ export function MobileChatPage() {
         </div>
       )}
 
-      <MobileComposer
+      <Composer
         value={draft}
         onChange={setDraft}
         onSend={() => void send(draft)}
@@ -441,6 +497,9 @@ export function MobileChatPage() {
             </button>
             <button className="btn block" disabled={busy || !active.session_id} onClick={() => void resetSession()}>
               ⟲ 重置智能体记忆
+            </button>
+            <button className="btn block" onClick={() => void renameConversation()}>
+              <PencilIcon size={15} /> 重命名这个对话
             </button>
             <button className="btn block" disabled={!active.workspace_dir} onClick={() => void copyWorkspace()}>
               📋 复制工作目录

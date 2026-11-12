@@ -24,8 +24,9 @@ export function MobileApp() {
   const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
+    // 与桌面端同理：只取版本号，用最轻的探活接口。
     api
-      .overview()
+      .health()
       .then((info) => setVersion(info.version))
       .catch(() => undefined)
   }, [])

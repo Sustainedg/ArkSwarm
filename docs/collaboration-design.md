@@ -509,8 +509,8 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 
 ### 7.1 导航（已确认：单菜单 + 页内页签）
 
-主导航（`App.tsx` 的 `NAV`）新增一项：`{ to: '/collab', icon: '🤝', label: '协作' }`
-（放在「对话」之后）。页面内两个页签，四个路由都指向同一个 `CollabPage`：
+主导航（`App.tsx` 的 `NAV`）新增一项：`{ to: '/collab', icon: '🤝', label: '协作组' }`
+（放在「角色」之后，与移动端抽屉里的叫法一致）。页面内两个页签，四个路由都指向同一个 `CollabPage`：
 
 | 路由 | 页签 | 内容 |
 | --- | --- | --- |
@@ -1252,9 +1252,9 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | --- | --- |
 | 主页面是办公室 | 协作运行页主区整屏铺 `MobileCollabProgress`（`/m/` 下那间可双指缩放 / 单指拖动的等距办公室），原来的时间线与「需要你决定」卡片不再平铺在下面 |
 | 聊天点人才出来 | 点办公室里的**入口角色**工牌弹出整屏对话弹层（`MobileSheet full`）；点其他岗位工牌仍开只读的岗位会话。**顶栏不再放对话按钮** —— 聊天界面就是「点人」这一条入口 |
-| 底部只有输入框 | 输入区收成屏幕最下面那块（`.m-composer`），框上方只有一行：左边是模式切换按钮，右边一句当前模式说明；「需要你决定 / 正在推进」这类状态跟在下面；平时底部干干净净 |
+| 底部只有输入框 | 输入区收成屏幕最下面那块（`.composer`，两端共用 `components/Composer.tsx`），框上方只有一行：左边是模式切换按钮，右边一句当前模式说明；「需要你决定 / 正在推进」这类状态跟在下面；平时底部干干净净 |
 | 两种模式由用户切 | 输入框上方只有一个按钮：当前是「普通对话」，点一下变成「推进任务」，再点回「普通对话」（按钮上写的就是当前模式，`aria-pressed` 同步）。推进模式下把这句话接到工单上接着跑；不输入内容直接发就是「让领导者继续推进」（等价于 `POST /runs/{id}/resume`，原来那个「继续推进（不补充内容）」按钮因此取消）。有三处没法自由选，界面直接接管并把按钮置灰：工单正在推进（推进接口会 409，只能问进度）、带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）；任务还没开始时先不显示按钮（第一句就是任务描述） |
-| 输入区只有一份 | 对话页与协作页共用 `mobile/components/MobileComposer.tsx`（受控：草稿、附件、上传、发送 / 停止都由页面给）。框里只有附件 / 语音 / 输入框 / 发送四个图标按钮，**没有 placeholder**，附件与语音的提示回给页面弹横幅 —— 改一处两端一起变 |
+| 输入区只有一份 | 对话页与协作页共用 `frontend/src/components/Composer.tsx`（两端各一份样式、组件一份；受控：草稿、附件、上传、发送 / 停止都由页面给）。框里只有附件 / 语音 / 输入框 / 发送四个图标按钮，**没有 placeholder**，附件与语音的提示回给页面弹横幅 —— 改一处两端一起变 |
 | 协作也能带附件 | 附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词），对话与协作走同一套：新增 `POST /api/collab/runs/{id}/attachments` 把文件存进这次协作的工作目录，`POST /runs/{id}/chat` 的 `attachments` 带相对路径，`engine.prepare_chat()` 用 `compose_with_attachments()` 把路径拼进 prompt 与落库内容（**只有附件、没有正文也允许**）；发消息时带附件会强制走入口角色这条聊天通道（工单推进的输入是结构化工单，没有附件位） |
 | 办公室跟着主题换色 | 底图有深 / 浅两张（`frontend/public/office/iso-office.svg` 与 `iso-office-light.svg`，同一份几何 —— 生成脚本按「反相 + 色相旋转 180°」在构建期换算，免去手机上对整张 1600×1000 图做实时滤镜），`CollabOfficeMap` 按 `lib/theme.ts` 的当前主题选；工牌 / 图例 / 工具按钮 / 信息卡的深色也改成 `--office-*` 变量（`index.css` 与 `mobile.css` 各一份，浅色只在 `[data-theme='light']` 覆盖）。手机是浅色模式时，办公室里的背景与卡片一起变浅 |
 
@@ -1263,7 +1263,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | `backend/app/attachments.py`（新增） | 附件共享模块：`decode_attachment()` / `store_attachment()` / `compose_with_attachments()`、上限 8 MB、安全文件名；对话与协作都走它，异常统一转成显式的 HTTP 状态码 |
 | `backend/app/api/conversations.py` · `runtime/service.py` | 附件上传 / 拼提示词改调 `app.attachments`（原来各写一份的逻辑收口） |
 | `backend/app/collab/schemas.py` / `engine.py` / `api.py` | `RunMessage.attachments`、`RunAttachmentUpload`；`prepare_chat()` 支持附件（校验落在工作目录内、拼进 prompt 与落库内容）；新增 `POST /runs/{id}/attachments` |
-| `frontend/src/mobile/components/MobileComposer.tsx`（新增） | 两端输入区共用：附件 chip、语音识别、发送 / 停止、框上方说明条、`allowEmptySend`（推进模式空发）；无 placeholder |
+| `frontend/src/components/Composer.tsx`（新增） | 两端输入区共用：附件 chip、语音识别、发送 / 停止、框上方说明条、`allowEmptySend`（推进模式空发）；无 placeholder |
 | `frontend/src/mobile/pages/MobileChatPage.tsx` / `MobileCollabRunPage.tsx` | 改用共享输入区；协作页主区改成整屏办公室、聊天收进弹层，输入框上方保留一个「普通对话 / 推进任务」模式按钮 |
 | `frontend/src/components/CollabOfficeMap.tsx` · `scripts/gen_office_bg.py` | 按主题选深 / 浅底图；生成脚本新增 `light_color()` / `light_svg()`，同时输出两张图 |
 | `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | 新增 `--office-*` 变量（深色默认 + `[data-theme='light']` 覆盖），把办公室段里写死的深色改成变量；新增 `.m-composer-head` / `.m-run-stage` / `.m-run-chat-*` 等；共享段两端逐字一致 |

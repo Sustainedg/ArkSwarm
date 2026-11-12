@@ -40,9 +40,24 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 MAX_ATTACHMENT_BYTES = attachments.MAX_ATTACHMENT_BYTES
 
 
-async def _conversation_read(conversation: Conversation, session: AsyncSession, count: int = 0) -> ConversationRead:
+async def _related(
+    session: AsyncSession, conversation: Conversation
+) -> tuple[Role | None, AgentInstance | None]:
+    """取对话引用的角色与智能体快照。
+
+    只给「单条响应」用；列表接口走批量查询，避免查询数随对话数线性增长（N+1）。
+    """
     role = await session.get(Role, conversation.role_id)
     agent = await session.get(AgentInstance, conversation.agent_id)
+    return role, agent
+
+
+def _conversation_read(
+    conversation: Conversation,
+    role: Role | None,
+    agent: AgentInstance | None,
+    count: int = 0,
+) -> ConversationRead:
     return ConversationRead(
         id=conversation.id,
         title=conversation.title,
@@ -72,7 +87,22 @@ async def list_conversations(
     counts = dict(
         (await session.execute(select(Message.conversation_id, func.count(Message.id)).group_by(Message.conversation_id))).all()
     )
-    items = [(await _conversation_read(c, session, counts.get(c.id, 0))).model_dump() for c in rows]
+    # 角色与智能体各批量取一次：逐个 session.get 会让一次列表请求打出 2N 条查询。
+    role_ids = {c.role_id for c in rows}
+    agent_ids = {c.agent_id for c in rows}
+    roles = {
+        r.id: r for r in (await session.execute(select(Role).where(Role.id.in_(role_ids)))).scalars()
+    }
+    agents = {
+        a.id: a
+        for a in (
+            await session.execute(select(AgentInstance).where(AgentInstance.id.in_(agent_ids)))
+        ).scalars()
+    }
+    items = [
+        _conversation_read(c, roles.get(c.role_id), agents.get(c.agent_id), counts.get(c.id, 0)).model_dump()
+        for c in rows
+    ]
     return {"items": items, "active_runs": registry.list()}
 
 
@@ -87,7 +117,8 @@ async def create_conversation(
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
-    return (await _conversation_read(conversation, session, 0)).model_dump()
+    agent = await session.get(AgentInstance, conversation.agent_id)
+    return _conversation_read(conversation, role, agent, 0).model_dump()
 
 
 @router.get("/{conversation_id}")
@@ -100,8 +131,9 @@ async def get_conversation(conversation_id: str, session: AsyncSession = Depends
             select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
         )
     ).scalars().all()
+    role, agent = await _related(session, conversation)
     return {
-        "conversation": (await _conversation_read(conversation, session, len(messages))).model_dump(),
+        "conversation": _conversation_read(conversation, role, agent, len(messages)).model_dump(),
         "messages": [MessageRead.model_validate(m).model_dump() for m in messages],
         "active_run": registry.active_for(conversation_id).snapshot() if registry.active_for(conversation_id) else None,
     }
@@ -121,7 +153,8 @@ async def update_conversation(
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
-    return (await _conversation_read(conversation, session)).model_dump()
+    role, agent = await _related(session, conversation)
+    return _conversation_read(conversation, role, agent).model_dump()
 
 
 @router.delete("/{conversation_id}", status_code=204)

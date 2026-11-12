@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator, Literal
 
 from ..agents.base import AgentDefinition, RuntimeProvisioner
 from ..settings import get_settings
+from . import availability as availability_service
 from .runner import _StreamLines, _redact
 
 Action = Literal["install", "update", "uninstall"]
@@ -167,7 +168,9 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
             level="warn",
         )
 
-    availability = definition.availability()
+    # 安装 / 更新 / 卸载都会动本机那份可执行文件，所以这里顺手重测一遍缓存
+    # （探测在后台线程里跑，不占用事件循环），并用新结论收尾。
+    status = await availability_service.refresh_definition(definition)
     ok = process.returncode == 0 and not timed_out
     yield _event(
         "finished",
@@ -176,9 +179,9 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
         ok=ok,
         status="ok" if ok else "error",
         exit_code=process.returncode,
-        installed=availability.installed,
-        version=availability.version,
-        path=availability.detail if availability.installed else None,
+        installed=status.installed,
+        version=status.version,
+        path=status.detail if status.installed else None,
         error=None if ok else f"`{display}` 退出码 {process.returncode}",
     )
 

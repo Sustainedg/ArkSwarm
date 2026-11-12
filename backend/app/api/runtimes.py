@@ -13,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..agents import AgentDefinition, all_agents, get_agent
+from ..agents.base import Availability
 from ..db import get_session
 from ..models import AgentInstance
+from ..runtime import availability as availability_service
 from ..runtime import provisioning
 from ..schemas import RuntimeAction
 from ..transport.sse import sse_stream
@@ -22,7 +24,8 @@ from ..transport.sse import sse_stream
 router = APIRouter(prefix="/runtimes", tags=["runtimes"])
 
 
-def _describe(definition: AgentDefinition, instances: int) -> dict:
+def _describe(definition: AgentDefinition, instances: int, availability: Availability) -> dict:
+    """一张运行时卡片的全部数据；安装状态来自框架缓存的检测结果（不实时探测）。"""
     return {
         "id": definition.id,
         "name": definition.name,
@@ -34,7 +37,7 @@ def _describe(definition: AgentDefinition, instances: int) -> dict:
         "executable": definition.executable,
         #: 有多少个未删除的智能体实例在用这个运行时（卸载前提示影响面）
         "instances": instances,
-        "provisioning": definition.provisioning(),
+        "provisioning": definition.provisioning(availability),
     }
 
 
@@ -48,7 +51,27 @@ async def list_runtimes(session: AsyncSession = Depends(get_session)) -> dict:
         )
     ).all()
     counts = {type_id: count for type_id, count in rows}
-    return {"items": [_describe(definition, counts.get(definition.id, 0)) for definition in all_agents()]}
+    definitions = all_agents()
+    statuses = await availability_service.statuses(definitions)
+    return {
+        "items": [
+            _describe(definition, counts.get(definition.id, 0), statuses[definition.id])
+            for definition in definitions
+        ]
+    }
+
+
+@router.post("/{type_id}/refresh")
+async def refresh_runtime(type_id: str) -> dict:
+    """强制重测一次安装状态与版本（卡片上的「重新检测」按钮）。
+
+    这是唯一会同步等待探测的读接口 —— 但探测在后台线程里跑，且这是用户主动触发的，
+    因此不会像「每次打开页面都探测」那样拖慢整站。
+    """
+    try:
+        return (await availability_service.refresh_type(type_id)).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 def _provision_stream(type_id: str, action: provisioning.Action) -> StreamingResponse:

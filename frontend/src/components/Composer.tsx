@@ -1,5 +1,5 @@
 /**
- * 移动端输入区（**共享**）：对话页与协作「找 CEO 聊」都用这一份，样式与交互完全一致。
+ * 输入区（**两端共享**）：对话页与协作「找 CEO 聊」都用这一份，样式与交互完全一致。
  *
  * 框里从左到右只有四样东西：附件（可选）、语音、输入框、发送（运行中变成停止）。
  * 输入框**没有 placeholder**：框里一长串提示文案在手机上既挤又容易跟真实输入混淆，
@@ -12,9 +12,9 @@
  * - `onSend`：正文与附件都空时不触发（除非页面开了 `allowEmptySend`），页面从自己的状态里取附件。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
-import type { AttachmentRef } from '../../lib/types'
-import { describeSpeechError, finalTranscript, speechRecognitionCtor, type SpeechRecognizer } from '../speech'
-import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from './MobileIcons'
+import type { AttachmentRef } from '../lib/types'
+import { describeSpeechError, finalTranscript, speechRecognitionCtor, type SpeechRecognizer } from '../lib/speech'
+import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from './Icons'
 
 /** 单个附件的上限，与服务端 `MAX_ATTACHMENT_BYTES` 保持一致（前端先拦一道，省一次往返）。 */
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
@@ -35,7 +35,7 @@ interface Props {
   busy?: boolean
   /** 整块禁用（例如还没选对话、另一台设备正在跑） */
   disabled?: boolean
-  /** 回车直接发送（默认回车换行） */
+  /** 回车直接发送（默认回车换行；桌面端用键盘时开这个） */
   submitOnEnter?: boolean
   /** 空内容也能发送：协作的「推进任务」模式下，不补充内容就是让领导者继续推进 */
   allowEmptySend?: boolean
@@ -63,7 +63,7 @@ function readBase64(file: File): Promise<string> {
   })
 }
 
-export function MobileComposer({
+export function Composer({
   value,
   onChange,
   onSend,
@@ -167,14 +167,14 @@ export function MobileComposer({
   }
 
   return (
-    <div className="m-composer">
-      {header}
+    <div className="composer">
+      {header && <div className="composer-head">{header}</div>}
 
       {attachments.length > 0 && (
-        <div className="m-attach-row">
+        <div className="composer-attach-row">
           {attachments.map((item) => (
-            <span className="m-attach-chip" key={item.rel_path}>
-              <span className="m-attach-name">{item.name}</span>
+            <span className="composer-attach-chip" key={item.rel_path}>
+              <span className="composer-attach-name">{item.name}</span>
               <button
                 onClick={() =>
                   onAttachmentsChange(attachments.filter((row) => row.rel_path !== item.rel_path))
@@ -188,7 +188,7 @@ export function MobileComposer({
         </div>
       )}
 
-      <div className="m-composer-box">
+      <div className="composer-box">
         <input
           ref={fileRef}
           type="file"
@@ -202,17 +202,17 @@ export function MobileComposer({
         />
         {onUpload && (
           <button
-            className="m-tool-btn"
+            className="composer-tool"
             onClick={() => fileRef.current?.click()}
             disabled={locked || uploading}
             aria-label="添加附件"
             title="添加附件（图片 / 文档都行，会上传到工作目录）"
           >
-            {uploading ? <span className="m-tool-spin">◌</span> : <PaperclipIcon size={17} />}
+            {uploading ? <span className="composer-tool-spin">◌</span> : <PaperclipIcon size={17} />}
           </button>
         )}
         <button
-          className={`m-tool-btn${listening ? ' on' : ''}${voiceSupported ? '' : ' muted'}`}
+          className={`composer-tool${listening ? ' on' : ''}${voiceSupported ? '' : ' muted'}`}
           onClick={toggleVoice}
           disabled={locked}
           aria-label={listening ? '结束语音输入' : '语音输入'}
@@ -246,12 +246,12 @@ export function MobileComposer({
           }}
         />
         {busy ? (
-          <button className="m-tool-btn stop" onClick={() => onStop?.()} aria-label="停止" title="停止这次运行">
+          <button className="composer-tool stop" onClick={() => onStop?.()} aria-label="停止" title="停止这次运行">
             <StopIcon size={15} />
           </button>
         ) : (
           <button
-            className="m-tool-btn send"
+            className="composer-tool send"
             onClick={submit}
             disabled={disabled || !canSend}
             aria-label="发送"

@@ -165,6 +165,26 @@ uninstall_argv=…, latest_argv=…)`，框架（`runtime/provisioning.py`）只
                                                               └─ 客户端断开即 kill（同一次运行的取消语义）
 ```
 
+**安装状态与版本是缓存出来的，不是每次打开页面现探的**：探测要起一次 `内核 --version`
+子进程（gemini 这类 Node CLI 冷启动接近 2 秒），而后端是单进程单事件循环 —— 同步探测会
+把**整站所有接口**一起冻住（实测开网页时并发的读数请求被拖到 20 秒）。因此
+`runtime/availability.py` 采用与技能编目同构的「编目 + 定时刷新」：
+
+```
+读接口 ──▶ runtime/availability.statuses() ──▶ runtime_status 表（只读，缺行时只查 PATH）
+                     │ 未命中 / 过期 → 登记进待测集合（不等待、不建任务）
+                     ▼
+runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
+        ├─ 启动补齐：缺行 / 过期才补测（重启频繁，光靠定点容易整天漏掉）
+        ├─ 消费待测集合（每 WATCH_INTERVAL 秒看一次）
+        └─ 每天 DAILY_CHECK_HOUR=7 点（东八区）全量重测
+                     │
+安装 / 更新 / 卸载收尾 ──┴─▶ refresh_definition() + 界面「重新检测」按钮
+```
+
+- 探测一律在**工作线程**里跑（`asyncio.to_thread`），即使慢也不占用事件循环；
+- 界面卡片据此显示「检测于 …」；可用性只是展示元数据，一次运行并不依赖它
+  （`runtime/service.prepare_run` 不读它），所以缓存过期最多是版本号晚几小时。
 - `provision.*` 是安装器**自有的信封**（`provision.started / provision.output /
   provision.finished`），与协作域的 `collab.*` 同理，**不是**适配器事件协议，
   因此不参与铁律 5 的四处同步。
@@ -293,7 +313,8 @@ frontend/
 ├── public/m/               # 移动端 PWA 资产（manifest + Service Worker）
 ├── public/icons/           # 两端口共用的应用图标（由 scripts/gen_icons.py 生成）
 └── src/
-    ├── App.tsx · pages/ · components/ · index.css    # 桌面端
+    ├── App.tsx · pages/ · index.css                  # 桌面端
+    ├── components/                                   # 两端共用的纯展示组件（Composer · Icons · MessageView…）
     └── mobile/                                       # 移动端（独立页面与样式表）
         ├── main.tsx · MobileApp.tsx · mobile.css
         ├── components/（顶栏 · 左侧抽屉 · 底部弹层）
@@ -302,7 +323,7 @@ frontend/
 
 - **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
   与纯展示组件（`DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` /
-  `CollabRoleThread`）；页面、路由、样式表各自独立
+  `CollabRoleThread` / `Composer` / `Icons`）；页面、路由、样式表各自独立
   （移动端用底部弹层替代桌面端的居中 Modal）。
 - **后端只保留一个 SPA 兜底**：`main.py:resolve_spa_target()` 按前缀把深链分派到 `dist/index.html`
   或 `dist/m/index.html`，其余静态文件原样返回；`/assets` 由两端口共享。
@@ -324,6 +345,8 @@ frontend/
   一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
   （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 角色 / 协作组 / 技能 / 设置，
   与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选角色开聊）。
+  桌面端左侧栏（`App.tsx` 的 `NAV` + `components/ConversationList.tsx`）现在是**同一份菜单**
+  （顺序、命名、行样式都对齐）；「智能体配置」「运行时」两边都不占菜单，收在「设置」页的配置入口。
   抽屉由 `MobileApp` 统一持有，任何顶级页面的顶栏默认就是那个 logo 按钮（`MobileTopBar`
   在没有 `onBack` 时自动渲染），子页面仍是返回箭头。
   两端的对话列表项都显示时间：今天只显示 `14:23`，其余显示日期 + 时间（口径统一在 `lib/datetime.ts`）。
@@ -349,14 +372,15 @@ frontend/
   路径写进用户提示词 —— 与内核无关，任何能读工作目录的智能体都自动支持；单个附件上限 8 MB。
   协作聊天走同一套：`POST /api/collab/runs/{id}/attachments` + `engine.prepare_chat()` 的
   `compose_with_attachments()`（只有附件、没有正文也允许）。
-  语音走浏览器的 Web Speech API（`mobile/speech.ts`；不支持时按钮仍显示，点一下给出中文说明），
+  语音走浏览器的 Web Speech API（`lib/speech.ts`，两端共用；不支持时按钮仍显示，点一下给出中文说明），
   只把识别文字填进草稿。
   输入区就是屏幕最下面那一块，只留 6px 收边：token 用量在输入框**上方**，底部安全区**不照搬** ——
   iOS 独立应用里安全区 34px，Home 条本身只占 ~13px，照搬会在输入框下面空出一截；输入区底色一直
   铺到屏幕底边。附件 / 语音 / 发送（运行中是停止）都是**框内**的图标按钮（线条 SVG，见
-  `mobile/components/MobileIcons.tsx`；emoji 在各系统上大小不一），输入框不再有背景提示文字。
-- **输入区只有一份**：`mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 / 发送都由
-  页面给），对话页与协作运行页（含聊天弹层）共用，交互与样式必须完全一致。
+  `components/Icons.tsx`；emoji 在各系统上大小不一），输入框不再有背景提示文字。
+- **输入区只有一份**：`components/Composer.tsx`（受控：草稿 / 附件 / 上传 / 发送都由
+  页面给），两端的对话页与协作运行页（含聊天弹层）共用，交互与样式必须完全一致；
+  样式段在 `index.css` 与 `mobile.css` 各写一份（桌面端 / 移动端各一段微调），共享那段逐字一致。
 - **协作运行页 = 一间办公室**：`/m/collab/runs/:id` 主区整屏铺那间可双指缩放 / 单指拖动的等距办公室
   （`MobileCollabProgress`），时间线与「需要你决定」卡片收进整屏对话弹层 —— **点入口角色工牌**才
   出来（顶栏不放对话按钮），点其他岗位开只读岗位会话。输入框上方是一个模式按钮：点一下切

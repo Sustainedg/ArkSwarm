@@ -56,8 +56,7 @@ class CodexAgent(AgentDefinition):
     )
     runtime = Runtime.CLI
     executable = "codex"
-    #: 官方通过 npm 分发（包内含原生二进制）。本机可能由其它方式安装，
-    #: 直接更新会在 npm 全局目录再装一份，界面上会把这个取舍讲清楚。
+    #: 官方通过 npm 分发（包内含原生二进制）。
     provisioner = RuntimeProvisioner(
         manager="npm",
         package="@openai/codex",
@@ -66,7 +65,6 @@ class CodexAgent(AgentDefinition):
         uninstall_argv=["npm", "uninstall", "-g", "@openai/codex"],
         latest_argv=["npm", "view", "@openai/codex", "version"],
         homepage="https://developers.openai.com/codex/cli/",
-        note="若本机 codex 是通过其它方式安装的，更新会在 npm 全局目录额外安装一份副本。",
     )
     api_key_env = "OPENAI_API_KEY"
     base_url_env = "OPENAI_BASE_URL"

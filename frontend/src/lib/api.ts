@@ -1,7 +1,9 @@
 import type {
-  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, CollabChatMessage, CollabRun,
+  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
+  CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
-  Message, Overview, ProvisionEvent, Role, RuntimeLatest, Skill, SkillDetail, SkillRescanResult, TestResult,
+  ConversationDetail, Overview, ProvisionEvent, Role, RuntimeLatest, Skill, SkillDetail,
+  SkillRescanResult, TestResult,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -70,6 +72,8 @@ function describeBody(response: Response, body: ResponseBody): string {
 }
 
 export const api = {
+  /** 最轻的探活接口：只回状态与版本号（首屏拿版本号用它，不必汇总系统信息）。 */
+  health: () => request<{ status: string; version: string }>('/api/health'),
   overview: () => request<Overview>('/api/system/overview'),
   architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
   agentTypes: () => request<{ items: AgentType[] }>('/api/agent-types').then((r) => r.items),
@@ -84,6 +88,9 @@ export const api = {
 
   // --- 运行时（各 CLI 内核的安装 / 更新 / 卸载）-----------------------------
   listRuntimes: () => request<{ items: AgentRuntime[] }>('/api/runtimes').then((r) => r.items),
+  /** 强制重测一次运行时的安装状态与版本（「重新检测」按钮；后端会把结果写回缓存）。 */
+  refreshRuntime: (typeId: string) =>
+    request<Availability>(`/api/runtimes/${typeId}/refresh`, { method: 'POST' }),
   checkRuntimeLatest: (typeId: string) =>
     request<RuntimeLatest>(`/api/runtimes/${typeId}/check`, { method: 'POST' }),
   /** 安装 / 更新不改动已有配置，直接发起；卸载是破坏性操作，必须带 confirm（服务端会再校验一次）。 */
@@ -125,8 +132,7 @@ export const api = {
   listConversations: () => request<{ items: Conversation[] }>('/api/conversations').then((r) => r.items),
   createConversation: (body: unknown) =>
     request<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify(body) }),
-  getConversation: (id: string) =>
-    request<{ conversation: Conversation; messages: Message[]; active_run: unknown }>(`/api/conversations/${id}`),
+  getConversation: (id: string) => request<ConversationDetail>(`/api/conversations/${id}`),
   updateConversation: (id: string, body: unknown) =>
     request<Conversation>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteConversation: (id: string) => request<void>(`/api/conversations/${id}`, { method: 'DELETE' }),

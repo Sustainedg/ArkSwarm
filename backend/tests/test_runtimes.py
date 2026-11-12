@@ -94,7 +94,7 @@ def test_provisioning_descriptor_is_serialisable():
         data = definition.provisioning()
         assert set(data) == {
             "supported", "manager", "package", "homepage", "note", "commands",
-            "installed", "version", "path",
+            "installed", "version", "path", "checked_at",
         }, f"{definition.id} 的 provisioning() 字段集发生变化"
 
 

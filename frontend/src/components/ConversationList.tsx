@@ -1,0 +1,251 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { api, ApiError } from '../lib/api'
+import { notifyConversationsChanged, useConversationsChanged } from '../lib/conversations'
+import { formatListTime } from '../lib/datetime'
+import type { Conversation, Role } from '../lib/types'
+import { sameConversationList, useAutoRefresh } from '../lib/useAutoRefresh'
+import { MoreIcon, PencilIcon, TrashIcon } from './Icons'
+
+/**
+ * 左侧栏下半部分的对话列表（桌面端）：与移动端抽屉里那份同构 —— 导航在上、列表在下。
+ *
+ * 每行在鼠标移上去时浮出三个小图标：
+ * - 「⋯」会话操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）：那几件事要用到聊天页的
+ *   消息与会话状态，所以只用路由 state 打个信号，由 `ChatPage` 弹出面板；
+ * - 「✎」就地重命名（回车提交，Esc 取消）；
+ * - 「🗑」直接删除（删掉的正是当前打开的那条时，自动落到剩下的最近一条）。
+ *
+ * 列表自己拉数据（8 秒一轮 + 聊天页改动后的广播），不跟聊天页共用一个状态 ——
+ * 与移动端抽屉一样的做法，两边谁都不必等对方。
+ */
+export function ConversationList() {
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [roles, setRoles] = useState<Role[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  /** true 时下半部分换成「选角色新建对话」 */
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  /** 正在就地重命名的对话 id（下面那支输入框） */
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  /** Esc 取消重命名后，紧接着的 blur 不该把草稿提交上去 */
+  const cancelRenameRef = useRef(false)
+
+  const activeId = /^\/chat\/([^/]+)/.exec(pathname)?.[1] ?? null
+
+  const load = useCallback(async () => {
+    try {
+      const list = await api.listConversations()
+      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
+      setError(null)
+      return list
+    } catch (e) {
+      setError(describe(e))
+      return []
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // 跨设备同步：另一台设备发的消息会让标题、条数与时间自己变。
+  useAutoRefresh(load, { intervalMs: 8000 })
+  // 本端在聊天页里发消息 / 删对话之后，列表立刻对齐，不用等下一次轮询。
+  useConversationsChanged(() => void load())
+
+  const openPicker = async () => {
+    setPickerOpen(true)
+    setError(null)
+    try {
+      setRoles(await api.listRoles())
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const create = async (roleId: string) => {
+    setCreating(true)
+    setError(null)
+    try {
+      const conversation = await api.createConversation({ role_id: roleId })
+      setPickerOpen(false)
+      await load()
+      notifyConversationsChanged()
+      navigate(`/chat/${conversation.id}`)
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const startRename = (conversation: Conversation) => {
+    cancelRenameRef.current = false
+    setRenamingId(conversation.id)
+    setRenameDraft(conversation.title)
+  }
+
+  const commitRename = async (conversation: Conversation) => {
+    if (cancelRenameRef.current) {
+      cancelRenameRef.current = false
+      setRenamingId(null)
+      return
+    }
+    const title = renameDraft.trim()
+    setRenamingId(null)
+    if (!title || title === conversation.title) return
+    try {
+      await api.updateConversation(conversation.id, { title })
+      await load()
+      notifyConversationsChanged()
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const remove = async (conversation: Conversation) => {
+    if (!confirm(`删除对话「${conversation.title}」？`)) return
+    try {
+      await api.deleteConversation(conversation.id)
+    } catch (e) {
+      setError(describe(e))
+      return
+    }
+    setError(null)
+    const remaining = await load()
+    notifyConversationsChanged()
+    // 删掉的正是当前打开的那条：落到剩下的最近一条（一条都没有时给空状态）。
+    if (conversation.id !== activeId) return
+    if (remaining.length > 0) navigate(`/chat/${remaining[0].id}`, { replace: true })
+    else navigate('/chat', { replace: true })
+  }
+
+  return (
+    <div className="sidebar-conversations">
+      <div className="sidebar-section-head">
+        <span className="card-section-title">对话</span>
+        <button
+          className="btn sm ghost"
+          onClick={() => (pickerOpen ? setPickerOpen(false) : void openPicker())}
+          aria-expanded={pickerOpen}
+        >
+          {pickerOpen ? '取消' : '＋ 新建'}
+        </button>
+      </div>
+
+      {error && <div className="banner err">{error}</div>}
+
+      <div className="sidebar-scroll">
+        {pickerOpen ? (
+          roles.length === 0 ? (
+            <p className="dim small" style={{ padding: '8px 8px 4px', lineHeight: 1.6 }}>
+              还没有角色。先到「角色」页创建一个：角色 = 人格设定 + 绑定的智能体。
+            </p>
+          ) : (
+            <div className="sidebar-picker">
+              {roles.map((role) => (
+                <button
+                  key={role.id}
+                  className="chat-item"
+                  disabled={creating}
+                  onClick={() => void create(role.id)}
+                  title={`与「${role.name}」开始新对话`}
+                >
+                  <span className="chat-item-title">
+                    {role.avatar} {role.name}
+                  </span>
+                  <span className="chat-item-meta">
+                    <span>{role.agent_name}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )
+        ) : loading && conversations.length === 0 ? (
+          <p className="dim small" style={{ padding: '8px' }}>
+            正在加载对话…
+          </p>
+        ) : conversations.length === 0 ? (
+          <p className="dim small" style={{ padding: '8px 8px 4px', lineHeight: 1.6 }}>
+            还没有对话，点上面的「＋ 新建」选一个角色开始。
+          </p>
+        ) : (
+          conversations.map((conversation) => (
+            <div
+              key={conversation.id}
+              className={`chat-item${conversation.id === activeId ? ' active' : ''}`}
+            >
+              {renamingId === conversation.id ? (
+                <input
+                  className="chat-item-rename"
+                  autoFocus
+                  value={renameDraft}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void commitRename(conversation)
+                    else if (event.key === 'Escape') {
+                      cancelRenameRef.current = true
+                      setRenamingId(null)
+                    }
+                  }}
+                  onBlur={() => void commitRename(conversation)}
+                  aria-label={`重命名对话「${conversation.title}」`}
+                />
+              ) : (
+                <button className="chat-item-main" onClick={() => navigate(`/chat/${conversation.id}`)}>
+                  <span className="chat-item-title">{conversation.title}</span>
+                  <span className="chat-item-meta">
+                    <span>{conversation.role_name}</span>
+                    <span>·</span>
+                    <span>{conversation.message_count} 条</span>
+                    <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
+                  </span>
+                </button>
+              )}
+
+              <div className="chat-item-actions">
+                <button
+                  className="chat-item-act"
+                  onClick={() => navigate(`/chat/${conversation.id}`, { state: { openActions: true } })}
+                  aria-label={`对话「${conversation.title}」的会话操作`}
+                  title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
+                >
+                  <MoreIcon size={14} />
+                </button>
+                <button
+                  className="chat-item-act"
+                  onClick={() => startRename(conversation)}
+                  aria-label={`重命名对话「${conversation.title}」`}
+                  title="重命名"
+                >
+                  <PencilIcon size={14} />
+                </button>
+                <button
+                  className="chat-item-act danger"
+                  onClick={() => void remove(conversation)}
+                  aria-label={`删除对话「${conversation.title}」`}
+                  title="删除"
+                >
+                  <TrashIcon size={14} />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function describe(error: unknown): string {
+  if (error instanceof ApiError) return `${error.status} · ${error.message}`
+  return error instanceof Error ? error.message : String(error)
+}

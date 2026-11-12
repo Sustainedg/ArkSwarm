@@ -93,25 +93,37 @@ def test_mobile_pages_do_not_import_desktop_ui():
     assert offenders == [], "\n".join(offenders)
 
 
-#: 「协作办公室」那一段样式：移动端不加载 index.css，所以两端**各写一份**，语义必须一致。
+#: 两端共用一套 class 的样式段（移动端不加载 index.css，所以样式各写一份）：逐字一致，守卫见下。
+#: 「协作办公室」：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟。
 OFFICE_STYLE_BANNER = (
     "/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */"
 )
-#: 「工单看板」那一段卡片样式：同样两端各一份，逐字一致（从横幅到「协作办公室」横幅为止）。
+#: 「工单看板」：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴（到「协作办公室」横幅为止）。
 BOARD_STYLE_BANNER = (
     "/* ================= 工单看板：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴 ================= */"
 )
+#: 「输入区」：一个框 + 框里的线条图标。组件只有一份（`components/Composer.tsx`），
+#: 样式仍是两端各一份 —— 共享段逐字一致，桌面端 / 移动端各自的尺寸微调写在共享段之后。
+COMPOSER_STYLE_BANNER = (
+    "/* ================= 输入区：一个框 + 框里的线条图标（两端共用这一份）================= */"
+)
 MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
+DESKTOP_COMPOSER_TUNING = "/* ---------- 桌面端：输入区寄在会话栏底部"
+MOBILE_COMPOSER_TUNING = "/* ---------- 移动端：输入区贴着屏幕最下边"
 
 
-def _office_style_block(path: Path, cut: str | None = None) -> str:
-    """取出一份样式表里的「协作办公室」样式段（可选：在移动端微调段之前截断）。"""
+def _shared_style_block(path: Path, banner: str, cut: str | None = None) -> str:
+    """取出一份样式表里的共享样式段：`banner` 到 `cut` 为止（不给 `cut` 就取到文件结尾）。
+
+    两端专用 class 的样式各写一份，所以这些段落必须逐字一致；各自那几条微调规则写在
+    共享段之后，不参与比对。改动时忘了同步另一边，会在这里被拦下。
+    """
     text = path.read_text(encoding="utf-8")
-    start = text.find(OFFICE_STYLE_BANNER)
-    assert start >= 0, f"{path.name} 里找不到「协作办公室」样式段（横幅注释被删了？）"
+    start = text.find(banner)
+    assert start >= 0, f"{path.name} 里找不到共享样式段：{banner[:24]}…（横幅注释被删了？）"
     if cut is not None:
         end = text.find(cut, start)
-        assert end > start, f"{path.name} 里找不到移动端微调段"
+        assert end > start, f"{path.name} 里 {banner[:16]}… 之后找不到 {cut[:24]}…（微调段被删了？）"
         text = text[:end]
     return text[start:].rstrip("\n")
 
@@ -123,21 +135,11 @@ def test_office_styles_are_identical_on_both_ends():
     改了一边忘了另一边，手机上就会走样：小人不在工位上、工牌错位、挂钟指针飞出去。
     移动端自己那几条微调规则写在这一段之后，不参与比对。
     """
-    desktop = _office_style_block(FRONTEND / "src" / "index.css")
-    mobile = _office_style_block(MOBILE_SRC / "mobile.css", MOBILE_OFFICE_TUNING)
+    desktop = _shared_style_block(FRONTEND / "src" / "index.css", OFFICE_STYLE_BANNER)
+    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", OFFICE_STYLE_BANNER, MOBILE_OFFICE_TUNING)
     assert desktop == mobile, (
         "index.css 与 mobile.css 的协作办公室样式不一致：改了一边记得把另一边同步（两端各一份）"
     )
-
-
-def _board_style_block(path: Path) -> str:
-    """取出一份样式表里的「工单看板」原子段（截到「协作办公室」段之前）。"""
-    text = path.read_text(encoding="utf-8")
-    start = text.find(BOARD_STYLE_BANNER)
-    assert start >= 0, f"{path.name} 里找不到「工单看板」样式段（横幅注释被删了？）"
-    end = text.find(OFFICE_STYLE_BANNER, start)
-    assert end > start, f"{path.name} 里「工单看板」段之后应当还有「协作办公室」段"
-    return text[start:end].rstrip("\n")
 
 
 @needs_frontend
@@ -147,14 +149,45 @@ def test_ticket_board_card_styles_are_identical_on_both_ends():
     只读节点越权时的红色高亮就在这段里：改了一边忘了另一边，手机上就看不见越权提示。
     两端各自的布局（桌面三栏、移动端单栏）写在这一段之外，不参与比对。
     """
-    desktop = _board_style_block(FRONTEND / "src" / "index.css")
-    mobile = _board_style_block(MOBILE_SRC / "mobile.css")
+    desktop = _shared_style_block(FRONTEND / "src" / "index.css", BOARD_STYLE_BANNER, OFFICE_STYLE_BANNER)
+    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", BOARD_STYLE_BANNER, OFFICE_STYLE_BANNER)
     assert desktop == mobile, (
         "index.css 与 mobile.css 的「工单看板」卡片样式不一致：改了一边记得把另一边同步"
     )
     # 越权高亮必须真的在共享段里，不然这条守卫等于没守。
     assert ".board-entry.violation" in desktop
     assert ".board-tag.tone-error" in desktop
+
+
+@needs_frontend
+def test_composer_styles_are_identical_on_both_ends():
+    """输入区的样式两端各一份，共享那段必须逐字一致。
+
+    组件只有一份（`components/Composer.tsx`），但两端样式表各自加载不了对方 —— 忘了同步
+    会变成「手机上框里图标挤在一起、桌面上又空一截」。桌面端 / 移动端各自的尺寸微调
+    （`DESKTOP_COMPOSER_TUNING` / `MOBILE_COMPOSER_TUNING` 之后）不参与比对。
+    """
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", COMPOSER_STYLE_BANNER, DESKTOP_COMPOSER_TUNING
+    )
+    mobile = _shared_style_block(
+        MOBILE_SRC / "mobile.css", COMPOSER_STYLE_BANNER, MOBILE_COMPOSER_TUNING
+    )
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的输入区样式不一致：改了一边记得把另一边同步（共享段逐字一致）"
+    )
+    # 关键规则必须真的在共享段里，不然「逐字一致」可能只是两边一起空着。
+    for selector in (
+        ".composer-box",
+        ".composer textarea",
+        ".composer-tool.send",
+        ".composer-tool.stop",
+        ".composer-attach-chip button",
+    ):
+        assert selector in desktop, f"输入区共享样式段里少了 {selector}"
+    # 共享段是两端共同的基础值；各自那几条微调（贴底收边、高度上限）写在它之外。
+    assert "max-height: 160px" in desktop, "共享段里应当有输入框高度的基础值"
+    assert "safe-bottom" not in desktop, "贴底安全区的处理应当写在移动端微调段里"
 
 
 @needs_frontend
@@ -266,7 +299,7 @@ def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
     )
 
     # 锁定缩放后输入框必须 ≥ 16px：iOS 聚焦 font-size < 16px 的输入框会强制放大页面。
-    for selector in (".input, .select, .textarea", ".m-composer textarea", ".input.mono"):
+    for selector in (".input, .select, .textarea", ".composer textarea", ".input.mono"):
         block = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
         assert block, f"mobile.css 缺少 {selector} 样式"
         size = re.search(r"font-size:\s*(\d+(?:\.\d+)?)px", block.group(1))
@@ -346,14 +379,14 @@ def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
     「⋯」上 —— 那几件事要用到聊天页的消息与会话状态，所以信号经路由 state 传回。
     """
     page = (MOBILE_SRC / "pages" / "MobileChatPage.tsx").read_text(encoding="utf-8")
-    assert "MobileComposer" in page, "对话页的输入区应当用共享组件 MobileComposer"
+    assert "components/Composer" in page, "对话页的输入区应当用两端共享的 components/Composer"
     assert 'aria-label="更多操作"' not in page, "顶栏右上角的「⋯」应当已挪到抽屉的对话行"
     assert "useSpeechOutput" in page and "speechSupported" not in page, "朗读开关只用 lib/tts 那一份实现"
     assert "speechSynthesis" not in page, "页面里不许自己调语音合成"
     assert "openActions" in page, "抽屉点「⋯」后聊天页要负责弹会话操作面板"
 
     # 输入区的样子只有一份实现（对话页与协作对话共用）：线条图标长在框里、没有背景提示文字。
-    composer = (MOBILE_SRC / "components" / "MobileComposer.tsx").read_text(encoding="utf-8")
+    composer = (FRONTEND / "src" / "components" / "Composer.tsx").read_text(encoding="utf-8")
     assert not re.search(r"placeholder\s*=", composer), "输入框不该再有背景提示文字"
     for symbol in ("PaperclipIcon", "MicIcon", "SendIcon", "StopIcon"):
         assert symbol in composer, f"输入区应当用 {symbol} 这类线条图标"
@@ -387,11 +420,13 @@ def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
         assert symbol in tts, f"lib/tts.ts 缺少 {symbol}"
     assert "removeItem" in tts, "关掉朗读要把存储键删掉（默认关闭只有一个真值来源）"
 
-    # 输入区贴着屏幕底边：不再整段照搬底部安全区。
+    # 输入区贴着屏幕底边：不再整段照搬底部安全区（协作弹层那一条覆盖规则不算）。
     css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
-    composer = re.search(r"\.m-composer \{([^}]*)\}", css)
-    assert composer, "mobile.css 缺少 .m-composer 样式"
-    assert "--safe-bottom" not in composer.group(1), "输入区不该再整段照搬底部安全区"
+    # 先去掉注释：注释里也可能有花括号，留着会把选择器认错。
+    plain = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    blocks = [body for selector, body in re.findall(r"([^{}]*)\{([^}]*)\}", plain) if selector.strip() == ".composer"]
+    assert blocks, "mobile.css 缺少 .composer 样式"
+    assert all("--safe-bottom" not in body for body in blocks), "输入区不该再整段照搬底部安全区"
 
 
 @needs_frontend
@@ -404,7 +439,7 @@ def test_lists_show_dates_with_a_single_time_source():
 
     drawer = (MOBILE_SRC / "components" / "MobileDrawer.tsx").read_text(encoding="utf-8")
     assert "formatListTime" in drawer, "移动端的对话列表要显示时间"
-    desktop = (FRONTEND / "src" / "pages" / "ChatPage.tsx").read_text(encoding="utf-8")
+    desktop = (FRONTEND / "src" / "components" / "ConversationList.tsx").read_text(encoding="utf-8")
     assert "formatListTime" in desktop, "桌面端的对话列表也要显示时间"
 
 
@@ -412,11 +447,11 @@ def test_lists_show_dates_with_a_single_time_source():
 def test_collab_run_is_the_office_with_the_chat_hidden_behind_a_tap():
     """协作运行页的主页面就是那间 3D 办公室；聊天界面点人物才出来。
 
-    底部只有输入框，而且与对话页共用同一份（`MobileComposer`）；3D 底图深 / 浅各一张，
+    底部只有输入框，而且与对话页共用同一份（`components/Composer`）；3D 底图深 / 浅各一张，
     由主题决定用哪张 —— 浅色外壳下不能还是一块深色画布。
     """
     page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
-    assert "MobileComposer" in page, "协作运行页的输入区要复用对话页那一份"
+    assert "components/Composer" in page, "协作运行页的输入区要复用对话页那一份"
     assert not re.search(r"placeholder\s*=", page), "输入框不该再有背景提示文字"
     # 时间线只在对话弹层里出现：主页面是办公室，不是聊天界面。
     assert 'className="m-thread m-run-chat-thread"' in page, "时间线应当只在对话弹层里"

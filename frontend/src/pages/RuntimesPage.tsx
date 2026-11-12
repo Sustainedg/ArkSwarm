@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { RefreshIcon } from '../components/Icons'
 import { KernelLogo } from '../components/KernelLogo'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
+import { formatListTime } from '../lib/datetime'
 import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../lib/types'
 
 const ACTION_LABELS: Record<RuntimeAction, string> = {
@@ -35,6 +37,7 @@ export function RuntimesPage() {
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
@@ -53,11 +56,43 @@ export function RuntimesPage() {
     }
   }
 
+  /** 强制重测一个运行时（后端会把结果写回缓存，界面直接用新值覆盖）。 */
+  const refreshStatus = async (runtime: AgentRuntime) => {
+    setRefreshing((prev) => ({ ...prev, [runtime.id]: true }))
+    try {
+      const status = await api.refreshRuntime(runtime.id)
+      setRuntimes((prev) =>
+        prev.map((item) =>
+          item.id === runtime.id
+            ? {
+                ...item,
+                provisioning: {
+                  ...item.provisioning,
+                  installed: status.installed,
+                  version: status.version ?? null,
+                  path: status.installed ? status.detail ?? null : null,
+                  checked_at: status.checked_at ?? null,
+                },
+              }
+            : item,
+        ),
+      )
+      setError(null)
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setRefreshing((prev) => ({ ...prev, [runtime.id]: false }))
+    }
+  }
+
   const reload = async () => {
     try {
       const items = await api.listRuntimes()
       setRuntimes(items)
       setError(null)
+      // 「检查更新」是每个内核一次远端查询（npm view 之类），不能挡住首屏：
+      // 卡片先出来，查到结果再逐个补上，不然页面会一直停在「正在读取运行时状态…」。
+      setLoading(false)
       await Promise.all(items.map((item) => checkLatest(item)))
     } catch (e) {
       setError(describe(e))
@@ -143,6 +178,8 @@ export function RuntimesPage() {
             <RuntimeCard
               key={runtime.id}
               runtime={runtime}
+              refreshing={Boolean(refreshing[runtime.id])}
+              onRefresh={() => void refreshStatus(runtime)}
               latest={latest[runtime.id]}
               checking={Boolean(checking[runtime.id])}
               busy={running && job?.runtimeId === runtime.id}
@@ -199,12 +236,14 @@ interface CardProps {
   runtime: AgentRuntime
   latest?: RuntimeLatest
   checking: boolean
+  refreshing: boolean
   busy: boolean
   onCheck: () => void
+  onRefresh: () => void
   onRun: (action: RuntimeAction) => void
 }
 
-function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardProps) {
+function RuntimeCard({ runtime, latest, checking, refreshing, busy, onCheck, onRefresh, onRun }: CardProps) {
   const provisioning = runtime.provisioning
   const managed = provisioning.supported
   const remote = latest?.latest ?? null
@@ -213,6 +252,8 @@ function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardPr
   // 查到比本机更高的版本才提示「更新到 X」；已经是最新版就不给更新入口。
   // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
   const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
+  // 远端最新版本与本机一致时，在版本号旁边挂一个「已是最新」，一眼就知道不用再点更新。
+  const upToDate = Boolean(remote && current && versionCore(remote) === current)
   const showUpdate =
     managed &&
     provisioning.installed &&
@@ -223,10 +264,24 @@ function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardPr
     <div className="card runtime-card">
       <div className="runtime-head">
         <KernelLogo logo={runtime.logo} />
-        <div>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div className="card-title">{runtime.name}</div>
-          <div className="card-sub">{kernelSummary(runtime, current)}</div>
+          <div className="card-sub runtime-sub">
+            <span>{kernelSummary(runtime, current)}</span>
+            {upToDate && <span className="pill ok">已是最新</span>}
+          </div>
+          <div className="dim small">{detectedLabel(provisioning.checked_at)}</div>
         </div>
+        {/* 「重新检测」收成右上角一个小图标：状态本来就带缓存，这是个偶尔点一次的备用动作 */}
+        <button
+          className="icon-btn"
+          onClick={onRefresh}
+          disabled={refreshing || busy}
+          aria-label="重新检测"
+          title="重新检测安装状态与版本"
+        >
+          <RefreshIcon size={16} className={refreshing ? 'spin' : undefined} />
+        </button>
       </div>
 
       {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
@@ -269,6 +324,11 @@ function kernelSummary(runtime: AgentRuntime, current: string | null): string {
     return `${runtime.vendor} · ${runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}`
   }
   return provisioning.installed && current ? `${runtime.vendor} · 当前版本 ${current}` : `${runtime.vendor} · 未安装`
+}
+
+/** 「检测于 …」：安装状态是后端缓存 + 定时检测的，不是每次打开页面实时探的。 */
+function detectedLabel(checkedAt: string | null | undefined): string {
+  return checkedAt ? `检测于 ${formatListTime(checkedAt)}` : '尚未检测'
 }
 
 /** 从版本字符串里抽出可比较的核心版本号（`2.1.316 (Claude Code)` → `2.1.316`）。 */

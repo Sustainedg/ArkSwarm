@@ -1,6 +1,8 @@
 """FastAPI 应用入口。"""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +17,7 @@ from .agents import all_agents
 from .api import api_router
 from .bootstrap import seed_if_empty
 from .db import SessionLocal, init_db
+from .runtime import availability as availability_service
 from .runtime import skills as skill_service
 from .settings import get_settings
 
@@ -48,7 +51,15 @@ async def lifespan(app: FastAPI):
         if recovered:
             logger.info("协作：%s 次运行因重启被标记为 interrupted", recovered)
     logger.info("%s %s 已就绪 — 数据目录 %s", settings.app_name, __version__, settings.data_dir)
-    yield
+    # 运行时可用性（内核装没装、什么版本）是缓存 + 定时检测的，绝不放在请求路径上：
+    # 探测要起一次 `内核 --version` 子进程，同步跑会冻住整个事件循环。
+    detector = asyncio.create_task(availability_service.scheduler())
+    try:
+        yield
+    finally:
+        detector.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await detector
 
 
 app = FastAPI(

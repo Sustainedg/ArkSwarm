@@ -7,15 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..agents import AgentContext, get_agent
+from ..agents.base import Availability
 from ..db import get_session
 from ..models import AgentInstance, Role
+from ..runtime import availability as availability_service
 from ..schemas import AgentCreate, AgentRead, AgentTestResult, AgentUpdate
 from ..security import decrypt, encrypt, mask
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def to_read(agent: AgentInstance) -> AgentRead:
+def to_read(agent: AgentInstance, availability: Availability | None = None) -> AgentRead:
+    """把智能体实例转成响应；``availability`` 由调用方从缓存里取（不实时探测）。"""
     secret = decrypt(agent.api_key_encrypted)
     gateway_url, model = agent.gateway_url, agent.model
     try:
@@ -23,7 +26,7 @@ def to_read(agent: AgentInstance) -> AgentRead:
         # 未被用户显式修改的网关/模型，回落到适配器读到的本机真实配置。
         gateway_url = definition.resolve_gateway(agent.gateway_url)
         model = definition.resolve_model(agent.model)
-        type_name, runtime, availability = definition.name, definition.runtime.value, definition.availability().to_dict()
+        type_name, runtime = definition.name, definition.runtime.value
     except KeyError:
         type_name, runtime, availability = None, None, None
     return AgentRead(
@@ -41,8 +44,14 @@ def to_read(agent: AgentInstance) -> AgentRead:
         runtime=runtime,
         api_key_set=bool(agent.api_key_encrypted),
         api_key_preview=mask(secret),
-        availability=availability,
+        availability=availability.to_dict() if availability else None,
     )
+
+
+async def to_read_with_status(agent: AgentInstance) -> AgentRead:
+    """单个实例的响应：可用性走缓存表（缺行时只查 PATH），绝不在这里起子进程。"""
+    statuses = await availability_service.for_types([agent.type_id])
+    return to_read(agent, statuses.get(agent.type_id))
 
 
 def _coerce(definition, options: dict | None) -> dict:
@@ -63,7 +72,9 @@ async def list_agents(session: AsyncSession = Depends(get_session)) -> dict:
         AgentInstance.created_at
     )
     rows = (await session.execute(statement)).scalars().all()
-    return {"items": [to_read(a).model_dump() for a in rows]}
+    # 可用性按 type_id 批量取一次，避免「每行实例探测一遍」（那会让实例越多越慢）。
+    statuses = await availability_service.for_types(a.type_id for a in rows)
+    return {"items": [to_read(a, statuses.get(a.type_id)).model_dump() for a in rows]}
 
 
 @router.post("", status_code=201)
@@ -87,13 +98,13 @@ async def create_agent(payload: AgentCreate, session: AsyncSession = Depends(get
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
-    return to_read(agent).model_dump()
+    return (await to_read_with_status(agent)).model_dump()
 
 
 @router.get("/{agent_id}")
 async def get_agent_instance(agent_id: str, session: AsyncSession = Depends(get_session)) -> dict:
     agent = await _active_agent(agent_id, session)
-    return to_read(agent).model_dump()
+    return (await to_read_with_status(agent)).model_dump()
 
 
 @router.patch("/{agent_id}")
@@ -118,7 +129,7 @@ async def update_agent(
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
-    return to_read(agent).model_dump()
+    return (await to_read_with_status(agent)).model_dump()
 
 
 @router.delete("/{agent_id}", status_code=204)
@@ -155,10 +166,16 @@ async def test_agent(agent_id: str, session: AsyncSession = Depends(get_session)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
-    availability = definition.availability()
+    # 「连通性测试」是用户主动点的，这里必须是**实时**探测；但探测要起子进程，
+    # 所以丢到线程里跑，别把整站的其他请求一起冻住。
+    probed = await availability_service.probe(definition)
     checks = [
         {"name": "适配器", "ok": True, "detail": f"{definition.name}（{definition.runtime.value}）"},
-        {"name": "运行环境", "ok": availability.installed, "detail": availability.detail},
+        {
+            "name": "运行环境",
+            "ok": bool(probed and probed.installed),
+            "detail": (probed or availability_service.cheap_availability(definition)).detail,
+        },
     ]
 
     ctx = AgentContext(
@@ -192,4 +209,4 @@ async def duplicate_agent(agent_id: str, session: AsyncSession = Depends(get_ses
     session.add(clone)
     await session.commit()
     await session.refresh(clone)
-    return to_read(clone).model_dump()
+    return (await to_read_with_status(clone)).model_dump()

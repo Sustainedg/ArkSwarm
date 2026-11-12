@@ -7,6 +7,7 @@
 * :class:`Conversation`  —— 对话，绑定某个角色并记住智能体侧的会话 ID。
 * :class:`Skill`         —— 从各智能体内核扫描出来的技能（统一编目）。
 * :class:`RoleSkill`     —— 角色与技能的分配关系（角色能用的技能只能来自这里）。
+* :class:`RuntimeStatus`  —— 各运行时的可用性检测结果（框架层缓存，不是领域实体）。
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, JSON, String, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -158,3 +159,22 @@ class Message(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), index=True))
 
+
+class RuntimeStatus(SQLModel, table=True):
+    """某个运行时（CLI 内核）在本机的一次可用性检测结果。
+
+    这是框架层的**缓存**，不是领域实体：内核装没装、是什么版本，只有跑一次
+    ``内核 --version`` 才知道，而 Node 系 CLI 的冷启动接近 2 秒 —— 这种同步子进程
+    放在请求路径上会冻住整个事件循环（详见 ``runtime/availability.py``）。
+    因此由框架定时检测后写在这里，接口只读这张表。``type_id`` 就是适配器的 id。
+    """
+
+    __tablename__ = "runtime_status"
+
+    type_id: str = Field(sa_column=Column(String(64), primary_key=True))
+    installed: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
+    version: str | None = Field(default=None, sa_column=Column(String(160)))
+    #: 已安装时是可执行文件路径，未安装时是原因（与 ``Availability.detail`` 同义）。
+    detail: str | None = Field(default=None, sa_column=Column(Text))
+    #: 本次检测的时间（UTC）。超过 ``runtime.availability.CHECK_INTERVAL`` 即视为过期。
+    checked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))

@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import VERSION_HISTORY, __version__
 from ..agents import all_agents
+from ..runtime import availability as availability_service
 from ..runtime import registry
 from ..settings import get_settings
 from .architecture_doc import build_architecture_page
@@ -20,6 +21,8 @@ async def health() -> dict:
 async def overview() -> dict:
     settings = get_settings()
     agents = all_agents()
+    # 可用性读缓存（缺行只查 PATH）：这里绝不能实时探测，否则每次打开页面都冻住几秒。
+    statuses = await availability_service.statuses(agents)
     return {
         "version": __version__,
         "version_history": [dict(item) for item in VERSION_HISTORY],
@@ -27,7 +30,7 @@ async def overview() -> dict:
         "data_dir": str(settings.data_dir),
         "workspaces_root": str(settings.workspaces_root),
         "agent_types": len(agents),
-        "installed_types": sum(1 for a in agents if a.availability().installed),
+        "installed_types": sum(1 for a in agents if statuses[a.id].installed),
         "active_runs": registry.list(),
     }
 

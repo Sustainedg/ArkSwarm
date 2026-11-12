@@ -16,7 +16,7 @@ import type {
 } from '../../lib/types'
 import { useAutoRefresh } from '../../lib/useAutoRefresh'
 import { MobileCollabProgress } from '../components/MobileCollabProgress'
-import { MobileComposer } from '../components/MobileComposer'
+import { Composer } from '../../components/Composer'
 import { MobileRoleConversationSheet } from '../components/MobileRoleConversationSheet'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
@@ -586,7 +586,8 @@ export function MobileCollabRunPage() {
           : '发送即让领导者继续推进'
         : '不推进工单，只和入口角色聊'
   const composerHeader = showComposerHeader ? (
-    <div className="m-composer-head">
+    // 外层容器由共享的 Composer 渲染（`.composer-head`），这里只放内容，别再套一层。
+    <>
       {modeToggleVisible && (
         <div className="m-mode-row">
           <button
@@ -627,12 +628,12 @@ export function MobileCollabRunPage() {
           </button>
         </div>
       )}
-    </div>
+    </>
   ) : undefined
 
   /** 输入区（共享组件）：主页面与对话弹层共用这一个渲染函数，ref 分别绑定当前可见的输入框。 */
   const renderComposer = (inputRef?: Ref<HTMLTextAreaElement>) => (
-    <MobileComposer
+    <Composer
       value={draft}
       onChange={setDraft}
       onSend={submitDraft}
@@ -806,7 +807,7 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
-      {/* 底部只有输入框：附件 / 语音 / 发送都长在框里（与对话页共用 MobileComposer）。 */}
+      {/* 底部只有输入框：附件 / 语音 / 发送都长在框里（与对话页共用 Composer）。 */}
       {renderComposer()}
 
       {chatOpen && detail && (

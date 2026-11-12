@@ -326,7 +326,7 @@ class AcmeHarness(OpenAIHarnessBase):
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、左侧抽屉与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
-  `TicketBoardKit`
+  `TicketBoardKit` / `Composer` / `Icons`
   等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用
@@ -336,7 +336,7 @@ class AcmeHarness(OpenAIHarnessBase):
   「界面能打开」，对话仍需联网）。
 - **朗读（`src/lib/tts.ts`）只有一份实现**：开关默认关闭、存在 localStorage，开启后念的是
   Markdown 转出来的纯文本；对话页顶栏右上角只有「分享 + 朗读」两个按钮。
-- **移动端「操作图标」用线条 SVG**（`src/mobile/components/MobileIcons.tsx`）：输入区、顶栏这类
+- **「操作图标」用线条 SVG**（`src/components/Icons.tsx`，两端共用）：输入区、顶栏这类
   需要与文字同色的小图标，emoji 的尺寸与颜色随系统而变、同一排对不齐；这类图标一律
   `stroke="currentColor"`，尺寸走 `size` 参数。
 - **智能体设置挂在运行时页**：移动端没有独立的智能体配置页，内核的安装 / 更新与它的实例配置
@@ -346,8 +346,11 @@ class AcmeHarness(OpenAIHarnessBase):
   覆盖块。**界面里不要写死深色**：先加 CSS 变量、再补浅色值；两端都要用到的新配色，两份样式表
   一起加（共享段还要逐字一致，见 `backend/tests/test_mobile_web.py`）。原生外壳的配色由
   `applyTheme()` 同步 `meta[name=theme-color]`，别在别处硬编码主题色。
-- **输入区只有一份**：`src/mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 /
-  发送都由页面给），对话页与协作运行页共用；不要再各写一个输入框。
+- **输入区只有一份**：`src/components/Composer.tsx`（受控：草稿 / 附件 / 上传 /
+  发送都由页面给），两端的对话页与协作运行页共用；不要再各写一个输入框。
+  `src/components/Icons.tsx` 同理：线条图标两端共用一份。样式是**组件一份、样式表各一份**
+  （共享段逐字一致，守卫见 `tests/test_mobile_web.py::test_composer_styles_are_identical_on_both_ends`；
+  两端的尺寸微调写在共享段之后）。
 - **图片 / 插画类的多主题资源在构建期换算，不要在手机上跑实时滤镜**：协作办公室底图就是这么做的
   —— `scripts/gen_office_bg.py` 从同一份几何产出深 / 浅两张 SVG，前端按主题选（见
   `frontend/public/office/`、`components/CollabOfficeMap.tsx`）。

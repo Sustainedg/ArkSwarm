@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, AsyncIterator, ClassVar, Iterable, Sequence
 
@@ -96,9 +98,17 @@ class Availability:
     installed: bool
     version: str | None = None
     detail: str | None = None
+    #: 这个结论是什么时候检测出来的。适配器现探时留空；框架层从缓存表读出时带上时间戳，
+    #: 界面据此提示「检测于 …」（见 ``runtime/availability.py``）。
+    checked_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"installed": self.installed, "version": self.version, "detail": self.detail}
+        return {
+            "installed": self.installed,
+            "version": self.version,
+            "detail": self.detail,
+            "checked_at": self.checked_at.isoformat() if self.checked_at else None,
+        }
 
 
 @dataclass(slots=True)
@@ -225,7 +235,14 @@ class AgentDefinition(ABC):
 
     # -- 元数据与自省 --------------------------------------------------------
 
-    def descriptor(self) -> dict[str, Any]:
+    def descriptor(self, availability: Availability | None = None) -> dict[str, Any]:
+        """适配器的静态自省 + 本机真实可用性。
+
+        ``availability`` 由框架层注入：框架把检测结果缓存在 ``runtime_status`` 表里并定时刷新，
+        请求路径只读缓存。不传则现探一次 —— 那是同步阻塞的子进程调用，只允许出现在
+        启动播种与测试里，**请求路径禁止**走到这一步（否则会冻住整个事件循环）。
+        """
+        availability = availability or self.availability()
         return {
             "id": self.id,
             "name": self.name,
@@ -241,13 +258,16 @@ class AgentDefinition(ABC):
             "docs_url": self.docs_url,
             "logo": self.logo,
             "executable": self.executable,
-            "availability": self.availability().to_dict(),
-            "provisioning": self.provisioning(),
+            "availability": availability.to_dict(),
+            "provisioning": self.provisioning(availability),
         }
 
-    def provisioning(self) -> dict[str, Any]:
-        """本机真实的安装状态 + 适配器声明的维护方式，供「运行时」页展示。"""
-        availability = self.availability()
+    def provisioning(self, availability: Availability | None = None) -> dict[str, Any]:
+        """本机真实的安装状态 + 适配器声明的维护方式，供「运行时」页展示。
+
+        ``availability`` 同 :meth:`descriptor`：由框架层注入缓存值，不传则现探一次。
+        """
+        availability = availability or self.availability()
         data: dict[str, Any] = {
             "supported": self.provisioner is not None,
             "manager": None,
@@ -258,6 +278,8 @@ class AgentDefinition(ABC):
             "installed": availability.installed,
             "version": availability.version,
             "path": availability.detail if availability.installed else None,
+            #: 这份安装状态是什么时候检测的（界面提示「检测于 …」）。
+            "checked_at": availability.checked_at.isoformat() if availability.checked_at else None,
         }
         if self.provisioner is not None:
             data.update(self.provisioner.to_dict())
@@ -359,7 +381,8 @@ class AgentDefinition(ABC):
     async def probe(self, ctx: AgentContext) -> tuple[bool, str]:
         """给「连通性测试」按钮用的轻量探测：检查运行环境、凭据与连通性。"""
         if self.runtime is Runtime.CLI:
-            availability = self.availability()
+            # 探测要起一次子进程（`内核 --version`），丢到线程里跑，别占用事件循环。
+            availability = await asyncio.to_thread(self.availability)
             if not availability.installed:
                 return False, availability.detail or "缺少可执行文件"
             if not ctx.api_key and not self.api_key_env:

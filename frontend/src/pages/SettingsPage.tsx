@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
 import type { AgentType, ArchitectureDoc, Overview } from '../lib/types'
 
 export function SettingsPage() {
+  const navigate = useNavigate()
   const { mode, theme, setMode } = useThemeMode()
   const [overview, setOverview] = useState<Overview | null>(null)
   const [types, setTypes] = useState<AgentType[]>([])
@@ -46,8 +48,8 @@ export function SettingsPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">系统</h1>
-          <p className="page-desc">运行时状态、已注册的适配器与扩展点说明。</p>
+          <h1 className="page-title">设置</h1>
+          <p className="page-desc">外观、配置入口，以及运行时状态与已注册的适配器。</p>
         </div>
         <div className="spacer" />
         <button className="btn" onClick={() => void openArchitecture()}>
@@ -92,6 +94,29 @@ export function SettingsPage() {
             })}
           </div>
           <p className="dim small">外观是这台设备的个人偏好，只存在本机，不影响别人。</p>
+        </section>
+
+        {/* 不在主导航里的两个页面（与移动端设置页的配置入口一致）：一个内核 = 一份安装 + N 份配置。 */}
+        <section className="stack">
+          <h2 className="card-section-title">配置</h2>
+          <div className="settings-entries">
+            <button className="settings-entry" onClick={() => navigate('/agents')}>
+              <span className="settings-entry-icon">⚙️</span>
+              <span className="settings-entry-main">
+                <span className="settings-entry-title">智能体配置</span>
+                <span className="settings-entry-sub">每个内核的实例：网关 · API 密钥 · 模型 · 适配器选项</span>
+              </span>
+              <span className="settings-entry-chevron">›</span>
+            </button>
+            <button className="settings-entry" onClick={() => navigate('/runtimes')}>
+              <span className="settings-entry-icon">🧬</span>
+              <span className="settings-entry-main">
+                <span className="settings-entry-title">运行时</span>
+                <span className="settings-entry-sub">内核的安装 / 更新 / 卸载，以及当前版本与检测状态</span>
+              </span>
+              <span className="settings-entry-chevron">›</span>
+            </button>
+          </div>
         </section>
 
         {versionHistory.length > 0 && (

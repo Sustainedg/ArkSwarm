@@ -1,9 +1,12 @@
 /**
- * 移动端的图标：一律是**纯线条**的内联 SVG（`stroke="currentColor"`），不用 emoji。
+ * 界面图标：一律是**纯线条**的内联 SVG（`stroke="currentColor"`），不用 emoji。
  *
  * 为什么不用 emoji：各系统字体的 emoji 大小、粗细、颜色都不一样 —— 附件 📎 在 iOS 上尤其大，
  * 同一排图标永远对不齐。线条图标跟文字一个颜色（`currentColor`），深浅色主题自动跟随，
  * 尺寸也统一由 `size` 控制。
+ *
+ * 桌面端与移动端**共用这一份**（两端样式表各自给尺寸与配色）：新增图标就往这里加，
+ * 别再各写一份。
  */
 import type { ReactNode } from 'react'
 
@@ -103,5 +106,49 @@ export function StopIcon({ size = 20, className }: IconProps) {
     >
       <rect x="7" y="7" width="10" height="10" rx="2.4" fill="currentColor" />
     </svg>
+  )
+}
+
+/** 铅笔：重命名 / 编辑。 */
+export function PencilIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4.8 19.2l1-3.9L15.7 5.4a2.15 2.15 0 0 1 3 3L8.8 18.3l-4 .9z" />
+      <path d="m14.4 6.7 2.9 2.9" />
+    </Icon>
+  )
+}
+
+/** 垃圾桶：删除。 */
+export function TrashIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4.5 7h15" />
+      <path d="M9.6 7V4.8h4.8V7" />
+      <path d="M6.6 7l.8 12.1a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5L17.4 7" />
+      <path d="M10.4 11v6" />
+      <path d="M13.6 11v6" />
+    </Icon>
+  )
+}
+
+/** 顺时针箭头：重新检测（不是「刷新页面」，是可以转起来的那种）。 */
+export function RefreshIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M20.2 12a8.2 8.2 0 1 1-2.5-5.9" />
+      <path d="M20.4 3.9v5h-5" />
+    </Icon>
+  )
+}
+
+/** 横着的三个点：更多操作。 */
+export function MoreIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6 12h.01" />
+      <path d="M12 12h.01" />
+      <path d="M18 12h.01" />
+    </Icon>
   )
 }

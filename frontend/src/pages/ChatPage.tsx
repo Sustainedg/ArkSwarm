@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Composer } from '../components/Composer'
 import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
+import { ShareIcon, SpeakerIcon } from '../components/Icons'
 import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, streamPost } from '../lib/api'
+import { notifyConversationsChanged } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
-import type { Conversation, Message, Role } from '../lib/types'
-import { sameConversationList, sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
+import { shareConversationImage } from '../lib/shareImage'
+import { useThemeMode } from '../lib/theme'
+import { useSpeechOutput } from '../lib/tts'
+import type { AttachmentRef, Conversation, ConversationDetail, Message } from '../lib/types'
+import { sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn extends AgentStreamState {
@@ -16,63 +22,117 @@ interface LiveTurn extends AgentStreamState {
   avatar: string
 }
 
+/**
+ * 对话页（桌面端）：左侧栏（导航 + 对话列表，见 `App.tsx`）选中一条对话，这里显示它。
+ *
+ * 与移动端同一套设计与分工：
+ * - 顶栏右上角只有「分享 + 朗读」两个图标按钮（朗读默认关闭，开着时每条新回复念出来）；
+ * - 输入区是两端共享的 `components/Composer`（附件 / 语音 / 图标发送都在框里）；
+ * - 会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）不占顶栏，收在左侧栏对话行的
+ *   「⋯」后面 —— 那几件事要用到本页的消息与会话状态，所以经路由 state 落回本页的弹窗。
+ */
 export function ChatPage() {
   const { conversationId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const speech = useSpeechOutput()
+  const { theme } = useThemeMode()
 
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [live, setLive] = useState<LiveTurn | null>(null)
   const [draft, setDraft] = useState('')
+  /** 已上传、等待随消息发出的附件（输入区共享组件持有 UI，状态由本页持有） */
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
+  /** 后台同步（轮询）产生的提示：下一次同步成功就撤掉，不长期占着界面 */
+  const [syncError, setSyncError] = useState<string | null>(null)
+  /** 一次性的提示（分享图已下载之类），与错误分开显示 */
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [remoteRunning, setRemoteRunning] = useState(false)
+  /** 会话操作弹窗（从左侧栏对话行的「⋯」打开） */
+  const [actionsOpen, setActionsOpen] = useState(false)
+  /** 正在生成长图（要几百毫秒，期间按钮置灰避免连点出两张） */
+  const [sharing, setSharing] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  /** 已经念过的回复 id（切换对话时把历史一次性记为「已念过」，不重念） */
+  const spokenRef = useRef<Set<string>>(new Set())
+  const primedConversationRef = useRef<string | null>(null)
+  /** 本端刚删掉的对话 id：它引出的 404 是预期行为，不该再当成「这条对话不见了」处理 */
+  const selfDeletedRef = useRef<string | null>(null)
 
-  const loadConversations = useCallback(async () => {
-    try {
-      const [list, roleList] = await Promise.all([api.listConversations(), api.listRoles()])
-      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
-      setRoles(roleList)
-      return list
-    } catch (e) {
-      setError(describe(e))
-      return []
-    }
+  const applyDetail = useCallback((detail: ConversationDetail, resetLive: boolean) => {
+    setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
+    setActive(detail.conversation)
+    if (resetLive) setLive(null)
+    setRemoteRunning(Boolean(detail.active_run))
   }, [])
 
   const openConversation = useCallback(
     async (id: string) => {
+      // 明确要打开某条对话（点击 / 路由 / 重置记忆）：先撤掉上一次的提示，再按本次结果决定报不报错。
+      setError(null)
+      setSyncError(null)
       try {
-        const detail = await api.getConversation(id)
-        setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
-        setActive(detail.conversation)
-        setLive(null)
-        setRemoteRunning(Boolean(detail.active_run))
+        applyDetail(await api.getConversation(id), true)
       } catch (e) {
         setError(describe(e))
       }
     },
-    [],
+    [applyDetail],
   )
+
+  /** 正在看的这条对话已经不在了（多半是在别的设备上被删）：落到剩下的对话，别留一条消不掉的 404。 */
+  const leaveMissingConversation = useCallback(async () => {
+    setError(null)
+    setSyncError(null)
+    try {
+      const list = await api.listConversations()
+      if (list.length > 0) navigate(`/chat/${list[0].id}`, { replace: true })
+      else {
+        setActive(null)
+        setMessages([])
+        navigate('/chat', { replace: true })
+      }
+    } catch (e) {
+      setSyncError(describe(e))
+    }
+  }, [navigate])
 
   useEffect(() => {
     void (async () => {
-      const list = await loadConversations()
       if (conversationId) {
         await openConversation(conversationId)
-      } else if (list.length > 0) {
-        navigate(`/chat/${list[0].id}`, { replace: true })
+        return
+      }
+      // `/chat`：进入最近一次对话（一条都没有时给空状态）。
+      setError(null)
+      try {
+        const list = await api.listConversations()
+        if (list.length > 0) navigate(`/chat/${list[0].id}`, { replace: true })
+        else {
+          setActive(null)
+          setMessages([])
+        }
+      } catch (e) {
+        setError(describe(e))
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId])
+
+  // 左侧栏对话行的「⋯」：先落到这个对话，再把会话操作弹窗打开。
+  // 用一次性的路由 state 传信号，读完（replace 掉）就清空，返回 / 刷新不会又弹一次。
+  useEffect(() => {
+    const state = location.state as { openActions?: boolean } | null
+    if (!state?.openActions) return
+    setActionsOpen(true)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.state, location.pathname, navigate])
 
   useEffect(() => {
     const node = scrollRef.current
@@ -82,24 +142,58 @@ export function ChatPage() {
   const refreshActive = useCallback(async () => {
     if (!conversationId) return
     try {
-      const detail = await api.getConversation(conversationId)
-      setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
-      setActive(detail.conversation)
-      setRemoteRunning(Boolean(detail.active_run))
+      applyDetail(await api.getConversation(conversationId), false)
+      setSyncError(null)
     } catch (e) {
-      setError(describe(e))
+      if (e instanceof ApiError && e.status === 404) {
+        // 本端刚删的那条：在途的轮询打回来必然是 404，属于预期，不提示也不跳转（删除流程自己会跳）。
+        if (selfDeletedRef.current === conversationId) return
+        await leaveMissingConversation()
+        return
+      }
+      setSyncError(describe(e))
     }
-  }, [conversationId])
+  }, [conversationId, applyDetail, leaveMissingConversation])
 
   // 跨设备同步：另一台设备发出的消息与最后状态会在这里自动出现。
   useAutoRefresh(refreshActive, { intervalMs: 3000, enabled: Boolean(conversationId) && !busy })
-  useAutoRefresh(loadConversations, { intervalMs: 8000 })
+
+  /**
+   * 朗读：开关开着 + 这条回复还没念过才出声，一次只念**最新**那条（新的会打断旧的）。
+   *
+   * 统一在这里判「新回复」，而不是在 `send()` 里 —— 这样另一台设备写入、由
+   * `useAutoRefresh` 拉回来的回复也会念。切换对话时先把已有消息记成「已念过」，
+   * 打开历史对话不会从头念一遍。
+   */
+  useEffect(() => {
+    const replies = messages.filter((message) => message.role === 'assistant' && message.status !== 'error')
+    if (primedConversationRef.current !== (active?.id ?? null)) {
+      primedConversationRef.current = active?.id ?? null
+      spokenRef.current = new Set(replies.map((message) => message.id))
+      return
+    }
+    const fresh = replies.filter((message) => !spokenRef.current.has(message.id))
+    fresh.forEach((message) => spokenRef.current.add(message.id))
+    if (fresh.length > 0) speech.speakIfEnabled(fresh[fresh.length - 1].content)
+  }, [messages, active?.id, speech.speakIfEnabled])
+
+  // 一次性提示看完就撤，不长期占着输入框上方。
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  // 离开页面（切换对话 / 返回）时终止正在进行的流，避免后台空转。
+  // （语音识别由输入区共享组件在自己卸载时收起。）
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const send = async (content: string, regenerate = false) => {
     const conversation = active
     if (!conversation) return
     if (remoteRunning) return
-    if (!regenerate && !content.trim()) return
+    const pending = regenerate ? [] : attachments
+    if (!regenerate && !content.trim() && pending.length === 0) return
 
     setError(null)
     setBusy(true)
@@ -120,10 +214,12 @@ export function ChatPage() {
         regenerate
           ? `/api/conversations/${conversation.id}/regenerate`
           : `/api/conversations/${conversation.id}/messages`,
-        regenerate ? {} : { content },
+        regenerate ? {} : { content, attachments: pending.map((item) => item.rel_path) },
         (event) => setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev)),
         controller.signal,
       )
+      // 消息已经落到服务端，附件随之清空；失败时保留，方便用户重发。
+      if (pending.length > 0) setAttachments([])
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') setError(describe(e))
     } finally {
@@ -134,10 +230,11 @@ export function ChatPage() {
         setMessages(detail.messages)
         setActive(detail.conversation)
         setLive(null)
-        await loadConversations()
       } catch {
         /* 刷新失败时保留流式渲染出来的内容 */
       }
+      // 这一轮会让条数与时间变化，左侧栏列表立刻对齐（不用等下一次轮询）。
+      notifyConversationsChanged()
     }
   }
 
@@ -147,14 +244,70 @@ export function ChatPage() {
     await api.cancelRun(active.id).catch(() => undefined)
   }
 
-  const createConversation = async (roleId: string) => {
+  /** 输入区共享组件把读好的 base64 交回来，这里只负责调接口。 */
+  const uploadAttachment = async (name: string, contentBase64: string): Promise<AttachmentRef> => {
+    if (!active) throw new Error('先选一段对话，再添加附件')
+    return api.uploadAttachment(active.id, { name, content_base64: contentBase64 })
+  }
+
+  const shareChat = async () => {
+    if (!active || messages.length === 0) return
+    setSharing(true)
+    setError(null)
+    setNotice(null)
     try {
-      const conversation = await api.createConversation({ role_id: roleId })
-      setPickerOpen(false)
-      await loadConversations()
-      navigate(`/chat/${conversation.id}`)
+      const outcome = await shareConversationImage({
+        title: active.title,
+        subtitle: [active.role_name, active.agent_name].filter(Boolean).join(' · '),
+        theme,
+        messages: messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          createdAt: formatListTime(message.created_at),
+        })),
+      })
+      if (outcome === 'downloaded') setNotice('分享图已生成，已开始下载（当前环境不支持系统分享面板）')
     } catch (e) {
       setError(describe(e))
+    } finally {
+      setSharing(false)
+    }
+  }
+
+  const resetSession = async () => {
+    if (!active) return
+    setActionsOpen(false)
+    await api.resetSession(active.id)
+    await openConversation(active.id)
+  }
+
+  const removeConversation = async () => {
+    if (!active) return
+    setActionsOpen(false)
+    if (!confirm(`删除对话「${active.title}」？`)) return
+    try {
+      await api.deleteConversation(active.id)
+    } catch (e) {
+      setError(describe(e))
+      return
+    }
+    selfDeletedRef.current = active.id
+    setError(null)
+    setSyncError(null)
+    setAttachments([])
+    notifyConversationsChanged()
+    // 回到 /chat：由它自动进入剩下的最近一次对话（一条都没有时给空状态）。
+    navigate('/chat', { replace: true })
+  }
+
+  const copyWorkspace = async () => {
+    setActionsOpen(false)
+    if (!active?.workspace_dir) return
+    try {
+      await navigator.clipboard.writeText(active.workspace_dir)
+    } catch {
+      // 剪贴板在非 https/无权限时会失败：明确告诉用户改用手动复制，不要静默无反应。
+      setError('复制失败：请手动选中工作目录再复制')
     }
   }
 
@@ -215,37 +368,6 @@ export function ChatPage() {
 
   return (
     <div className="chat-shell">
-      <aside className="chat-list">
-        <button className="btn primary" style={{ justifyContent: 'center' }} onClick={() => setPickerOpen(true)}>
-          + 新建对话
-        </button>
-        {conversations.map((conversation) => {
-          const isActive = conversation.id === active?.id || conversation.id === conversationId
-          return (
-            <div
-              key={conversation.id}
-              className={`chat-item${isActive ? ' active' : ''}`}
-              onClick={() => navigate(`/chat/${conversation.id}`)}
-            >
-              <div className="chat-item-title">
-                {conversation.role_avatar} {conversation.title}
-              </div>
-              <div className="chat-item-meta">
-                <span>{conversation.role_name}</span>
-                <span>·</span>
-                <span>{conversation.message_count} 条</span>
-                <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
-              </div>
-            </div>
-          )
-        })}
-        {conversations.length === 0 && (
-          <p className="dim small" style={{ padding: '14px 8px', lineHeight: 1.6 }}>
-            还没有对话。先在「角色」页创建一个角色，再回到这里开始聊天。
-          </p>
-        )}
-      </aside>
-
       <section className="chat-pane">
         {active ? (
           <>
@@ -258,43 +380,35 @@ export function ChatPage() {
                 </div>
               </div>
               <div className="spacer" style={{ flex: 1 }} />
-              <div className="row" style={{ gap: 6 }}>
-                <button
-                  className="btn sm"
-                  onClick={() => void send('', true)}
-                  disabled={busy || messages.length === 0}
-                  title="用当前角色配置重新生成最后一条回复"
-                >
-                  ↻ 重新生成
-                </button>
-                <button
-                  className="btn sm"
-                  onClick={async () => {
-                    await api.resetSession(active.id)
-                    await openConversation(active.id)
-                  }}
-                  disabled={busy || !active.session_id}
-                  title="丢弃智能体侧的会话记忆，下一轮从零开始"
-                >
-                  ⟲ 重置记忆
-                </button>
-                <button
-                  className="btn sm danger"
-                  onClick={async () => {
-                    if (!confirm(`删除对话「${active.title}」？`)) return
-                    await api.deleteConversation(active.id)
-                    const list = await loadConversations()
-                    if (list.length > 0) navigate(`/chat/${list[0].id}`)
-                    else {
-                      setActive(null)
-                      setMessages([])
-                      navigate('/chat')
-                    }
-                  }}
-                >
-                  删除
-                </button>
-              </div>
+              <button
+                className="icon-btn"
+                onClick={() => void shareChat()}
+                disabled={messages.length === 0 || sharing}
+                aria-label="分享对话"
+                title="把这段对话生成长图分享出去"
+              >
+                <ShareIcon size={18} />
+              </button>
+              <button
+                className={`icon-btn${speech.enabled ? ' on' : ''}`}
+                onClick={() => {
+                  const next = !speech.enabled
+                  speech.setEnabled(next)
+                  setNotice(next ? '朗读已开启：新回复会自动念出来' : '朗读已关闭')
+                }}
+                disabled={!speech.supported}
+                aria-pressed={speech.enabled}
+                aria-label={speech.enabled ? '关闭朗读' : '开启朗读'}
+                title={
+                  !speech.supported
+                    ? '当前浏览器不支持朗读，可用系统自带的读屏'
+                    : speech.enabled
+                      ? '朗读已开启：新回复会自动念出来，点一下关闭'
+                      : '朗读已关闭：点一下开启，新回复会自动念出来'
+                }
+              >
+                <SpeakerIcon on={speech.enabled} size={18} />
+              </button>
             </div>
 
             <div className="chat-scroll" ref={scrollRef}>
@@ -313,9 +427,15 @@ export function ChatPage() {
               />
             </div>
 
-            {error && (
+            {(error ?? syncError) && (
               <div style={{ padding: '0 26px' }}>
-                <div className="banner err">{error}</div>
+                <div className="banner err">{error ?? syncError}</div>
+              </div>
+            )}
+
+            {notice && (
+              <div style={{ padding: '0 26px' }}>
+                <div className="banner info">{notice}</div>
               </div>
             )}
 
@@ -325,128 +445,102 @@ export function ChatPage() {
               </div>
             )}
 
-            <div className="composer">
-              <div className="composer-inner">
-                <div className="composer-box">
-                  <textarea
-                    ref={textareaRef}
-                    rows={1}
-                    value={draft}
-                    placeholder={
-                      remoteRunning
-                        ? '另一台设备正在运行…'
-                        : busy
-                          ? '智能体正在工作…'
-                          : `发消息给 ${active.role_name}（Enter 发送，Shift+Enter 换行）`
-                    }
-                    onChange={(e) => {
-                      setDraft(e.target.value)
-                      const node = e.target
-                      node.style.height = 'auto'
-                      node.style.height = `${Math.min(node.scrollHeight, 220)}px`
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                        e.preventDefault()
-                        if (!busy && !remoteRunning) void send(draft)
-                      }
-                    }}
-                    disabled={busy || remoteRunning}
-                  />
-                  {busy ? (
-                    <button className="btn danger" onClick={() => void stop()}>
-                      ■ 停止
-                    </button>
-                  ) : (
-                    <button className="btn primary" onClick={() => void send(draft)} disabled={!draft.trim() || remoteRunning}>
-                      发送 ↵
-                    </button>
-                  )}
-                </div>
-                {usageSummary.messages > 0 && (
-                  <div className="usage-bar" title="整段对话累计消耗">
-                    <span className="usage-tag">本对话消耗</span>
-                    <span className="usage-item">
-                      <span className="usage-label">读取</span>
-                      <span className="usage-value">{usageSummary.input.toLocaleString()}</span>
-                      <span className="usage-unit">tok</span>
-                    </span>
-                    <span className="usage-item">
-                      <span className="usage-label">输出</span>
-                      <span className="usage-value">{usageSummary.output.toLocaleString()}</span>
-                      <span className="usage-unit">tok</span>
-                    </span>
-                    <span className="usage-item">
-                      <span className="usage-label">总计</span>
-                      <span className="usage-value">{usageSummary.total.toLocaleString()}</span>
-                      <span className="usage-unit">tok</span>
-                    </span>
-                    <span className="usage-item">
-                      <span className="usage-label">缓存命中</span>
-                      <span className="usage-value">
-                        {usageSummary.cacheRatio === null
-                          ? '—'
-                          : `${Math.round(usageSummary.cacheRatio * 100)}%`}
-                      </span>
-                    </span>
-                    {usageSummary.cacheRead > 0 && (
-                      <span className="usage-item usage-muted">
-                        <span className="usage-label">命中缓存</span>
-                        <span className="usage-value">{usageSummary.cacheRead.toLocaleString()}</span>
-                        <span className="usage-unit">tok</span>
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                <div className="composer-hint">
-                  <span>
-                    {active.agent_name} · {active.session_id ? '续用智能体会话' : '新建智能体会话'}
-                  </span>
-                  <span>所有输出都会写回工作目录</span>
-                </div>
+            <div className="chat-composer">
+              <div className="chat-composer-inner">
+                <Composer
+                  value={draft}
+                  onChange={setDraft}
+                  onSend={() => void send(draft)}
+                  attachments={attachments}
+                  onAttachmentsChange={setAttachments}
+                  onUpload={uploadAttachment}
+                  onStop={() => void stop()}
+                  busy={busy}
+                  disabled={remoteRunning}
+                  submitOnEnter
+                  inputRef={inputRef}
+                  onNotice={setError}
+                  inputLabel={`发消息给 ${active.role_name}`}
+                  header={
+                    usageSummary.messages > 0 ? (
+                      <div className="usage-bar" title="整段对话累计消耗">
+                        <span className="usage-tag">本对话消耗</span>
+                        <span className="usage-item">
+                          <span className="usage-label">读取</span>
+                          <span className="usage-value">{usageSummary.input.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">输出</span>
+                          <span className="usage-value">{usageSummary.output.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">总计</span>
+                          <span className="usage-value">{usageSummary.total.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">缓存命中</span>
+                          <span className="usage-value">
+                            {usageSummary.cacheRatio === null
+                              ? '—'
+                              : `${Math.round(usageSummary.cacheRatio * 100)}%`}
+                          </span>
+                        </span>
+                        {usageSummary.cacheRead > 0 && (
+                          <span className="usage-item usage-muted">
+                            <span className="usage-label">命中缓存</span>
+                            <span className="usage-value">{usageSummary.cacheRead.toLocaleString()}</span>
+                            <span className="usage-unit">tok</span>
+                          </span>
+                        )}
+                      </div>
+                    ) : null
+                  }
+                />
               </div>
             </div>
           </>
         ) : (
           <div className="empty" style={{ margin: 'auto' }}>
             <div className="empty-icon">💬</div>
-            <p>选择一个对话，或新建一个</p>
-            <button className="btn primary" style={{ marginTop: 14 }} onClick={() => setPickerOpen(true)}>
-              + 新建对话
-            </button>
+            <p>在左侧选一条对话，或点「＋ 新建对话」开始</p>
           </div>
         )}
       </section>
 
-      {pickerOpen && (
+      {actionsOpen && active && (
         <Modal
-          title="选择角色开始对话"
-          onClose={() => setPickerOpen(false)}
+          title={`「${active.title}」的操作`}
+          onClose={() => setActionsOpen(false)}
           footer={
-            <button className="btn ghost" onClick={() => setPickerOpen(false)}>
-              取消
+            <button className="btn ghost" onClick={() => setActionsOpen(false)}>
+              关闭
             </button>
           }
         >
-          {roles.length === 0 ? (
-            <div className="banner info">还没有角色。请先到「角色」页创建：角色 = 人格设定 + 绑定的智能体。</div>
-          ) : (
-            <div className="stack" style={{ gap: 8 }}>
-              {roles.map((role) => (
-                <div key={role.id} className="agent-type-row" onClick={() => void createConversation(role.id)}>
-                  <div className="avatar">{role.avatar}</div>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="agent-type-name">{role.name}</div>
-                    <div className="agent-type-desc">
-                      {role.agent_name} · {role.tagline ?? '无备注'}
-                    </div>
-                  </div>
-                  <span className="pill">开始</span>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="stack" style={{ gap: 8 }}>
+            <button
+              className="btn"
+              disabled={busy || remoteRunning || messages.length === 0}
+              onClick={() => {
+                setActionsOpen(false)
+                void send('', true)
+              }}
+            >
+              ↻ 重新生成最后一条回复
+            </button>
+            <button className="btn" disabled={busy || !active.session_id} onClick={() => void resetSession()}>
+              ⟲ 重置智能体记忆
+            </button>
+            <button className="btn" disabled={!active.workspace_dir} onClick={() => void copyWorkspace()}>
+              📋 复制工作目录
+            </button>
+            <button className="btn danger" onClick={() => void removeConversation()}>
+              删除这个对话
+            </button>
+          </div>
         </Modal>
       )}
     </div>

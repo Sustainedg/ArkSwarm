@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../../lib/types'
+import { RefreshIcon } from '../../components/Icons'
 import { KernelLogo } from '../../components/KernelLogo'
 import { MobileAgentSettings } from '../components/MobileAgentSettings'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
-import { describeError } from '../util'
+import { describeError, relativeTime } from '../util'
 
 const ACTION_LABELS: Record<RuntimeAction, string> = {
   install: '安装',
@@ -38,6 +39,7 @@ export function MobileRuntimesPage() {
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
@@ -58,11 +60,42 @@ export function MobileRuntimesPage() {
     }
   }
 
+  /** 强制重测一个运行时（后端把结果写回缓存，界面直接用新值覆盖）。 */
+  const refreshStatus = async (runtime: AgentRuntime) => {
+    setRefreshing((prev) => ({ ...prev, [runtime.id]: true }))
+    try {
+      const status = await api.refreshRuntime(runtime.id)
+      setRuntimes((prev) =>
+        prev.map((item) =>
+          item.id === runtime.id
+            ? {
+                ...item,
+                provisioning: {
+                  ...item.provisioning,
+                  installed: status.installed,
+                  version: status.version ?? null,
+                  path: status.installed ? status.detail ?? null : null,
+                  checked_at: status.checked_at ?? null,
+                },
+              }
+            : item,
+        ),
+      )
+      setError(null)
+    } catch (e) {
+      setError(describeError(e))
+    } finally {
+      setRefreshing((prev) => ({ ...prev, [runtime.id]: false }))
+    }
+  }
+
   const reload = async () => {
     try {
       const items = await api.listRuntimes()
       setRuntimes(items)
       setError(null)
+      // 「检查更新」是每个内核一次远端查询，不能挡住首屏：卡片先出来，结果到了再补。
+      setLoading(false)
       await Promise.all(items.map((item) => checkLatest(item)))
     } catch (e) {
       setError(describeError(e))
@@ -135,6 +168,8 @@ export function MobileRuntimesPage() {
               // 查到更高版本才提示「更新到 X」；已经是最新版就不给更新入口。
               // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
               const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
+              // 远端最新版本与本机一致时，在版本号旁边挂一个「已是最新」。
+              const upToDate = Boolean(remote && current && versionCore(remote) === current)
               const showUpdate =
                 managed &&
                 provisioning.installed &&
@@ -147,8 +182,22 @@ export function MobileRuntimesPage() {
                     <KernelLogo logo={runtime.logo} />
                     <div className="m-item-main">
                       <div className="m-item-title">{runtime.name}</div>
-                      <div className="m-item-sub">{kernelSummary(runtime, current)}</div>
+                      <div className="m-item-sub runtime-sub">
+                        <span>{kernelSummary(runtime, current)}</span>
+                        {upToDate && <span className="pill ok">已是最新</span>}
+                      </div>
+                      <div className="dim small">{detectedLabel(provisioning.checked_at)}</div>
                     </div>
+                    {/* 「重新检测」收成右上角一个小图标（状态本来就带缓存，偶尔点一次） */}
+                    <button
+                      className="m-icon-btn"
+                      onClick={() => void refreshStatus(runtime)}
+                      disabled={Boolean(refreshing[runtime.id]) || busy}
+                      aria-label="重新检测"
+                      title="重新检测安装状态与版本"
+                    >
+                      <RefreshIcon size={17} className={refreshing[runtime.id] ? 'm-spin' : undefined} />
+                    </button>
                   </div>
 
                   {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
@@ -256,6 +305,12 @@ function kernelSummary(runtime: AgentRuntime, current: string | null): string {
     return `${runtime.vendor} · ${runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}`
   }
   return provisioning.installed && current ? `${runtime.vendor} · 当前版本 ${current}` : `${runtime.vendor} · 未安装`
+}
+
+/** 「检测于 …」：安装状态由后端缓存 + 定时检测，不是每次打开页面实时探的。 */
+function detectedLabel(checkedAt: string | null | undefined): string {
+  const text = relativeTime(checkedAt)
+  return text ? `检测于 ${text}` : '尚未检测'
 }
 
 /** 从版本字符串里抽出可比较的核心版本号（`2.1.316 (Claude Code)` → `2.1.316`）。 */

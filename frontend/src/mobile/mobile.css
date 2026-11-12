@@ -126,7 +126,7 @@
 
 /* 半透明玻璃面板：深色是「深紫叠在深底上」，浅色换成「白叠在浅底上」 */
 [data-theme='light'] .m-topbar { background: rgba(255, 255, 255, 0.92); }
-[data-theme='light'] .m-composer { background: rgba(255, 255, 255, 0.96); }
+[data-theme='light'] .composer { background: rgba(255, 255, 255, 0.96); }
 [data-theme='light'] .m-drawer-backdrop,
 [data-theme='light'] .m-sheet-backdrop { background: rgba(37, 31, 68, 0.42); }
 
@@ -150,7 +150,7 @@
 [data-theme='light'] .banner.info { color: var(--accent); }
 [data-theme='light'] .m-board-note.ok { color: #15803d; }
 /* 录音中的麦克风：深色下是白字压在红底上，浅色底上要用深红 */
-[data-theme='light'] .m-tool-btn.on { color: #b3261e; }
+[data-theme='light'] .composer-tool.on { color: #b3261e; }
 
 [data-theme='light'] .avatar.user { background: linear-gradient(135deg, #ded8f5, #c8c1e6); }
 [data-theme='light'] .m-arch-frame { background: #f4f3fa; }
@@ -807,8 +807,7 @@ code, pre, .mono { font-family: var(--mono); }
 .m-collab-running-bar { display: flex; align-items: center; gap: 10px; }
 .m-collab-running-bar .dim { flex: 1; line-height: 1.5; }
 /* 输入框上方的那一条状态（需要拍板 / 正在推进 / 可以继续推进）：只在有事要说时出现，
-   平时底部就只有那个输入框。 */
-.m-composer-head { display: flex; flex-direction: column; gap: 7px; padding-bottom: 8px; }
+   平时底部就只有那个输入框（.composer-head 的具体样式在共享块里）。 */
 /* 发送模式切换：一个按钮在「普通对话」与「推进任务」之间来回切；右边一句当前模式说明。 */
 .m-mode-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .m-mode-toggle {
@@ -833,7 +832,7 @@ code, pre, .mono { font-family: var(--mono); }
 .m-sheet-body.m-run-chat-body { overflow: hidden; min-height: 0; padding: 0; gap: 0; }
 .m-run-chat-thread { flex: 1; min-height: 0; }
 /* 弹层贴屏幕底边，输入区要自己让开 Home 条 */
-.m-run-chat-body .m-composer { padding-bottom: calc(6px + var(--safe-bottom)); }
+.m-run-chat-body .composer { padding-bottom: calc(6px + var(--safe-bottom)); }
 
 .m-sheet-body.m-collab-role-body { overflow: hidden; min-height: 0; gap: 10px; }
 .m-collab-role-meta { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -948,60 +947,67 @@ code, pre, .mono { font-family: var(--mono); }
 .md-code-copy { margin-left: auto; background: none; border: none; color: var(--brand); font-size: 11.5px; cursor: pointer; padding: 2px 6px; }
 .md-code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 12px; line-height: 1.6; }
 
-/* ---------- 对话：输入区 ---------- */
-/* 输入区就贴着屏幕最下边，只留 6px 收边：
-   - 底部安全区**不照搬**。iOS 独立应用里 `env(safe-area-inset-bottom)` 是 34px，而 Home 条
-     本身只占 ~13px，照搬会在输入框下面留出一整条空白（用户看到的「没到底」）；
-   - 输入区底色一直铺到屏幕底边，安全区里也不会露出页面底色。 */
-.m-composer {
-  flex: none; border-top: 1px solid var(--border); background: rgba(18, 17, 28, 0.96);
-  padding: 8px 10px 6px;
-}
-/* 输入框本身就是那个「框」：附件 / 语音在左，发送 / 停止在右，都长在框里面。
-   图标是内联 SVG（见 components/MobileIcons.tsx）：各系统 emoji 大小不一，📎 在 iOS 上尤其大。 */
-.m-composer-box {
+/* ================= 输入区：一个框 + 框里的线条图标（两端共用这一份）================= */
+/* 框里依次是：附件 / 语音、输入框、发送（运行中变成停止）；框上方可以插一条说明
+   （token 用量、协作状态…）。图标是内联 SVG（见 components/Icons.tsx）：各系统 emoji
+   大小不一，📎 在 iOS 上尤其大 —— 这一份两端共用，改样式记得两边同步。 */
+.composer { display: flex; flex-direction: column; }
+.composer-head { display: flex; flex-direction: column; gap: 7px; padding-bottom: 8px; }
+/* 输入框本身就是那个「框」：附件 / 语音在左，发送 / 停止在右，都长在框里面。 */
+.composer-box {
   display: flex; align-items: flex-end; gap: 2px;
   padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-input);
 }
-.m-composer-box:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
-.m-composer textarea {
+.composer-box:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.composer textarea {
   flex: 1; min-width: 0; background: none; border: none; border-radius: var(--radius);
   padding: 10px 4px; color: var(--text); font-size: 16px; line-height: 1.5; resize: none; outline: none;
-  max-height: 34vh; max-height: 34dvh; min-height: 42px;
+  min-height: 42px; max-height: 160px;
 }
-.m-composer textarea:disabled { color: var(--text-dim); }
-/* 框内的工具按钮：附件 / 语音 / 发送 / 停止 */
-.m-tool-btn {
+.composer textarea:disabled { color: var(--text-dim); }
+.composer-tool {
   flex: none; width: 34px; height: 34px; border-radius: 11px; border: 1px solid transparent;
   background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer;
   display: grid; place-items: center;
 }
 /* 环境不支持语音输入时把麦克风压暗（仍可点击，点了给中文说明） */
-.m-tool-btn.muted { opacity: 0.5; }
-.m-tool-spin { display: inline-block; animation: m-spin 1s linear infinite; }
-@keyframes m-spin { to { transform: rotate(360deg); } }
-.m-tool-btn:active:not(:disabled) { background: var(--bg-hover); }
-.m-tool-btn:disabled { opacity: 0.4; }
-.m-tool-btn.on {
+.composer-tool.muted { opacity: 0.5; }
+.composer-tool-spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.composer-tool:active:not(:disabled) { background: var(--bg-hover); }
+.composer-tool:disabled { opacity: 0.4; }
+.composer-tool.on {
   color: #fff; background: rgba(248, 113, 113, 0.22); border-color: rgba(248, 113, 113, 0.5);
-  animation: m-recording 1.6s ease-in-out infinite;
+  animation: composer-recording 1.6s ease-in-out infinite;
 }
 /* 发送 / 停止：框内右侧那一个图标按钮 */
-.m-tool-btn.send { color: #fff; background: var(--brand); font-size: 15px; }
-.m-tool-btn.send:disabled { background: var(--bg-hover); color: var(--text-dim); }
-.m-tool-btn.stop { color: #fff; background: var(--danger); font-size: 13px; }
-@keyframes m-recording { 50% { opacity: 0.5; } }
+.composer-tool.send { color: #fff; background: var(--brand); font-size: 15px; }
+.composer-tool.send:disabled { background: var(--bg-hover); color: var(--text-dim); }
+.composer-tool.stop { color: #fff; background: var(--danger); font-size: 13px; }
+@keyframes composer-recording { 50% { opacity: 0.5; } }
 /* 待发送的附件：横向滚动的一排胶囊，避免长文件名把输入区撑高 */
-.m-attach-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
-.m-attach-chip {
+.composer-attach-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+.composer-attach-chip {
   flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   padding: 5px 8px 5px 10px; border-radius: 999px;
   border: 1px solid var(--border-strong); background: var(--bg-input);
   font-size: 11.5px; color: var(--text-muted);
 }
-.m-attach-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.m-attach-chip button { flex: none; padding: 0 2px; border: none; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.composer-attach-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-attach-chip button { flex: none; padding: 0 2px; border: none; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+
+/* ---------- 移动端：输入区贴着屏幕最下边 ---------- */
+/* 只留 6px 收边，底部安全区**不照搬**：iOS 独立应用里 `env(safe-area-inset-bottom)` 是 34px，
+   而 Home 条本身只占 ~13px，照搬会在输入框下面留出一整条空白（用户看到的「没到底」）；
+   底色一直铺到屏幕底边，安全区里也不会露出页面底色。 */
+.composer {
+  flex: none; border-top: 1px solid var(--border); background: rgba(18, 17, 28, 0.96);
+  padding: 8px 10px 6px;
+}
+/* 输入框高度上限按可视视口算：小屏上别让输入区把整屏吃掉 */
+.composer textarea { max-height: 34vh; max-height: 34dvh; }
+
 /* token 用量在输入框上方（贴底的是输入框） */
 .m-usage { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); margin-bottom: 7px; flex-wrap: wrap; }
 .m-usage b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -1415,6 +1421,10 @@ code, pre, .mono { font-family: var(--mono); }
   mask-size: contain;
 }
 .runtime-head { display: flex; align-items: center; gap: 10px; }
+/* 版本号那一行：后面可以挂一个「已是最新」，「重新检测」的图标在卡片右上角 */
+.runtime-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 图标转起来 = 正在检测（与输入区那个加载圈同一个动画） */
+.m-spin { display: inline-block; animation: spin 1s linear infinite; }
 .runtime-log {
   margin: 0; padding: 12px 13px; max-height: 58vh; overflow: auto;
   background: #0e0d17; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);

@@ -250,13 +250,15 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
   `env(safe-area-inset-bottom)` 是 34px，而 Home 条本身只占 ~13px，照搬会在输入框下面留出一条
   空白（「界面底部空出一截」）；现在只留 6px 收边，并给 `html` 铺主题底色。输入框本身就是那个
   「框」：附件 / 语音在框内左侧，发送 / 停止在框内右侧，**不要**再写背景提示文字。
-- **输入区 / 顶栏的图标是线条 SVG**：`mobile/components/MobileIcons.tsx`（`stroke="currentColor"`，
+- **输入区 / 顶栏的图标是线条 SVG**：`components/Icons.tsx`（两端共用，`stroke="currentColor"`，
   尺寸走 `size`）。各系统的 emoji 字体大小、粗细都不一样（📎 在 iOS 上尤其大），一排小图标永远
   对不齐，也不跟主题换色；这类「要跟文字同色的操作图标」**不要**再用 emoji，新的就往这个文件里加。
   （抽屉导航、空状态里那种大号装饰性图标仍可用 emoji。）
-- **输入区只有一份**：`mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 / 发送都
+- **输入区只有一份**：`components/Composer.tsx`（两端共用，受控：草稿 / 附件 / 上传 / 发送都
   由页面给）。对话页与协作运行页（含聊天弹层）都用它，**不要**再各写一个输入框 —— 两处的交互与
-  样式必须完全一致。附件与语音的提示通过 `onNotice` 回给页面，输入框不自己弹东西。页面自己的
+  样式必须完全一致（样式仍是两端各一份：共享段逐字一致，有守卫测试
+  `tests/test_mobile_web.py::test_composer_styles_are_identical_on_both_ends`）。
+  附件与语音的提示通过 `onNotice` 回给页面，输入框不自己弹东西。页面自己的
   语义（协作的模式切换按钮、状态条）走 `header` 插槽传进去；要允许空发送就开
   `allowEmptySend`（别为这类差异复制一份输入区，也别把页面语义塞进组件）。
 - **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，

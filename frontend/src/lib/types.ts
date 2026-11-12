@@ -29,6 +29,8 @@ export interface Availability {
   installed: boolean
   version?: string | null
   detail?: string | null
+  /** 这份结论的检测时间（框架缓存的，ISO 字符串；实时探测与从未检测时为 null） */
+  checked_at?: string | null
 }
 
 /** 运行时维护动作：安装 / 更新 / 卸载。 */
@@ -54,6 +56,12 @@ export interface RuntimeProvisioning {
   version?: string | null
   /** 已安装时的可执行文件路径 */
   path?: string | null
+  /**
+   * 这份安装状态的检测时间（ISO 字符串）。
+   * 可用性由后端缓存并定时检测（每天定点 + 启动补齐 + 安装后重测），
+   * 所以卡片上可以直接写「检测于 …」，而不是每次打开页面去跑一遍 `内核 --version`。
+   */
+  checked_at?: string | null
 }
 
 /** 一个智能体运行时（某个 CLI 内核在本机的那份可执行文件）。 */
@@ -205,6 +213,13 @@ export interface SkillRescanResult {
   updated: number
   missing: number
   total: number
+}
+
+/** 单条对话的完整读取结果：对话本身 + 全部消息 + 正在跑的那次运行（若有）。 */
+export interface ConversationDetail {
+  conversation: Conversation
+  messages: Message[]
+  active_run: unknown
 }
 
 export interface Conversation {
