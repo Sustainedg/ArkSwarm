@@ -18,7 +18,7 @@
 ## 2. 一次运行的完整时序
 
 ```
-前端  POST /api/conversations/{id}/messages  {content}
+前端  POST /api/conversations/{id}/messages  {content, attachments}
  │
  ├─ api/conversations.send_message()
  │    └─ service.prepare_run()
@@ -28,6 +28,7 @@
  │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接
  │         │    不支持 session → 回放数据库里的最近 N 轮（transcript）
  │         │    无原生人格   → 把 system prompt 折进 prompt
+ │         ├─ 附件（可选）：先 POST /{id}/attachments 存进工作目录，这里把相对路径并进 prompt
  │         ├─ 落库 user message + 占位 assistant message(status=streaming)
  │         ├─ 自动为首轮对话生成标题
  │         └─ registry.register() 生成 run_id（供取消/追踪）
@@ -68,7 +69,7 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
            └─ ctx.prompt = prompt.build_step_prompt(...) # 只含工单字段与 gist 摘要
       └─ runner.stream_run(ctx) → AgentEvent → 累积 → 解析 work_order → 更新工单 → 交给下一个岗位
       └─ 根工单收尾 → 交回入口角色做一次收尾汇报（附全流程工单汇总）→ 结论回到用户那条主会话
-      └─ 入口角色聊天（并行）→ prepare_chat() → 只读工单快照 + 最近聊天 → 独立 chat_bus 推给用户
+      └─ 入口角色聊天（并行）→ prepare_chat() → 只读工单快照 + 最近聊天（+ 附件路径）→ 独立 chat_bus 推给用户
 ```
 
 协作域使用自有的信封协议 `collab.*`（`app/collab/protocol.py`），与下面的智能体事件协议**分属两层**，
@@ -80,7 +81,7 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
 | --- | --- | --- |
 | `run.started` | `payload.run_id` | 建立运行标识 |
 | `message.delta` | `text` | 正文增量 |
-| `thinking.delta` | `text` | 推理增量（DeepSeek `reasoning_content`、Claude thinking） |
+| `thinking.delta` | `text` | 推理增量（如 `reasoning_content`、Claude thinking） |
 | `tool.call` | `name`, `call_id`, `payload.input` | 工具调用 |
 | `tool.result` | `call_id`, `payload.output`, `payload.is_error` | 工具结果 |
 | `usage` | 任意数值 | token / 费用 / 耗时 |
@@ -120,6 +121,7 @@ class AgentDefinition(ABC):
     def discover_skills() -> list[SkillSpec]     # 技能：本内核的技能根（只读扫描）
     def skill_mount(ctx) -> SkillMount | None    # 技能：把分配到的技能物化到哪里
 
+    logo                                          # 官方 Logo（/icons/kernels/*.svg，前端当遮罩染色）
     provisioner                                   # 运行时：如何安装 / 更新 / 卸载本内核
 ```
 
@@ -140,8 +142,16 @@ class AgentDefinition(ABC):
 
 ### 4.1 运行时管理（安装 / 更新 / 卸载）
 
-「运行时」= 某个 CLI 适配器依赖的**本机可执行文件**。界面上的「运行时」页列出每个运行时
-的安装状态、当前版本、安装位置与有多少实例在用它，并可直接安装 / 更新 / 卸载 / 检查更新。
+「运行时」= 某个 CLI 适配器依赖的**本机可执行文件**。界面上的「运行时」页每张卡片只留
+**官方 Logo + 内核名 + 所属公司 + 当前版本**（其余信息收进按钮后面的动作里），并可直接
+安装 / 更新 / 卸载 / 检查更新：
+
+- **Logo 由适配器声明**（`AgentDefinition.logo` 指向 `/icons/kernels/*.svg`），前端用
+  `components/KernelLogo.tsx` 把它当遮罩染成当前文字色 —— 深浅两套外观共用一份单色图形，
+  不必为每个内核准备两张图。前端**不**按 `type_id` 写映射（铁律 1）。
+- **已经是最新版就不给「更新」按钮**：界面先查一次最新版本，只有确实更高才显示
+  「更新到 <版本>」；查不到（该适配器没声明 `latest_argv`、查询失败或还没查）时保留普通
+  「更新」，免得用户失去升级手段。
 
 和技能一样，**「用哪个包管理器、包名叫什么、装到哪儿」是适配器的知识**：适配器声明
 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…, update_argv=…,
@@ -158,8 +168,8 @@ uninstall_argv=…, latest_argv=…)`，框架（`runtime/provisioning.py`）只
 - `provision.*` 是安装器**自有的信封**（`provision.started / provision.output /
   provision.finished`），与协作域的 `collab.*` 同理，**不是**适配器事件协议，
   因此不参与铁律 5 的四处同步。
-- 未声明 `provisioner` 的适配器（进程内 API 内核、`custom-cli`）在界面上标成「进程内 / 自备」，
-  平台不代管它们的环境。卸载属于破坏性操作，接口要求显式 `confirm`。
+- 未声明 `provisioner` 的适配器（进程内 API 内核、`custom-cli`）卡片副标题写明
+  「进程内运行」/「自备可执行文件」，平台不代管它们的环境。卸载属于破坏性操作，接口要求显式 `confirm`。
 
 ## 5. 技能（Skill）
 
@@ -286,8 +296,8 @@ frontend/
     ├── App.tsx · pages/ · components/ · index.css    # 桌面端
     └── mobile/                                       # 移动端（独立页面与样式表）
         ├── main.tsx · MobileApp.tsx · mobile.css
-        ├── components/（底部 Tab · 顶栏 · 底部弹层）
-        └── pages/（对话列表 · 对话 · 角色 · 智能体 · 技能 · 协作 · 设置）
+        ├── components/（顶栏 · 左侧抽屉 · 底部弹层）
+        └── pages/（对话 · 角色 · 智能体 · 技能 · 协作 · 设置）
 ```
 
 - **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
@@ -310,6 +320,60 @@ frontend/
   动过入口 HTML / 样式表 / 构建产物就 +1 —— 已安装的独立应用才会在下次打开时换掉旧外壳。
   独立应用没有地址栏也没有刷新按钮，因此设置页提供了「更新到最新版本」（`pwa.ts:refreshShell()`：
   注销 SW、清掉 `magenta-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
+- **移动端没有底部 Tab，只有左侧抽屉**：打开就是聊天界面（`/chat` 自动进入最近一次对话，
+  一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
+  （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 角色 / 协作组 / 技能 / 设置，
+  与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选角色开聊）。
+  抽屉由 `MobileApp` 统一持有，任何顶级页面的顶栏默认就是那个 logo 按钮（`MobileTopBar`
+  在没有 `onBack` 时自动渲染），子页面仍是返回箭头。
+  两端的对话列表项都显示时间：今天只显示 `14:23`，其余显示日期 + 时间（口径统一在 `lib/datetime.ts`）。
+  抽屉里每个对话行右侧的「⋯」是会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）的入口：
+  它只把路由 state（`openActions`）交给聊天页，由聊天页弹面板 —— 那几件事要用到消息与会话状态。
+- **朗读（语音合成）**：开关在对话页顶栏右上角（原有「⋯ 更多操作」的位置），**默认关闭**，
+  开启后新回复会被念出来（`lib/tts.ts`：Markdown 先转纯文本，长文按句读切段排队，新输出打断旧的
+  一条；开关存 `localStorage['magenta.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
+  `messages` 的效果里，所以另一台设备写入、由 `useAutoRefresh` 拉回来的回复同样会念；iOS 两个坑
+  一起处理：首次发声在点开关的手势里 `unlockSpeech()` 解锁，打断旧的一条时 `cancel()` 与 `speak()`
+  分开两轮执行。
+- **分享成长图**：对话页顶栏的分享按钮把当前对话（标题 + 气泡 + 代码块 + 页脚）用 Canvas 画成
+  一张长图（`lib/shareImage.ts`，不引第三方依赖），优先交系统分享面板（`navigator.share({files})`），
+  不支持就退回下载；过长时整体降采样，避免撞上 iOS 的画布面积上限。
+- **智能体设置并入运行时**：移动端不再有独立的智能体配置页（`/agents` 已取消）。一个内核 = 一份
+  安装 + N 份配置，运行时页每张卡片的「设置」打开 `MobileAgentSettings`，在里面增删改该内核的
+  智能体实例（网关 · 密钥 · 模型 · 适配器选项，选项仍由 `DynamicForm` 渲染）。
+- **移动端设置页**只留「外观 / 配置 / 更多」三节：运行概览、版本记录这类信息看桌面端即可；
+  「更新到最新版本」（自助清缓存重载）保留在「更多」里 —— 独立应用没有刷新按钮。
+- **移动端输入框**：附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词只有一份）；
+  先 `POST /api/conversations/{id}/attachments` 落到对话工作目录的 `attachments/`（内容走 base64，
+  省掉 multipart 依赖），发消息时随 `attachments` 一起提交，由 `service.compose_user_content()` 把
+  路径写进用户提示词 —— 与内核无关，任何能读工作目录的智能体都自动支持；单个附件上限 8 MB。
+  协作聊天走同一套：`POST /api/collab/runs/{id}/attachments` + `engine.prepare_chat()` 的
+  `compose_with_attachments()`（只有附件、没有正文也允许）。
+  语音走浏览器的 Web Speech API（`mobile/speech.ts`；不支持时按钮仍显示，点一下给出中文说明），
+  只把识别文字填进草稿。
+  输入区就是屏幕最下面那一块，只留 6px 收边：token 用量在输入框**上方**，底部安全区**不照搬** ——
+  iOS 独立应用里安全区 34px，Home 条本身只占 ~13px，照搬会在输入框下面空出一截；输入区底色一直
+  铺到屏幕底边。附件 / 语音 / 发送（运行中是停止）都是**框内**的图标按钮（线条 SVG，见
+  `mobile/components/MobileIcons.tsx`；emoji 在各系统上大小不一），输入框不再有背景提示文字。
+- **输入区只有一份**：`mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 / 发送都由
+  页面给），对话页与协作运行页（含聊天弹层）共用，交互与样式必须完全一致。
+- **协作运行页 = 一间办公室**：`/m/collab/runs/:id` 主区整屏铺那间可双指缩放 / 单指拖动的等距办公室
+  （`MobileCollabProgress`），时间线与「需要你决定」卡片收进整屏对话弹层 —— **点入口角色工牌**才
+  出来（顶栏不放对话按钮），点其他岗位开只读岗位会话。输入框上方是一个模式按钮：点一下切
+  「推进任务」、再点回「普通对话」。对话走 `/chat`（可带附件），推进走 `/messages`，推进模式下
+  空内容直接发就是 `/resume`；工单正在推进、带着附件、或有待回答的问题时，界面接管模式并置灰按钮。
+  办公室底图有深 / 浅两张（`iso-office.svg` 与
+  `iso-office-light.svg`，同一份几何，`scripts/gen_office_bg.py` 构建期按「反相 + 色相旋转 180°」
+  换算），`CollabOfficeMap` 按当前主题选；工牌 / 图例 / 工具按钮 / 信息卡颜色走 `--office-*`
+  变量，浅色下整间办公室一起变浅。
+- **外观（深色 / 浅色 / 跟随系统）**：两端共用 `lib/theme.ts` —— 模式存在 localStorage 的
+  `magenta.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
+  `meta[name=theme-color]`（状态栏 / Android 系统导航条这些「原生外壳」跟着换色）与 iOS 独立应用的
+  状态栏样式。两个入口 HTML 各有一段等价的内联脚本，在首屏渲染前就把主题定下来（否则浅色用户每次
+  打开都会先闪一下深色外壳）。两份样式表各自的 `:root` 仍是深色默认，浅色只是
+  `[data-theme='light']` 覆盖块（变量 + 少量写死深色的装饰），`html` 也铺主题底色 —— 系统预留或
+  回弹露出的那一条才不会跟页面两个色。「系统架构」是 iframe + srcDoc 的自包含文档，主题由
+  `lib/theme.ts:withDocumentTheme()` 写进它的 `<html>`（`api/architecture_doc.py` 认同一个属性）。
 - **移动端的取舍**：协作域不提供可视化画布（连线需要精确拖拽，手机上体验很差），
   改在「协作组」详情页用**表单**编排：岗位是卡片、连线是「从谁到谁」的下拉选择；
   两端的字段语义、默认值与中文标签共用 `lib/collabDraft.ts` 一份，校验一律走服务端
@@ -318,7 +382,7 @@ frontend/
   `100vh`/`100dvh` 配 `height: 100%` 父链 —— 真机上地址栏与底部工具栏会伸缩，两者高度经常对不齐，
   底栏就会浮起来留一条缝或被工具栏压住。固定定位跟的是可视视口，刘海与 Home 条交给
   `env(safe-area-inset-*)`（守卫测试 `test_mobile_shell_is_pinned_to_the_visible_viewport`）。
-- **移动端锁定缩放**：移动端采用「固定外壳」布局（顶栏 + 底部 Tab + 内部滚动区），随手指缩放会
+- **移动端锁定缩放**：移动端采用「固定外壳」布局（顶栏 + 内部滚动区 + 左侧抽屉），随手指缩放会
   让外壳错位，因此入口视口写 `maximum-scale=1.0, user-scalable=no`，并用 `mobile.css` 的
   `touch-action: pan-x pan-y` 兜底（iOS Safari 自 iOS 10 起忽略 `user-scalable=no`，只有
   `touch-action` 真正生效）。因此移动端输入框字号统一 ≥ 16px —— iOS 聚焦小于 16px 的输入框会

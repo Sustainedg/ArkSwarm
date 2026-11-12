@@ -64,6 +64,8 @@ export interface AgentRuntime {
   description: string
   runtime: 'cli' | 'api'
   docs_url?: string | null
+  /** 官方 Logo 的静态资源路径（后端按适配器声明给出，前端只负责显示） */
+  logo?: string | null
   executable?: string | null
   /** 有多少个智能体实例在用这个运行时 */
   instances: number
@@ -219,6 +221,20 @@ export interface Conversation {
   role_avatar?: string | null
   agent_name?: string | null
   message_count: number
+}
+
+/**
+ * 上传到对话工作目录的附件（`POST /api/conversations/{id}/attachments` 的返回）。
+ * 发送消息时把 `rel_path` 放进 `attachments`，框架会连同路径一起写进提示词。
+ */
+export interface AttachmentRef {
+  /** 落盘后的文件名（已去掉目录成分） */
+  name: string
+  /** 相对工作目录的路径，发送消息时用这个值 */
+  rel_path: string
+  /** 绝对路径（只在界面上展示，供用户复制） */
+  path: string
+  size: number
 }
 
 export interface MessagePart {

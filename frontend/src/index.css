@@ -2,6 +2,9 @@
    Magenta Agents —— 设计变量与基础原语
    ============================================================ */
 :root {
+  /* 外观：深色是默认（浅色看下面的 [data-theme='light']）。color-scheme 决定原生控件、
+     滚动条、下拉框按哪套配色渲染，必须和下面的变量成套。 */
+  color-scheme: dark;
   --bg: #0b0a12;
   --bg-elevated: #12111c;
   --bg-panel: #17162a;
@@ -24,6 +27,25 @@
   --warn: #fbbf24;
   --danger: #f87171;
 
+  /* 协作办公室那张等距插画：深色底图配深色的工牌 / 图例 / 工具按钮。
+     浅色外壳下换成浅色底图（public/office/iso-office-light.svg）与浅色卡片，见下面浅色块。 */
+  --office-canvas: #05040a;
+  --office-card: rgba(19, 18, 32, 0.94);
+  --office-card-edge: #0b0a12;
+  --office-card-face: rgba(255, 255, 255, 0.15);
+  --office-card-ring: rgba(255, 255, 255, 0.08);
+  --office-card-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  --office-lanyard: rgba(255, 255, 255, 0.3);
+  --office-glass: rgba(11, 10, 18, 0.78);
+  --office-tool: rgba(19, 18, 32, 0.92);
+  --office-tool-hover: rgba(45, 41, 76, 0.95);
+  --office-popover: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
+  --office-popover-ring: rgba(123, 92, 255, 0.42);
+  --office-popover-shadow: 0 22px 56px rgba(0, 0, 0, 0.55);
+  --office-chip: rgba(11, 10, 18, 0.5);
+  --office-inset: rgba(255, 255, 255, 0.04);
+  --office-map-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 18px;
@@ -32,9 +54,145 @@
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* ============================================================
+   浅色外观：[data-theme='light']
+   ------------------------------------------------------------
+   主题写在 <html data-theme> 上，由 src/lib/theme.ts 决定（深色 / 浅色 / 跟随系统），
+   入口 HTML 里有一段等价的内联脚本负责首屏防闪。
+   这里先把整套变量换掉，再逐条覆盖那些**写死了深色**的装饰（代码块、半透明玻璃面板、
+   遮罩、品牌色文字、滚动条…）—— 浅色下它们不改就是一块黑。
+   每条选择器都带 `[data-theme='light']` 前缀：多一层属性选择器，优先级高于原规则，
+   所以这一段放在文件前面也压得住后面的原规则（移动端在 mobile.css 里有一份同样的）。
+   注：协作办公室那张等距插画（.office-map / .collab-workdesk-* 等）有两张底图（深 / 浅，
+   同一份几何，见 scripts/gen_office_bg.py），由 CollabOfficeMap 按当前主题选；
+   「系统架构」文档视图另有一套自带配色的文档（见 lib/theme.ts 的 withDocumentTheme）。
+   ============================================================ */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f4f3fa;
+  --bg-elevated: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #eceaf6;
+  --border: #e3dff2;
+  --border-strong: #cac4e3;
+
+  --text: #23203a;
+  --text-muted: #5f5a7c;
+  --text-dim: #8d88a8;
+
+  /* 品牌色在白底上要压深一档才有对比；浅色底（brand-soft）也跟着换成同一支色 */
+  --brand: #b63ba9;
+  --brand-soft: rgba(182, 59, 169, 0.1);
+  --brand-strong: #932a88;
+  --accent: #0e9c85;
+  --accent-soft: rgba(14, 156, 133, 0.1);
+
+  --ok: #16a34a;
+  --warn: #b45309;
+  --danger: #dc2626;
+
+  /* 协作办公室：浅色外壳用浅色底图，工牌 / 图例 / 工具按钮也换成浅色卡片 */
+  --office-canvas: #eef1f8;
+  --office-card: rgba(255, 255, 255, 0.95);
+  --office-card-edge: #ffffff;
+  --office-card-face: rgba(35, 32, 58, 0.09);
+  --office-card-ring: rgba(35, 32, 58, 0.08);
+  --office-card-shadow: 0 8px 18px rgba(58, 48, 96, 0.22);
+  --office-lanyard: rgba(35, 32, 58, 0.22);
+  --office-glass: rgba(255, 255, 255, 0.82);
+  --office-tool: rgba(255, 255, 255, 0.92);
+  --office-tool-hover: rgba(238, 236, 248, 0.98);
+  --office-popover: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 242, 250, 0.98));
+  --office-popover-ring: rgba(123, 92, 255, 0.32);
+  --office-popover-shadow: 0 22px 56px rgba(58, 48, 96, 0.22);
+  --office-chip: rgba(35, 32, 58, 0.06);
+  --office-inset: rgba(255, 255, 255, 0.7);
+  --office-map-shadow: 0 18px 44px rgba(58, 48, 96, 0.16);
+
+  --shadow: 0 18px 48px rgba(37, 31, 68, 0.16);
+}
+
+/* 页面底色：与深色那份同构，只是把两团光晕换成浅色 */
+[data-theme='light'] body {
+  background: radial-gradient(1200px 700px at 12% -8%, #e7e2fb 0%, transparent 55%),
+              radial-gradient(900px 600px at 105% 0%, #dcecf4 0%, transparent 50%),
+              var(--bg);
+}
+
+[data-theme='light'] ::-webkit-scrollbar-thumb { background: #cfc9e3; background-clip: content-box; }
+[data-theme='light'] ::-webkit-scrollbar-thumb:hover { background: #b3aad2; background-clip: content-box; }
+
+/* 半透明玻璃面板：深色是「深紫叠在深底上」，浅色换成「白叠在浅底上」 */
+[data-theme='light'] .sidebar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(243, 241, 252, 0.72));
+}
+[data-theme='light'] .collab-progress-board-head { background: rgba(255, 255, 255, 0.78); }
+[data-theme='light'] .collab-role-panel-head { background: rgba(255, 255, 255, 0.72); }
+[data-theme='light'] .collab-inspector { background: rgba(255, 255, 255, 0.5); }
+[data-theme='light'] .collab-progress-trigger-count { background: rgba(35, 32, 58, 0.06); }
+[data-theme='light'] .modal-backdrop { background: rgba(37, 31, 68, 0.42); }
+[data-theme='light'] .collab-progress-board-backdrop { background: rgba(37, 31, 68, 0.55); }
+[data-theme='light'] .collab-progress-conversation {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 246, 251, 0.98));
+}
+[data-theme='light'] .banner-close:hover { background: rgba(35, 32, 58, 0.06); }
+
+/* 代码 / 终端输出：深色下是近黑的 #0e0d17 */
+[data-theme='light'] .md-code-block,
+[data-theme='light'] .tool-card pre,
+[data-theme='light'] .runtime-log { background: #f7f6fb; }
+[data-theme='light'] .md-code-head { background: rgba(35, 32, 58, 0.03); }
+[data-theme='light'] .markdown-body blockquote { background: rgba(35, 32, 58, 0.035); }
+[data-theme='light'] .markdown-body tr:nth-child(even) td { background: rgba(35, 32, 58, 0.025); }
+
+/* 品牌色文字：深色下用浅粉，浅色下用深咖紫 */
+[data-theme='light'] .brand-version,
+[data-theme='light'] .pill.brand,
+[data-theme='light'] .nav-link.active,
+[data-theme='light'] .tab.active,
+[data-theme='light'] .collab-toggle.on,
+[data-theme='light'] .board-filter.active { color: var(--brand-strong); }
+[data-theme='light'] .markdown-body a { color: var(--brand-strong); }
+[data-theme='light'] .markdown-body a:hover { color: var(--brand); }
+[data-theme='light'] .markdown-body strong { color: var(--text); }
+[data-theme='light'] .markdown-body :not(pre) > code.md-inline-code {
+  color: #8f2786; background: rgba(182, 59, 169, 0.09); border-color: rgba(182, 59, 169, 0.22);
+}
+
+/* 报错文字：深色下是浅红 #fca5a5，白底上要换成深红 */
+[data-theme='light'] .banner.err,
+[data-theme='light'] .board-entry-error,
+[data-theme='light'] .board-entry-violation { color: #b3261e; }
+
+[data-theme='light'] .avatar.user { background: linear-gradient(135deg, #ded8f5, #c8c1e6); }
+[data-theme='light'] .arch-frame { background: #f4f3fa; }
+
+/* 协作办公室：浅色外壳下换用浅色底图（public/office/iso-office-light.svg，由
+   scripts/gen_office_bg.py 同一份几何换算出来），工牌 / 图例 / 工具按钮也随之换成浅色卡片
+   （配色变量见上面的 [data-theme='light'] 变量块）。 */
+
+/* ---------- 外观设置（深色 / 浅色 / 跟随系统） ---------- */
+.theme-picker { display: flex; gap: 10px; flex-wrap: wrap; }
+.theme-option {
+  flex: 1 1 190px; display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input); color: var(--text); cursor: pointer;
+}
+.theme-option:hover { border-color: var(--border-strong); }
+.theme-option.active { border-color: var(--brand); background: var(--brand-soft); }
+.theme-option-head { display: flex; align-items: center; gap: 8px; }
+.theme-option-label { font-size: 13.5px; font-weight: 600; }
+.theme-option-check { margin-left: auto; color: var(--brand); font-size: 12px; }
+.theme-option-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
+
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
+/* html 也要铺底色：文档外面（回弹、独立应用里系统预留的那一条）露出来的就是它，
+   不铺的话浅色下会露白、深色下会露黑，跟页面不是一个色。 */
+html { background: var(--bg); }
 
 body {
   margin: 0;
@@ -117,6 +275,9 @@ code, pre, .mono { font-family: var(--mono); }
 .chat-item.active { background: var(--brand-soft); border-color: rgba(217, 79, 208, 0.3); }
 .chat-item-title { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item-meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; display: flex; gap: 6px; align-items: center; }
+/* 角色名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
+.chat-item-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item-time { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
 
 .chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
@@ -364,11 +525,21 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- 运行时管理 ---------- */
 .runtime-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
-.runtime-cmd {
-  font-family: var(--mono); font-size: 11.5px; color: var(--text-muted);
-  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 7px 10px; overflow-x: auto; white-space: pre;
+/* 内核 Logo：把单色 SVG 当遮罩用，颜色跟着文字走（深浅两套外观自适应） */
+.kernel-logo {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
+.runtime-head { display: flex; align-items: center; gap: 10px; }
 .runtime-log {
   margin: 0; padding: 12px 14px; max-height: 52vh; overflow: auto;
   background: #0e0d17; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
@@ -1313,10 +1484,10 @@ code, pre, .mono { font-family: var(--mono); }
 /* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
 .office-map {
   position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
-  border: 1px solid var(--border); border-radius: 20px; background: #05040a;
+  border: 1px solid var(--border); border-radius: 20px; background: var(--office-canvas);
   cursor: grab; touch-action: none; overscroll-behavior: contain; user-select: none;
   -webkit-user-select: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 44px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 var(--office-inset), var(--office-map-shadow);
 }
 .office-map.dragging { cursor: grabbing; }
 .office-map-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; will-change: transform; }
@@ -1333,24 +1504,24 @@ code, pre, .mono { font-family: var(--mono); }
 .office-pin::after { /* 挂绳：从工牌底端垂到人头顶 */
   content: ''; position: absolute; top: 100%; left: 50%; width: 2px; height: 13px;
   transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, var(--office-lanyard), transparent);
 }
 .office-pin-body {
   position: relative; display: flex; align-items: center; gap: 5px;
   padding: 3px 7px 3px 3px; border-radius: 12px;
-  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.94);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-strong); background: var(--office-card);
+  box-shadow: var(--office-card-shadow);
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .office-pin-face { /* 工牌上的照片位 */
   position: relative; flex: none; width: 28px; height: 28px; display: grid; place-items: center;
   font-size: 15px; border-radius: 8px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.03));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: linear-gradient(160deg, var(--office-card-face), transparent);
+  box-shadow: inset 0 0 0 1px var(--office-card-ring);
 }
 .office-pin:hover .office-pin-body,
 .office-pin.selected .office-pin-body { transform: translateY(-3px) scale(1.04); border-color: var(--accent); }
-.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), 0 10px 22px rgba(0, 0, 0, 0.5); }
+.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), var(--office-card-shadow); }
 .office-pin.tone-working .office-pin-body { border-color: rgba(52, 211, 153, 0.62); }
 .office-pin.tone-busy .office-pin-body { border-color: rgba(248, 113, 113, 0.62); }
 .office-pin.tone-ask .office-pin-body { border-color: rgba(251, 191, 36, 0.62); }
@@ -1360,7 +1531,7 @@ code, pre, .mono { font-family: var(--mono); }
 .office-pin.detailed .office-pin-text { gap: 0; }
 .office-pin-dot {
   position: absolute; top: -5px; right: -5px; width: 13px; height: 13px; border-radius: 50%;
-  border: 2.5px solid #0b0a12; background: var(--text-dim);
+  border: 2.5px solid var(--office-card-edge); background: var(--text-dim);
 }
 .office-pin.tone-working .office-pin-dot { background: #34d399; animation: office-pin-pulse 1.9s ease-in-out infinite; }
 .office-pin.tone-busy .office-pin-dot { background: #f87171; }
@@ -1373,8 +1544,8 @@ code, pre, .mono { font-family: var(--mono); }
   70% { box-shadow: 0 0 0 9px rgba(52, 211, 153, 0); }
 }
 @keyframes office-pin-glow {
-  0%, 100% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 0 rgba(217, 79, 208, 0.5); }
-  50% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 8px rgba(217, 79, 208, 0); }
+  0%, 100% { box-shadow: var(--office-card-shadow), 0 0 0 0 rgba(217, 79, 208, 0.5); }
+  50% { box-shadow: var(--office-card-shadow), 0 0 0 8px rgba(217, 79, 208, 0); }
 }
 .office-pin-name {
   max-width: 92px; font-size: 11px; font-weight: 640; line-height: 1.3; color: var(--text);
@@ -1416,9 +1587,9 @@ code, pre, .mono { font-family: var(--mono); }
 /* 点标记弹出的进度信息卡 */
 .office-popover {
   position: absolute; z-index: 6; width: 306px; padding: 12px 13px 13px;
-  border: 1px solid rgba(123, 92, 255, 0.42); border-radius: 16px;
-  background: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
-  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.55); backdrop-filter: blur(10px);
+  border: 1px solid var(--office-popover-ring); border-radius: 16px;
+  background: var(--office-popover);
+  box-shadow: var(--office-popover-shadow); backdrop-filter: blur(10px);
 }
 .office-popover-head { display: flex; align-items: flex-start; gap: 10px; }
 .office-popover-scene { flex: none; width: 108px; height: 88px; overflow: hidden; }
@@ -1455,7 +1626,7 @@ code, pre, .mono { font-family: var(--mono); }
 .office-popover-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
 .office-popover-meta span {
   padding: 2px 8px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.5);
+  border: 1px solid var(--border); background: var(--office-chip);
 }
 .office-popover-more { margin-top: 11px; width: 100%; justify-content: center; }
 
@@ -1463,20 +1634,20 @@ code, pre, .mono { font-family: var(--mono); }
 .office-map-tools { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; flex-direction: column; gap: 7px; }
 .office-map-tools button {
   width: 38px; height: 38px; border-radius: 12px; cursor: pointer; font-size: 15px;
-  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.92); color: var(--text);
+  border: 1px solid var(--border-strong); background: var(--office-tool); color: var(--text);
   backdrop-filter: blur(8px); transition: background 0.15s ease, transform 0.15s ease;
 }
-.office-map-tools button:hover { background: rgba(45, 41, 76, 0.95); transform: translateY(-1px); }
+.office-map-tools button:hover { background: var(--office-tool-hover); transform: translateY(-1px); }
 .office-map-legend {
   position: absolute; right: 14px; top: 14px; z-index: 1; display: flex; flex-wrap: wrap; gap: 10px;
   justify-content: flex-end; max-width: calc(100% - 28px);
   padding: 7px 11px; border-radius: 12px; border: 1px solid var(--border);
-  background: rgba(11, 10, 18, 0.78); backdrop-filter: blur(8px);
+  background: var(--office-glass); backdrop-filter: blur(8px);
 }
 .office-map-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
 .office-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .office-map-hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.75); pointer-events: none;
+  border: 1px solid var(--border); background: var(--office-glass); pointer-events: none;
 }

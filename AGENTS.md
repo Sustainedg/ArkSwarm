@@ -12,7 +12,7 @@
 
 | 项 | 事实 |
 | --- | --- |
-| 产品 | Magenta Agents —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI / DeepSeek 等智能体并给它们套角色 |
+| 产品 | Magenta Agents —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体并给它们套角色 |
 | 后端 | Python 3.11 · FastAPI 0.115 · SQLModel + SQLite(aiosqlite) · Pydantic v2 · httpx（依赖见 `backend/requirements.txt`） |
 | 前端 | React 18 + TypeScript + Vite 6 · react-router · **无 UI 框架，手写 CSS**（`frontend/src/index.css`） |
 | 后端入口 | `backend/app/main.py`（`uvicorn app.main:app --app-dir backend`） |
@@ -82,16 +82,18 @@
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
  │                 registry(注册) · skills(技能契约) · builtin/*(实现) │
  ├───────────────────────────────────────────────────────────────────┤
- │ models/db · schemas · settings · security · bootstrap              │
+ │ models/db · schemas · settings · security · attachments · bootstrap│
  └───────────────────────────────────────────────────────────────────┘
 ```
 
-依赖方向**只能自上而下**：`api → runtime → agents`；`api/runtime` 可依赖 `models/db/settings/security`；
+依赖方向**只能自上而下**：`api → runtime → agents`；`api/runtime` 可依赖
+`models/db/settings/security/attachments`；
 **`agents` 不得反向依赖任何上层**。跨层共享的数据结构定义在叶子层（如 `agents/base.py` 的 `AgentContext`）。
 
 协作域 `collab/` 是**旁路功能**，不在主干上：`api` 只把它当一条子路由挂上去，它在内部经**唯一边界**
 `collab/execution.py` 调用 `runtime.runner`。硬约束（有守卫测试 `tests/test_collab_architecture.py`）：
-`collab/*` 只允许依赖 `agents.events`（事件契约）与 `models/db/settings`，**不得** `import app.api.*`，
+`collab/*` 只允许依赖 `agents.events`（事件契约）、`models/db/settings` 与叶子工具模块
+`app.attachments`（附件落盘 / 拼提示词，与对话域共用同一份），**不得** `import app.api.*`，
 也**不得**绕过 `execution.py` 直接 `import app.runtime.*`；`tickets.py`/`graph.py`/`prompt.py` 必须是
 不碰存储与 HTTP 的纯函数。框架层禁止反向依赖 `collab`。协作事件是自有的 `collab.*` 信封
 （`collab/protocol.py`），**不属于**铁律 5 的适配器事件协议。
@@ -138,7 +140,8 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ### 3.2 `AgentDefinition` 契约（新增适配器要实现/声明）
 必需：`id`、`name`、`runtime`、`build_invocation()`、`parse_line()`（CLI）或 `stream()`（API）。
 常用可选：`description`、`vendor`、`capabilities`、`config_fields`、`api_key_env`、`base_url_env`、
-`default_gateway`、`default_model`、`docs_url`、`executable`、`auto_provision`、
+`default_gateway`、`default_model`、`docs_url`、`logo`（官方 Logo 的前端静态资源路径，如
+`/icons/kernels/claude.svg`）、`executable`、`auto_provision`、
 `availability()`、`probe()`/`probe_api()`、`resume_supported(ctx)`（可选钩子）。
 - `parse_line(line, run)` 里**不要吞异常**：解析不了就 `yield log(...)` 或忽略该行，别让整个运行崩掉。
 - 需要"运行结束时补发事件"的适配器，请覆盖 **`AgentRun.finish()`**（基类钩子）。
@@ -188,14 +191,15 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 
 ### 4.1 接入新的 CLI 智能体（例：Aider）
 1. 新建 `backend/app/agents/builtin/aider.py`，`@register_agent` 装饰 `AiderAgent(AgentDefinition)`。
-2. 声明 `id/name/vendor/runtime=Runtime.CLI/executable/capabilities/config_fields` 与凭据/网关环境变量。
+2. 声明 `id/name/vendor/logo/runtime=Runtime.CLI/executable/capabilities/config_fields` 与凭据/网关环境变量；
+   `logo` 指向 `frontend/public/icons/kernels/` 下的 24×24 单色 SVG（只画形状，染色由界面遮罩完成）。
 3. 实现 `build_invocation(ctx) -> Invocation`（`argv/env/cwd/stdin/files`）与 `parse_line(line, run)`。
 4. 用 `builtin/util.py` 的 `as_list/truthy/flatten_content/dig`，不要重复造轮子。
 5. 加测试：解析用真实样本；在 `backend/tests/` 参照 `test_adapters.py` 的写法。
 
 ### 4.2 接入新的模型供应商（无官方 CLI）
-复用 `agents/builtin/openai_harness.py` 的 `OpenAIHarnessBase`，只写一个子类声明默认网关/模型/`config_fields`，
-参考同文件的 `OpenAICompatibleHarness` 与 `DeepSeekHarness`。**不要再写一遍工具循环。**
+复用 `agents/builtin/openai_harness.py` 的 `OpenAIHarnessBase`，只写一个子类声明默认网关/模型/`config_fields`/`logo`，
+参考同文件的 `OpenAICompatibleHarness`（`openai-harness`）。**不要再写一遍工具循环。**
 
 ### 4.3 零代码接入私有 CLI
 用内置 `custom-cli` 适配器：填 `command/args/prompt_mode/output_format/..._path` 等 `ConfigField` 即可。
@@ -222,6 +226,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
   样式写进 `src/mobile/mobile.css`。移动端页面**不得**引用 `src/pages/`、`src/App.tsx` 或
   `src/index.css`（有守卫测试 `tests/test_mobile_web.py`），但可以复用 `src/lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
+  `KernelLogo` /
   `TicketBoardKit`
   这些纯展示组件（对话气泡只有 `MessageView` 一份，线程装配只有 `ConversationThread` 一份）。
 - **两端功能对齐、交互各表**：桌面端有的能力（例如协作组编排）移动端也要能用，但按触屏重做交互 ——
@@ -236,7 +241,54 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **移动端外壳钉在可视视口上**：`.m-app` 用 `position: fixed` + 四边贴 0，**不要**用
   `100vh`/`100dvh` 配 `height: 100%` 父链 —— 真机上地址栏与底部工具栏会伸缩，两者高度经常
   对不齐，底栏就会浮起来留缝或被工具栏压住；`env(safe-area-inset-*)` 负责刘海与 Home 条。
-- **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 底部 Tab + 内部滚动），入口视口写
+- **外观（深色 / 浅色 / 跟随系统）只有一份实现**：`src/lib/theme.ts`（模式存在 localStorage，
+  解析结果写在 `<html data-theme>`；两个入口 HTML 各有一段等价的内联脚本做首屏防闪）。
+  配色一律走 CSS 变量：`index.css` / `mobile.css` 的 `:root` 是深色默认，浅色只加
+  `[data-theme='light']` 覆盖块 —— **新写颜色不要写死深色**，先加变量、再补浅色值；
+  原生外壳（状态栏 / 系统导航条）的配色由 `applyTheme()` 同步 `meta[name=theme-color]`。
+- **移动端外壳贴住屏幕底边**：输入区（`.m-composer`）**不照搬**底部安全区 —— iOS 独立应用里
+  `env(safe-area-inset-bottom)` 是 34px，而 Home 条本身只占 ~13px，照搬会在输入框下面留出一条
+  空白（「界面底部空出一截」）；现在只留 6px 收边，并给 `html` 铺主题底色。输入框本身就是那个
+  「框」：附件 / 语音在框内左侧，发送 / 停止在框内右侧，**不要**再写背景提示文字。
+- **输入区 / 顶栏的图标是线条 SVG**：`mobile/components/MobileIcons.tsx`（`stroke="currentColor"`，
+  尺寸走 `size`）。各系统的 emoji 字体大小、粗细都不一样（📎 在 iOS 上尤其大），一排小图标永远
+  对不齐，也不跟主题换色；这类「要跟文字同色的操作图标」**不要**再用 emoji，新的就往这个文件里加。
+  （抽屉导航、空状态里那种大号装饰性图标仍可用 emoji。）
+- **输入区只有一份**：`mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 / 发送都
+  由页面给）。对话页与协作运行页（含聊天弹层）都用它，**不要**再各写一个输入框 —— 两处的交互与
+  样式必须完全一致。附件与语音的提示通过 `onNotice` 回给页面，输入框不自己弹东西。页面自己的
+  语义（协作的模式切换按钮、状态条）走 `header` 插槽传进去；要允许空发送就开
+  `allowEmptySend`（别为这类差异复制一份输入区，也别把页面语义塞进组件）。
+- **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，
+  时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口角色工牌**才出来
+  （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。输入区上方有一个**模式按钮**（不是两档
+  选项框）：点一下切「推进任务」，再点回「普通对话」。推进模式下空内容直接发 = 让领导者继续推进
+  （`/resume`）；工单正在推进（接口 409）、带着附件（工单通道没有附件位）、有待回答的问题时，
+  界面直接接管模式并把按钮置灰；任务还没开始时先不显示按钮（第一句就是任务描述）。
+- **附件能力下沉在 `backend/app/attachments.py`**：校验 / 落盘 / 拼提示词只有一份，对话
+  （`POST /api/conversations/{id}/attachments`）与协作（`POST /api/collab/runs/{id}/attachments`）
+  都调用它，别再各写一份 base64 解码与目录穿越校验。
+- **办公室底图有两张**：`frontend/public/office/iso-office.svg`（深）与 `iso-office-light.svg`
+  （浅），同一份几何 —— `scripts/gen_office_bg.py` 的 `light_color()` 在构建期按「反相 + 色相旋转
+  180°」换算（不要把实时 `filter` 加到手机上的大图上），`CollabOfficeMap` 按 `lib/theme.ts` 的当前
+  主题选。办公室里的工牌 / 图例 / 工具按钮 / 信息卡颜色一律走 `--office-*` 变量（两端样式表各一份，
+  浅色只在 `[data-theme='light']` 覆盖），**不要**写死深色。
+- **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `magenta.tts`，
+  **默认关闭**；开启后新回复会被念出来，Markdown 先转成纯文本）。两个 iOS 坑必须一起处理：
+  ① 首次发声要在**用户手势里**解锁（点开关时 `unlockSpeech()`）；② 打断上一条时 `cancel()` 与
+  `speak()` 不能在同一轮里（iOS 会吞掉），要丢到下一个任务。对话页顶栏右上角只有「分享 + 朗读」
+  两个按钮；会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）挂在抽屉的对话行「⋯」上，
+  由聊天页弹面板 —— 不要再往顶栏塞「⋯」。
+- **分享成长图**：`src/lib/shareImage.ts`（Canvas 手绘，不引依赖）：对话页顶栏的分享按钮把当前
+  对话渲染成 PNG，优先走 `navigator.share({ files })`，不支持就退回下载。
+- **智能体设置并入「运行时」**：移动端**没有**独立的智能体配置页（`/agents` 已取消）。一个内核
+  = 一份安装 + N 份配置，所以内核的安装 / 更新 / 卸载与它的智能体实例（网关 · 密钥 · 模型 ·
+  适配器选项）都在运行时页：卡片上的「设置」打开 `mobile/components/MobileAgentSettings.tsx`。
+  适配器选项仍由 `DynamicForm` 渲染，**不要**在前端硬编码字段。
+- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（技能 / 运行时）+ 一行「更多」。
+  运行概览、版本记录这些信息看桌面端即可；「更新到最新版本」（`pwa.ts:refreshShell()`）必须留着 ——
+  独立应用里没有刷新按钮，那是卡在旧外壳时的唯一出口。
+- **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 左侧抽屉 + 内部滚动），入口视口写
   `maximum-scale=1.0, user-scalable=no`，并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底
   （iOS Safari 忽略 `user-scalable=no`，只有 `touch-action` 真正生效）。配套约束：移动端输入框字号
   一律 ≥ 16px，否则 iOS 聚焦时会强制放大页面。**桌面端不做此限制**（浏览器缩放是它的无障碍能力）。
@@ -246,6 +298,9 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 `docs/collaboration-design.md`）；纯逻辑放 `tickets.py` / `graph.py` / `prompt.py`（有"必须是纯函数"的
 守卫）；对 `runtime`/`agents` 的调用只能加在 `execution.py`。给协作表加列要同时登记
 `ADDITIVE_COLUMNS`（SQLite 的 `create_all` 不会给旧表补列）。**不要**为了让协作跑通去改适配器或 `runtime/`。
+协作聊天也能带附件：落盘用共享的 `app.attachments`，接口是
+`POST /api/collab/runs/{id}/attachments`，`chat` 只收相对路径 —— 附件是工作目录里的普通文件，
+不是协作域新表（也别往对话域塞）。
 
 ### 4.9 让运行时可由平台安装 / 更新 / 卸载
 1. 在适配器声明 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…,
@@ -253,7 +308,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
    **适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
 2. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
 3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
-   界面会标成「进程内 / 自备」。
+   卡片副标题会写明「进程内运行」/「自备可执行文件」。
 
 ---
 
@@ -335,7 +390,7 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 
 | 你改了 | 必须同步检查 |
 | --- | --- |
-| `agents/base.py` 契约 | 全部 6 个内置适配器 + `custom_cli` + 测试 |
+| `agents/base.py` 契约 | 全部内置适配器 + 测试 |
 | `agents/events.py` | `runtime/service.consume_run`、前端 `applyEvent` + `types.ts`、`docs/architecture.md` |
 | `agents/skills.py` / 技能契约 | 全部声明 `skills=True` 的适配器 + `runtime/skills.py` + `tests/test_skills.py` |
 | `runtime/skills.py` | 角色分配接口、`service.prepare_run` 的物化步骤、前端技能页与角色弹窗 |
@@ -347,7 +402,7 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
-| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；图标由 `scripts/gen_icons.py` 重新生成 |
+| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对）；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管 |
 | `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
 

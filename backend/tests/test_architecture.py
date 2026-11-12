@@ -51,7 +51,6 @@ BUILTIN_IDS = {
     "claude-code",
     "codex",
     "gemini-cli",
-    "deepseek-harness",
     "openai-harness",
     "custom-cli",
 }

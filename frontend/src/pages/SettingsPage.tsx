@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
+import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
 import type { AgentType, ArchitectureDoc, Overview } from '../lib/types'
 
 export function SettingsPage() {
+  const { mode, theme, setMode } = useThemeMode()
   const [overview, setOverview] = useState<Overview | null>(null)
   const [types, setTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +69,30 @@ export function SettingsPage() {
             <Stat label="工作目录根" value={overview.workspaces_root} mono />
           </div>
         )}
+
+        <section className="stack">
+          <h2 className="card-section-title">外观</h2>
+          <div className="theme-picker">
+            {THEME_OPTIONS.map((option) => {
+              const active = mode === option.value
+              return (
+                <button
+                  key={option.value}
+                  className={`theme-option${active ? ' active' : ''}`}
+                  aria-pressed={active}
+                  onClick={() => setMode(option.value)}
+                >
+                  <span className="theme-option-head">
+                    <span className="theme-option-label">{option.label}</span>
+                    {active && <span className="theme-option-check">✓</span>}
+                  </span>
+                  <span className="theme-option-hint">{option.hint}</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="dim small">外观是这台设备的个人偏好，只存在本机，不影响别人。</p>
+        </section>
 
         {versionHistory.length > 0 && (
           <section className="stack">
@@ -214,7 +240,11 @@ export function SettingsPage() {
           </p>
           {archError && <div className="banner err">{archError}</div>}
           {architecture ? (
-            <iframe className="arch-frame" title="系统架构" srcDoc={architecture.html} />
+            <iframe
+              className="arch-frame"
+              title="系统架构"
+              srcDoc={withDocumentTheme(architecture.html, theme)}
+            />
           ) : (
             !archError && (
               <div className="row">

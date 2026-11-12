@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import re
@@ -1056,6 +1057,91 @@ async def test_chat_stays_available_after_the_run_is_done(
 
     chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
     assert chat_prompts and "运行状态：done" in chat_prompts[0]
+
+
+async def test_chat_attachment_lands_in_workspace_and_reaches_the_prompt(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """协作聊天也能带附件：文件落到工作目录，提示词里点名让入口角色去读。"""
+    script = {**FULL_SCRIPT, "ceo:chat": ["我看到了，按附件里的要求办。"]}
+    scenario = await make_scenario(script, tmp_path)
+    workspace = tmp_path / "ws"
+    run_id, _ = await start_run(
+        client, scenario["roles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
+    )
+
+    raw = "补充要求：登录页要支持扫码".encode()
+    uploaded = await client.post(
+        f"/api/collab/runs/{run_id}/attachments",
+        json={"name": "补充说明.txt", "content_base64": base64.b64encode(raw).decode()},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    info = uploaded.json()
+    assert info["rel_path"].startswith("attachments/")
+    assert info["size"] == len(raw)
+    saved = workspace / info["rel_path"]
+    assert saved.is_file() and saved.read_bytes() == raw
+
+    response = await client.post(
+        f"/api/collab/runs/{run_id}/chat",
+        json={"content": "看下这个", "attachments": [info["rel_path"]]},
+    )
+    assert response.status_code == 200, response.text
+    events = await read_sse(response)
+    assert any(event["type"] == "collab.chat.finished" for event in events)
+
+    chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
+    assert chat_prompts, "入口角色的聊天 prompt 应当被记录下来"
+    assert "📎 附件" in chat_prompts[-1]
+    assert info["rel_path"] in chat_prompts[-1]
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    user_row = next(row for row in detail["chat_messages"] if row["sender"] == "user")
+    assert user_row["content"].startswith("看下这个")
+    assert info["rel_path"] in user_row["content"]
+
+
+async def test_chat_attachment_guards(client: httpx.AsyncClient, tmp_path: Path):
+    """附件与正文至少要有一样；附件必须真的在工作目录里、内容必须是 base64。"""
+    script = {**FULL_SCRIPT, "ceo:chat": ["收到。"]}
+    scenario = await make_scenario(script, tmp_path)
+    workspace = tmp_path / "ws"
+    run_id, _ = await start_run(
+        client, scenario["roles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
+    )
+
+    empty = await client.post(f"/api/collab/runs/{run_id}/chat", json={"content": "   "})
+    assert empty.status_code == 422
+
+    bad_base64 = await client.post(
+        f"/api/collab/runs/{run_id}/attachments",
+        json={"name": "x.txt", "content_base64": "不是 base64!!"},
+    )
+    assert bad_base64.status_code == 422
+    assert "base64" in bad_base64.json()["detail"]
+
+    # 文件名里的目录成分被剥掉：跑不出工作目录
+    sneaky = await client.post(
+        f"/api/collab/runs/{run_id}/attachments",
+        json={"name": "../../逃逸.txt", "content_base64": base64.b64encode(b"x").decode()},
+    )
+    assert sneaky.status_code == 201, sneaky.text
+    assert sneaky.json()["name"] == "逃逸.txt"
+    assert ".." not in sneaky.json()["rel_path"]
+
+    # 指向工作目录之外的附件一律拒绝
+    outside = await client.post(
+        f"/api/collab/runs/{run_id}/chat",
+        json={"content": "hi", "attachments": ["../../etc/hosts"]},
+    )
+    assert outside.status_code == 409
+
+    # 未知运行：附件上传给 404，而不是悄悄新建目录
+    missing = await client.post(
+        "/api/collab/runs/nope/attachments",
+        json={"name": "x.txt", "content_base64": base64.b64encode(b"x").decode()},
+    )
+    assert missing.status_code == 404
 
 
 async def test_delegate_step_records_target_for_handoff_chain(client: httpx.AsyncClient, full):

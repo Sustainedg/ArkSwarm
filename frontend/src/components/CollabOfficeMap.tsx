@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { DUTIES } from '../lib/collabDraft'
+import { useThemeMode } from '../lib/theme'
 import {
   OFFICE_HEIGHT, OFFICE_STATUS_TONE, OFFICE_WIDTH, OFFICE_ZOOM, clampOffice, fitOffice, focusOffice,
   officeChairPoint, officeToViewport, panOffice, seatFlowRows, zoomOffice, zoomOfficeAt,
@@ -57,6 +58,7 @@ function pointerSpread(points: { x: number; y: number }[]): number {
 }
 
 export function CollabOfficeMap({ nodes, edges, onOpenRole, initialView = 'whole' }: Props) {
+  const { theme } = useThemeMode()
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const pointersRef = useRef(new Map<number, { x: number; y: number }>())
   const pinchRef = useRef<number | null>(null)
@@ -191,7 +193,9 @@ export function CollabOfficeMap({ nodes, edges, onOpenRole, initialView = 'whole
       >
         <img
           className="office-map-bg"
-          src="/office/iso-office.svg"
+          // 深色 / 浅色各一张底图（同一份几何，见 scripts/gen_office_bg.py）：
+          // 浅色外壳下若还用深色图，整块画布就是页面中间的一块黑。
+          src={theme === 'light' ? '/office/iso-office-light.svg' : '/office/iso-office.svg'}
           alt="等距视角的办公室"
           width={OFFICE_WIDTH}
           height={OFFICE_HEIGHT}

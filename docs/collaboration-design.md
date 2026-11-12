@@ -1149,7 +1149,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 关注点 | 做法 |
 | --- | --- |
 | 为什么是等距（isometric） | 用户要 Gather.town 那种「走进办公室看一眼」的感觉。等距投影只用一个 `iso(ix, iy)` 公式就能把地砖坐标换算成画布坐标，不需要 3D 引擎 |
-| 底图从哪来 | **脚本生成**，不是手画、也不是位图：`scripts/gen_office_bg.py`（纯标准库）输出 `frontend/public/office/iso-office.svg`。放大 2.4 倍也不糊，体积只有 ~50 KB，两端共用同一张图（`/office/iso-office.svg`，绝对路径，`/m/` 下同样取得到） |
+| 底图从哪来 | **脚本生成**，不是手画、也不是位图：`scripts/gen_office_bg.py`（纯标准库）输出深 / 浅两张 `iso-office.svg` 与 `iso-office-light.svg`。放大 2.4 倍也不糊，两端共用同一份几何（绝对路径，`/m/` 下同样取得到），前端按当前主题选图 |
 | 坐标只有一份 | 工位的唯一真源是 `frontend/src/lib/collabOffice.ts` 的 `OFFICE_DESKS`；生成脚本**读它**去摆桌子，前端热区也钉在同一组坐标上 —— 桌子与标记不会错位。`backend/tests/test_frontend_assets.py` 会在两边不一致时拦下来（还校验提交的 SVG 就是当前代码的产物） |
 | 工位按层摆 | `OFFICE_ROW_SIZES = [1, 1, 4, 4]`：第 0 行留给入口领导者（一人一桌，在房间最里面），第 1 行是它直接派活的人（通常是 CTO），再往外的两排并排坐干活的人。`seatFlowRows()` 把 `buildFlowRows()` 分好的层一一落到对应的桌子排上；一层的人比桌子多时从这排第一张桌重新坐起并整圈错开（`LAP_OFFSET`），标记不会叠在一起 |
 | 缩放 / 平移 | 数学都在 `collabOffice.ts` 里（纯函数、可单测）：`fitOffice`（铺满居中）、`zoomOfficeAt`（**以指针为锚点**缩放，缩放前后指针下的内容不动）、`panOffice` + `clampOffice`（拖不出空白、比视口小就居中）。滚轮用**原生监听**挂 `{ passive: false }` —— React 的 `onWheel` 是 passive 的，`preventDefault` 不生效，页面会跟着一起滚 |
@@ -1163,7 +1163,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 文件 | 内容 |
 | --- | --- |
 | `scripts/gen_office_bg.py`（新增） | 生成等距办公室底图：地板 / 两面墙（落地窗 + 白板）/ 地毯 / 书柜 / 饮水机 / 绿植 / 按 `OFFICE_DESKS` 摆的桌子与转椅；`box()` 是「底面落地、向上长 h」的画法，`z` 用来叠放（显示器立在桌面上、水桶坐在机身上） |
-| `frontend/public/office/iso-office.svg`（新增，产物） | 底图本体；每张桌子带 `data-desk` / `data-x` / `data-y` |
+| `frontend/public/office/iso-office.svg` · `iso-office-light.svg`（新增，产物） | 深 / 浅两张底图，几何一致；每张桌子带 `data-desk` / `data-x` / `data-y` |
 | `frontend/src/lib/collabOffice.ts`（新增） | 工位坐标与行布局、`OFFICE_STATUS_TONE`、缩放 / 平移 / 命中数学 |
 | `frontend/src/components/CollabOfficeMap.tsx`（新增） | 画布交互 + 热区标记 + 进度信息卡（两端共用一份） |
 | `frontend/src/lib/collabProgress.ts` | 新增 `roleProgressPercent()` |
@@ -1241,3 +1241,35 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 用一次真实运行（32 步 / 11 张工单）渲染核对：三栏比例、标题限行、动作徽章、底部小字元数据，
 以及「只读节点却改动了工作目录」那条的红色高亮（往真实数据里插一条只读节点的越权步骤复现）；
 移动端另外看了单栏看板与运行页上的入口按钮。
+
+### M15 PWA 协作运行页 = 一间办公室 · 共享输入区 · 协作附件（V0.16）
+
+**关注点**：协作运行页原来是「上面流程图 + 下面聊天时间线」两条并排，手机上两张都要看，
+屏幕被切得很碎；底部还顶着一块输入框。这一版把它收成「主页面就是那间可缩放的办公室，
+聊天点人才出来」，输入区与对话页共用同一份组件。
+
+| 关注点 | 做法 |
+| --- | --- |
+| 主页面是办公室 | 协作运行页主区整屏铺 `MobileCollabProgress`（`/m/` 下那间可双指缩放 / 单指拖动的等距办公室），原来的时间线与「需要你决定」卡片不再平铺在下面 |
+| 聊天点人才出来 | 点办公室里的**入口角色**工牌弹出整屏对话弹层（`MobileSheet full`）；点其他岗位工牌仍开只读的岗位会话。**顶栏不再放对话按钮** —— 聊天界面就是「点人」这一条入口 |
+| 底部只有输入框 | 输入区收成屏幕最下面那块（`.m-composer`），框上方只有一行：左边是模式切换按钮，右边一句当前模式说明；「需要你决定 / 正在推进」这类状态跟在下面；平时底部干干净净 |
+| 两种模式由用户切 | 输入框上方只有一个按钮：当前是「普通对话」，点一下变成「推进任务」，再点回「普通对话」（按钮上写的就是当前模式，`aria-pressed` 同步）。推进模式下把这句话接到工单上接着跑；不输入内容直接发就是「让领导者继续推进」（等价于 `POST /runs/{id}/resume`，原来那个「继续推进（不补充内容）」按钮因此取消）。有三处没法自由选，界面直接接管并把按钮置灰：工单正在推进（推进接口会 409，只能问进度）、带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）；任务还没开始时先不显示按钮（第一句就是任务描述） |
+| 输入区只有一份 | 对话页与协作页共用 `mobile/components/MobileComposer.tsx`（受控：草稿、附件、上传、发送 / 停止都由页面给）。框里只有附件 / 语音 / 输入框 / 发送四个图标按钮，**没有 placeholder**，附件与语音的提示回给页面弹横幅 —— 改一处两端一起变 |
+| 协作也能带附件 | 附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词），对话与协作走同一套：新增 `POST /api/collab/runs/{id}/attachments` 把文件存进这次协作的工作目录，`POST /runs/{id}/chat` 的 `attachments` 带相对路径，`engine.prepare_chat()` 用 `compose_with_attachments()` 把路径拼进 prompt 与落库内容（**只有附件、没有正文也允许**）；发消息时带附件会强制走入口角色这条聊天通道（工单推进的输入是结构化工单，没有附件位） |
+| 办公室跟着主题换色 | 底图有深 / 浅两张（`frontend/public/office/iso-office.svg` 与 `iso-office-light.svg`，同一份几何 —— 生成脚本按「反相 + 色相旋转 180°」在构建期换算，免去手机上对整张 1600×1000 图做实时滤镜），`CollabOfficeMap` 按 `lib/theme.ts` 的当前主题选；工牌 / 图例 / 工具按钮 / 信息卡的深色也改成 `--office-*` 变量（`index.css` 与 `mobile.css` 各一份，浅色只在 `[data-theme='light']` 覆盖）。手机是浅色模式时，办公室里的背景与卡片一起变浅 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/attachments.py`（新增） | 附件共享模块：`decode_attachment()` / `store_attachment()` / `compose_with_attachments()`、上限 8 MB、安全文件名；对话与协作都走它，异常统一转成显式的 HTTP 状态码 |
+| `backend/app/api/conversations.py` · `runtime/service.py` | 附件上传 / 拼提示词改调 `app.attachments`（原来各写一份的逻辑收口） |
+| `backend/app/collab/schemas.py` / `engine.py` / `api.py` | `RunMessage.attachments`、`RunAttachmentUpload`；`prepare_chat()` 支持附件（校验落在工作目录内、拼进 prompt 与落库内容）；新增 `POST /runs/{id}/attachments` |
+| `frontend/src/mobile/components/MobileComposer.tsx`（新增） | 两端输入区共用：附件 chip、语音识别、发送 / 停止、框上方说明条、`allowEmptySend`（推进模式空发）；无 placeholder |
+| `frontend/src/mobile/pages/MobileChatPage.tsx` / `MobileCollabRunPage.tsx` | 改用共享输入区；协作页主区改成整屏办公室、聊天收进弹层，输入框上方保留一个「普通对话 / 推进任务」模式按钮 |
+| `frontend/src/components/CollabOfficeMap.tsx` · `scripts/gen_office_bg.py` | 按主题选深 / 浅底图；生成脚本新增 `light_color()` / `light_svg()`，同时输出两张图 |
+| `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | 新增 `--office-*` 变量（深色默认 + `[data-theme='light']` 覆盖），把办公室段里写死的深色改成变量；新增 `.m-composer-head` / `.m-run-stage` / `.m-run-chat-*` 等；共享段两端逐字一致 |
+| `backend/tests/test_api.py` / `test_collab_engine.py` / `test_frontend_assets.py` / `test_mobile_web.py` / `test_appearance.py` | 附件落到工作目录并进 prompt、越界 / 空文件被拒；提交的浅色底图必须是最新产物；协作运行页「办公室为主、聊天点人才出来」、共享输入区与外观主题的守卫 |
+| `frontend/public/m/sw.js` | 外壳缓存名 v20 → v29（样式表与移动端产物都变了） |
+
+验证：`bash scripts/test.sh` → **246 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
+在 390×844 的 headless Chromium 上核对：协作页深 / 浅两套主题（底部只有输入框且贴底、办公室铺满主区、
+浅色底图与浅色卡片正确）、点工牌开进度卡、点「查看实时对话」开只读岗位会话、带附件发消息落库含附件说明。

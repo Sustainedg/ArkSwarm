@@ -2,7 +2,8 @@
 """生成协作进度页的等距视角办公室背景图（纯标准库，不引入任何依赖）。
 
 用法：python3 scripts/gen_office_bg.py
-输出：frontend/public/office/iso-office.svg
+输出：frontend/public/office/iso-office.svg（深色，默认）
+      frontend/public/office/iso-office-light.svg（浅色：同一张图按「反相 + 色相旋转 180°」换算）
 
 为什么是 SVG 而不是位图：这张图要跟着鼠标滚轮放大（最大 2.4 倍），矢量图放大不糊，
 体积也只有几十 KB。构图是一间 13×10 格的等距办公室：地板、两面墙（落地窗 + 白板）、
@@ -27,6 +28,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 TS_SOURCE = REPO / "frontend" / "src" / "lib" / "collabOffice.ts"
 OUT_FILE = REPO / "frontend" / "public" / "office" / "iso-office.svg"
+#: 浅色底图：几何与深色版一字不差，只是把每个颜色换算过去（见 `light_svg()`）。
+LIGHT_OUT_FILE = REPO / "frontend" / "public" / "office" / "iso-office-light.svg"
 
 # ---------- 画布与等距投影 ----------
 CANVAS_W, CANVAS_H = 1600, 1000
@@ -323,7 +326,48 @@ def desk_group(index: int, x: float, y: float) -> str:
     return "".join(out)
 
 
-def build() -> str:
+#: 浅色换算用到的两个滤镜矩阵的合成：先 `invert(1)` 再 `hue-rotate(180deg)`。
+#: 与 CSS 里的 `filter: invert(1) hue-rotate(180deg)` 完全等价 —— 只是提到构建期算好，
+#: 免去手机上拖动 / 缩放时对整张 1600×1000 图做实时滤镜的开销。
+_HUE_ROTATE_180 = (
+    (-0.574, 1.430, 0.144),
+    (0.426, 0.430, 0.144),
+    (0.426, 1.430, -0.856),
+)
+_HEX = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})")
+
+
+def _expand(code: str) -> str:
+    """把 `#abc` 补成 `#aabbcc`（底图里两种写法都有）。"""
+    if len(code) == 4:
+        return "#" + "".join(ch * 2 for ch in code[1:])
+    return code
+
+
+def light_color(code: str) -> str:
+    """把一个深色底图里的颜色换算成浅色版（RGB 反相 → 色相旋转 180°，再夹回 0..1）。"""
+    code = _expand(code)
+    rgb = [int(code[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    inverted = [1 - value for value in rgb]
+    out = []
+    for row in _HUE_ROTATE_180:
+        value = sum(weight * channel for weight, channel in zip(row, inverted))
+        out.append(round(min(max(value, 0.0), 1.0) * 255))
+    return "#{:02x}{:02x}{:02x}".format(*out)
+
+
+def light_svg(svg: str) -> str:
+    """把整张深色底图换算成浅色：几何、坐标、热区一律不动，只换颜色。"""
+    return _HEX.sub(lambda match: light_color(match.group(0)), svg)
+
+
+def build(theme: str = "dark") -> str:
+    """生成底图；`theme='light'` 时返回浅色版（同一份几何）。"""
+    svg = _render()
+    return light_svg(svg) if theme == "light" else svg
+
+
+def _render() -> str:
     desks = read_desks()
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CANVAS_W} {CANVAS_H}" width="{CANVAS_W}" height="{CANVAS_H}" role="img" aria-label="等距视角的协作办公室">',
@@ -373,8 +417,9 @@ def build() -> str:
 
 def main() -> None:
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    OUT_FILE.write_text(build(), encoding="utf-8")
-    print(f"已生成 {OUT_FILE.relative_to(REPO)}（{OUT_FILE.stat().st_size / 1024:.1f} KB）")
+    for path, theme in ((OUT_FILE, "dark"), (LIGHT_OUT_FILE, "light")):
+        path.write_text(build(theme), encoding="utf-8")
+        print(f"已生成 {path.relative_to(REPO)}（{path.stat().st_size / 1024:.1f} KB）")
 
 
 if __name__ == "__main__":

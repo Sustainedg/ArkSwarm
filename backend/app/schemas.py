@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AgentCreate(BaseModel):
@@ -205,8 +205,22 @@ class MessageRead(BaseModel):
     created_at: datetime
 
 
+class AttachmentUpload(BaseModel):
+    """上传一个附件。
+
+    内容走 base64 而不是 multipart：一次上传本来就只有几百 KB，这样不必为它引入
+    `python-multipart` 依赖（见 AGENTS.md「不要新增依赖」）。
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=1)
+
+
 class SendMessage(BaseModel):
-    content: str = Field(min_length=1)
+    #: 只发附件时正文可以为空
+    content: str = ""
+    #: 已上传附件的相对路径（相对对话工作目录，由 `/attachments` 接口返回）
+    attachments: list[str] = Field(default_factory=list)
     #: 可选的单轮覆盖项
     workspace_dir: str | None = None
     reset_session: bool = False
@@ -215,5 +229,11 @@ class SendMessage(BaseModel):
     @classmethod
     def _strip(cls, value: str) -> str:
         return value
+
+    @model_validator(mode="after")
+    def _require_something(self) -> SendMessage:
+        if not self.content.strip() and not self.attachments:
+            raise ValueError("消息内容不能为空")
+        return self
 
 

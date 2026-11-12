@@ -1,5 +1,5 @@
 import type {
-  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, CollabChatMessage, CollabRun,
+  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, CollabChatMessage, CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
   Message, Overview, ProvisionEvent, Role, RuntimeLatest, Skill, SkillDetail, SkillRescanResult, TestResult,
 } from './types'
@@ -134,6 +134,12 @@ export const api = {
     request<{ ok: boolean }>(`/api/conversations/${conversationId}/cancel`, { method: 'POST' }),
   resetSession: (conversationId: string) =>
     request<{ ok: boolean }>(`/api/conversations/${conversationId}/session/reset`, { method: 'POST' }),
+  /** 上传附件：内容走 base64，省掉 multipart 依赖；服务端落到对话工作目录的 attachments/ */
+  uploadAttachment: (conversationId: string, body: { name: string; content_base64: string }) =>
+    request<AttachmentRef>(`/api/conversations/${conversationId}/attachments`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   // --- 协作域 ---------------------------------------------------------------
   // 协作组（可视化编排图）
@@ -158,6 +164,12 @@ export const api = {
   createCollabRun: (body: { team_id: string; title?: string; workspace_dir?: string | null }) =>
     request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
   getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),
+  /** 上传协作附件：落到这次协作的工作目录，发消息时随聊天通道带上（同对话附件） */
+  uploadCollabAttachment: (runId: string, body: { name: string; content_base64: string }) =>
+    request<AttachmentRef>(`/api/collab/runs/${runId}/attachments`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   listCollabChat: (id: string) =>
     request<{ items: CollabChatMessage[] }>(`/api/collab/runs/${id}/chat`).then((r) => r.items),
   deleteCollabRun: (id: string) => request<void>(`/api/collab/runs/${id}`, { method: 'DELETE' }),

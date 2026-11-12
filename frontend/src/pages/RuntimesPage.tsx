@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { KernelLogo } from '../components/KernelLogo'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../lib/types'
@@ -208,77 +209,27 @@ function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardPr
   const managed = provisioning.supported
   const remote = latest?.latest ?? null
   const canCheck = Boolean(provisioning.commands?.latest?.length)
-  const updateAvailable = Boolean(
-    remote && provisioning.version && versionCore(remote) !== versionCore(provisioning.version),
-  )
-  const primaryCommand =
-    provisioning.commands?.update ?? provisioning.commands?.install ?? null
+  const current = provisioning.version ? versionCore(provisioning.version) : null
+  // 查到比本机更高的版本才提示「更新到 X」；已经是最新版就不给更新入口。
+  // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
+  const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
+  const showUpdate =
+    managed &&
+    provisioning.installed &&
+    Boolean(provisioning.commands?.update?.length) &&
+    (updateTarget !== null || !canCheck || !remote)
 
   return (
-    <div className="card">
-      <div className="card-head">
+    <div className="card runtime-card">
+      <div className="runtime-head">
+        <KernelLogo logo={runtime.logo} />
         <div>
           <div className="card-title">{runtime.name}</div>
-          <div className="card-sub">
-            {[runtime.vendor, runtime.runtime === 'cli' ? 'CLI 子进程' : '进程内 API'].filter(Boolean).join(' · ')}
-          </div>
-        </div>
-        <div className="card-actions">
-          {managed ? (
-            provisioning.installed ? (
-              <span className="pill ok">已安装</span>
-            ) : (
-              <span className="pill warn">未安装</span>
-            )
-          ) : (
-            <span className="pill">{runtime.runtime === 'api' ? '进程内' : '自备'}</span>
-          )}
-          {updateAvailable && <span className="pill brand">有更新</span>}
+          <div className="card-sub">{kernelSummary(runtime, current)}</div>
         </div>
       </div>
 
-      <p className="dim small" style={{ margin: 0 }}>
-        {runtime.description}
-      </p>
-
-      <dl className="kv">
-        {managed && (
-          <>
-            <dt>当前版本</dt>
-            <dd>{provisioning.version ?? (provisioning.installed ? '未知' : '—')}</dd>
-            <dt>最新版本</dt>
-            <dd>
-              {!canCheck ? (
-                <span className="dim">不适用</span>
-              ) : checking ? (
-                <span className="dim">查询中…</span>
-              ) : remote ? (
-                remote
-              ) : (
-                <span className="dim">{latest?.error ? '查询失败' : '未检查'}</span>
-              )}
-            </dd>
-            <dt>安装位置</dt>
-            <dd className="mono-sm">{provisioning.path ?? (provisioning.installed ? '—' : '未检测到')}</dd>
-          </>
-        )}
-        <dt>使用中的实例</dt>
-        <dd>{runtime.instances} 个智能体</dd>
-        {managed && (
-          <>
-            <dt>安装方式</dt>
-            <dd>{[provisioning.manager, provisioning.package].filter(Boolean).join(' · ')}</dd>
-          </>
-        )}
-      </dl>
-
-      {managed && primaryCommand && <div className="runtime-cmd">{primaryCommand.join(' ')}</div>}
       {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
-      {!managed && (
-        <div className="dim small">
-          {runtime.runtime === 'api' ? '进程内运行，无需安装。' : '由用户自备可执行文件，平台不代管安装。'}
-        </div>
-      )}
 
       <div className="row wrap" style={{ gap: 6, marginTop: 'auto' }}>
         {canCheck && (
@@ -286,25 +237,21 @@ function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardPr
             {checking ? '查询中…' : '检查更新'}
           </button>
         )}
-        {managed && (
-          <>
-            {!provisioning.installed && provisioning.commands?.install?.length ? (
-              <button className="btn sm primary" onClick={() => onRun('install')} disabled={busy}>
-                安装
-              </button>
-            ) : null}
-            {provisioning.installed && provisioning.commands?.update?.length ? (
-              <button className="btn sm primary" onClick={() => onRun('update')} disabled={busy}>
-                更新
-              </button>
-            ) : null}
-            {provisioning.installed && provisioning.commands?.uninstall?.length ? (
-              <button className="btn sm danger" onClick={() => onRun('uninstall')} disabled={busy}>
-                卸载
-              </button>
-            ) : null}
-          </>
-        )}
+        {managed && !provisioning.installed && provisioning.commands?.install?.length ? (
+          <button className="btn sm primary" onClick={() => onRun('install')} disabled={busy}>
+            安装
+          </button>
+        ) : null}
+        {showUpdate ? (
+          <button className="btn sm primary" onClick={() => onRun('update')} disabled={busy}>
+            {updateTarget ? `更新到 ${updateTarget}` : '更新'}
+          </button>
+        ) : null}
+        {managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
+          <button className="btn sm danger" onClick={() => onRun('uninstall')} disabled={busy}>
+            卸载
+          </button>
+        ) : null}
         {runtime.docs_url && (
           <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
             文档 ↗
@@ -313,6 +260,15 @@ function RuntimeCard({ runtime, latest, checking, busy, onCheck, onRun }: CardPr
       </div>
     </div>
   )
+}
+
+/** 卡片副标题：所属公司 + 当前版本（卡片上只留这三样，其余信息收进按钮后面的动作里）。 */
+function kernelSummary(runtime: AgentRuntime, current: string | null): string {
+  const provisioning = runtime.provisioning
+  if (!provisioning.supported) {
+    return `${runtime.vendor} · ${runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}`
+  }
+  return provisioning.installed && current ? `${runtime.vendor} · 当前版本 ${current}` : `${runtime.vendor} · 未安装`
 }
 
 /** 从版本字符串里抽出可比较的核心版本号（`2.1.316 (Claude Code)` → `2.1.316`）。 */

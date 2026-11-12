@@ -126,6 +126,7 @@ class ClaudeCodeAgent(AgentDefinition):
     default_gateway = "https://api.anthropic.com"
     default_model = "sonnet"
     docs_url = "https://docs.claude.com/en/docs/claude-code"
+    logo = "/icons/kernels/claude.svg"
     capabilities = Capabilities(
         streaming=True,
         sessions=True,

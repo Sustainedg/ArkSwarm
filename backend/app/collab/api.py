@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from .. import attachments
 from ..db import SessionLocal, get_session
 from ..models import Role, utcnow
 from ..transport.sse import sse_stream
@@ -18,6 +19,7 @@ from .bus import bus, chat_bus
 from . import engine, execution, graph as graph_service, store
 from .schemas import (
     GraphSpec,
+    RunAttachmentUpload,
     RunCreate,
     RunDetail,
     RunMessage,
@@ -282,8 +284,8 @@ async def send_chat(
     run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
 ) -> StreamingResponse:
     """和入口角色聊天：**不受**主流程是否正在推进影响。"""
-    if not (payload.content or "").strip():
-        raise HTTPException(status_code=422, detail="请先输入想对 CEO 说的话")
+    if not (payload.content or "").strip() and not payload.attachments:
+        raise HTTPException(status_code=422, detail="请先输入想对 CEO 说的话，或附上一个文件")
     if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
         raise HTTPException(status_code=409, detail="CEO 正在回复上一条消息，请稍等它说完")
     try:
@@ -291,10 +293,34 @@ async def send_chat(
     except store.RunNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     try:
-        prepared = await engine.prepare_chat(session, run_id, payload.content)
+        prepared = await engine.prepare_chat(session, run_id, payload.content, payload.attachments)
     except engine.ChatError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return _stream_chat(prepared)
+
+
+@router.post("/runs/{run_id}/attachments", status_code=201)
+async def upload_run_attachment(
+    run_id: str, payload: RunAttachmentUpload, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """把附件存进这次协作的工作目录（`<工作目录>/attachments/`）。
+
+    与对话附件同一套实现（:mod:`app.attachments`）：文件落到工作目录里，发消息时把路径
+    写进提示词，因此任何能读工作目录的内核都自动支持。
+    """
+    try:
+        run = await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    try:
+        raw = attachments.decode_attachment(payload.content_base64)
+        workspace = execution.ensure_workspace(run)
+        stored = attachments.store_attachment(workspace, payload.name, raw)
+    except attachments.AttachmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    except execution.StepError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return stored.to_dict()
 
 
 @router.post("/runs/{run_id}/resume")

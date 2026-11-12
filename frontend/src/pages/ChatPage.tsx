@@ -5,6 +5,7 @@ import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, streamPost } from '../lib/api'
+import { formatListTime } from '../lib/datetime'
 import type { Conversation, Message, Role } from '../lib/types'
 import { sameConversationList, sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
@@ -233,6 +234,7 @@ export function ChatPage() {
                 <span>{conversation.role_name}</span>
                 <span>·</span>
                 <span>{conversation.message_count} 条</span>
+                <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
               </div>
             </div>
           )

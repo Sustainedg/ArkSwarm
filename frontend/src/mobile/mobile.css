@@ -6,9 +6,12 @@
    为了直接复用共享的纯展示组件（DynamicForm / MessageView /
    MarkdownView），这里保留与它们一致的类名，但按触屏重做尺寸；
    原语（btn / pill / banner / field / input / card / grid / card-section-title…）沿用既有命名，
-   移动端专有的结构（m-tabbar / m-sheet / m-item / m-thread…）才用 `m-` 前缀。
+   移动端专有的结构（m-drawer / m-sheet / m-item / m-thread…）才用 `m-` 前缀。
    ============================================================ */
 :root {
+  /* 外观：深色是默认（浅色看下面的 [data-theme='light']）。color-scheme 决定原生控件、
+     滚动条、下拉框按哪套配色渲染，必须和下面的变量成套。 */
+  color-scheme: dark;
   --bg: #0b0a12;
   --bg-elevated: #12111c;
   --bg-panel: #17162a;
@@ -23,12 +26,32 @@
 
   --brand: #d94fd0;
   --brand-soft: rgba(217, 79, 208, 0.14);
+  --brand-strong: #b93ab0;
   --accent: #6ee7d1;
   --accent-soft: rgba(110, 231, 209, 0.13);
 
   --ok: #4ade80;
   --warn: #fbbf24;
   --danger: #f87171;
+
+  /* 协作办公室那张等距插画：深色底图配深色的工牌 / 图例 / 工具按钮。
+     浅色外壳下换成浅色底图（public/office/iso-office-light.svg）与浅色卡片，见下面浅色块。 */
+  --office-canvas: #05040a;
+  --office-card: rgba(19, 18, 32, 0.94);
+  --office-card-edge: #0b0a12;
+  --office-card-face: rgba(255, 255, 255, 0.15);
+  --office-card-ring: rgba(255, 255, 255, 0.08);
+  --office-card-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  --office-lanyard: rgba(255, 255, 255, 0.3);
+  --office-glass: rgba(11, 10, 18, 0.78);
+  --office-tool: rgba(19, 18, 32, 0.92);
+  --office-tool-hover: rgba(45, 41, 76, 0.95);
+  --office-popover: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
+  --office-popover-ring: rgba(123, 92, 255, 0.42);
+  --office-popover-shadow: 0 22px 56px rgba(0, 0, 0, 0.55);
+  --office-chip: rgba(11, 10, 18, 0.5);
+  --office-inset: rgba(255, 255, 255, 0.04);
+  --office-map-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
 
   --radius: 14px;
   --radius-sm: 10px;
@@ -41,9 +64,121 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* ============================================================
+   浅色外观：[data-theme='light']
+   ------------------------------------------------------------
+   主题写在 <html data-theme> 上，由 src/lib/theme.ts 决定（深色 / 浅色 / 跟随系统），
+   入口 HTML 里有一段等价的内联脚本负责首屏防闪。
+   这里先把整套变量换掉，再逐条覆盖那些**写死了深色**的装饰（半透明玻璃面板、遮罩、
+   品牌色文字、代码块…）—— 浅色下它们不改就是一块黑。
+   每条选择器都带 `[data-theme='light']` 前缀：多一层属性选择器，优先级高于原规则，
+   所以这一段放在文件前面也压得住后面的原规则（桌面端 index.css 里有一份同样的）。
+   注：协作办公室那张等距插画（.office-map / .collab-workdesk-* 等）有两张底图（深 / 浅，
+   同一份几何，见 scripts/gen_office_bg.py），由 CollabOfficeMap 按当前主题选；
+   「系统架构」文档视图另有一套自带配色的文档（见 lib/theme.ts 的 withDocumentTheme）。
+   ============================================================ */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f4f3fa;
+  --bg-elevated: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #eceaf6;
+  --border: #e3dff2;
+  --border-strong: #cac4e3;
+
+  --text: #23203a;
+  --text-muted: #5f5a7c;
+  --text-dim: #8d88a8;
+
+  /* 品牌色在白底上要压深一档才有对比；浅色底（brand-soft）也跟着换成同一支色 */
+  --brand: #b63ba9;
+  --brand-soft: rgba(182, 59, 169, 0.1);
+  --brand-strong: #932a88;
+  --accent: #0e9c85;
+  --accent-soft: rgba(14, 156, 133, 0.1);
+
+  --ok: #16a34a;
+  --warn: #b45309;
+  --danger: #dc2626;
+
+  /* 协作办公室：浅色外壳用浅色底图，工牌 / 图例 / 工具按钮也换成浅色卡片 */
+  --office-canvas: #eef1f8;
+  --office-card: rgba(255, 255, 255, 0.95);
+  --office-card-edge: #ffffff;
+  --office-card-face: rgba(35, 32, 58, 0.09);
+  --office-card-ring: rgba(35, 32, 58, 0.08);
+  --office-card-shadow: 0 8px 18px rgba(58, 48, 96, 0.22);
+  --office-lanyard: rgba(35, 32, 58, 0.22);
+  --office-glass: rgba(255, 255, 255, 0.82);
+  --office-tool: rgba(255, 255, 255, 0.92);
+  --office-tool-hover: rgba(238, 236, 248, 0.98);
+  --office-popover: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 242, 250, 0.98));
+  --office-popover-ring: rgba(123, 92, 255, 0.32);
+  --office-popover-shadow: 0 22px 56px rgba(58, 48, 96, 0.22);
+  --office-chip: rgba(35, 32, 58, 0.06);
+  --office-inset: rgba(255, 255, 255, 0.7);
+  --office-map-shadow: 0 18px 44px rgba(58, 48, 96, 0.16);
+
+  --shadow: 0 18px 48px rgba(37, 31, 68, 0.18);
+}
+
+/* 半透明玻璃面板：深色是「深紫叠在深底上」，浅色换成「白叠在浅底上」 */
+[data-theme='light'] .m-topbar { background: rgba(255, 255, 255, 0.92); }
+[data-theme='light'] .m-composer { background: rgba(255, 255, 255, 0.96); }
+[data-theme='light'] .m-drawer-backdrop,
+[data-theme='light'] .m-sheet-backdrop { background: rgba(37, 31, 68, 0.42); }
+
+/* 品牌色文字：深色下用浅粉，浅色下用深咖紫 */
+[data-theme='light'] .m-badge,
+[data-theme='light'] .m-drawer-link.active,
+[data-theme='light'] .m-chip.on,
+[data-theme='light'] .pill.brand,
+[data-theme='light'] .m-board-tab.active { color: var(--brand-strong); }
+[data-theme='light'] .markdown-body strong { color: var(--text); }
+[data-theme='light'] .markdown-body a { color: var(--brand-strong); }
+
+/* 代码块：深色下是近黑的 #0e0d17 */
+[data-theme='light'] .md-code-block,
+[data-theme='light'] .tool-card pre { background: #f7f6fb; }
+
+/* 报错 / 提示文字：深色下是浅红浅青，浅色底上要换成深色 */
+[data-theme='light'] .banner.err,
+[data-theme='light'] .board-entry-error,
+[data-theme='light'] .board-entry-violation { color: #b3261e; }
+[data-theme='light'] .banner.info { color: var(--accent); }
+[data-theme='light'] .m-board-note.ok { color: #15803d; }
+/* 录音中的麦克风：深色下是白字压在红底上，浅色底上要用深红 */
+[data-theme='light'] .m-tool-btn.on { color: #b3261e; }
+
+[data-theme='light'] .avatar.user { background: linear-gradient(135deg, #ded8f5, #c8c1e6); }
+[data-theme='light'] .m-arch-frame { background: #f4f3fa; }
+
+/* 协作办公室：浅色外壳下换用浅色底图（public/office/iso-office-light.svg，由
+   scripts/gen_office_bg.py 同一份几何换算出来），工牌 / 图例 / 工具按钮也随之换成浅色卡片
+   （配色变量见上面的 [data-theme='light'] 变量块）。 */
+
+/* ---------- 外观设置（深色 / 浅色 / 跟随系统） ---------- */
+.theme-picker { display: flex; flex-direction: column; gap: 8px; }
+.theme-option {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text); cursor: pointer;
+}
+.theme-option:active { background: var(--bg-hover); }
+.theme-option.active { border-color: var(--brand); background: var(--brand-soft); }
+.theme-option-head { display: flex; align-items: center; gap: 8px; }
+.theme-option-label { font-size: 14px; font-weight: 600; }
+.theme-option-check { margin-left: auto; color: var(--brand); font-size: 13px; }
+.theme-option-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 /* 文档本身不滚动：滚动只发生在内部的 .m-page-body / .m-thread / 弹层里。 */
 html, body { height: 100%; overflow: hidden; }
+/* html 也铺上主题底色：文档外面（回弹、独立应用里系统预留的那一条）露的就是它，
+   不铺的话浅色下会露白、深色下会露黑，跟页面不是一个色。 */
+html { background: var(--bg); }
 #root { height: 100%; }
 
 /* 禁止双指/双击缩放。`user-scalable=no` 在 iOS Safari 上会被忽略，
@@ -69,7 +204,7 @@ p { margin: 0; }
 ul { margin: 0; padding: 0; list-style: none; }
 code, pre, .mono { font-family: var(--mono); }
 
-/* ---------- 外壳：顶栏 + 可滚动内容 + 底部 Tab ---------- */
+/* ---------- 外壳：顶栏 + 可滚动内容 + 输入区（无底部 Tab，导航在左侧抽屉） ---------- */
 /* 外壳四边贴 0，钉在「可视视口」上。真机上地址栏与底部工具栏会伸缩，`100vh` /
    `100dvh` 与 `height: 100%` 的父链高度经常对不齐 —— 底栏要么浮在屏幕底部之上
    留出一条缝，要么被浏览器工具栏压住。`position: fixed` 跟的是可视视口，配合
@@ -104,25 +239,57 @@ code, pre, .mono { font-family: var(--mono); }
   display: grid; place-items: center; font-size: 15px; color: #fff;
 }
 
+/* 顶栏左上角的品牌 logo（菜单按钮）：点它打开左侧抽屉（导航 + 对话列表）。 */
+.m-logo-btn {
+  flex: none; padding: 0; border: none; background: none; cursor: pointer; line-height: 0;
+}
+.m-logo-btn:active { opacity: 0.72; }
+
 .m-icon-btn {
   flex: none; width: 38px; height: 38px; border-radius: 12px; border: 1px solid transparent;
   background: transparent; color: var(--text-muted); font-size: 17px; cursor: pointer;
   display: grid; place-items: center;
 }
 .m-icon-btn:active { background: var(--bg-hover); color: var(--text); }
+/* 顶栏里的「已开启」态：目前只有朗读开关用 —— 实心品牌底 + 白色线条图标，一眼看出会不会出声 */
+.m-icon-btn.on { color: #fff; background: var(--brand); border-color: transparent; }
+.m-icon-btn:disabled { opacity: 0.4; }
 
-/* ---------- 底部 Tab ---------- */
-.m-tabbar {
-  flex: none; display: flex; border-top: 1px solid var(--border);
-  background: rgba(18, 17, 28, 0.96); padding-bottom: var(--safe-bottom);
+/* ---------- 左侧抽屉：主导航 + 对话列表（移动端唯一的主导航，无底部 Tab） ---------- */
+.m-drawer-backdrop {
+  position: fixed; inset: 0; z-index: 40; background: rgba(4, 3, 10, 0.6);
+  backdrop-filter: blur(2px);
 }
-.m-tab {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 8px 2px 7px; font-size: 10.5px; color: var(--text-dim); cursor: pointer;
+.m-drawer {
+  position: absolute; top: 0; bottom: 0; left: 0; width: min(84vw, 330px);
+  display: flex; flex-direction: column;
+  background: var(--bg-elevated); border-right: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  padding-top: var(--safe-top); padding-bottom: var(--safe-bottom);
+  animation: m-drawer-in 0.18s ease-out;
 }
-.m-tab-icon { font-size: 19px; line-height: 1; }
-.m-tab.active { color: #f6d9f4; }
-.m-tab.active .m-tab-icon { filter: drop-shadow(0 3px 10px rgba(217, 79, 208, 0.55)); }
+@keyframes m-drawer-in { from { transform: translateX(-14px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+.m-drawer-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 12px; border-bottom: 1px solid var(--border);
+}
+.m-drawer-title { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 650; }
+.m-drawer-sub { font-size: 11px; color: var(--text-dim); }
+.m-drawer-nav { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; }
+.m-drawer-link {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: var(--radius-sm); color: var(--text-muted); font-size: 14px; font-weight: 550;
+}
+.m-drawer-link.active { background: var(--brand-soft); color: #f6d9f4; }
+.m-drawer-link-icon { font-size: 17px; line-height: 1; }
+.m-drawer-chevron { margin-left: auto; color: var(--text-dim); }
+.m-drawer-section { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.m-drawer-section-head {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-dim);
+}
+.m-drawer-section-head > span:first-child { flex: 1; }
+.m-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 12px 14px; -webkit-overflow-scrolling: touch; }
 
 /* ---------- 列表项 / 卡片 ---------- */
 .m-list { display: flex; flex-direction: column; gap: 8px; }
@@ -136,8 +303,30 @@ code, pre, .mono { font-family: var(--mono); }
 .m-item-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .m-item-title { display: block; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-item-sub { display: block; font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-item.active { border-color: rgba(217, 79, 208, 0.45); background: var(--brand-soft); }
+/* 副行：角色/条数在左，日期时间靠右（今天只显示时间，其余显示日期 + 时间）。 */
+.m-item-sub-row { display: flex; align-items: baseline; gap: 8px; }
+.m-item-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-item-time { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
 .m-item-chevron { color: var(--text-dim); font-size: 15px; flex: none; }
 .m-item-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+/* 对话行：整行是「打开对话」，右侧再挂一个「⋯」打开会话操作面板。 */
+.m-conv-row { padding: 0; }
+.m-conv-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border: none; background: none; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; border-radius: var(--radius);
+}
+/* 对话列表比其它列表更紧凑：字号小一档（头像也不画了，见 MobileDrawer）。 */
+.m-conv-row .m-item-title { font-size: 13.5px; }
+.m-conv-row .m-item-sub { font-size: 11px; }
+.m-conv-main:active { background: var(--bg-hover); }
+.m-conv-more {
+  flex: none; width: 34px; align-self: stretch; margin: 4px 4px 4px 0;
+  border: none; background: none; border-radius: var(--radius-sm);
+  color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.m-conv-more:active { background: var(--bg-hover); color: var(--text); }
 
 .card {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -149,8 +338,6 @@ code, pre, .mono { font-family: var(--mono); }
 .m-stat-value { font-size: 15px; font-weight: 600; margin-top: 3px; word-break: break-all; }
 
 .card-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); font-weight: 600; margin: 2px 0 2px; }
-
-.m-fab { position: fixed; right: 16px; bottom: calc(70px + var(--safe-bottom)); z-index: 20; }
 
 /* ---------- 协作组编排（表单式，替代桌面端的画布连线） ---------- */
 .m-node-card {
@@ -619,7 +806,34 @@ code, pre, .mono { font-family: var(--mono); }
 
 .m-collab-running-bar { display: flex; align-items: center; gap: 10px; }
 .m-collab-running-bar .dim { flex: 1; line-height: 1.5; }
-.m-composer-secondary { margin-top: 7px; min-height: 32px; }
+/* 输入框上方的那一条状态（需要拍板 / 正在推进 / 可以继续推进）：只在有事要说时出现，
+   平时底部就只有那个输入框。 */
+.m-composer-head { display: flex; flex-direction: column; gap: 7px; padding-bottom: 8px; }
+/* 发送模式切换：一个按钮在「普通对话」与「推进任务」之间来回切；右边一句当前模式说明。 */
+.m-mode-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.m-mode-toggle {
+  flex: none; padding: 5px 13px; font-family: inherit; font-size: 12.5px; line-height: 1.4;
+  color: var(--text-dim); background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 999px; cursor: pointer;
+}
+.m-mode-toggle.on { color: #fff; background: var(--brand); border-color: transparent; }
+.m-mode-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.m-mode-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「需要你决定」：点开对话界面去回答（问题只露一行，长的省略） */
+.m-run-ask {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 10px; font-family: inherit; font-size: 12.5px; color: var(--text);
+  background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.38);
+  border-radius: var(--radius-sm);
+}
+.m-run-ask-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-run-ask-go { flex: none; font-size: 12px; color: var(--warn); }
+
+/* 与入口角色的对话弹层：线程自己滚动，输入区钉在弹层底部（与对话页同款输入区） */
+.m-sheet-body.m-run-chat-body { overflow: hidden; min-height: 0; padding: 0; gap: 0; }
+.m-run-chat-thread { flex: 1; min-height: 0; }
+/* 弹层贴屏幕底边，输入区要自己让开 Home 条 */
+.m-run-chat-body .m-composer { padding-bottom: calc(6px + var(--safe-bottom)); }
 
 .m-sheet-body.m-collab-role-body { overflow: hidden; min-height: 0; gap: 10px; }
 .m-collab-role-meta { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -735,19 +949,61 @@ code, pre, .mono { font-family: var(--mono); }
 .md-code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 12px; line-height: 1.6; }
 
 /* ---------- 对话：输入区 ---------- */
+/* 输入区就贴着屏幕最下边，只留 6px 收边：
+   - 底部安全区**不照搬**。iOS 独立应用里 `env(safe-area-inset-bottom)` 是 34px，而 Home 条
+     本身只占 ~13px，照搬会在输入框下面留出一整条空白（用户看到的「没到底」）；
+   - 输入区底色一直铺到屏幕底边，安全区里也不会露出页面底色。 */
 .m-composer {
   flex: none; border-top: 1px solid var(--border); background: rgba(18, 17, 28, 0.96);
-  padding: 10px 12px calc(10px + var(--safe-bottom));
+  padding: 8px 10px 6px;
 }
-.m-composer-box { display: flex; align-items: flex-end; gap: 8px; }
+/* 输入框本身就是那个「框」：附件 / 语音在左，发送 / 停止在右，都长在框里面。
+   图标是内联 SVG（见 components/MobileIcons.tsx）：各系统 emoji 大小不一，📎 在 iOS 上尤其大。 */
+.m-composer-box {
+  display: flex; align-items: flex-end; gap: 2px;
+  padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.m-composer-box:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .m-composer textarea {
-  flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 10px 12px; color: var(--text); font-size: 16px; line-height: 1.5; resize: none; outline: none;
+  flex: 1; min-width: 0; background: none; border: none; border-radius: var(--radius);
+  padding: 10px 4px; color: var(--text); font-size: 16px; line-height: 1.5; resize: none; outline: none;
   max-height: 34vh; max-height: 34dvh; min-height: 42px;
 }
-.m-composer textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
-.m-composer .btn { flex: none; min-width: 62px; }
-.m-usage { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); margin-top: 7px; flex-wrap: wrap; }
+.m-composer textarea:disabled { color: var(--text-dim); }
+/* 框内的工具按钮：附件 / 语音 / 发送 / 停止 */
+.m-tool-btn {
+  flex: none; width: 34px; height: 34px; border-radius: 11px; border: 1px solid transparent;
+  background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer;
+  display: grid; place-items: center;
+}
+/* 环境不支持语音输入时把麦克风压暗（仍可点击，点了给中文说明） */
+.m-tool-btn.muted { opacity: 0.5; }
+.m-tool-spin { display: inline-block; animation: m-spin 1s linear infinite; }
+@keyframes m-spin { to { transform: rotate(360deg); } }
+.m-tool-btn:active:not(:disabled) { background: var(--bg-hover); }
+.m-tool-btn:disabled { opacity: 0.4; }
+.m-tool-btn.on {
+  color: #fff; background: rgba(248, 113, 113, 0.22); border-color: rgba(248, 113, 113, 0.5);
+  animation: m-recording 1.6s ease-in-out infinite;
+}
+/* 发送 / 停止：框内右侧那一个图标按钮 */
+.m-tool-btn.send { color: #fff; background: var(--brand); font-size: 15px; }
+.m-tool-btn.send:disabled { background: var(--bg-hover); color: var(--text-dim); }
+.m-tool-btn.stop { color: #fff; background: var(--danger); font-size: 13px; }
+@keyframes m-recording { 50% { opacity: 0.5; } }
+/* 待发送的附件：横向滚动的一排胶囊，避免长文件名把输入区撑高 */
+.m-attach-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+.m-attach-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 5px 8px 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--bg-input);
+  font-size: 11.5px; color: var(--text-muted);
+}
+.m-attach-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-attach-chip button { flex: none; padding: 0 2px; border: none; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+/* token 用量在输入框上方（贴底的是输入框） */
+.m-usage { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); margin-bottom: 7px; flex-wrap: wrap; }
 .m-usage b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ---------- 空状态 ---------- */
@@ -900,10 +1156,10 @@ code, pre, .mono { font-family: var(--mono); }
 /* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
 .office-map {
   position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
-  border: 1px solid var(--border); border-radius: 20px; background: #05040a;
+  border: 1px solid var(--border); border-radius: 20px; background: var(--office-canvas);
   cursor: grab; touch-action: none; overscroll-behavior: contain; user-select: none;
   -webkit-user-select: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 44px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 var(--office-inset), var(--office-map-shadow);
 }
 .office-map.dragging { cursor: grabbing; }
 .office-map-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; will-change: transform; }
@@ -920,24 +1176,24 @@ code, pre, .mono { font-family: var(--mono); }
 .office-pin::after { /* 挂绳：从工牌底端垂到人头顶 */
   content: ''; position: absolute; top: 100%; left: 50%; width: 2px; height: 13px;
   transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, var(--office-lanyard), transparent);
 }
 .office-pin-body {
   position: relative; display: flex; align-items: center; gap: 5px;
   padding: 3px 7px 3px 3px; border-radius: 12px;
-  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.94);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-strong); background: var(--office-card);
+  box-shadow: var(--office-card-shadow);
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .office-pin-face { /* 工牌上的照片位 */
   position: relative; flex: none; width: 28px; height: 28px; display: grid; place-items: center;
   font-size: 15px; border-radius: 8px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.03));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: linear-gradient(160deg, var(--office-card-face), transparent);
+  box-shadow: inset 0 0 0 1px var(--office-card-ring);
 }
 .office-pin:hover .office-pin-body,
 .office-pin.selected .office-pin-body { transform: translateY(-3px) scale(1.04); border-color: var(--accent); }
-.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), 0 10px 22px rgba(0, 0, 0, 0.5); }
+.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), var(--office-card-shadow); }
 .office-pin.tone-working .office-pin-body { border-color: rgba(52, 211, 153, 0.62); }
 .office-pin.tone-busy .office-pin-body { border-color: rgba(248, 113, 113, 0.62); }
 .office-pin.tone-ask .office-pin-body { border-color: rgba(251, 191, 36, 0.62); }
@@ -947,7 +1203,7 @@ code, pre, .mono { font-family: var(--mono); }
 .office-pin.detailed .office-pin-text { gap: 0; }
 .office-pin-dot {
   position: absolute; top: -5px; right: -5px; width: 13px; height: 13px; border-radius: 50%;
-  border: 2.5px solid #0b0a12; background: var(--text-dim);
+  border: 2.5px solid var(--office-card-edge); background: var(--text-dim);
 }
 .office-pin.tone-working .office-pin-dot { background: #34d399; animation: office-pin-pulse 1.9s ease-in-out infinite; }
 .office-pin.tone-busy .office-pin-dot { background: #f87171; }
@@ -960,8 +1216,8 @@ code, pre, .mono { font-family: var(--mono); }
   70% { box-shadow: 0 0 0 9px rgba(52, 211, 153, 0); }
 }
 @keyframes office-pin-glow {
-  0%, 100% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 0 rgba(217, 79, 208, 0.5); }
-  50% { box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5), 0 0 0 8px rgba(217, 79, 208, 0); }
+  0%, 100% { box-shadow: var(--office-card-shadow), 0 0 0 0 rgba(217, 79, 208, 0.5); }
+  50% { box-shadow: var(--office-card-shadow), 0 0 0 8px rgba(217, 79, 208, 0); }
 }
 .office-pin-name {
   max-width: 92px; font-size: 11px; font-weight: 640; line-height: 1.3; color: var(--text);
@@ -1003,9 +1259,9 @@ code, pre, .mono { font-family: var(--mono); }
 /* 点标记弹出的进度信息卡 */
 .office-popover {
   position: absolute; z-index: 6; width: 306px; padding: 12px 13px 13px;
-  border: 1px solid rgba(123, 92, 255, 0.42); border-radius: 16px;
-  background: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
-  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.55); backdrop-filter: blur(10px);
+  border: 1px solid var(--office-popover-ring); border-radius: 16px;
+  background: var(--office-popover);
+  box-shadow: var(--office-popover-shadow); backdrop-filter: blur(10px);
 }
 .office-popover-head { display: flex; align-items: flex-start; gap: 10px; }
 .office-popover-scene { flex: none; width: 108px; height: 88px; overflow: hidden; }
@@ -1042,7 +1298,7 @@ code, pre, .mono { font-family: var(--mono); }
 .office-popover-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
 .office-popover-meta span {
   padding: 2px 8px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.5);
+  border: 1px solid var(--border); background: var(--office-chip);
 }
 .office-popover-more { margin-top: 11px; width: 100%; justify-content: center; }
 
@@ -1050,26 +1306,32 @@ code, pre, .mono { font-family: var(--mono); }
 .office-map-tools { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; flex-direction: column; gap: 7px; }
 .office-map-tools button {
   width: 38px; height: 38px; border-radius: 12px; cursor: pointer; font-size: 15px;
-  border: 1px solid var(--border-strong); background: rgba(19, 18, 32, 0.92); color: var(--text);
+  border: 1px solid var(--border-strong); background: var(--office-tool); color: var(--text);
   backdrop-filter: blur(8px); transition: background 0.15s ease, transform 0.15s ease;
 }
-.office-map-tools button:hover { background: rgba(45, 41, 76, 0.95); transform: translateY(-1px); }
+.office-map-tools button:hover { background: var(--office-tool-hover); transform: translateY(-1px); }
 .office-map-legend {
   position: absolute; right: 14px; top: 14px; z-index: 1; display: flex; flex-wrap: wrap; gap: 10px;
   justify-content: flex-end; max-width: calc(100% - 28px);
   padding: 7px 11px; border-radius: 12px; border: 1px solid var(--border);
-  background: rgba(11, 10, 18, 0.78); backdrop-filter: blur(8px);
+  background: var(--office-glass); backdrop-filter: blur(8px);
 }
 .office-map-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
 .office-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .office-map-hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: rgba(11, 10, 18, 0.75); pointer-events: none;
+  border: 1px solid var(--border); background: var(--office-glass); pointer-events: none;
 }
 
 /* ---------- 移动端：办公室画布矮一点、工牌小一点，指头也点得中 ---------- */
 .m-collab-progress .office-map { height: 340px; margin-top: 7px; border-radius: 16px; }
+/* 运行页的主页面就是这间办公室：画布吃掉剩下的全部高度，输入框贴着屏幕底部。
+   （其余页面沿用上面那条固定高度。） */
+.m-run-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 10px; }
+.m-run-stage .m-collab-progress { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m-run-stage .m-collab-progress .office-map { flex: 1; height: auto; min-height: 200px; }
+.m-run-stage .m-collab-progress-links { flex: none; }
 .m-collab-progress .office-pin-body { gap: 5px; padding: 3px 7px 3px 3px; border-radius: 11px; }
 .m-collab-progress .office-pin-face { width: 26px; height: 26px; font-size: 14px; border-radius: 8px; }
 .m-collab-progress .office-pin-name { font-size: 10.5px; max-width: 84px; }
@@ -1138,11 +1400,21 @@ code, pre, .mono { font-family: var(--mono); }
 .m-board-row dd { min-width: 0; margin: 0 0 0 auto; text-align: right; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- 运行时管理 ---------- */
-.runtime-cmd {
-  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
-  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 7px 10px; overflow-x: auto; white-space: pre;
+/* 内核 Logo：把单色 SVG 当遮罩用，颜色跟着文字走（深浅两套外观自适应） */
+.kernel-logo {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
+.runtime-head { display: flex; align-items: center; gap: 10px; }
 .runtime-log {
   margin: 0; padding: 12px 13px; max-height: 58vh; overflow: auto;
   background: #0e0d17; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);

@@ -83,10 +83,11 @@ export function MobileRolesPage() {
 
           {agents.length === 0 ? (
             <div className="banner info">
-              还没有配置任何智能体。角色必须绑定一个智能体，请先到「设置 → 智能体配置」创建。
+              还没有配置任何智能体。角色必须绑定一个智能体，请先到「设置 → 运行时」，
+              在对应内核的「设置」里新建一个实例。
               <div style={{ marginTop: 8 }}>
-                <button className="btn sm" onClick={() => navigate('/agents')}>
-                  去配置智能体
+                <button className="btn sm" onClick={() => navigate('/runtimes')}>
+                  去运行时配置
                 </button>
               </div>
             </div>
@@ -332,7 +333,7 @@ function RoleForm({
           className="input mono"
           value={modelOverride}
           onChange={(event) => setModelOverride(event.target.value)}
-          placeholder="例如 opus / deepseek-reasoner"
+          placeholder="例如 opus / sonnet"
         />
       </div>
 

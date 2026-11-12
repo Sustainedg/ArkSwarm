@@ -1,7 +1,7 @@
 """面向任意 OpenAI 兼容对话端点的进程内智能体内核。
 
 这个适配器家族覆盖了没有官方 CLI 的模型供应商：
-DeepSeek、Kimi、GLM、Qwen、OpenRouter、vLLM/Ollama…
+Kimi、GLM、Qwen、OpenRouter、vLLM/Ollama…
 所谓「内核」就是智能体循环本身：流式补全 + 沙箱化工具循环，
 让一个普通的对话模型表现得像一个编码智能体。
 """
@@ -316,31 +316,4 @@ class OpenAICompatibleHarness(OpenAIHarnessBase):
     base_url_env = "OPENAI_BASE_URL"
     default_gateway = "https://api.openai.com/v1"
     default_model = "gpt-4o-mini"
-
-
-@register_agent
-class DeepSeekHarness(OpenAIHarnessBase):
-    id = "deepseek-harness"
-    name = "DeepSeek 内核"
-    vendor = "DeepSeek"
-    description = (
-        "把 DeepSeek 的 chat / reasoner 模型套进共享工具循环。"
-        "也是「新增一个模型供应商只需加一个子类」的范例。"
-    )
-    api_key_env = "DEEPSEEK_API_KEY"
-    base_url_env = "DEEPSEEK_BASE_URL"
-    default_gateway = "https://api.deepseek.com/v1"
-    default_model = "deepseek-chat"
-    docs_url = "https://api-docs.deepseek.com/"
-    config_fields = OpenAIHarnessBase.config_fields + (
-        ConfigField(
-            "model_family",
-            "模型族",
-            FieldType.SELECT,
-            default="deepseek-chat",
-            options=[
-                {"value": "deepseek-chat", "label": "deepseek-chat · 通用对话（V3）"},
-                {"value": "deepseek-reasoner", "label": "deepseek-reasoner · 深度推理（R1）"},
-            ],
-        ),
-    )
+    logo = "/icons/kernels/openai.svg"

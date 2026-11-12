@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../../lib/types'
+import { KernelLogo } from '../../components/KernelLogo'
+import { MobileAgentSettings } from '../components/MobileAgentSettings'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -27,7 +29,10 @@ interface Job {
 
 /**
  * 运行时（移动端）：与桌面端同一套接口，交互改成卡片 + 底部弹层。
- * 安装 / 更新 / 卸载的日志在弹层里滚动，可随时中止。
+ *
+ * 一个内核 = 一份安装 + N 份智能体配置，所以「装 / 升 / 卸」与「这个内核怎么跑」
+ * 都在这里：卡片里的「设置」直接编辑该内核下的智能体实例（网关 · 密钥 · 模型 · 适配器选项）。
+ * 日志在弹层里滚动，可随时中止。
  */
 export function MobileRuntimesPage() {
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
@@ -36,6 +41,8 @@ export function MobileRuntimesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
+  /** 正在编辑设置的内核（适配器类型 id）：非空时弹出该内核的智能体设置 */
+  const [settingsFor, setSettingsFor] = useState<AgentRuntime | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const checkLatest = async (runtime: AgentRuntime) => {
@@ -102,8 +109,6 @@ export function MobileRuntimesPage() {
     }
   }
 
-  const instancesInUse = runtimes.reduce((total, runtime) => total + runtime.instances, 0)
-
   return (
     <div className="m-page">
       <MobileTopBar
@@ -124,100 +129,58 @@ export function MobileRuntimesPage() {
             {runtimes.map((runtime) => {
               const provisioning = runtime.provisioning
               const managed = provisioning.supported
-              const info = latest[runtime.id]
-              const remote = info?.latest ?? null
+              const remote = latest[runtime.id]?.latest ?? null
               const canCheck = Boolean(provisioning.commands?.latest?.length)
-              const updateAvailable = Boolean(
-                remote && provisioning.version && versionCore(remote) !== versionCore(provisioning.version),
-              )
+              const current = provisioning.version ? versionCore(provisioning.version) : null
+              // 查到更高版本才提示「更新到 X」；已经是最新版就不给更新入口。
+              // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
+              const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
+              const showUpdate =
+                managed &&
+                provisioning.installed &&
+                Boolean(provisioning.commands?.update?.length) &&
+                (updateTarget !== null || !canCheck || !remote)
               const busy = job?.status === 'running' && job.runtimeId === runtime.id
-              const primaryCommand = provisioning.commands?.update ?? provisioning.commands?.install ?? null
               return (
-                <div className="card" key={runtime.id}>
-                  <div className="row" style={{ gap: 8 }}>
+                <div className="card runtime-card" key={runtime.id}>
+                  <div className="runtime-head">
+                    <KernelLogo logo={runtime.logo} />
                     <div className="m-item-main">
                       <div className="m-item-title">{runtime.name}</div>
-                      <div className="m-item-sub">
-                        {[runtime.vendor, runtime.runtime === 'cli' ? 'CLI' : '进程内 API']
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </div>
+                      <div className="m-item-sub">{kernelSummary(runtime, current)}</div>
                     </div>
-                    {managed ? (
-                      provisioning.installed ? (
-                        <span className="pill ok">已安装</span>
-                      ) : (
-                        <span className="pill warn">未安装</span>
-                      )
-                    ) : (
-                      <span className="pill">{runtime.runtime === 'api' ? '进程内' : '自备'}</span>
-                    )}
-                    {updateAvailable && <span className="pill brand">有更新</span>}
                   </div>
 
-                  <div className="stack" style={{ gap: 4 }}>
-                    {managed && (
-                      <div className="row wrap" style={{ gap: 6 }}>
-                        <span className="dim small">当前版本</span>
-                        <span className="small">
-                          {provisioning.version ?? (provisioning.installed ? '未知' : '—')}
-                        </span>
-                      </div>
-                    )}
-                    {managed && (
-                      <div className="row wrap" style={{ gap: 6 }}>
-                        <span className="dim small">最新版本</span>
-                        <span className="small">
-                          {!canCheck
-                            ? '不适用'
-                            : checking[runtime.id]
-                              ? '查询中…'
-                              : remote
-                                ? remote
-                                : info?.error
-                                  ? '查询失败'
-                                  : '未检查'}
-                        </span>
-                      </div>
-                    )}
-                    {managed && provisioning.path && <div className="mono-sm dim">{provisioning.path}</div>}
-                    {managed && provisioning.package && (
-                      <div className="dim small">
-                        {provisioning.manager} · {provisioning.package}
-                      </div>
-                    )}
-                    <div className="dim small">{runtime.instances} 个智能体实例在用</div>
-                    {!managed && (
-                      <div className="dim small">
-                        {runtime.runtime === 'api' ? '进程内运行，无需安装。' : '由用户自备可执行文件，平台不代管安装。'}
-                      </div>
-                    )}
-                  </div>
-
-                  {managed && primaryCommand && <div className="runtime-cmd">{primaryCommand.join(' ')}</div>}
                   {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
 
                   <div className="row wrap" style={{ gap: 6 }}>
                     {canCheck && (
-                      <button className="btn sm" onClick={() => void checkLatest(runtime)} disabled={Boolean(checking[runtime.id]) || busy}>
+                      <button
+                        className="btn sm"
+                        onClick={() => void checkLatest(runtime)}
+                        disabled={Boolean(checking[runtime.id]) || busy}
+                      >
                         {checking[runtime.id] ? '查询中…' : '检查更新'}
                       </button>
                     )}
-                    {provisioning.supported && !provisioning.installed && provisioning.commands?.install?.length ? (
+                    {managed && !provisioning.installed && provisioning.commands?.install?.length ? (
                       <button className="btn sm primary" onClick={() => void start(runtime, 'install')} disabled={busy}>
                         安装
                       </button>
                     ) : null}
-                    {provisioning.supported && provisioning.installed && provisioning.commands?.update?.length ? (
+                    {showUpdate ? (
                       <button className="btn sm primary" onClick={() => void start(runtime, 'update')} disabled={busy}>
-                        更新
+                        {updateTarget ? `更新到 ${updateTarget}` : '更新'}
                       </button>
                     ) : null}
-                    {provisioning.supported && provisioning.installed && provisioning.commands?.uninstall?.length ? (
+                    {managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
                       <button className="btn sm danger" onClick={() => void start(runtime, 'uninstall')} disabled={busy}>
                         卸载
                       </button>
                     ) : null}
+                    <button className="btn sm primary" onClick={() => setSettingsFor(runtime)} disabled={busy}>
+                      设置
+                    </button>
                     {runtime.docs_url && (
                       <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
                         文档 ↗
@@ -228,14 +191,21 @@ export function MobileRuntimesPage() {
               )
             })}
           </div>
-
-          {!loading && runtimes.length > 0 && (
-            <div className="dim small" style={{ textAlign: 'center' }}>
-              共 {runtimes.length} 个运行时 · {instancesInUse} 个智能体实例
-            </div>
-          )}
         </div>
       </div>
+
+      {settingsFor && (
+        <MobileSheet
+          full
+          title={`${settingsFor.name} · 设置`}
+          onClose={() => {
+            setSettingsFor(null)
+            void reload()
+          }}
+        >
+          <MobileAgentSettings typeId={settingsFor.id} />
+        </MobileSheet>
+      )}
 
       {job && (
         <MobileSheet
@@ -277,6 +247,15 @@ export function MobileRuntimesPage() {
       )}
     </div>
   )
+}
+
+/** 卡片副标题：所属公司 + 当前版本（卡片上只留这三样，其余信息收进按钮后面的动作里）。 */
+function kernelSummary(runtime: AgentRuntime, current: string | null): string {
+  const provisioning = runtime.provisioning
+  if (!provisioning.supported) {
+    return `${runtime.vendor} · ${runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}`
+  }
+  return provisioning.installed && current ? `${runtime.vendor} · 当前版本 ${current}` : `${runtime.vendor} · 未安装`
 }
 
 /** 从版本字符串里抽出可比较的核心版本号（`2.1.316 (Claude Code)` → `2.1.316`）。 */

@@ -8,8 +8,8 @@
 
 ## 1. 设计目标与原则
 
-这个项目的生命周期里，唯一确定的事情是：**智能体会越来越多**（Claude Code、Codex、Gemini CLI、
-DeepSeek 内核之后还会有更多 CLI 与 API 型智能体）。所以架构的目标不是"支持 N 个智能体"，
+这个项目的生命周期里，唯一确定的事情是：**智能体会越来越多**（Claude Code、Codex、Gemini CLI
+之后还会有更多 CLI 与 API 型智能体）。所以架构的目标不是"支持 N 个智能体"，
 而是"**增加第 N+1 个智能体的成本趋近于零**"。
 
 四条原则，按优先级排序：
@@ -103,7 +103,7 @@ POST /api/conversations/{id}/messages
 | --- | --- | --- |
 | `run.started` | `payload.run_id` | 建立运行标识 |
 | `message.delta` | `text` | 正文增量 |
-| `thinking.delta` | `text` | 推理增量（DeepSeek `reasoning_content`、Claude thinking） |
+| `thinking.delta` | `text` | 推理增量（如 `reasoning_content`、Claude thinking） |
 | `tool.call` | `name`、`call_id`、`payload.input` | 工具调用 |
 | `tool.result` | `call_id`、`payload.output`、`payload.is_error` | 工具结果 |
 | `usage` | 任意数值键 | token / 费用 / 耗时 |
@@ -236,6 +236,7 @@ class AcmeAgent(AgentDefinition):
     base_url_env = "ACME_BASE_URL"
     default_gateway = "https://api.acme.dev/v1"
     default_model = "acme-pro"
+    logo = "/icons/kernels/acme.svg"  # 官方 Logo（单色 SVG，前端当遮罩染色）
     capabilities = Capabilities(sessions=True, native_system_prompt=True, tools=True,
                                working_directory=True)
     config_fields = (
@@ -250,6 +251,9 @@ class AcmeAgent(AgentDefinition):
 
 要求：`parse_line` 必须容忍脏行（解析失败 → `log(...)` 或忽略，不得抛出导致整轮失败）；
 需要的解析状态放 `run.state`；结束时要补发事件就覆盖 `AgentRun.finish()`。
+Logo 是**适配器声明的静态资源**（`frontend/public/icons/kernels/*.svg`，24×24 单色、只画形状）：
+界面把它当遮罩染成当前文字色，深色 / 浅色共用一份；没有官方图形的自备内核用中性线条图形。
+**不要**在前端按 `type_id` 写 Logo 映射（铁律 1）。
 
 ### 6.2 新增 API 型供应商
 
@@ -266,6 +270,7 @@ class AcmeHarness(OpenAIHarnessBase):
     base_url_env = "ACME_BASE_URL"
     default_gateway = "https://api.acme.dev/v1"
     default_model = "acme-chat"
+    logo = "/icons/kernels/acme.svg"
 ```
 
 `OpenAIHarnessBase` 已提供：流式补全、工具循环、`extra_headers`/`extra_body`、
@@ -297,7 +302,6 @@ class AcmeHarness(OpenAIHarnessBase):
 | 目标 | 现状 | 接入方式 |
 | --- | --- | --- |
 | Gemini CLI | 已有 `gemini_cli.py`（`GEMINI_SYSTEM_MD` 注入人格、`--resume` 续接） | 已接入；新版本差异用 `ConfigField` 暴露开关 |
-| DeepSeek 内核 | 已有 `openai_harness.py` 里的 `DeepSeekHarness` 子类（`deepseek-chat` / `deepseek-reasoner`） | 已接入；新增模型族只需加 `options` |
 | 任意 OpenAI 兼容端点 | 已有 `openai_harness.py`（OpenRouter/vLLM/Ollama/Kimi/GLM） | 新供应商 = 一个子类 |
 | 未来的 Aider / Cline / Continue 等 CLI | 无适配器 | 按 §6.1 写模块；或先用 §6.3 |
 | 非 OpenAI 协议的 API（如 Anthropic Messages API） | 复用 `OpenAIHarnessBase` 不合适 | 以 `Runtime.API` 直接实现 `async stream(ctx)`，产出标准事件即可 |
@@ -319,17 +323,34 @@ class AcmeHarness(OpenAIHarnessBase):
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
 - **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
-  有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、底部 Tab 与底部弹层。桌面端页面 / 入口 /
+  有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、左侧抽屉与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
   `TicketBoardKit`
   等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用
-  `m-` 前缀（`m-tabbar` / `m-sheet` / `m-item` / `m-thread`…）。
+  `m-` 前缀（`m-drawer` / `m-sheet` / `m-item` / `m-thread`…）。
 - **PWA 资产只放 `frontend/public/m/`**（`manifest.webmanifest` + `sw.js`）：`scope`/`start_url` 固定
   `/m/`，`/api/`（含 SSE 长连接）**永不进入缓存**。新增页面要保证断网时应用外壳仍能打开（离线只保证
   「界面能打开」，对话仍需联网）。
+- **朗读（`src/lib/tts.ts`）只有一份实现**：开关默认关闭、存在 localStorage，开启后念的是
+  Markdown 转出来的纯文本；对话页顶栏右上角只有「分享 + 朗读」两个按钮。
+- **移动端「操作图标」用线条 SVG**（`src/mobile/components/MobileIcons.tsx`）：输入区、顶栏这类
+  需要与文字同色的小图标，emoji 的尺寸与颜色随系统而变、同一排对不齐；这类图标一律
+  `stroke="currentColor"`，尺寸走 `size` 参数。
+- **智能体设置挂在运行时页**：移动端没有独立的智能体配置页，内核的安装 / 更新与它的实例配置
+  在同一处 —— 两件事本来就是一体的。
+- **外观（深色 / 浅色 / 跟随系统）只有一份实现**（`src/lib/theme.ts`）：解析结果写在
+  `<html data-theme>`，两端样式表各自的 `:root` 是深色默认、浅色只加 `[data-theme='light']`
+  覆盖块。**界面里不要写死深色**：先加 CSS 变量、再补浅色值；两端都要用到的新配色，两份样式表
+  一起加（共享段还要逐字一致，见 `backend/tests/test_mobile_web.py`）。原生外壳的配色由
+  `applyTheme()` 同步 `meta[name=theme-color]`，别在别处硬编码主题色。
+- **输入区只有一份**：`src/mobile/components/MobileComposer.tsx`（受控：草稿 / 附件 / 上传 /
+  发送都由页面给），对话页与协作运行页共用；不要再各写一个输入框。
+- **图片 / 插画类的多主题资源在构建期换算，不要在手机上跑实时滤镜**：协作办公室底图就是这么做的
+  —— `scripts/gen_office_bg.py` 从同一份几何产出深 / 浅两张 SVG，前端按主题选（见
+  `frontend/public/office/`、`components/CollabOfficeMap.tsx`）。
 - **移动端锁定缩放**：它是「固定外壳」的应用形态，入口视口写 `maximum-scale=1.0, user-scalable=no`，
   并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底（iOS Safari 忽略 `user-scalable=no`）；
   因此移动端输入框字号必须 ≥ 16px（iOS 聚焦小于 16px 的输入框会强制放大页面）。桌面端不禁用缩放。

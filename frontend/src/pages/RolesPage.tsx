@@ -387,7 +387,7 @@ function RoleModal({
 
         <div className="field">
           <label className="field-label">覆盖模型（可选）</label>
-          <input className="input mono" value={modelOverride} onChange={(e) => setModelOverride(e.target.value)} placeholder="例如 opus / deepseek-reasoner" />
+          <input className="input mono" value={modelOverride} onChange={(e) => setModelOverride(e.target.value)} placeholder="例如 opus / sonnet" />
         </div>
         <div className="field">
           <label className="field-label">覆盖网关（可选）</label>

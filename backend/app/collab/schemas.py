@@ -262,6 +262,15 @@ class RunCreate(BaseModel):
 
 class RunMessage(BaseModel):
     content: str = ""
+    #: 已上传附件的相对路径（相对这次协作的工作目录，由 `/runs/{id}/attachments` 返回）
+    attachments: list[str] = Field(default_factory=list)
+
+
+class RunAttachmentUpload(BaseModel):
+    """上传一个协作附件：内容走 base64，省掉 multipart 依赖（同对话附件）。"""
+
+    name: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=1)
 
 
 class TicketRead(BaseModel):

@@ -25,8 +25,9 @@ from typing import Any, AsyncIterator, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ..models import Role, utcnow
 from ..agents.events import AgentEvent, EventType
+from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
+from ..models import Role, utcnow
 from . import execution, protocol
 from .graph import (
     allowed_assignees,
@@ -382,11 +383,16 @@ def _chat_ticket_view(ticket: CollabTicket, labels: dict[str, str]) -> ChatTicke
     )
 
 
-async def prepare_chat(session: AsyncSession, run_id: str, content: str) -> PreparedChat:
+async def prepare_chat(
+    session: AsyncSession, run_id: str, content: str, attachments: Sequence[str] | None = None
+) -> PreparedChat:
     """校验并落库一条用户消息，拼出入口角色这次的聊天 prompt。
 
     这里刻意**不碰工单状态**，也不检查主流程是否正在跑：CEO 的聊天通道与工单推进并行，
     是用户随时能找到负责人的唯一入口。
+
+    ``attachments`` 是已经落在工作目录里的附件相对路径：只校验「确实在本工作目录内」，
+    再把清单拼进提示词 —— 与对话的附件走同一套（见 :mod:`app.attachments`）。
     """
     run = await session.get(CollabRun, run_id)
     if run is None:
@@ -394,8 +400,16 @@ async def prepare_chat(session: AsyncSession, run_id: str, content: str) -> Prep
     if execution.is_chat_running(run_id):
         raise ChatError("CEO 正在回复上一条消息，请稍等它说完")
     text = (content or "").strip()
-    if not text:
-        raise ChatError("请先输入想对 CEO 说的话")
+    if not text and not attachments:
+        raise ChatError("请先输入想对 CEO 说的话，或附上一个文件")
+    try:
+        files = [
+            attachment_relative_path(item, execution.workspace_root(run))
+            for item in attachments or []
+        ]
+    except AttachmentError as exc:
+        raise ChatError(str(exc)) from None
+    spoken = compose_with_attachments(text, files)
 
     team = await session.get(CollabTeam, run.team_id)
     if team is None:
@@ -421,7 +435,7 @@ async def prepare_chat(session: AsyncSession, run_id: str, content: str) -> Prep
         role_key=entry.key,
         sequence=await _next_chat_sequence(session, run.id),
         status="complete",
-        content=text,
+        content=spoken,
         finished_at=utcnow(),
     )
     session.add(user_message)
@@ -437,7 +451,7 @@ async def prepare_chat(session: AsyncSession, run_id: str, content: str) -> Prep
         node=entry,
         tickets=[_chat_ticket_view(ticket, labels) for ticket in tickets],
         history=[ChatHistoryEntry(sender=row.sender, content=row.content) for row in history],
-        user_message=text,
+        user_message=spoken,
         active_label=await _active_step_label(session, run.id, graph),
         node_labels=labels,
     )

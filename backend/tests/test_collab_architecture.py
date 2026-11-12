@@ -75,7 +75,8 @@ def test_collab_modules_stay_inside_their_layer(path: Path):
     ]
     assert offenders == [], (
         f"{path.name} 越层依赖了：{offenders}。协作域只能依赖 agents.events（事件契约）、"
-        "models/db/settings 与自身模块；执行层请通过 execution.py 访问。"
+        "models/db/settings、app.attachments（附件工具）与自身模块；"
+        "执行层请通过 execution.py 访问。"
     )
 
 

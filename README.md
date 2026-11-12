@@ -1,7 +1,7 @@
 # Magenta Agents · 多智能体对话控制台
 
-一个用于**管理并对话各种 CLI / API 型智能体**的网站。把 Claude Code、Codex、Gemini CLI、
-DeepSeek 等智能体注册成可配置的实例（自定义网关 + API 密钥 + 模型），再给它们套上
+一个用于**管理并对话各种 CLI / API 型智能体**的网站。把 Claude Code、Codex、Gemini CLI
+等智能体注册成可配置的实例（自定义网关 + API 密钥 + 模型），再给它们套上
 **角色（人格）**，就能像聊天一样使用。
 
 > 设计重点：**新智能体是插件，不是改动**。加一个文件即可接入新智能体；前端表单、SSE 流、
@@ -13,7 +13,7 @@ DeepSeek 等智能体注册成可配置的实例（自定义网关 + API 密钥 
 
 | 概念 | 说明 | 存储 |
 | --- | --- | --- |
-| **智能体类型** | 内置适配器（`claude-code` / `codex` / `gemini-cli` / `deepseek-harness` / `openai-harness` / `custom-cli`），声明能力位与配置项 schema | 代码（插件注册表） |
+| **智能体类型** | 内置适配器（`claude-code` / `codex` / `gemini-cli` / `openai-harness` / `custom-cli`），声明能力位与配置项 schema | 代码（插件注册表） |
 | **运行时** | 智能体类型依赖的**本机可执行文件**（CLI 内核）；可在「运行时」页查看版本并安装 / 更新 / 卸载 | 宿主机（命令由适配器声明） |
 | **智能体实例** | 一种类型的**实例**：名称 + 网关 + API 密钥 + 模型 + 适配器选项 | `agent_instances` |
 | **角色** | 头像 + 系统提示词 + 绑定某个智能体（可覆盖模型 / 网关） | `roles` |
@@ -63,7 +63,6 @@ usage         session         log              error       run.finished
 | `claude-code` | CLI `claude` | ✅ `--session-id` / `--resume` | ✅ `--append-system-prompt` | 支持权限模式、MCP、工具白名单 |
 | `codex` | CLI `codex` | ✅ `codex exec resume` | ➖ 注入到 prompt | 支持 `-c model_providers.*` 指向自定义网关 |
 | `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ `GEMINI_SYSTEM_MD` | 自动把人格写入运行期临时文件 |
-| `deepseek-harness` | 进程内 API | 由平台回放上下文 | ✅ | 内置工具循环，默认走 DeepSeek |
 | `openai-harness` | 进程内 API | 同上 | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama… |
 | `custom-cli` | CLI 任意命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体 |
 

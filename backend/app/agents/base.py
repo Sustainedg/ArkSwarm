@@ -1,6 +1,6 @@
 """每个智能体集成都要实现的契约。
 
-接入一个全新的智能体（Gemini CLI、DeepSeek 内核、Aider…），只需在
+接入一个全新的智能体（Gemini CLI、Aider…），只需在
 ``app/agents/builtin`` 下新增一个模块，定义 :class:`AgentDefinition` 的子类
 并用 :func:`register_agent` 装饰即可，代码库其他部分无需改动。
 """
@@ -212,6 +212,9 @@ class AgentDefinition(ABC):
     default_gateway: ClassVar[str | None] = None
     default_model: ClassVar[str | None] = None
     docs_url: ClassVar[str | None] = None
+    #: 该内核的官方 Logo（前端静态资源路径，如 ``/icons/kernels/claude.svg``）；
+    #: ``None`` 表示界面退回只用文字名。它只是「一张图」，不参与任何运行行为。
+    logo: ClassVar[str | None] = None
     #: 必须存在于 PATH 中的可执行文件（仅 CLI 适配器）
     executable: ClassVar[str | None] = None
     #: 该内核的运行时如何安装 / 更新 / 卸载；``None`` 表示不由平台管理
@@ -236,6 +239,7 @@ class AgentDefinition(ABC):
             "default_gateway": self.default_gateway,
             "default_model": self.default_model,
             "docs_url": self.docs_url,
+            "logo": self.logo,
             "executable": self.executable,
             "availability": self.availability().to_dict(),
             "provisioning": self.provisioning(),

@@ -2,7 +2,7 @@
 
 适配器输出的一切都用这些类型表达，因此传输层（SSE）、持久化层与界面
 都不需要关心这次运行是来自 CLI 子进程（Claude Code、Codex、Gemini CLI…）
-还是来自进程内的 API 内核（DeepSeek 或任意 OpenAI 兼容端点）。
+还是来自进程内的 API 内核（任意 OpenAI 兼容端点）。
 """
 from __future__ import annotations
 

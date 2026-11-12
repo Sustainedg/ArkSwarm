@@ -336,3 +336,154 @@ async def test_unknown_api_path_returns_json_instead_of_the_spa_shell(client):
     spa = await client.get("/collab/runs/example")
     assert spa.status_code == 200
     assert spa.headers["content-type"].startswith("text/html")
+
+
+@needs_frontend
+def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
+    """输入区只留一个「框」：线条图标长在框里、没有背景提示文字、贴着屏幕底边。
+
+    顶栏右上角是「分享对话」+ 朗读开关（**默认关闭**）；会话级操作挪到抽屉里每个对话行的
+    「⋯」上 —— 那几件事要用到聊天页的消息与会话状态，所以信号经路由 state 传回。
+    """
+    page = (MOBILE_SRC / "pages" / "MobileChatPage.tsx").read_text(encoding="utf-8")
+    assert "MobileComposer" in page, "对话页的输入区应当用共享组件 MobileComposer"
+    assert 'aria-label="更多操作"' not in page, "顶栏右上角的「⋯」应当已挪到抽屉的对话行"
+    assert "useSpeechOutput" in page and "speechSupported" not in page, "朗读开关只用 lib/tts 那一份实现"
+    assert "speechSynthesis" not in page, "页面里不许自己调语音合成"
+    assert "openActions" in page, "抽屉点「⋯」后聊天页要负责弹会话操作面板"
+
+    # 输入区的样子只有一份实现（对话页与协作对话共用）：线条图标长在框里、没有背景提示文字。
+    composer = (MOBILE_SRC / "components" / "MobileComposer.tsx").read_text(encoding="utf-8")
+    assert not re.search(r"placeholder\s*=", composer), "输入框不该再有背景提示文字"
+    for symbol in ("PaperclipIcon", "MicIcon", "SendIcon", "StopIcon"):
+        assert symbol in composer, f"输入区应当用 {symbol} 这类线条图标"
+    for emoji in ("📎", "🎤", "🔊", "🔈", "➤", "■"):
+        assert emoji not in composer, f"图标不该再用 emoji / 文字符号：{emoji}"
+    assert re.search(r"voiceSupported", composer), "麦克风按钮要一直显示（不支持时给出中文说明）"
+    assert "voiceSupported &&" not in composer, "麦克风不该再被 voiceSupported 藏起来"
+    for symbol in ("SpeakerIcon", "ShareIcon"):
+        assert symbol in page, f"顶栏应当用 {symbol} 这类线条图标"
+    for emoji in ("📎", "🎤", "🔊", "🔈", "➤", "■"):
+        assert emoji not in page, f"图标不该再用 emoji / 文字符号：{emoji}"
+
+    # 分享：把对话渲染成长图，走 lib/shareImage（只此一份实现）。
+    assert "shareConversationImage" in page, "顶栏的分享按钮要接 lib/shareImage"
+    share = (FRONTEND / "src" / "lib" / "shareImage.ts").read_text(encoding="utf-8")
+    for symbol in (
+        "renderConversationImage", "shareConversationImage", "navigator.share", "toBlob",
+    ):
+        assert symbol in share, f"lib/shareImage.ts 缺少 {symbol}"
+
+    drawer = (MOBILE_SRC / "components" / "MobileDrawer.tsx").read_text(encoding="utf-8")
+    assert "openActions" in drawer, "抽屉的对话行要能把会话操作交给聊天页"
+    assert "avatar" not in drawer.split("m-conv-row")[1].split("</div>")[0], "对话行不再画头像"
+
+    # 朗读只有一份实现，且开关默认关闭（关闭时把键删掉，不靠写 'off'）。
+    tts = (FRONTEND / "src" / "lib" / "tts.ts").read_text(encoding="utf-8")
+    for symbol in (
+        "SPEECH_STORAGE_KEY", "magenta.tts", "readSpeechEnabled", "storeSpeechEnabled",
+        "toSpeechText", "useSpeechOutput",
+    ):
+        assert symbol in tts, f"lib/tts.ts 缺少 {symbol}"
+    assert "removeItem" in tts, "关掉朗读要把存储键删掉（默认关闭只有一个真值来源）"
+
+    # 输入区贴着屏幕底边：不再整段照搬底部安全区。
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    composer = re.search(r"\.m-composer \{([^}]*)\}", css)
+    assert composer, "mobile.css 缺少 .m-composer 样式"
+    assert "--safe-bottom" not in composer.group(1), "输入区不该再整段照搬底部安全区"
+
+
+@needs_frontend
+def test_lists_show_dates_with_a_single_time_source():
+    """两端的列表都显示时间：今天只显示时间，其余显示日期 + 时间（口径只有 `lib/datetime.ts` 一份）。"""
+    dt = (FRONTEND / "src" / "lib" / "datetime.ts").read_text(encoding="utf-8")
+    for symbol in ("formatListTime", "isSameDay"):
+        assert symbol in dt, f"lib/datetime.ts 缺少 {symbol}"
+    assert "getHours()" in dt and "getMonth()" in dt, "时间文案在这里算，组件里不要再各写一份"
+
+    drawer = (MOBILE_SRC / "components" / "MobileDrawer.tsx").read_text(encoding="utf-8")
+    assert "formatListTime" in drawer, "移动端的对话列表要显示时间"
+    desktop = (FRONTEND / "src" / "pages" / "ChatPage.tsx").read_text(encoding="utf-8")
+    assert "formatListTime" in desktop, "桌面端的对话列表也要显示时间"
+
+
+@needs_frontend
+def test_collab_run_is_the_office_with_the_chat_hidden_behind_a_tap():
+    """协作运行页的主页面就是那间 3D 办公室；聊天界面点人物才出来。
+
+    底部只有输入框，而且与对话页共用同一份（`MobileComposer`）；3D 底图深 / 浅各一张，
+    由主题决定用哪张 —— 浅色外壳下不能还是一块深色画布。
+    """
+    page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
+    assert "MobileComposer" in page, "协作运行页的输入区要复用对话页那一份"
+    assert not re.search(r"placeholder\s*=", page), "输入框不该再有背景提示文字"
+    # 时间线只在对话弹层里出现：主页面是办公室，不是聊天界面。
+    assert 'className="m-thread m-run-chat-thread"' in page, "时间线应当只在对话弹层里"
+    assert "m-run-stage" in page, "主页面留一块专门放办公室画布的区域"
+    # 点人物 = 打开对话；入口角色的对话就是「你 ↔ 领导者」那条线。
+    assert "openRole" in page and "setChatOpen(true)" in page, "点动画里的人物要能打开对话界面"
+    assert 'aria-label="与领导者对话"' not in page, "顶栏不要再塞一个对话按钮（点人物才是入口）"
+
+    # 协作聊天也能带附件（后端与对话走同一套 app.attachments）。
+    assert "uploadCollabAttachment" in page, "输入区的回形针要接到协作附件接口"
+
+    # 底图跟着主题走：两张图、同一份几何。
+    office = (FRONTEND / "src" / "components" / "CollabOfficeMap.tsx").read_text(encoding="utf-8")
+    assert "iso-office-light.svg" in office and "useThemeMode" in office, (
+        "浅色外壳下要换成浅色底图（useThemeMode 决定用哪张）"
+    )
+    for name in ("iso-office.svg", "iso-office-light.svg"):
+        assert (FRONTEND / "public" / "office" / name).is_file(), f"缺少底图 {name}"
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    assert "--office-canvas" in css, "办公室画布底色要走主题变量（浅色下不能还是深色）"
+
+
+@needs_frontend
+def test_collab_composer_lets_the_user_pick_chat_or_advance():
+    """协作输入区有一个模式按钮：点一下「推进任务」、再点回「普通对话」，由用户说了算。
+
+    两个模式各自接一条线（`/chat` 与 `/messages`）；推进模式下空着也能发，那就是「继续推进」（`/resume`）。
+    """
+    page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
+    assert "m-mode-toggle" in page, "输入框上方要有一个切换模式的按钮"
+    assert "setSendMode(effectiveWork ? 'chat' : 'work')" in page, "再点一次要切回普通对话"
+    assert "aria-pressed" in page, "按钮要能看出当前是哪一种模式"
+    assert "推进任务" in page and "普通对话" in page, "两种模式的名字要写清楚"
+    # 模式 → 通道：对话走 /chat（可带附件），推进走 /messages，空内容是 /resume。
+    for path in ("/chat`", "/messages`", "/resume`"):
+        assert path in page, f"协作输入区缺少 {path} 这条通道"
+    assert "effectiveWork" in page, "发哪条线要由当前模式判定（不要按状态猜）"
+    assert "allowEmptySend={effectiveWork}" in page, "推进模式下空内容也要能发（= 继续推进）"
+    assert "sheetComposerRef" in page and "inputRef={inputRef}" in page, (
+        "自由答复要聚焦到当前可见的输入框（共享组件必须支持传入 textarea ref）"
+    )
+    # 选中态在样式表里有对应的一档高亮。
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    assert ".m-mode-toggle.on" in css, "mobile.css 缺少按钮的选中态"
+
+
+@needs_frontend
+def test_agent_settings_live_inside_the_runtimes_page():
+    """智能体设置并入「运行时」：一个内核 = 一份安装 + N 份配置，别再拆成两个页面。"""
+    pages = {path.name for path in (MOBILE_SRC / "pages").glob("*.tsx")}
+    assert "MobileAgentsPage.tsx" not in pages, "移动端不该再有独立的智能体配置页"
+
+    app = (MOBILE_SRC / "MobileApp.tsx").read_text(encoding="utf-8")
+    assert "/agents" not in app, "移动端路由里不该再挂 /agents"
+
+    panel = MOBILE_SRC / "components" / "MobileAgentSettings.tsx"
+    assert panel.is_file(), "该内核的智能体设置应当是一个可复用面板"
+    panel_text = panel.read_text(encoding="utf-8")
+    assert "DynamicForm" in panel_text, "适配器选项仍由 DynamicForm 渲染（前端不硬编码字段）"
+
+    runtimes = (MOBILE_SRC / "pages" / "MobileRuntimesPage.tsx").read_text(encoding="utf-8")
+    assert "MobileAgentSettings" in runtimes and "setSettingsFor" in runtimes, "运行时页每个内核要有「设置」入口"
+
+    settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
+    assert "/agents" not in settings, "设置页不该再指向智能体配置页"
+    assert "运行时" in settings and "技能" in settings
+    # 运行概览 / 版本记录这些信息不再占小屏（只认小节标题，注释里提到不算）。
+    for label in ("运行概览", "版本记录"):
+        assert f'card-section-title">{label}' not in settings, f"设置页不该再有「{label}」小节"
+    assert "refreshShell" in settings, "「更新到最新版本」是独立应用唯一的重载出口，必须留着"

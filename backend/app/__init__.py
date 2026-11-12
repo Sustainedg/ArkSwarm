@@ -1,9 +1,22 @@
 from __future__ import annotations
 
-__version__ = "V0.17"
+__version__ = "V0.18"
 
 #: 版本记录（最新在前）。新增发布时，请同步修改 ``__version__`` 并在此追加一条。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
+    {
+        "version": "V0.18",
+        "date": "2026-11-12",
+        "title": "运行时页：内核 Logo、精简卡片、按需更新，并取消 DeepSeek 内核",
+        "highlights": (
+            "每个内核的名字前面挂上官方 Logo（Claude / OpenAI / Gemini，自备 CLI 用终端线条图形）："
+            "图形由适配器声明（`logo`），前端当遮罩染成当前文字色，深浅两套外观共用一份单色图",
+            "运行时卡片只留「官方 Logo + 内核名 + 所属公司 + 当前版本」，其余信息收进动作按钮",
+            "已经是最新版就不再显示「更新」按钮；有更新时按钮直接写明「更新到 <版本>」",
+            "取消内置的 DeepSeek 内核（要接入任意 OpenAI 兼容端点，用 `openai-harness` 填网关与模型即可）",
+            "移动端外壳缓存版本 v29 → v30，已添加到主屏的独立应用下次打开即可换到这一版",
+        ),
+    },
     {
         "version": "V0.17",
         "date": "2026-11-11",

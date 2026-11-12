@@ -54,6 +54,7 @@ class GeminiCliAgent(AgentDefinition):
     default_gateway = "https://generativelanguage.googleapis.com"
     default_model = "gemini-2.5-pro"
     docs_url = "https://github.com/google-gemini/gemini-cli"
+    logo = "/icons/kernels/gemini.svg"
     capabilities = Capabilities(
         streaming=True,
         sessions=True,

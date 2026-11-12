@@ -1,6 +1,6 @@
 """用户自定义 CLI 智能体 —— 不写代码也能接入新智能体。
 
-用户描述如何调用任意命令行智能体（Aider、自研的 DeepSeek 内核二进制、
+用户描述如何调用任意命令行智能体（Aider、自研的内核二进制、
 内部工具……）以及如何解析它的输出。这是保持平台开放性的声明式逃生舱。
 """
 from __future__ import annotations
@@ -35,6 +35,7 @@ class CustomCliAgent(AgentDefinition):
         "它就能成为可绑定给角色的一等公民。"
     )
     runtime = Runtime.CLI
+    logo = "/icons/kernels/cli.svg"
     executable = None  # 由实例上的「可执行命令」决定
     auto_provision = False  # 这是模板：未填写命令前不参与播种
     api_key_env = None
@@ -52,7 +53,7 @@ class CustomCliAgent(AgentDefinition):
             "可执行命令",
             FieldType.STRING,
             required=True,
-            placeholder="aider / my-agent / /opt/bin/deepseek",
+            placeholder="aider / my-agent / /opt/bin/my-agent",
             help="按 PATH 查找，与 shell 的行为一致。",
         ),
         ConfigField(
@@ -127,9 +128,9 @@ class CustomCliAgent(AgentDefinition):
             advanced=True,
         ),
         ConfigField("api_key_env", "API 密钥环境变量名", FieldType.STRING, advanced=True,
-                    placeholder="DEEPSEEK_API_KEY"),
+                    placeholder="MY_AGENT_API_KEY"),
         ConfigField("gateway_env", "网关环境变量名", FieldType.STRING, advanced=True,
-                    placeholder="DEEPSEEK_BASE_URL"),
+                    placeholder="MY_AGENT_BASE_URL"),
         ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
     )
 

@@ -12,6 +12,7 @@ from sqlmodel import select
 
 from ..agents import AgentContext, AgentDefinition, EventType, get_agent
 from ..agents.events import AgentEvent, error, log, run_finished
+from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
 from ..models import AgentInstance, Conversation, Message, Role
 from ..security import decrypt
 from ..settings import get_settings
@@ -53,8 +54,11 @@ def resolve_workspace(conversation: Conversation, role: Role) -> str:
     settings = get_settings()
     raw = conversation.workspace_dir or role.workspace_dir
     base = Path(raw).expanduser() if raw else settings.workspaces_root / conversation.id
-    base = base.resolve()
-    base.mkdir(parents=True, exist_ok=True)
+    try:
+        base = base.resolve()
+        base.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ConfigurationError(f"工作目录不可用：{base}（{exc}）") from exc
     return str(base)
 
 
@@ -114,6 +118,28 @@ def _clip_history(rows: list[Message]) -> list[dict[str, str]]:
     return list(reversed(picked))
 
 
+def resolve_attachment(relative: str, workspace: str) -> str:
+    """校验附件确实在本次运行的工作目录内，返回规范化的相对路径。
+
+    实现与「📎 附件」提示块都在 :mod:`app.attachments`（协作域共用同一份），
+    这里只把异常换成运行层的 ``ConfigurationError``。
+    """
+    try:
+        return attachment_relative_path(relative, workspace)
+    except AttachmentError as exc:
+        raise ConfigurationError(str(exc)) from None
+
+
+def compose_user_content(content: str, attachments: list[str] | None, workspace: str) -> str:
+    """把附件写进用户提示词：文件已经落在工作目录里，这里明确点名让智能体去读。
+
+    这样做的好处是与内核无关 —— 只要能读工作目录的文件（Claude Code / Codex / Gemini CLI /
+    custom-cli 都行），附件就生效，不需要适配器或事件协议做任何改动。
+    """
+    paths = [resolve_attachment(item, workspace) for item in attachments or []]
+    return compose_with_attachments(content, paths)
+
+
 def transcript_prompt(system_prompt: str | None, history: list[dict[str, str]], prompt: str) -> str:
     """用于既不支持系统提示词参数、也不支持会话续接的智能体。"""
     lines = []
@@ -150,16 +176,19 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
         )
     ).scalars().all()
 
-    user_message = Message(conversation_id=conversation.id, role="user", content=payload.content)
+    content = compose_user_content(
+        payload.content, getattr(payload, "attachments", None), workspace
+    )
+    user_message = Message(conversation_id=conversation.id, role="user", content=content)
     session.add(user_message)
 
     history = _clip_history(list(existing))
-    ctx = build_context(definition, agent, role, conversation, payload.content, history, workspace)
+    ctx = build_context(definition, agent, role, conversation, content, history, workspace)
     skill_warnings = await prepare_skill_home(session, definition, agent, role, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
-            ctx.prompt = transcript_prompt(ctx.system_prompt, history, payload.content)
+            ctx.prompt = transcript_prompt(ctx.system_prompt, history, content)
             ctx.system_prompt = None
 
     assistant_message = Message(
@@ -290,7 +319,12 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
 
     role = await _load(session, Role, conversation.role_id)
     agent = await _load(session, AgentInstance, conversation.agent_id)
-    definition = get_agent(agent.type_id)
+    try:
+        definition = get_agent(agent.type_id)
+    except KeyError as exc:
+        # 适配器被下架后，历史智能体实例仍留在库里：这里要给一句可读的中文提示，
+        # 而不是让 KeyError 冒成 500（铁律 11）。
+        raise ConfigurationError(str(exc)) from None
     workspace = resolve_workspace(conversation, role)
     history_rows = (
         await session.execute(

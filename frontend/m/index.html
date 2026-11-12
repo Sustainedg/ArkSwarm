@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <!-- 移动端是「固定外壳」的应用形态（顶栏 + 底部 Tab + 内部滚动），不随手指缩放：
+    <!-- 移动端是「固定外壳」的应用形态（顶栏 + 左侧抽屉 + 内部滚动），不随手指缩放：
          maximum-scale / user-scalable 管住 Android 系；iOS 会忽略它们，另有 touch-action 兜底（见 mobile.css）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Magenta Agents · 移动端</title>
@@ -16,6 +16,27 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Magenta" />
     <meta name="format-detection" content="telephone=no" />
+    <!-- 首屏防闪：样式生效前先把主题定下来（与 src/lib/theme.ts 同一套规则，保持极简、无依赖）。
+         放在 head 末尾：它要读的 meta（theme-color、状态栏样式）都在前面，又早于任何样式与脚本。 -->
+    <script>
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('magenta.theme')
+          var light =
+            mode === 'light' ||
+            (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches)
+          document.documentElement.dataset.theme = light ? 'light' : 'dark'
+          if (!light) return
+          var themeColor = document.querySelector('meta[name="theme-color"]')
+          if (themeColor) themeColor.setAttribute('content', '#f4f3fa')
+          // 浅色外壳下状态栏也要切成系统默认样式，否则 iOS 独立应用里是一排看不见的白字。
+          var statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')
+          if (statusBar) statusBar.setAttribute('content', 'default')
+        } catch (error) {
+          /* 读不到设置就按默认深色渲染 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

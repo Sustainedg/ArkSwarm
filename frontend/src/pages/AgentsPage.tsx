@@ -85,7 +85,7 @@ export function AgentsPage() {
             <div className="empty-icon">⚙️</div>
             <p>还没有配置任何智能体。</p>
             <p className="dim small" style={{ marginTop: 6 }}>
-              点击「新建智能体」选择 Claude Code / Codex / Gemini CLI / DeepSeek 等类型。
+              点击「新建智能体」选择 Claude Code / Codex / Gemini CLI 等类型。
             </p>
           </div>
         ) : (

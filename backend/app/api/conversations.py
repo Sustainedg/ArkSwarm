@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,7 @@ from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from .. import attachments
 from ..db import SessionLocal, get_session
 from ..models import AgentInstance, Conversation, Message, Role
 from ..runtime import registry
@@ -20,11 +22,22 @@ from ..runtime.service import (
     new_conversation,
     prepare_run,
     regenerate_last,
+    resolve_workspace,
 )
-from ..schemas import ConversationCreate, ConversationRead, ConversationUpdate, MessageRead, SendMessage
+from ..schemas import (
+    AttachmentUpload,
+    ConversationCreate,
+    ConversationRead,
+    ConversationUpdate,
+    MessageRead,
+    SendMessage,
+)
 from ..transport.sse import sse_stream
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+#: 单个附件的上限：手机上多为截图与文档，8 MB 足够，也免得太大的 base64 撑爆请求体。
+MAX_ATTACHMENT_BYTES = attachments.MAX_ATTACHMENT_BYTES
 
 
 async def _conversation_read(conversation: Conversation, session: AsyncSession, count: int = 0) -> ConversationRead:
@@ -136,6 +149,32 @@ async def reset_session(conversation_id: str, session: AsyncSession = Depends(ge
     session.add(conversation)
     await session.commit()
     return {"ok": True, "session_id": None}
+
+
+@router.post("/{conversation_id}/attachments", status_code=201)
+async def upload_attachment(
+    conversation_id: str, payload: AttachmentUpload, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """把附件存进对话的工作目录（`<工作目录>/attachments/`）。
+
+    附件不经过适配器：智能体本来就能读工作目录里的文件，发消息时把相对路径写进提示词即可
+    （见 `runtime/service.compose_user_content`），因此每个内核都自动支持。
+    """
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    role = await session.get(Role, conversation.role_id)
+    if role is None:
+        raise HTTPException(status_code=409, detail="对话绑定的角色已不存在，无法保存附件")
+
+    try:
+        raw = attachments.decode_attachment(payload.content_base64, limit=MAX_ATTACHMENT_BYTES)
+        workspace = Path(resolve_workspace(conversation, role))
+        return attachments.store_attachment(workspace, payload.name, raw).to_dict()
+    except attachments.AttachmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 def _stream_prepared(prepared) -> StreamingResponse:

@@ -28,10 +28,10 @@ FINAL_CHUNKS = [
 def make_context(tmp_path, **overrides) -> AgentContext:
     base = dict(
         agent_id="a1",
-        agent_name="DS",
-        gateway_url="https://api.deepseek.com/v1",
+        agent_name="Harness",
+        gateway_url="https://gateway.example/v1",
         api_key="sk-test",
-        model="deepseek-chat",
+        model="gpt-4o-mini",
         role_name="Analyst",
         system_prompt="You are an analyst.",
         workspace_dir=str(tmp_path),
@@ -43,7 +43,7 @@ def make_context(tmp_path, **overrides) -> AgentContext:
 
 @pytest.fixture
 def stub_harness(monkeypatch, tmp_path):
-    definition = get_agent("deepseek-harness")
+    definition = get_agent("openai-harness")
     seen: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -85,7 +85,7 @@ async def test_harness_runs_the_tool_loop_and_streams_text(stub_harness, tmp_pat
     assert follow_up[-2]["role"] == "assistant" and follow_up[-2]["tool_calls"][0]["id"] == "call_1"
     assert follow_up[-1] == {"role": "tool", "tool_call_id": "call_1", "content": results[0].payload["output"]}
     assert seen[0]["stream_options"]["include_usage"] is True
-    assert seen[0]["model"] == "deepseek-chat"
+    assert seen[0]["model"] == "gpt-4o-mini"
 
 
 async def test_harness_reports_gateway_errors(stub_harness, monkeypatch, tmp_path):
@@ -116,7 +116,7 @@ async def test_harness_blocks_workspace_escapes(tmp_path):
 
 
 async def test_harness_can_disable_shell(tmp_path):
-    definition = get_agent("deepseek-harness")
+    definition = get_agent("openai-harness")
     context = make_context(tmp_path, options={"allow_shell": False})
     assert definition.tool_specs(context) is not None
     from app.agents.builtin.harness_tools import ToolError, WorkspaceTools

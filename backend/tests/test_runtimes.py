@@ -84,7 +84,7 @@ def test_cli_kernels_declare_a_provisioner():
 
 def test_api_kernels_are_not_managed():
     """进程内 API 内核与自定义 CLI 不该被平台改环境。"""
-    for type_id in ("openai-harness", "deepseek-harness", "custom-cli"):
+    for type_id in ("openai-harness", "custom-cli"):
         assert get_agent(type_id).provisioner is None, f"{type_id} 不应声明 provisioner"
         assert get_agent(type_id).provisioning()["supported"] is False
 
@@ -238,7 +238,10 @@ async def test_list_runtimes_reports_status_and_provisioning(client: httpx.Async
     assert claude["provisioning"]["manager"] == "npm"
     assert claude["provisioning"]["commands"]["install"]
     assert isinstance(claude["instances"], int)
-    assert items["deepseek-harness"]["provisioning"]["supported"] is False
+    # 界面按这个路径渲染官方 Logo，必须随接口一起下发（不能只在前端硬编码）
+    assert claude["logo"] == "/icons/kernels/claude.svg"
+    assert all(item["logo"] for item in payload["items"])
+    assert items["openai-harness"]["provisioning"]["supported"] is False
 
 
 @pytest.mark.asyncio

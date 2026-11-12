@@ -1,6 +1,6 @@
-"""协作办公室底图的守卫测试。
+"""前端静态资源的守卫测试：协作办公室底图 + 内核 Logo。
 
-等距办公室背景图（`frontend/public/office/iso-office.svg`）是**生成出来的**，不是手画的：
+**协作办公室底图**（`frontend/public/office/iso-office.svg`）是**生成出来的**，不是手画的：
 `scripts/gen_office_bg.py` 读 `frontend/src/lib/collabOffice.ts` 的 `OFFICE_DESKS` 去摆桌子，
 前端的热区标记也钉在同一组坐标上。这里把这条约定固化下来：
 
@@ -9,6 +9,9 @@
 - 行布局（几个人一行）要和工位数对得上；
 - 墙上的挂钟：底图只画钟面，圆心与半径必须和 `OFFICE_CLOCK` 一致（指针由前端按真实时间画）；
 - 小人与工牌都钉在「椅子」上（不是桌心），并且跟着底图一起缩放 —— 底图那把转椅画在那儿。
+
+内核 Logo（`frontend/public/icons/kernels/*.svg`）走另一条约定：图形是手工/厂商产物（不生成），
+但**必须由适配器声明**（`AgentDefinition.logo`），且两张运行时页都只留「Logo · 内核名 · 公司 · 版本」。
 """
 from __future__ import annotations
 
@@ -22,6 +25,8 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent.parent
 TS_SOURCE = REPO / "frontend" / "src" / "lib" / "collabOffice.ts"
 SVG_FILE = REPO / "frontend" / "public" / "office" / "iso-office.svg"
+FRONTEND = REPO / "frontend"
+MOBILE_SRC = FRONTEND / "src" / "mobile"
 GENERATOR = REPO / "scripts" / "gen_office_bg.py"
 
 needs_frontend = pytest.mark.skipif(not TS_SOURCE.is_file(), reason="未检出前端源码目录")
@@ -48,6 +53,22 @@ def test_committed_office_background_is_up_to_date():
     assert SVG_FILE.read_text(encoding="utf-8") == module.build(), (
         "底图与 scripts/gen_office_bg.py 的产物不一致，请重新执行 python3 scripts/gen_office_bg.py"
     )
+
+
+@needs_frontend
+def test_committed_light_office_background_is_up_to_date():
+    """浅色底图（同一份几何换算出来的）也必须是最新产物，且确实被换算过。"""
+    module = _load_generator()
+    light_file = module.LIGHT_OUT_FILE
+    assert light_file.is_file(), "缺少 frontend/public/office/iso-office-light.svg"
+    light = light_file.read_text(encoding="utf-8")
+    assert light == module.build("light"), (
+        "浅色底图与 scripts/gen_office_bg.py 的产物不一致，请重新执行 python3 scripts/gen_office_bg.py"
+    )
+    assert light != module.build(), "浅色版和深色版一模一样，颜色换算没生效"
+    # 几何（工位坐标 / 挂钟）两张图必须完全一致，只是颜色不同。
+    for marker in ('class="office-desk"', 'class="office-clock-face"'):
+        assert light.count(marker) == module.build().count(marker), f"浅色底图里的 {marker} 数量不对"
 
 
 @needs_frontend
@@ -119,3 +140,48 @@ def test_people_and_badges_are_pinned_to_the_chairs():
         assert ".office-worker > .collab-station-scene" in text, (
             f"{css} 缺少「小人跟着底图一起缩放」的规则（.office-worker > .collab-station-scene）"
         )
+
+
+# --- 运行时卡片：内核 Logo 与精简后的文案 -------------------------------------
+
+KERNEL_LOGO_DIR = REPO / "frontend" / "public" / "icons" / "kernels"
+
+
+@needs_frontend
+def test_every_kernel_declares_a_logo_that_is_committed():
+    """每个内核都要有官方 Logo，且声明的图形文件真的在仓库里（界面按路径直接取）。"""
+    from app.agents import all_agents
+
+    for definition in all_agents():
+        logo = definition.logo
+        assert logo, f"{definition.id} 未声明 logo"
+        assert logo.startswith("/icons/kernels/") and logo.endswith(".svg"), (
+            f"{definition.id} 的 logo 应指向 /icons/kernels/*.svg，实际是 {logo}"
+        )
+        path = KERNEL_LOGO_DIR / logo.rsplit("/", 1)[-1]
+        assert path.is_file(), f"{definition.id} 声明的 Logo 文件不存在：{path}"
+        text = path.read_text(encoding="utf-8")
+        assert 'viewBox="0 0 24 24"' in text, f"{path.name} 缺少统一画布（24×24）"
+        assert "<path" in text, f"{path.name} 里没有图形"
+
+
+@needs_frontend
+def test_runtime_cards_use_the_shared_logo_and_trimmed_copy():
+    """两端运行时卡片：名字前面挂官方 Logo，文案只留名称 / 公司 / 当前版本。"""
+    pages = [
+        FRONTEND / "src" / "pages" / "RuntimesPage.tsx",
+        MOBILE_SRC / "pages" / "MobileRuntimesPage.tsx",
+    ]
+    for path in pages:
+        text = path.read_text(encoding="utf-8")
+        assert "KernelLogo" in text, f"{path.name} 要在内核名字前显示官方 Logo"
+        # 已经是最新版就不给更新入口；有更新时按钮写明目标版本。
+        assert "showUpdate" in text, f"{path.name} 缺「按需显示更新按钮」的判断"
+        assert "更新到 ${updateTarget}" in text, f"{path.name} 的更新按钮要写明「更新到 X」"
+        for dropped in ("runtime.description", "runtime.instances", "provisioning.path"):
+            assert dropped not in text, f"{path.name} 的卡片文案已精简，不该再渲染 {dropped}"
+
+    logo = (FRONTEND / "src" / "components" / "KernelLogo.tsx").read_text(encoding="utf-8")
+    assert "maskImage" in logo, "Logo 用遮罩染色，深浅两套外观才能共用一份图形"
+    for css in (FRONTEND / "src" / "index.css", MOBILE_SRC / "mobile.css"):
+        assert ".kernel-logo" in css.read_text(encoding="utf-8"), f"{css.name} 缺少 .kernel-logo 规则"

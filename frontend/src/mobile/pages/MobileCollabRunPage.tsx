@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { api, streamGet, streamPost } from '../../lib/api'
@@ -12,10 +12,11 @@ import {
 } from '../../lib/collabNotices'
 import { buildCollabProgress } from '../../lib/collabProgress'
 import type {
-  CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
+  AttachmentRef, CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
 } from '../../lib/types'
 import { useAutoRefresh } from '../../lib/useAutoRefresh'
 import { MobileCollabProgress } from '../components/MobileCollabProgress'
+import { MobileComposer } from '../components/MobileComposer'
 import { MobileRoleConversationSheet } from '../components/MobileRoleConversationSheet'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
@@ -67,11 +68,15 @@ export function MobileCollabRunPage() {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
-  //: 空闲时的发送模式：auto = 有待回答的问题就走工单、否则只聊天；chat/work 是用户手动指定。
-  const [idleMode, setIdleMode] = useState<'auto' | 'chat' | 'work'>('auto')
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedRoleKey, setSelectedRoleKey] = useState<string | null>(null)
+  /** 与入口角色的对话界面：默认不显示，点动画里的人物才弹出来 */
+  const [chatOpen, setChatOpen] = useState(false)
+  /** 已上传、等待随消息发出的附件（只走入口角色的聊天通道） */
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
+  /** 发送模式：对话（只和入口角色聊）还是推进任务（把这句话接到工单上接着跑） */
+  const [sendMode, setSendMode] = useState<'chat' | 'work'>('chat')
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
 
@@ -80,7 +85,7 @@ export function MobileCollabRunPage() {
   const busyRef = useRef(false)
   const chatBusyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const sheetComposerRef = useRef<HTMLTextAreaElement | null>(null)
 
   const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
   const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
@@ -139,10 +144,11 @@ export function MobileCollabRunPage() {
     enabled: Boolean(runId) && !busy,
   })
 
+  // 内容变化（新步骤、流式追加）或对话弹层刚打开时，把时间线滚到底部。
   useEffect(() => {
     const node = scrollRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [visibleSteps.length, chatMessages.length, leaderLive?.agent.text, chatTurn.live?.agent.text])
+  }, [visibleSteps.length, chatMessages.length, leaderLive?.agent.text, chatTurn.live?.agent.text, chatOpen])
 
   /**
    * 订阅一次运行的实时事件并渲染。
@@ -239,8 +245,10 @@ export function MobileCollabRunPage() {
     if (!runId) return
     setError(null)
     setSelectedRoleKey(null)
+    setChatOpen(false)
+    setAttachments([])
+    setSendMode('chat')
     setChatTurn(emptyChatTurn())
-    setIdleMode('auto')
     void (async () => {
       const next = await load(runId)
       // 这次运行在跑就订阅实时事件：本页发起的、或别的设备/上次会话发起的都一样。
@@ -264,22 +272,74 @@ export function MobileCollabRunPage() {
     [detail, subscribe],
   )
 
-  const sendMessage = async (text: string) => {
-    if (!detail || !text.trim()) return
-    if (status === 'running' || busy || chatActive) {
-      const pending = { id: `local-user-${Date.now()}`, text }
+  /**
+   * 发一条消息，走哪条线由输入区的「对话 / 推进任务」决定（见 `effectiveWork`）。
+   *
+   * - **对话**：交给入口角色的聊天通道；带附件时一定走这条 —— 附件只落在聊天这条线上
+   *   （工单推进的输入是结构化工单，没有附件位），而入口角色本来就能把新要求同步进工单；
+   * - **推进任务**：把这句话接到工单上接着跑（`/messages`）；正文为空就是让领导者继续推进
+   *   （`/resume`，不追加用户消息）。
+   */
+  const sendMessage = async (
+    text: string,
+    files: AttachmentRef[] = [],
+    mode: 'chat' | 'work' = 'chat',
+  ) => {
+    if (!detail) return
+    if (!text.trim() && files.length === 0) return
+    if (mode !== 'work' || files.length > 0) {
+      const paths = files.map((item) => item.rel_path)
+      // 直接进对话界面：发出的内容与回复都要看得见。
+      setChatOpen(true)
+      const pending = {
+        id: `local-user-${Date.now()}`,
+        text: text.trim() || `（附上 ${files.length} 个文件）`,
+      }
       setPendingUser(pending)
       setError(null)
       try {
         await subscribeChat(detail.id, (onEvent, signal) =>
-          streamPost<RunEvent>(`/api/collab/runs/${detail.id}/chat`, { content: text }, onEvent, signal),
+          streamPost<RunEvent>(
+            `/api/collab/runs/${detail.id}/chat`,
+            { content: text, attachments: paths },
+            onEvent,
+            signal,
+          ),
         )
+        setAttachments([])
       } finally {
         setPendingUser(null)
       }
       return
     }
+    // 推进任务：不补充内容就是「让领导者继续推进」，走 resume。
+    if (!text.trim()) {
+      await stream(`/api/collab/runs/${detail.id}/resume`, {})
+      return
+    }
     await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
+  /** 输入区（共享组件）把读好的 base64 交回来，这里只负责调接口。 */
+  const uploadAttachment = async (name: string, contentBase64: string): Promise<AttachmentRef> => {
+    if (!detail) throw new Error('这次协作还没加载完，稍后再试')
+    return api.uploadCollabAttachment(detail.id, { name, content_base64: contentBase64 })
+  }
+
+  /** 输入区发出来的内容：按当前模式交给 `sendMessage`，附件由它决定何时清空。 */
+  const submitDraft = () => {
+    const text = draft
+    setDraft('')
+    void sendMessage(text, attachments, effectiveWork ? 'work' : 'chat')
+  }
+
+  /** 点动画里的人物：入口角色打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
+  const openRole = (key: string) => {
+    if (key === leaderKey) {
+      setChatOpen(true)
+      return
+    }
+    setSelectedRoleKey(key)
   }
 
   /** 关掉一条提醒：立即移除，并记住「用户已经看过」，刷新后不再冒出来。 */
@@ -302,7 +362,7 @@ export function MobileCollabRunPage() {
     if (!detail || busy || chatBusy) return
     const text = collabChoiceAnswer(choice)
     if (!text) {
-      composerRef.current?.focus()
+      sheetComposerRef.current?.focus()
       return
     }
     setDraft('')
@@ -467,7 +527,6 @@ export function MobileCollabRunPage() {
     : null
 
   const status = turn?.status ?? detail?.status ?? 'running'
-  const canResume = ['waiting_user', 'error', 'interrupted', 'cancelled'].includes(status)
   const remoteRunning = status === 'running' && !busy
   const progress = useMemo(
     () =>
@@ -494,10 +553,147 @@ export function MobileCollabRunPage() {
         : [],
     [detail, status, turn?.tickets],
   )
-  //: 任务开始后、主流程空闲时，默认先聊天：问进度/补要求不会白跑一步工单。
-  //: auto 模式下「有待回答的问题」自动走推进任务，避免把答复误发进聊天。
-  const idle = Boolean(detail?.goal) && status !== 'running' && !busy
-  const chatActive = idle && (idleMode === 'chat' || (idleMode === 'auto' && pendingAsks.length === 0))
+  /**
+   * 协作有两条线，走哪条由输入区的「对话 / 推进任务」决定：
+   *
+   * - **对话**：只和入口角色聊，不推进工单（问进度、补要求），新要求会在下一轮步骤生效；
+   * - **推进任务**：把这句话接到工单上接着跑。
+   *
+   * 有两处没法自由选，界面会直接把选择权接管过去（对应的那一档同时禁用）：
+   * 任务还没开始（第一句就是任务描述，只能走推进）、工单正在推进（推进接口会 409，只能问进度）、
+   * 带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）。
+   */
+  const taskStarted = Boolean(detail?.goal)
+  const advancing = status === 'running' || busy
+  const modeToggleVisible = taskStarted && !advancing
+  const modeLockedByAttachments = attachments.length > 0
+  const modeLockedByAsk = modeToggleVisible && pendingAsks.length > 0
+  const effectiveWork =
+    !advancing && !modeLockedByAttachments && (!taskStarted || modeLockedByAsk || sendMode === 'work')
+  const showComposerHeader = modeToggleVisible || pendingAsks.length > 0 || busy || remoteRunning
+
+  /**
+   * 输入框上方的那一条：左侧一个按钮切换发送模式（点一下「推进任务」，再点回「普通对话」），
+   * 右侧一句当前模式的说明；需要拍板 / 正在推进这类状态挂在下面。平时不硬塞东西。
+   */
+  const modeHint = modeLockedByAttachments
+    ? '附件只能随普通对话发送'
+    : modeLockedByAsk
+      ? '有待回答的问题：发送后继续推进'
+      : effectiveWork
+        ? draft.trim()
+          ? '发送后接着跑工单'
+          : '发送即让领导者继续推进'
+        : '不推进工单，只和入口角色聊'
+  const composerHeader = showComposerHeader ? (
+    <div className="m-composer-head">
+      {modeToggleVisible && (
+        <div className="m-mode-row">
+          <button
+            type="button"
+            className={`m-mode-toggle${effectiveWork ? ' on' : ''}`}
+            aria-pressed={effectiveWork}
+            disabled={modeLockedByAsk || modeLockedByAttachments}
+            onClick={() => setSendMode(effectiveWork ? 'chat' : 'work')}
+            title={
+              modeLockedByAttachments
+                ? '附件只能随普通对话发送；去掉附件后可以切到推进任务'
+                : modeLockedByAsk
+                  ? '有待回答的问题，发送后会继续推进'
+                  : effectiveWork
+                    ? '点一下切回普通对话（不推进工单）'
+                    : '点一下切到推进任务（发送后接着跑工单；空着发就是继续推进）'
+            }
+          >
+            {effectiveWork ? '推进任务' : '普通对话'}
+          </button>
+          <span className="m-mode-hint dim small">{modeHint}</span>
+        </div>
+      )}
+      {pendingAsks.length > 0 && (
+        <button className="m-run-ask" onClick={() => setChatOpen(true)}>
+          <span className="pill warn">需要你决定</span>
+          <span className="m-run-ask-text">{pendingAsks[0].question}</span>
+          <span className="m-run-ask-go">去回答 ›</span>
+        </button>
+      )}
+      {(busy || remoteRunning) && (
+        <div className="m-collab-running-bar">
+          <span className="dim small">
+            领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}；点办公室里的领导者可以问进度
+          </span>
+          <button className="btn sm danger" onClick={() => void stop()}>
+            {busy ? '■ 停止' : '叫停'}
+          </button>
+        </div>
+      )}
+    </div>
+  ) : undefined
+
+  /** 输入区（共享组件）：主页面与对话弹层共用这一个渲染函数，ref 分别绑定当前可见的输入框。 */
+  const renderComposer = (inputRef?: Ref<HTMLTextAreaElement>) => (
+    <MobileComposer
+      value={draft}
+      onChange={setDraft}
+      onSend={submitDraft}
+      attachments={attachments}
+      onAttachmentsChange={setAttachments}
+      /* 任务还没开始时先不显示回形针：第一句是任务描述，那条线只认正文 */
+      onUpload={taskStarted ? uploadAttachment : undefined}
+      onStop={() => void stop()}
+      busy={busy || chatBusy}
+      disabled={!detail}
+      submitOnEnter
+      /* 推进任务模式下空着也能发：那就是「让领导者继续推进」（等价于 /resume） */
+      allowEmptySend={effectiveWork}
+      onNotice={setError}
+      inputLabel={`对「${leaderLabel}」说点什么`}
+      inputRef={inputRef}
+      header={composerHeader}
+    />
+  )
+
+  /** 对话时间线：入口角色的产出、你与它的对话、以及需要你拍板的问题。 */
+  const thread = (
+    <>
+      {timeline.length === 0 && !liveEntry && !chatLiveEntry && pendingAsks.length === 0 && !busy && (
+        <div className="m-empty">
+          <div className="m-empty-icon">🤝</div>
+          <p>和领导者开始对话</p>
+          <p className="dim small">先告诉领导者这次协作要完成什么。</p>
+        </div>
+      )}
+      {timeline.map((entry) => (
+        <MessageView key={entry.id} message={entry.message} avatar={entry.avatar} label={entry.label} />
+      ))}
+      {liveEntry && <MessageView message={liveEntry.message} avatar={liveEntry.avatar} label={liveEntry.label} />}
+      {chatLiveEntry && (
+        <MessageView message={chatLiveEntry.message} avatar={chatLiveEntry.avatar} label={chatLiveEntry.label} />
+      )}
+      {pendingAsks.map((ask) => (
+        <div key={ask.ticketId} className="m-ask-card">
+          <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="pill warn">需要你决定</span>
+            <span className="dim small">点一项作为答复，或直接在下方输入</span>
+          </div>
+          <div className="m-ask-question">{ask.question}</div>
+          <div className="m-ask-options">
+            {ask.options.map((choice, index) => (
+              <button
+                key={`${ask.ticketId}-${index}-${choice.label}`}
+                className={`m-ask-option${choice.freeform ? ' freeform' : ''}`}
+                disabled={busy || chatBusy}
+                onClick={() => answerAsk(choice)}
+              >
+                <span>{choice.label}</span>
+                {choice.description && <span className="dim small">{choice.description}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  )
 
   return (
     <div className="m-page">
@@ -538,7 +734,10 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
-      <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenRole={setSelectedRoleKey} />
+      {/* 主页面就是那间可缩放 / 拖动的 3D 办公室；聊天界面点人物才出来。 */}
+      <div className="m-run-stage">
+        <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenRole={openRole} />
+      </div>
 
       {reconnecting && (
         <div style={{ padding: '8px 12px 0' }}>
@@ -607,124 +806,22 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
-      <div className="m-thread" ref={scrollRef}>
-        {timeline.length === 0 && !liveEntry && !chatLiveEntry && pendingAsks.length === 0 && !busy && (
-          <div className="m-empty">
-            <div className="m-empty-icon">🤝</div>
-            <p>和领导者开始对话</p>
-            <p className="dim small">先告诉领导者这次协作要完成什么。</p>
-          </div>
-        )}
-        {timeline.map((entry) => (
-          <MessageView key={entry.id} message={entry.message} avatar={entry.avatar} label={entry.label} />
-        ))}
-        {liveEntry && <MessageView message={liveEntry.message} avatar={liveEntry.avatar} label={liveEntry.label} />}
-        {chatLiveEntry && (
-          <MessageView message={chatLiveEntry.message} avatar={chatLiveEntry.avatar} label={chatLiveEntry.label} />
-        )}
-        {pendingAsks.map((ask) => (
-          <div key={ask.ticketId} className="m-ask-card">
-            <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className="pill warn">需要你决定</span>
-              <span className="dim small">点一项作为答复，或直接在下方输入</span>
-            </div>
-            <div className="m-ask-question">{ask.question}</div>
-            <div className="m-ask-options">
-              {ask.options.map((choice, index) => (
-                <button
-                  key={`${ask.ticketId}-${index}-${choice.label}`}
-                  className={`m-ask-option${choice.freeform ? ' freeform' : ''}`}
-                  disabled={busy || chatBusy}
-                  onClick={() => answerAsk(choice)}
-                >
-                  <span>{choice.label}</span>
-                  {choice.description && <span className="dim small">{choice.description}</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* 底部只有输入框：附件 / 语音 / 发送都长在框里（与对话页共用 MobileComposer）。 */}
+      {renderComposer()}
 
-      <div className="m-composer">
-        {(busy || remoteRunning) && (
-          <div className="m-collab-running-bar">
-            <span className="dim small">
-              领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}；你可以继续找 CEO 细化要求或问进度
-            </span>
-            <button className="btn sm danger" onClick={() => void stop()}>
-              {busy ? '■ 停止' : '叫停'}
-            </button>
+      {chatOpen && detail && (
+        <MobileSheet
+          full
+          title={`与「${leaderLabel}」的对话`}
+          onClose={() => setChatOpen(false)}
+          bodyClassName="m-run-chat-body"
+        >
+          <div className="m-thread m-run-chat-thread" ref={scrollRef}>
+            {thread}
           </div>
-        )}
-        {idle && (
-          <div className="row" style={{ gap: 8, alignItems: 'center', padding: '0 2px 7px' }}>
-            <button
-              type="button"
-              className={`btn sm${chatActive ? ' primary' : ' ghost'}`}
-              onClick={() => setIdleMode(chatActive ? 'work' : 'chat')}
-            >
-              {chatActive ? '💬 聊天中' : '▶ 推进任务'}
-            </button>
-            <span className="dim small">
-              {chatActive
-                ? pendingAsks.length > 0
-                  ? '聊天模式：上方有待回答的问题，回答请点选项'
-                  : '只对话，不推进工单'
-                : '发送后会继续推进工单'}
-            </span>
-          </div>
-        )}
-        <div className="m-composer-box">
-          <textarea
-            ref={composerRef}
-            rows={1}
-            value={draft}
-            disabled={chatBusy}
-            placeholder={
-              chatBusy
-                ? 'CEO 正在回复…'
-                : chatActive
-                  ? '和 CEO 聊聊：问进度、补要求、随便说两句…'
-                : status === 'running'
-                  ? '随时问 CEO：细化要求、问进度、聊两句…'
-                  : detail?.goal
-                    ? '推进任务：回答提问，或让 CEO 继续推进工单…'
-                    : `和领导者「${leaderLabel}」对话…`
-            }
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                if (!chatBusy && draft.trim()) {
-                  const text = draft
-                  setDraft('')
-                  void sendMessage(text)
-                }
-              }
-            }}
-          />
-          <button
-            className="btn primary"
-            disabled={chatBusy || !draft.trim()}
-            onClick={() => {
-              const text = draft
-              setDraft('')
-              void sendMessage(text)
-            }}
-          >
-            {chatBusy ? '回复中…' : '发送'}
-          </button>
-        </div>
-        {canResume && !busy && !chatBusy && (
-          <button
-            className="btn ghost block m-composer-secondary"
-            onClick={() => void stream(`/api/collab/runs/${detail?.id}/resume`, {})}
-          >
-            让领导者继续推进（不补充内容）
-          </button>
-        )}
-      </div>
+          {renderComposer(sheetComposerRef)}
+        </MobileSheet>
+      )}
 
       {selectedRole && detail && (
         <MobileRoleConversationSheet

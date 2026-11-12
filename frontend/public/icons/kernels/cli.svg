@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 自定义 CLI：没有厂商 Logo，用中性的「终端提示符」线条图形占位。
+     前端把它当「遮罩」用（.kernel-logo 的 mask-image），因此只画形状、不指定颜色：
+     染色由 CSS 的 background-color 决定，深浅两套外观自动跟着文字色走。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="自定义 CLI">
+  <g fill="none" stroke="#000" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.6 6.4 9 11.8l-5.4 5.4"/>
+    <path d="M12.4 18.7h8"/>
+  </g>
+</svg>

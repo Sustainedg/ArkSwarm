@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { api } from '../lib/api'
-import { MobileTabBar } from './components/MobileTabBar'
-import { MobileAgentsPage } from './pages/MobileAgentsPage'
+import { MobileDrawer } from './components/MobileDrawer'
+import { MobileMenuProvider } from './components/MobileMenuButton'
 import { MobileChatPage } from './pages/MobileChatPage'
 import { MobileCollabPage } from './pages/MobileCollabPage'
 import { MobileCollabRunPage } from './pages/MobileCollabRunPage'
 import { MobileCollabTeamPage } from './pages/MobileCollabTeamPage'
 import { MobileTicketBoardPage } from './pages/MobileTicketBoardPage'
-import { MobileConversationsPage } from './pages/MobileConversationsPage'
 import { MobileRolesPage } from './pages/MobileRolesPage'
 import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
@@ -22,6 +21,7 @@ import { MobileSkillsPage } from './pages/MobileSkillsPage'
  */
 export function MobileApp() {
   const [version, setVersion] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     api
@@ -32,12 +32,20 @@ export function MobileApp() {
 
   return (
     <Routes>
-      <Route element={<MobileLayout />}>
+      <Route
+        element={
+          <MobileLayout
+            menuOpen={menuOpen}
+            onMenuOpen={() => setMenuOpen(true)}
+            onMenuClose={() => setMenuOpen(false)}
+            version={version}
+          />
+        }
+      >
         <Route path="/" element={<Navigate to="/chat" replace />} />
-        <Route path="/chat" element={<MobileConversationsPage version={version} />} />
+        <Route path="/chat" element={<MobileChatPage />} />
         <Route path="/chat/:conversationId" element={<MobileChatPage />} />
         <Route path="/roles" element={<MobileRolesPage />} />
-        <Route path="/agents" element={<MobileAgentsPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
         <Route path="/runtimes" element={<MobileRuntimesPage />} />
         <Route path="/collab" element={<MobileCollabPage />} />
@@ -51,16 +59,31 @@ export function MobileApp() {
   )
 }
 
-/** 外壳：内容区 + 底部 Tab；对话详情页沉浸式，不显示 Tab。 */
-function MobileLayout() {
-  const { pathname } = useLocation()
-  const immersive = /^\/chat\/[^/]+/.test(pathname)
+/**
+ * 外壳：内容区 + 左侧抽屉。
+ *
+ * 移动端只留这一处主导航：底部的 Tab 栏已取消，导航与对话列表都收进左上角 logo 打开的
+ * 抽屉里，内容区整屏归页面（独立应用里没有浏览器的后退键，抽屉是唯一的出口）。
+ */
+function MobileLayout({
+  menuOpen,
+  onMenuOpen,
+  onMenuClose,
+  version,
+}: {
+  menuOpen: boolean
+  onMenuOpen: () => void
+  onMenuClose: () => void
+  version: string
+}) {
   return (
-    <div className="m-app">
-      <div className="m-main">
-        <Outlet />
+    <MobileMenuProvider onOpen={onMenuOpen}>
+      <div className="m-app">
+        <div className="m-main">
+          <Outlet />
+        </div>
+        <MobileDrawer open={menuOpen} onClose={onMenuClose} version={version} />
       </div>
-      {!immersive && <MobileTabBar />}
-    </div>
+    </MobileMenuProvider>
   )
 }

@@ -73,6 +73,7 @@ class CodexAgent(AgentDefinition):
     default_gateway = "https://api.openai.com/v1"
     default_model = "gpt-5-codex"
     docs_url = "https://developers.openai.com/codex/cli/"
+    logo = "/icons/kernels/openai.svg"
     capabilities = Capabilities(
         streaming=True,
         sessions=True,
@@ -107,7 +108,7 @@ class CodexAgent(AgentDefinition):
             "自定义供应商名称",
             FieldType.STRING,
             advanced=True,
-            placeholder="例如 deepseek、openrouter",
+            placeholder="例如 openrouter、ollama",
             help="填写后，Codex 会通过一个具名 model_provider 指向你填的网关。",
         ),
         ConfigField(

@@ -23,7 +23,7 @@ def ctx(**overrides) -> AgentContext:
 
 
 def test_registry_exposes_first_party_adapters():
-    for expected in ("claude-code", "codex", "gemini-cli", "deepseek-harness", "custom-cli"):
+    for expected in ("claude-code", "codex", "gemini-cli", "openai-harness", "custom-cli"):
         assert expected in known_ids()
 
 
@@ -67,13 +67,13 @@ def test_claude_code_stream_parsing_dedupes_partial_text():
 def test_codex_invocation_uses_named_provider_and_resume():
     definition = get_agent("codex")
     invocation = definition.build_invocation(
-        ctx(options={"provider_name": "deepseek", "sandbox_mode": "workspace-write"}, session_id="tid-1")
+        ctx(options={"provider_name": "mygateway", "sandbox_mode": "workspace-write"}, session_id="tid-1")
     )
     assert invocation.argv[:3] == ["codex", "exec", "resume"]
     assert "tid-1" in invocation.argv
     assert "--json" in invocation.argv
     joined = " ".join(invocation.argv)
-    assert "model_providers.deepseek.base_url=\"https://gateway.example/v1\"" in joined
+    assert "model_providers.mygateway.base_url=\"https://gateway.example/v1\"" in joined
     assert invocation.env["OPENAI_API_KEY"] == "sk-secret"
 
 
@@ -126,7 +126,7 @@ def test_custom_cli_placeholder_survives_unknown_keys():
 
 
 def test_harness_builds_transcript_messages():
-    definition = get_agent("deepseek-harness")
+    definition = get_agent("openai-harness")
     context = ctx(history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}])
     messages = definition.build_messages(context)
     assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
@@ -156,7 +156,7 @@ def test_claude_code_reads_real_system_config(monkeypatch, tmp_path):
                 "ANTHROPIC_AUTH_TOKEN": "sk-local-secret",
                 "ANTHROPIC_API_KEY": "",  # 空值应被忽略
             },
-            "model": "deepseek-v4.1-flash",
+            "model": "my-model-v1",
         },
         local={"env": {"ANTHROPIC_MODEL": "local-model"}},
     )

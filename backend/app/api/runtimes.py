@@ -30,6 +30,7 @@ def _describe(definition: AgentDefinition, instances: int) -> dict:
         "description": definition.description,
         "runtime": definition.runtime.value,
         "docs_url": definition.docs_url,
+        "logo": definition.logo,
         "executable": definition.executable,
         #: 有多少个未删除的智能体实例在用这个运行时（卸载前提示影响面）
         "instances": instances,

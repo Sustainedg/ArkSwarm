@@ -181,37 +181,50 @@ def render_markdown(markdown: str) -> str:
 
 
 _PAGE_STYLE = """
-:root { color-scheme: dark; }
+/* 配色跟着外壳走：前端把当前外观写在 <html data-theme> 上（见 frontend/src/lib/theme.ts），
+   文档认同一个属性。没人写属性时保持深色，也就是页面单独打开时的样子。 */
+:root {
+  color-scheme: dark;
+  --bg: #0b0a12; --fg: #e7e5f2; --muted: #a9a5c4; --dim: #6f6a8f;
+  --line: #2b2844; --panel: #17151f; --code: #121019; --brand: #d94fd0; --link: #7b5cff;
+}
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f3fa; --fg: #23203a; --muted: #5f5a7c; --dim: #8d88a8;
+  --line: #e3dff2; --panel: #ffffff; --code: #f7f6fb; --brand: #b63ba9; --link: #7c3aed;
+}
 * { box-sizing: border-box; }
 body {
-  margin: 0; padding: 28px 32px 60px; background: #0b0a12; color: #e7e5f2;
+  margin: 0; padding: 28px 32px 60px; background: var(--bg); color: var(--fg);
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   line-height: 1.7; font-size: 14px;
 }
 main { max-width: 900px; margin: 0 auto; }
 h1, h2, h3, h4 { line-height: 1.35; margin: 1.6em 0 0.6em; }
-h1 { font-size: 24px; border-bottom: 1px solid #2b2844; padding-bottom: 10px; }
-h2 { font-size: 19px; color: #d94fd0; }
+h1 { font-size: 24px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+h2 { font-size: 19px; color: var(--brand); }
 h3 { font-size: 16px; }
 p { margin: 0.7em 0; }
-a { color: #7b5cff; }
+a { color: var(--link); }
 code {
   font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12.5px;
-  background: #17151f; border: 1px solid #2b2844; border-radius: 5px; padding: 1px 5px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px;
 }
 pre {
-  background: #121019; border: 1px solid #2b2844; border-radius: 10px;
+  background: var(--code); border: 1px solid var(--line); border-radius: 10px;
   padding: 14px 16px; overflow: auto;
 }
 pre code { background: none; border: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
 table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 13px; }
-th, td { border: 1px solid #2b2844; padding: 7px 11px; text-align: left; vertical-align: top; }
-th { background: #17151f; }
+th, td { border: 1px solid var(--line); padding: 7px 11px; text-align: left; vertical-align: top; }
+th { background: var(--panel); }
 ul, ol { padding-left: 22px; margin: 0.7em 0; }
 li { margin: 0.3em 0; }
-blockquote { margin: 0.8em 0; padding: 2px 14px; border-left: 3px solid #7b5cff; color: #a9a5c4; }
-hr { border: none; border-top: 1px solid #2b2844; margin: 1.6em 0; }
-.doc-meta { color: #6f6a8f; font-size: 12px; margin-bottom: 18px; }
+blockquote {
+  margin: 0.8em 0; padding: 2px 14px; border-left: 3px solid var(--link); color: var(--muted);
+}
+hr { border: none; border-top: 1px solid var(--line); margin: 1.6em 0; }
+.doc-meta { color: var(--dim); font-size: 12px; margin-bottom: 18px; }
 """
 
 

@@ -16,7 +16,7 @@ export function MobileCollabProgress({ nodes, edges, onOpenRole }: Props) {
     <div className="m-collab-progress">
       <div className="m-collab-progress-head">
         <span>协作进度</span>
-        <span className="dim">双指缩放 · 拖动平移 · 点工牌看详情</span>
+        <span className="dim">双指缩放 · 点人物看对话</span>
       </div>
       <CollabOfficeMap nodes={nodes} edges={edges} onOpenRole={onOpenRole} initialView="desks" />
       {loops.length > 0 && (

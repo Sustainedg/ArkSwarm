@@ -24,15 +24,6 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${then.getMonth() + 1}月${then.getDate()}日`
 }
 
-/** 秒数转「1分12秒」。 */
-export function formatDuration(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds))
-  if (total < 60) return `${total}秒`
-  const minutes = Math.floor(total / 60)
-  const rest = total % 60
-  return rest ? `${minutes}分${rest}秒` : `${minutes}分`
-}
-
 /** 截断过长的字符串（避免把密钥、长路径原样铺满屏幕）。 */
 export function short(value: string | null | undefined, max = 28): string {
   if (!value) return ''

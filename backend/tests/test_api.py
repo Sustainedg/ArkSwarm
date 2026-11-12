@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sys
 from pathlib import Path
@@ -7,11 +8,12 @@ from pathlib import Path
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import update
 
 from app import __version__
 from app.db import SessionLocal, engine, init_db
 from app.main import app
-from app.models import Message, SQLModel
+from app.models import AgentInstance, Message, SQLModel
 
 FAKE_AGENT = str(Path(__file__).parent / "fakes" / "fake_jsonl_agent.py")
 
@@ -93,14 +95,14 @@ async def test_agent_delete_blocked_while_a_role_uses_it(client: httpx.AsyncClie
 async def test_agent_types_expose_config_schema_and_availability(client: httpx.AsyncClient):
     types = (await client.get("/api/agent-types")).json()["items"]
     by_id = {t["id"]: t for t in types}
-    assert {"claude-code", "codex", "gemini-cli", "deepseek-harness", "openai-harness", "custom-cli"} <= set(by_id)
+    assert {"claude-code", "codex", "gemini-cli", "openai-harness", "custom-cli"} <= set(by_id)
     claude = by_id["claude-code"]
     assert claude["availability"]["installed"] is True
     assert claude["runtime"] == "cli"
     assert any(f["key"] == "permission_mode" for f in claude["config_fields"])
     assert claude["capabilities"]["sessions"] is True
     assert "system_defaults" in claude
-    assert by_id["deepseek-harness"]["runtime"] == "api"
+    assert by_id["openai-harness"]["runtime"] == "api"
 
 
 async def test_agent_types_never_leak_plaintext_secret(client: httpx.AsyncClient, monkeypatch, tmp_path):
@@ -271,8 +273,189 @@ async def test_agent_can_be_deleted_after_its_only_role_was_deleted(client: http
 
 async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):
     overview = (await client.get("/api/system/overview")).json()
-    assert overview["agent_types"] == 6
+    assert overview["agent_types"] == 5  # 取消 DeepSeek 内核后只剩 5 个内置适配器
     assert overview["installed_types"] >= 1  # 当前环境中已安装 claude-code
     assert overview["version"] == __version__
     assert overview["version_history"][0]["version"] == overview["version"]
     assert overview["version_history"][0]["highlights"]
+
+
+async def _conversation_with_workspace(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> tuple[dict, Path]:
+    """建一个工作目录可控的对话，附件测试不必往真实数据目录里写东西。"""
+    agent = await make_agent(client)
+    role = (
+        await client.post("/api/roles", json={"name": "Tester", "agent_id": agent["id"]})
+    ).json()
+    workspace = tmp_path / "ws"
+    conversation = (
+        await client.post(
+            "/api/conversations", json={"role_id": role["id"], "workspace_dir": str(workspace)}
+        )
+    ).json()
+    return conversation, workspace
+
+
+async def test_attachment_is_saved_in_the_workspace_and_reaches_the_prompt(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    conversation, workspace = await _conversation_with_workspace(client, tmp_path)
+    raw = "季度报表内容".encode()
+
+    uploaded = await client.post(
+        f"/api/conversations/{conversation['id']}/attachments",
+        json={"name": "季度报表.txt", "content_base64": base64.b64encode(raw).decode()},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    info = uploaded.json()
+    assert info["name"] == "季度报表.txt"
+    assert info["rel_path"].startswith("attachments/")
+    assert info["size"] == len(raw)
+    saved = workspace / info["rel_path"]
+    assert saved.is_file() and saved.read_bytes() == raw
+
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conversation['id']}/messages",
+        json={"content": "看看这个", "attachments": [info["rel_path"]]},
+    ) as response:
+        assert response.status_code == 200
+        events = await read_sse(response)
+
+    # 附件行真的进了智能体看到的提示词（替身智能体会回显提示词开头）。
+    echoed = "".join(e.get("text") or "" for e in events if e["type"] == "message.delta")
+    assert "📎 附件" in echoed
+
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()
+    assert detail["messages"][1]["status"] == "complete"
+    user = detail["messages"][0]
+    assert user["role"] == "user"
+    assert user["content"].startswith("看看这个")
+    assert info["rel_path"] in user["content"]
+
+
+async def test_attachment_only_message_is_allowed(client: httpx.AsyncClient, tmp_path: Path):
+    conversation, _ = await _conversation_with_workspace(client, tmp_path)
+    info = (
+        await client.post(
+            f"/api/conversations/{conversation['id']}/attachments",
+            json={"name": "note.md", "content_base64": base64.b64encode(b"# hi").decode()},
+        )
+    ).json()
+
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conversation['id']}/messages",
+        json={"content": "   ", "attachments": [info["rel_path"]]},
+    ) as response:
+        assert response.status_code == 200
+        await read_sse(response)
+
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()
+    assert detail["messages"][0]["content"].startswith("📎 附件")
+
+    # 既没有正文也没有附件 → 422（与旧行为一致）
+    empty = await client.post(
+        f"/api/conversations/{conversation['id']}/messages", json={"content": "  "}
+    )
+    assert empty.status_code == 422
+
+
+async def test_attachment_upload_guards(client: httpx.AsyncClient, tmp_path: Path, monkeypatch):
+    conversation, workspace = await _conversation_with_workspace(client, tmp_path)
+    base = f"/api/conversations/{conversation['id']}/attachments"
+
+    invalid = await client.post(base, json={"name": "x.txt", "content_base64": "不是 base64!!"})
+    assert invalid.status_code == 422
+    assert "base64" in invalid.json()["detail"]
+
+    # 文件名里的目录成分被剥掉：跑不出工作目录
+    sneaky = await client.post(
+        base, json={"name": "../../逃逸.txt", "content_base64": base64.b64encode(b"x").decode()}
+    )
+    assert sneaky.status_code == 201, sneaky.text
+    assert sneaky.json()["name"] == "逃逸.txt"
+    assert ".." not in sneaky.json()["rel_path"]
+
+    # 超过上限的附件被拒（把上限压到 4 字节，不必真造一个 8 MB 的请求）
+    from app.api import conversations as api_conversations
+
+    monkeypatch.setattr(api_conversations, "MAX_ATTACHMENT_BYTES", 4)
+    oversized = await client.post(
+        base, json={"name": "big.bin", "content_base64": base64.b64encode(b"0123456789").decode()}
+    )
+    assert oversized.status_code == 413
+    assert "附件过大" in oversized.json()["detail"]
+
+    # 指向工作目录之外的附件一律拒绝，别让模型去读工作目录以外的文件
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conversation['id']}/messages",
+        json={"content": "hi", "attachments": ["../../etc/hosts"]},
+    ) as response:
+        assert response.status_code == 409
+
+
+async def test_attachment_upload_reports_an_unusable_workspace(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """工作目录不可用时要给出明确提示，而不是让建目录的异常冒成裸 500。"""
+    agent = await make_agent(client)
+    role = (
+        await client.post("/api/roles", json={"name": "Tester", "agent_id": agent["id"]})
+    ).json()
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("x", encoding="utf-8")
+    conversation = (
+        await client.post(
+            "/api/conversations", json={"role_id": role["id"], "workspace_dir": str(blocked)}
+        )
+    ).json()
+
+    response = await client.post(
+        f"/api/conversations/{conversation['id']}/attachments",
+        json={"name": "x.txt", "content_base64": base64.b64encode(b"x").decode()},
+    )
+    assert response.status_code == 409
+    assert "工作目录不可用" in response.json()["detail"]
+
+
+async def test_removed_kernel_gives_a_readable_error(client: httpx.AsyncClient):
+    """适配器下架后，历史实例仍留在库里：聊天与重新生成都要给中文提示，而不是裸 500。
+
+    这是「取消某个内核」的兼容性兜底：数据一行不删，但使用到它时要明确说清楚哪里不对。
+    """
+    agent = await make_agent(client)
+    role = (await client.post("/api/roles", json={"name": "Legacy", "agent_id": agent["id"]})).json()
+    conversation = (await client.post("/api/conversations", json={"role_id": role["id"]})).json()
+
+    async with client.stream(
+        "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "hi"}
+    ) as response:
+        assert response.status_code == 200
+        await read_sse(response)
+
+    # 模拟旧库里残留的、已经下架的内核实例（接口不允许这么建，只能直接改库）
+    async with SessionLocal() as session:
+        await session.execute(
+            update(AgentInstance)
+            .where(AgentInstance.id == agent["id"])
+            .values(type_id="deepseek-harness")
+        )
+        await session.commit()
+
+    response = await client.post(
+        f"/api/conversations/{conversation['id']}/messages", json={"content": "再来一轮"}
+    )
+    assert response.status_code == 409
+    assert "未知的智能体类型" in response.json()["detail"]
+
+    regen = await client.post(f"/api/conversations/{conversation['id']}/regenerate")
+    assert regen.status_code == 409
+    assert "未知的智能体类型" in regen.json()["detail"]
+
+    # 列表接口仍然要把这条实例展示出来（历史对话照旧可读），只是标成「未知类型」
+    items = (await client.get("/api/agents")).json()["items"]
+    assert [row["id"] for row in items] == [agent["id"]]
+    assert items[0]["type_id"] == "deepseek-harness"
