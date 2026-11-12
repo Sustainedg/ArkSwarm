@@ -36,7 +36,7 @@ frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 +
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
 runtime/service.py  编排：对话→智能体→适配器（网关解密密钥与地址）、能力决策、历史回放、落库
-runtime/runner.py   执行：起子进程 / 发 HTTP、逐行/逐块转事件、超时、取消、脱敏
+runtime/runner.py   执行：起子进程 / 发 HTTP、逐行/逐块转事件、双向 stdin 代写、超时、取消、脱敏
 runtime/manager.py  运行表：注册、查询、取消、快照
         │
 agents/base.py      契约（AgentDefinition/AgentContext/AgentRun/Invocation/ConfigField/Capabilities）
@@ -167,6 +167,13 @@ POST /api/conversations/{id}/messages
 
 `AgentRun` 提供：`state`（本次运行私有字典）、`emitted_text`/`thinking`/`tool_calls`（框架自动累积）、
 `build_invocation()`、`feed(line)`，以及**结束时补发事件的钩子 `finish()`**。
+
+**双向 stdin（常驻型 JSON-RPC 内核，例如 Codex app-server）**：适配器在 `build_invocation()` 里置
+`Invocation.stdin_hold=True`（`stdin` 只写第一帧、写完不关），解析到应答后用 `AgentRun.send(line)`
+排队下一帧、用 `AgentRun.mark_done()` 声明收工。**写入与关闭 stdin 一律由 `runner` 完成**
+（`write_stdin` / `close_stdin`，写不动或超过上限就停止投递），适配器仍然只生产数据、不碰子进程 ——
+取消、超时、凭据擦除因此都只有一份实现。服务端反向请求（审批 / 提问）没有人工确认入口时必须
+显式应答（拒绝并告知用户），否则该轮会一直等一个不会到来的答复。
 
 ---
 

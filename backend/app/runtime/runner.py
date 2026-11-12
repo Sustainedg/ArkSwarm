@@ -24,6 +24,29 @@ _STREAM_CHUNK_SIZE = 1 << 16
 #: 真越界时丢弃该行剩余内容而不是让整轮运行崩掉（铁律 10：长任务不能因一处噪声中断）。
 _MAX_LINE_BYTES = 64 << 20
 
+#: 子进程退出后，再等多久把管道里的残余输出读完就收工。
+#: 内核可能留下**握着 stdout 的后台孙进程**：Codex 会拉起
+#: ``git ls-remote https://github.com/openai/plugins.git`` 刷新插件市场，网络不通时它会挂住，
+#: 于是 ``readline`` 永远等不到 EOF —— 不能因为一个背景任务把整轮运行卡在收尾（铁律 10）。
+#: 子进程退出时该写的都已经进了管道缓冲，这里只需要一点宽限收尾。
+_EXIT_DRAIN_SECONDS = 0.5
+
+#: 读 stdout 的轮询间隔：进程在跑时 0.5 秒一看（兼顾取消 / 超时的响应），
+#: 已经退出就收得更紧，好在残余读完后立刻收工。
+_STREAM_POLL_SECONDS = 0.5
+_EXIT_POLL_SECONDS = 0.2
+
+#: 收尾时等 stderr 读完的宽限。后台孙进程同样继承 stderr，不能为等它 EOF 再拖几秒；
+#: 正常退出（`returncode == 0`）不需要 stderr，直接放行。
+_EXIT_STDERR_SECONDS = 0.5
+
+#: 关闭 stdin 之后，等内核自己退出的上限。常驻型内核（如 Codex app-server）看到 EOF 会正常收工；
+#: 万一它不理会，也不能让整轮运行永远挂在 `process.wait()` 上（铁律 10）。
+_EXIT_WAIT_SECONDS = 5.0
+
+#: 写 stdin 的等待上限：内核若不读 stdin（管道塞满或卡住），不能把整轮运行挂死（铁律 10）。
+_STDIN_DRAIN_SECONDS = 5.0
+
 
 def _run_secrets(ctx: AgentContext) -> list[str]:
     """本次运行要从事件文本里擦掉的敏感值：智能体的凭据 + 网关 API 密钥。
@@ -85,6 +108,14 @@ class _StreamLines:
             if index >= 0:
                 self._buffer.extend(chunk[index + 1 :])
                 return
+
+    def take_leftover(self) -> bytes:
+        """取出缓冲区里还没被换行收尾的残余内容（提前收工前调用，避免丢掉最后一行）。"""
+        if not self._buffer:
+            return b""
+        line = bytes(self._buffer)
+        self._buffer.clear()
+        return line
 
 
 async def stream_run(
@@ -170,13 +201,36 @@ async def stream_cli_run(
 
     run.process = process
 
-    if invocation.stdin is not None and process.stdin is not None:
+    async def write_stdin(payload: str) -> bool:
+        """把一行写进内核 stdin；管道已断或写不动返回 False（内核已退出 / 不读了）。"""
+        if process.stdin is None or process.stdin.is_closing():
+            return False
         try:
-            process.stdin.write(invocation.stdin.encode())
-            await process.stdin.drain()
-            process.stdin.close()
+            process.stdin.write(payload.encode())
+            await asyncio.wait_for(process.stdin.drain(), timeout=_STDIN_DRAIN_SECONDS)
+            return True
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            return False
+        except asyncio.TimeoutError:
+            # 内核不再读 stdin（管道塞满 / 卡住）：丢掉还没写出去的内容、别再投递，
+            # 剩下的交给收尾逻辑（否则传输层会在管道断开时抛一颗没人接的异常）。
+            transport = getattr(process.stdin, "transport", None)
+            if transport is not None:
+                with contextlib.suppress(OSError, RuntimeError):
+                    transport.abort()
+            return False
+
+    def close_stdin() -> None:
+        """尽力关闭 stdin（内核可能已经退出）；关不掉也不该影响收尾。"""
+        if process.stdin is None or process.stdin.is_closing():
+            return
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
+            process.stdin.close()
+
+    if invocation.stdin is not None:
+        wrote = await write_stdin(invocation.stdin)
+        if wrote and not invocation.stdin_hold:
+            close_stdin()
 
     stderr_chunks: list[str] = []
     assert process.stderr is not None
@@ -197,6 +251,7 @@ async def stream_cli_run(
     try:
         assert process.stdout is not None
         stdout_lines = _StreamLines(process.stdout)
+        drain_deadline: float | None = None
         while True:
             if run.cancel_event.is_set():
                 cancelled = True
@@ -207,8 +262,20 @@ async def stream_cli_run(
                 yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
                 break
             try:
-                line = await asyncio.wait_for(stdout_lines.readline(), timeout=1.0)
+                # 进程已退出就缩短轮询间隔，尽快确认残余读完、别把收尾拖成整秒级。
+                timeout = (
+                    _EXIT_POLL_SECONDS if process.returncode is not None else _STREAM_POLL_SECONDS
+                )
+                line = await asyncio.wait_for(stdout_lines.readline(), timeout=timeout)
             except asyncio.TimeoutError:
+                # 子进程已经退出、却还读不到 EOF：多半是它留下的后台孙进程握着管道不放
+                # （见 `_EXIT_DRAIN_SECONDS`）。先把残余读完，再等一小会儿就收工，
+                # 不让一个背景任务把整轮运行拖到超时。
+                if process.returncode is not None:
+                    if drain_deadline is None:
+                        drain_deadline = asyncio.get_event_loop().time() + _EXIT_DRAIN_SECONDS
+                    elif asyncio.get_event_loop().time() >= drain_deadline:
+                        break
                 continue
             if stdout_lines.overflowed:
                 stdout_lines.overflowed = False
@@ -220,17 +287,42 @@ async def stream_cli_run(
                 break
             for event in agent_run.feed(line.decode("utf-8", "replace").rstrip("\n")):
                 yield scrub_event(event, _run_secrets(ctx))
+            # 适配器可能在解析这一行后排出了要写回内核的请求（双向 JSON-RPC：先 initialize，
+            # 拿到 thread id 再 turn/start）。运行层统一代写，管道断了就当作内核已收工。
+            alive = True
+            for payload in agent_run.take_outbound():
+                alive = await write_stdin(payload)
+                if not alive:
+                    break
+            if not alive or agent_run.done:
+                break
 
+        leftover = stdout_lines.take_leftover()
+        if leftover:
+            # 提前收工时可能还剩一条没写换行的尾巴，别丢掉（EOF 路径下这里必为空）。
+            for event in agent_run.feed(leftover.decode("utf-8", "replace")):
+                yield scrub_event(event, _run_secrets(ctx))
         for event in agent_run.finish():
             yield scrub_event(event, _run_secrets(ctx))
-        await process.wait()
+        # 常驻内核要收到 EOF 才会退出；先关 stdin，再有上限地等它收工。
+        close_stdin()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=_EXIT_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
     finally:
+        close_stdin()
         if process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
             await process.wait()
         with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
-            await asyncio.wait_for(stderr_task, timeout=2)
+            await asyncio.wait_for(
+                stderr_task,
+                timeout=0.05 if process.returncode == 0 else _EXIT_STDERR_SECONDS,
+            )
         stderr_text = "".join(stderr_chunks).strip()
         shutil.rmtree(run_dir, ignore_errors=True)
 

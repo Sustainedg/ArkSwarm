@@ -16,6 +16,7 @@ import pytest_asyncio
 
 from app.agents import AgentContext, AgentDefinition, AgentRun, Runtime, all_agents, get_agent
 from app.agents.base import RuntimeProvisioner
+from app.agents.builtin.util import npm_install_argv, npm_prepare_argv
 from app.db import engine, init_db
 from app.main import app
 from app.models import SQLModel
@@ -89,6 +90,45 @@ def test_api_kernels_are_not_managed():
         assert get_agent(type_id).provisioning()["supported"] is False
 
 
+def test_npm_kernels_clean_up_leftovers_before_acting():
+    """npm 的中转目录残留会让安装 / 更新 / 卸载永久失败，三个 npm 内核都要声明清扫命令。"""
+    for type_id in ("claude-code", "codex", "gemini-cli"):
+        provisioner = get_agent(type_id).provisioner
+        assert provisioner is not None and provisioner.prepare_argv, f"{type_id} 缺少「清扫」命令"
+
+
+def test_npm_kernels_install_through_the_conflict_aware_wrapper():
+    """安装 / 更新走包装命令：本机既有的同名可执行文件会让 npm 直接失败在 EEXIST。"""
+    kernels = (
+        ("claude-code", "@anthropic-ai/claude-code"),
+        ("codex", "@openai/codex"),
+        ("gemini-cli", "@google/gemini-cli"),
+    )
+    for type_id, package in kernels:
+        definition = get_agent(type_id)
+        provisioner = definition.provisioner
+        assert provisioner is not None
+        for action, command in (
+            ("install", f"npm install -g {package}"),
+            ("update", f"npm install -g {package}@latest"),
+        ):
+            argv = provisioner.argv_for(action)
+            assert argv[:2] == ["sh", "-c"], f"{type_id} 的「{action}」应走包装命令"
+            assert command in argv[2], f"{type_id} 的「{action}」没跑预期的 npm 命令"
+            assert f'link="$bin/{definition.executable}"' in argv[2], f"{type_id} 的包装命令没对上可执行文件名"
+
+
+def test_npm_prepare_command_only_targets_its_own_leftovers():
+    """清扫命令只删自己那个包的残留目录，不碰别的东西。"""
+    scoped = npm_prepare_argv("@google/gemini-cli")
+    assert scoped[:2] == ["sh", "-c"]
+    script = scoped[2]
+    assert 'root="$(npm root -g)"' in script
+    assert '"$root"/@google/.gemini-cli-*' in script
+    # 普通包没有作用域目录
+    assert '"$root"/.aider-*' in npm_prepare_argv("aider")[2]
+
+
 def test_provisioning_descriptor_is_serialisable():
     for definition in all_agents():
         data = definition.provisioning()
@@ -121,6 +161,145 @@ async def test_stream_provision_reports_failure():
     final = events[-1]
     assert final["type"] == "provision.finished"
     assert final["ok"] is False and final["status"] == "error" and final["exit_code"] == 3
+
+
+def _texts(events: list[dict]) -> str:
+    return "".join(e.get("text", "") for e in events if e["type"] == "provision.output")
+
+
+#: 假 npm：只认 prefix/root/install 三个子命令，把「装好的包」写成一条链接。
+_NPM_STUB = """#!/bin/sh
+case "$1 $2" in
+  "prefix -g") echo "$FAKE_PREFIX" ;;
+  "root -g") echo "$FAKE_PREFIX/lib/node_modules" ;;
+  "install -g")
+    [ "${FAKE_INSTALL_FAIL:-0}" = "1" ] && exit 7
+    mkdir -p "$FAKE_PREFIX/lib/node_modules/pkg"
+    ln -sf ../lib/node_modules/pkg/cli.js "$FAKE_PREFIX/bin/claude"
+    ;;
+  *) exit 1 ;;
+esac
+"""
+
+
+def _npm_sandbox(tmp_path, monkeypatch) -> Any:
+    """搭一个假的 npm 全局前缀，让包装命令整条链路真跑一遍（不碰本机的 npm）。"""
+    prefix = tmp_path / "prefix"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib/node_modules").mkdir(parents=True)
+    stub = tmp_path / "npm"
+    stub.write_text(_NPM_STUB, encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_PREFIX", str(prefix))
+    return prefix
+
+
+def _install_definition() -> AgentDefinition:
+    definition = _FakeRuntime()
+    definition.provisioner = RuntimeProvisioner(
+        manager="npm",
+        package="@anthropic-ai/claude-code",
+        install_argv=npm_install_argv("@anthropic-ai/claude-code", bin_name="claude"),
+    )
+    return definition
+
+
+@pytest.mark.asyncio
+async def test_npm_install_moves_a_foreign_bin_aside(tmp_path, monkeypatch):
+    """占位指向别处（另一个 node 装的那份）时，先挪到备份名，再让 npm 建立自己的链接。"""
+    prefix = _npm_sandbox(tmp_path, monkeypatch)
+    foreign = tmp_path / "appcenter-node/claude"
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text("#!/bin/sh\n", encoding="utf-8")
+    (prefix / "bin/claude").symlink_to(foreign)
+
+    events = await _collect(_install_definition(), "install")
+
+    assert events[-1]["ok"] is True
+    assert "挪到" in _texts(events)
+    assert os.readlink(prefix / "bin/claude") == "../lib/node_modules/pkg/cli.js"
+    assert os.readlink(prefix / "bin/.claude.magenta-bak") == str(foreign)
+
+
+@pytest.mark.asyncio
+async def test_npm_install_restores_the_foreign_bin_when_npm_fails(tmp_path, monkeypatch):
+    """npm 自己失败时把占位放回原位 —— 不留「命令没了、包也没装上」的半截状态。"""
+    prefix = _npm_sandbox(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_INSTALL_FAIL", "1")
+    foreign = tmp_path / "appcenter-node/claude"
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text("#!/bin/sh\n", encoding="utf-8")
+    (prefix / "bin/claude").symlink_to(foreign)
+
+    events = await _collect(_install_definition(), "install")
+
+    assert events[-1]["ok"] is False and events[-1]["exit_code"] == 7
+    assert "放回原位" in _texts(events)
+    assert os.readlink(prefix / "bin/claude") == str(foreign)
+    assert not (prefix / "bin/.claude.magenta-bak").exists()
+
+
+@pytest.mark.asyncio
+async def test_npm_install_keeps_a_link_that_is_already_ours(tmp_path, monkeypatch):
+    """占位本来就指向 npm 全局目录（换链接不会冲突）时不动它。"""
+    prefix = _npm_sandbox(tmp_path, monkeypatch)
+    ours = prefix / "lib/node_modules/@anthropic-ai/claude-code"
+    ours.mkdir(parents=True)
+    (ours / "cli.js").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    # npm 自己建的是相对链接，解析后落在全局目录里
+    (prefix / "bin/claude").symlink_to("../lib/node_modules/@anthropic-ai/claude-code/cli.js")
+
+    events = await _collect(_install_definition(), "install")
+
+    assert events[-1]["ok"] is True
+    assert "挪到" not in _texts(events)
+    assert not (prefix / "bin/.claude.magenta-bak").exists()
+
+
+@pytest.mark.asyncio
+async def test_prepare_command_runs_before_the_action():
+    definition = _FakeRuntime()
+    definition.provisioner = RuntimeProvisioner(
+        manager="test",
+        install_argv=["sh", "-c", "echo 开始安装"],
+        prepare_argv=["sh", "-c", "echo 清理残留"],
+    )
+    events = await _collect(definition, "install")
+    output = _texts(events)
+    assert "清理残留" in output and "开始安装" in output
+    assert output.index("清理残留") < output.index("开始安装")
+    assert events[-1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_failing_prepare_command_does_not_abort_the_action():
+    """清扫只是清场：它自己失败了（退出码非 0）不影响动作本身的成败。"""
+    definition = _FakeRuntime()
+    definition.provisioner = RuntimeProvisioner(
+        manager="test",
+        install_argv=["sh", "-c", "echo 安装完成"],
+        prepare_argv=["sh", "-c", "echo 清不掉 && exit 7"],
+    )
+    events = await _collect(definition, "install")
+    output = _texts(events)
+    assert "安装完成" in output
+    assert "清扫未完成（退出码 7），继续执行安装" in output
+    assert events[-1]["ok"] is True and events[-1]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_missing_prepare_command_is_only_a_warning():
+    definition = _FakeRuntime()
+    definition.provisioner = RuntimeProvisioner(
+        manager="test",
+        install_argv=["sh", "-c", "echo 安装完成"],
+        prepare_argv=["magenta-does-not-exist"],
+    )
+    events = await _collect(definition, "install")
+    output = _texts(events)
+    assert "清扫未完成（未找到命令" in output
+    assert events[-1]["ok"] is True
 
 
 @pytest.mark.asyncio

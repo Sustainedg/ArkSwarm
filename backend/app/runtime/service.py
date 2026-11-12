@@ -312,7 +312,9 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
                 session.add(prepared.conversation)
             elif event.type is EventType.ERROR:
                 status = "error"
-                error_text = event.payload.get("message") or "智能体返回了错误"
+                # 适配器把错误文案放在事件的 ``text`` 上（``events.error()``）；只有个别
+                # 适配器会额外塞进 payload，所以两处都看，别丢掉真正的原因。
+                error_text = event.text or event.payload.get("message") or "智能体返回了错误"
             elif event.type is EventType.RUN_FINISHED:
                 extra = dict(event.payload or {})
                 if extra.get("status") in ("error", "cancelled"):

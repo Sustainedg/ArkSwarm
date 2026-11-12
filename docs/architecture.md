@@ -156,15 +156,33 @@ class AgentDefinition(ABC):
 
 和技能一样，**「用哪个包管理器、包名叫什么、装到哪儿」是适配器的知识**：适配器声明
 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…, update_argv=…,
-uninstall_argv=…, latest_argv=…)`，框架（`runtime/provisioning.py`）只负责按声明执行：
+uninstall_argv=…, latest_argv=…, prepare_argv=…)`，框架（`runtime/provisioning.py`）只负责按声明执行：
 
 ```
 适配器声明命令 ──▶ runtime/provisioning.stream_provision() ──▶ 受控子进程
+                                                              ├─ 动作前先跑 prepare_argv（清扫残留，失败只告警）
                                                               ├─ 逐行流式回显（SSE provision.output）
                                                               ├─ 总超时（settings.provision_timeout_seconds）
                                                               ├─ 命令脱敏（runner._redact）
                                                               └─ 客户端断开即 kill（同一次运行的取消语义）
 ```
+
+- **动作前先清扫（`prepare_argv`）**：上一次动作被中途打断（超时、服务重启）可能在本机
+  留下让包管理器再也无法覆写安装目录的残留 —— 典型是 npm 的中转目录（卸载 / 覆盖安装前
+  先把旧目录 rename 成 `.<包名>-<安装路径哈希>` 再删掉），而中转名只由绝对路径决定，
+  于是之后**每一次**安装 / 更新 / 卸载都会永久撞上 `ENOTEMPTY`。适配器声明这条清扫命令
+  （内置的三个 npm 内核用 `builtin/util.py:npm_prepare_argv()` 生成），框架在同一次动作的
+  最前面跑一遍并回显它的输出；清扫与动作共用同一个总时限，清扫自己失败只回一行告警、
+  **不**中断动作 —— 成败始终只由动作自己的退出码决定。
+
+- **安装 / 更新还要自己处理「本机既有的同名可执行文件」**：`<npm 前缀>/bin/<命令>` 可能
+  已经被别的安装占着（系统里另一个 node 装的同一内核、用户手写的垫片），而 npm 只肯覆盖
+  **指向自己安装目录**的链接，否则整个动作直接失败在 `EEXIST`（连包都不装）。所以 npm 内核的
+  `install_argv` / `update_argv` 由 `builtin/util.py:npm_install_argv()` 生成：先判断那个占位
+  是不是自己的（解析后落在 npm 全局目录里就不动它），不是就挪到一个隐藏备份名
+  （`.<命令>.magenta-bak`）让出位置，npm 失败再把备份放回原位 —— 不留「命令没了、包也没装上」
+  的半截状态。包装命令顺带负责调用 npm，所以它天然只挂在安装 / 更新上；卸载不建链接，
+  `uninstall_argv` 保持原样，确认框里显示的就是它。
 
 **安装状态与版本是缓存出来的，不是每次打开页面现探的**：探测要起一次 `内核 --version`
 子进程（gemini 这类 Node CLI 冷启动接近 2 秒），而后端是单进程单事件循环 —— 同步探测会
@@ -355,7 +373,25 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 
 - CLI 适配器的多轮依赖各工具自身的会话续接；`custom-cli` 若声明不出 `session_path`，
   平台会退化为 transcript 回放。
-- `codex exec resume` 的子命令形式在不同 Codex 版本间有差异，所以做成了可选策略。
+- `codex exec` 与 `codex exec resume` 认的旗标不一样：`-s/--sandbox`、`-C/--cd` 只挂在 `exec` 上，新版 `exec` 也去掉了 `--full-auto`。适配器按子命令分别表达 —— 沙箱在 `exec` 上用 `-s`、恢复会话时走 `-c sandbox_mode=…`；全自动走 `-c approval_policy=never`。`resume` 这一子命令形式在不同 Codex 版本间也有差异，所以做成了可选策略（app-server 模式下对应 `thread/resume`）。
+- 新版 Codex 不再读 `OPENAI_BASE_URL`（内置 provider 拿着它也会直奔 api.openai.com），所以自定义网关
+  一律经一个具名 `model_provider` 注入（名字取「自定义供应商名称」，留空用内置名 `magenta`）；
+  没走网关时（官方默认 / 本机登录态）不注入任何 provider。`wire_api` 也不再由平台下发 ——
+  0.4x 起只剩 `responses`、更早的版本默认 `chat`，写死任何一边都会在另一边直接报错。
+- Codex 默认走「接口模式 = app-server」：`codex app-server --listen stdio://` 是 Codex 自己的
+  JSON-RPC 通道（TUI 也用这条），回复按 `item/agentMessage/delta` **逐字**推送，思考走
+  `item/reasoning/summaryTextDelta`，用量走 `thread/tokenUsage/updated`。个别不支持 app-server
+  的旧版本可在智能体选项里切回「接口模式 = exec」（`codex exec --json` 只在整条消息完成时给一个
+  `item.completed`，回复是整段出现的）。
+- app-server 是**常驻**内核：适配器只声明第一帧 `initialize`（`Invocation.stdin_hold=True`），
+  拿到应答后再用 `AgentRun.send()` 排队 `thread/start`（或 `thread/resume`）与 `turn/start`，
+  由执行层统一代写 stdin，并在适配器 `mark_done()` 后关掉 stdin 收工（关不掉则 5 秒后强杀）。
+  适配器仍然只生产数据、不碰子进程，取消 / 超时 / 凭据擦除依旧只有一份实现。
+- app-server 没有人工确认入口，所以服务端反向请求（命令 / 补丁审批、`requestUserInput`、
+  MCP elicitation）一律自动拒绝，并在对话里显式提示——否则该轮会一直等一个不会到来的答复。
+- Codex 默认把 OTEL 指标导出到它的分析后端，连不上时会在**退出前**干等满 10 秒
+  （表现为「回复完还要等一会儿才结束」）。适配器用 `-c otel.metrics_exporter="none"` 关掉它；
+  要自己接 OTEL 的可以在「额外命令行参数」里再覆盖回来。
 - Gemini CLI 的人格注入依赖 `GEMINI_SYSTEM_MD`，若目标版本不支持可切换为 prepend 模式。
 - 工具循环（API harness）的权限模型是「工作目录沙箱」，没有做命令级审批。
 - 技能「严格仅分配」只保证**平台注入的技能 == 智能体分配**：内核自带的个别技能（Claude Code 的

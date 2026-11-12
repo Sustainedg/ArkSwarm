@@ -26,7 +26,7 @@ from ..events import (
     usage,
 )
 from ..registry import register_agent
-from .util import as_list, flatten_content
+from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv
 
 
 @register_agent
@@ -43,10 +43,13 @@ class GeminiCliAgent(AgentDefinition):
     provisioner = RuntimeProvisioner(
         manager="npm",
         package="@google/gemini-cli",
-        install_argv=["npm", "install", "-g", "@google/gemini-cli"],
-        update_argv=["npm", "install", "-g", "@google/gemini-cli@latest"],
+        #: 安装 / 更新走包装命令：本机既有的同名可执行文件（另一个 node 装的、
+        #: 用户手写的垫片）会让 npm 直接失败在 EEXIST，先把这种占位挪开。
+        install_argv=npm_install_argv("@google/gemini-cli", bin_name="gemini"),
+        update_argv=npm_install_argv("@google/gemini-cli", bin_name="gemini", latest=True),
         uninstall_argv=["npm", "uninstall", "-g", "@google/gemini-cli"],
         latest_argv=["npm", "view", "@google/gemini-cli", "version"],
+        prepare_argv=npm_prepare_argv("@google/gemini-cli"),
         homepage="https://github.com/google-gemini/gemini-cli",
     )
     api_key_env = "GEMINI_API_KEY"

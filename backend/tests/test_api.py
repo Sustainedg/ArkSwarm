@@ -216,6 +216,12 @@ async def test_missing_executable_reports_a_clean_error(client: httpx.AsyncClien
     assert events[-2]["type"] == "run.finished"
     assert events[-2]["payload"]["status"] == "error"
 
+    # 落库的那条助手消息也要记住真正的错误原因（不能只剩一句「智能体返回了错误」）。
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()
+    assistant = detail["messages"][-1]
+    assert assistant["status"] == "error"
+    assert "未安装" in (assistant["error"] or "")
+
 
 async def test_probe_endpoint_reports_missing_binary(client: httpx.AsyncClient):
     bad = await make_agent(

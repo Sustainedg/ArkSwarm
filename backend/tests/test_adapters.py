@@ -65,7 +65,14 @@ def test_claude_code_stream_parsing_dedupes_partial_text():
 def test_codex_invocation_uses_named_provider_and_resume():
     definition = get_agent("codex")
     invocation = definition.build_invocation(
-        ctx(options={"provider_name": "mygateway", "sandbox_mode": "workspace-write"}, session_id="tid-1")
+        ctx(
+            options={
+                "transport": "exec",
+                "provider_name": "mygateway",
+                "sandbox_mode": "workspace-write",
+            },
+            session_id="tid-1",
+        )
     )
     assert invocation.argv[:3] == ["codex", "exec", "resume"]
     assert "tid-1" in invocation.argv
@@ -75,9 +82,63 @@ def test_codex_invocation_uses_named_provider_and_resume():
     assert invocation.env["OPENAI_API_KEY"] == "sk-secret"
 
 
+def test_codex_gateway_goes_through_a_named_provider():
+    """自定义网关必须落到具名 model_provider 上 —— 新版 Codex 已不再读 ``OPENAI_BASE_URL``。
+
+    同时不下发 ``wire_api``：新版只剩 responses、旧版默认 chat，写死任何一边都会在另一边
+    直接报错；``provider_name`` 留空时用内置名 ``magenta``。
+    """
+    definition = get_agent("codex")
+    # 存量智能体里由旧默认值写下的 wire_api=chat 必须被忽略，否则新版 Codex 会拒绝启动。
+    invocation = definition.build_invocation(
+        ctx(options={"transport": "exec", "wire_api": "chat"})
+    )
+    joined = " ".join(invocation.argv)
+    assert "model_provider=magenta" in joined
+    assert 'model_providers.magenta.base_url="https://gateway.example/v1"' in joined
+    assert 'model_providers.magenta.env_key="OPENAI_API_KEY"' in joined
+    assert "wire_api" not in joined
+
+    # 没走网关（官方默认 / 本机登录态）时不注入任何 provider，交给 Codex 自己的配置。
+    bare = definition.build_invocation(ctx(options={"transport": "exec"}, gateway_url=None))
+    assert "model_provider" not in " ".join(bare.argv)
+
+
+def test_codex_disables_the_metrics_export_that_stalls_shutdown():
+    """退出前的 OTEL 指标导出连不上分析后端会干等满超时（内网约 10 秒），必须关掉。
+
+    未知的 ``-c`` 键在旧版 Codex 上会被忽略，所以这个开关对老版本是安全的。
+    """
+    definition = get_agent("codex")
+    invocation = definition.build_invocation(ctx(options={"transport": "exec"}))
+    joined = " ".join(invocation.argv)
+    assert 'otel.metrics_exporter="none"' in joined
+    # 走官方默认（本机登录态）时同样要关，否则一样会卡。
+    assert 'otel.metrics_exporter="none"' in " ".join(
+        definition.build_invocation(ctx(options={"transport": "exec"}, gateway_url=None)).argv
+    )
+
+
+def test_codex_invocation_uses_flags_the_cli_still_accepts():
+    """`codex exec` 0.4x 起不再有 --full-auto；`exec resume` 也不认 -s/-C（只认配置覆盖）。"""
+    definition = get_agent("codex")
+    options = {"transport": "exec", "full_auto": True, "sandbox_mode": "danger-full-access"}
+
+    fresh = definition.build_invocation(ctx(options=options))
+    assert "--full-auto" not in fresh.argv
+    assert 'approval_policy="never"' in fresh.argv
+    assert fresh.argv[fresh.argv.index("-s") + 1] == "danger-full-access"
+
+    resumed = definition.build_invocation(ctx(options=options, session_id="tid-1"))
+    assert resumed.argv[:3] == ["codex", "exec", "resume"]
+    assert "-s" not in resumed.argv and "-C" not in resumed.argv
+    assert 'sandbox_mode="danger-full-access"' in resumed.argv
+    assert 'approval_policy="never"' in resumed.argv
+
+
 def test_codex_parses_modern_and_legacy_events():
     definition = get_agent("codex")
-    run = definition.create_run(ctx())
+    run = definition.create_run(ctx(options={"transport": "exec"}))
     run.state["saw_delta"] = True
     lines = [
         {"type": "thread.started", "thread_id": "th1"},
@@ -221,3 +282,266 @@ def test_claude_code_root_bypass_sets_sandbox_env(monkeypatch):
         ctx(options={"permission_mode": "bypassPermissions", "env": {"IS_SANDBOX": "0"}})
     )
     assert custom.env["IS_SANDBOX"] == "0"
+
+
+# --- Codex app-server（JSON-RPC）-----------------------------------------
+
+
+def _app_server_run(**overrides):
+    """建一个走 app-server 的 Codex 运行（默认选项里只覆盖 transport）。"""
+    definition = get_agent("codex")
+    options = {"transport": "app-server", "sandbox_mode": "workspace-write"}
+    options.update(overrides.pop("options", {}))
+    return definition, definition.create_run(ctx(options=options, **overrides))
+
+
+def _request(run) -> dict:
+    outbound = run.take_outbound()
+    assert len(outbound) == 1, outbound
+    return json.loads(outbound[0])
+
+
+def test_codex_app_server_invocation_speaks_json_rpc_over_stdio():
+    """app-server 模式：argv 是常驻服务，stdin 只放第一帧 initialize 且保持打开。"""
+    definition = get_agent("codex")
+    invocation = definition.build_invocation(ctx())
+    assert invocation.argv[:3] == ["codex", "app-server", "--listen"]
+    assert "stdio://" in invocation.argv
+    assert invocation.stdin_hold is True
+    assert "--json" not in invocation.argv
+    frame = json.loads(invocation.stdin)
+    assert frame["method"] == "initialize" and frame["id"] == 1
+    assert frame["params"]["clientInfo"]["name"] == "magenta-agents"
+
+    # 逐字流式来自 app-server；exec 仍是可选的老路径（写完 stdin 就关）。
+    legacy = definition.build_invocation(ctx(options={"transport": "exec"}))
+    assert legacy.argv[:2] == ["codex", "exec"]
+    assert legacy.stdin_hold is False
+
+
+def test_codex_app_server_handshake_then_streams_deltas():
+    definition, run = _app_server_run()
+
+    # initialize 的响应到齐后，适配器把 thread/start 排进队列（由运行层代写）。
+    assert list(run.feed(json.dumps({"id": 1, "result": {"userAgent": "x"}}))) == []
+    thread_request = _request(run)
+    assert thread_request["method"] == "thread/start"
+    assert thread_request["params"]["cwd"] == "/tmp/ws"
+    assert thread_request["params"]["model"] == "some-model"
+    assert thread_request["params"]["sandbox"] == "workspace-write"
+    assert thread_request["params"]["approvalPolicy"] == "never"
+
+    events = list(run.feed(json.dumps({"id": 2, "result": {"thread": {"id": "th-1"}}})))
+    assert [e.type.value for e in events] == ["session"]
+    assert run.session_id == "th-1"
+    turn_request = _request(run)
+    assert turn_request["method"] == "turn/start"
+    assert turn_request["params"]["threadId"] == "th-1"
+    assert turn_request["params"]["input"] == [{"type": "text", "text": "hello world"}]
+
+    # 逐字增量：一个 delta 一个事件。
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {"itemId": "m1", "delta": "你"},
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["message.delta"]
+    assert run.emitted_text == "你"
+
+    # 已有增量的条目不再补发整段文本，避免内容翻倍。
+    assert (
+        list(
+            run.feed(
+                json.dumps(
+                    {
+                        "method": "item/completed",
+                        "params": {"item": {"type": "agentMessage", "id": "m1", "text": "你好"}},
+                    }
+                )
+            )
+        )
+        == []
+    )
+
+    # 思考走 summaryTextDelta。
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {"itemId": "r1", "delta": "想一下"},
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["thinking.delta"]
+
+    # token 用量是 camelCase，翻译成与 exec 一致的键名。
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "tokenUsage": {
+                            "last": {
+                                "inputTokens": 5,
+                                "cachedInputTokens": 1,
+                                "cacheWriteInputTokens": 0,
+                                "outputTokens": 6,
+                                "reasoningOutputTokens": 2,
+                                "totalTokens": 11,
+                            }
+                        }
+                    },
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["usage"]
+    assert events[0].payload["input_tokens"] == 5
+    assert events[0].payload["total_tokens"] == 11
+
+    # 本轮结束：适配器声明收工，运行层据此关 stdin。
+    assert (
+        list(
+            run.feed(
+                json.dumps(
+                    {"method": "turn/completed", "params": {"turn": {"id": "t1", "status": "completed"}}}
+                )
+            )
+        )
+        == []
+    )
+    assert run.done is True
+
+
+def test_codex_app_server_falls_back_to_the_finished_message():
+    """服务端没给增量（旧版 app-server）时，item/completed 要补上整段文本。"""
+    _, run = _app_server_run()
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "item/completed",
+                    "params": {"item": {"type": "agentMessage", "id": "m9", "text": "完整回复"}},
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["message.delta"]
+    assert run.emitted_text == "完整回复"
+
+
+def test_codex_app_server_maps_tool_items():
+    _, run = _app_server_run()
+    started = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "item/started",
+                    "params": {
+                        "item": {"type": "commandExecution", "id": "c1", "command": "ls -la"}
+                    },
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in started] == ["tool.call"]
+    assert started[0].name == "shell"
+
+    done = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "type": "commandExecution",
+                            "id": "c1",
+                            "status": "completed",
+                            "exitCode": 0,
+                            "aggregatedOutput": "files",
+                        }
+                    },
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in done] == ["tool.result"]
+    assert done[0].payload["output"] == "files"
+    assert done[0].payload["is_error"] is False
+
+
+def test_codex_app_server_resumes_the_snapshot_thread():
+    definition, run = _app_server_run(session_id="th-old")
+    list(run.feed(json.dumps({"id": 1, "result": {}})))
+    request = _request(run)
+    assert request["method"] == "thread/resume"
+    assert request["params"]["threadId"] == "th-old"
+
+    # 选「每轮重放完整对话记录」时不能恢复服务端线程，否则历史会重复。
+    _, replayed = _app_server_run(
+        session_id="th-old", options={"resume_style": "transcript"}
+    )
+    list(replayed.feed(json.dumps({"id": 1, "result": {}})))
+    assert _request(replayed)["method"] == "thread/start"
+
+
+def test_codex_app_server_declines_approvals_instead_of_hanging():
+    """没有人工确认入口：审批一律自动拒绝，并把这件事告诉用户。"""
+    _, run = _app_server_run()
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "id": 7,
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {"command": "rm -rf /"},
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["log"]
+    assert json.loads(run.take_outbound()[0]) == {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {"decision": "decline"},
+    }
+
+
+def test_codex_app_server_reports_failed_turn_and_bad_response():
+    _, run = _app_server_run()
+    events = list(
+        run.feed(
+            json.dumps(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turn": {"id": "t1", "status": "failed", "error": {"message": "模型崩了"}}
+                    },
+                }
+            )
+        )
+    )
+    assert [e.type.value for e in events] == ["error"]
+    assert events[0].text == "模型崩了"
+    assert run.done is True
+
+    _, broken = _app_server_run()
+    events = list(broken.feed(json.dumps({"id": 1, "error": {"message": "不认识这个客户端"}})))
+    assert [e.type.value for e in events] == ["error"]
+    assert broken.done is True
+
+
+def test_codex_app_server_ignores_dirty_lines():
+    """合法 JSON 但不是对象（数组 / 数字 / 字符串）也不能把整轮运行带崩。"""
+    for line in ("[1, 2, 3]", "42", '"oops"'):
+        _, run = _app_server_run()
+        events = list(run.feed(line))
+        assert [e.type.value for e in events] == ["log"], line

@@ -8,15 +8,22 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.agents.base import AgentContext, AgentDefinition, Capabilities, Invocation, Runtime
+from app.agents.events import log, text_delta
 from app.runtime import runner
+from app.runtime.manager import registry
 from app.runtime.runner import _StreamLines
 
 FAKE_LONG_LINE_AGENT = str(Path(__file__).parent / "fakes" / "fake_long_line_agent.py")
+FAKE_LURKING_CHILD = str(Path(__file__).parent / "fakes" / "fake_lurking_child.py")
+FAKE_RPC_CHILD = str(Path(__file__).parent / "fakes" / "fake_rpc_child.py")
+FAKE_DEAF_CHILD = str(Path(__file__).parent / "fakes" / "fake_deaf_child.py")
 
 
 async def test_readline_default_limit_rejects_a_long_line():
@@ -114,3 +121,147 @@ async def test_cli_run_survives_a_very_long_output_line(client: httpx.AsyncClien
     assert message["error"] is None
     assert message["content"] == deltas
     assert message["usage"]["output_tokens"] == 7
+
+
+async def test_cli_run_ends_even_if_a_grandchild_keeps_the_pipe_open(client: httpx.AsyncClient):
+    """内核退出后，后台孙进程还握着 stdout（Codex 的 ``git ls-remote`` 就是这种）。
+
+    执行层不能为了等 EOF 把整轮运行拖住：子进程一退出，只再宽限几秒把残余读完就收工。
+    这里用「睡 20 秒」的孙进程固定住这个场景，要求整轮远早于它结束。
+    """
+    role = (
+        await client.post(
+            "/api/agents",
+            json={
+                "name": "留后手的 CLI",
+                "type_id": "custom-cli",
+                "model": "fake-model",
+                "options": {
+                    "command": sys.executable,
+                    "args": [FAKE_LURKING_CHILD],
+                    "prompt_mode": "stdin",
+                    "output_format": "jsonl",
+                    "text_path": "delta",
+                    "delta_mode": True,
+                },
+            },
+        )
+    ).json()
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": role["id"]})).json()
+
+    started = time.monotonic()
+    async with client.stream(
+        "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "你好"}
+    ) as response:
+        assert response.status_code == 200
+        events = await _read_sse(response)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5, f"整轮运行被后台孙进程拖住了：{elapsed:.1f} 秒"
+    assert [e["type"] for e in events][-1] == "stream.closed"
+    assert not [e for e in events if e["type"] == "error"]
+    deltas = "".join(e.get("text") or "" for e in events if e["type"] == "message.delta")
+    assert deltas == "done"
+
+
+class _RpcProbeAgent(AgentDefinition):
+    """最小双向内核：读完第一帧再排队发第二帧，收到 ``done`` 就声明收工。"""
+
+    id = "probe-rpc"
+    name = "双向探针"
+    runtime = Runtime.CLI
+    executable = sys.executable
+    capabilities = Capabilities(sessions=True)
+
+    def build_invocation(self, ctx: AgentContext) -> Invocation:
+        return Invocation(
+            argv=[sys.executable, FAKE_RPC_CHILD],
+            stdin=json.dumps({"id": 1}) + "\n",
+            stdin_hold=True,
+        )
+
+    def parse_line(self, line: str, run):
+        payload = json.loads(line)
+        if payload.get("seq"):
+            yield log(f"echo:{payload['seq']}")
+            if payload["seq"] == 1:
+                # 适配器只生产数据；真正写回 stdin 的是执行层。
+                run.send(json.dumps({"id": 2}) + "\n")
+        if payload.get("done"):
+            run.mark_done()
+
+
+async def _drain(stream) -> list:
+    return [event async for event in stream]
+
+
+async def test_cli_run_writes_adapter_requests_back_to_stdin():
+    """常驻 JSON-RPC 内核（Codex app-server 那类）靠 stdin 逐步收请求。
+
+    执行层必须：① ``stdin_hold`` 时不急着关闭 stdin；② 把适配器排队的请求照写回内核；
+    ③ 适配器 ``mark_done()`` 后立刻关 stdin 收工，而不是干等内核自己 EOF。
+    """
+    definition = _RpcProbeAgent()
+    context = AgentContext(agent_id="a1", agent_name="probe", prompt="你好")
+    active = registry.register("conversation-probe", "probe")
+    started = time.monotonic()
+    try:
+        events = await asyncio.wait_for(
+            _drain(runner.stream_run(definition, context, active)), timeout=20
+        )
+    finally:
+        registry.finish(active, "ok")
+    elapsed = time.monotonic() - started
+
+    kinds = [event.type.value for event in events]
+    # 第二帧是适配器排队、执行层代写的；内核回了两声 echo 才可能收工。
+    assert kinds.count("log") >= 2, kinds
+    assert kinds[-1] == "run.finished"
+    assert elapsed < 15, f"双向内核没有被及时收尾：{elapsed:.1f} 秒"
+    assert active.process is not None and active.process.returncode == 0
+
+
+class _DeafProbeAgent(AgentDefinition):
+    """把一个远超管道缓冲的请求投给一个「完全不读 stdin」的内核。"""
+
+    id = "probe-deaf"
+    name = "不读 stdin 的探针"
+    runtime = Runtime.CLI
+    executable = sys.executable
+
+    def build_invocation(self, ctx: AgentContext) -> Invocation:
+        # 300 KiB 远大于管道缓冲：内核不读的话 drain() 必然卡住。
+        return Invocation(
+            argv=[sys.executable, FAKE_DEAF_CHILD],
+            stdin=json.dumps({"blob": "x" * 300_000}) + "\n",
+            stdin_hold=True,
+        )
+
+    def parse_line(self, line: str, run):
+        payload = json.loads(line)
+        if payload.get("delta"):
+            yield text_delta(payload["delta"])
+
+
+async def test_cli_run_does_not_hang_when_the_kernel_stops_reading_stdin(monkeypatch):
+    """内核不读 stdin 时 ``drain()`` 会一直堵着：写 stdin 必须有上限（铁律 10）。"""
+    monkeypatch.setattr(runner, "_STDIN_DRAIN_SECONDS", 0.3)
+    monkeypatch.setattr(runner, "_STREAM_POLL_SECONDS", 0.2)
+    monkeypatch.setattr(runner, "_EXIT_DRAIN_SECONDS", 0.2)
+    monkeypatch.setattr(runner, "_EXIT_WAIT_SECONDS", 2.0)
+
+    definition = _DeafProbeAgent()
+    context = AgentContext(agent_id="a1", agent_name="deaf", prompt="你好")
+    active = registry.register("conversation-deaf", "deaf")
+    started = time.monotonic()
+    try:
+        events = await asyncio.wait_for(
+            _drain(runner.stream_run(definition, context, active)), timeout=20
+        )
+    finally:
+        registry.finish(active, "ok")
+    elapsed = time.monotonic() - started
+
+    assert [event.type.value for event in events][-1] == "run.finished"
+    assert elapsed < 15, f"写 stdin 卡住后整轮运行没有收尾：{elapsed:.1f} 秒"
+    assert any(event.text == "start" for event in events)

@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any, AsyncIterator, ClassVar, Iterable, Sequence
 
 from .events import AgentEvent, EventType
-from .skills import SkillMount, SkillSpec
+from .skills import SkillMount, SkillRoot, SkillSpec
 
 
 class FieldType(str, Enum):
@@ -132,6 +132,10 @@ class RuntimeProvisioner:
     update_argv: list[str] = field(default_factory=list)
     uninstall_argv: list[str] = field(default_factory=list)
     latest_argv: list[str] = field(default_factory=list)
+    #: 执行上面三条命令**之前**先跑的「清扫」命令，用来清掉上一次被中断的动作留下的
+    #: 残留（例如 npm 的 rename 中转目录）。空列表表示无需清扫；框架照常执行、逐行回显，
+    #: 但它失败**不**中断动作 —— 动作的成败只由动作自己的退出码决定。
+    prepare_argv: list[str] = field(default_factory=list)
     homepage: str | None = None
     #: 适配器想提醒用户的事项（例如「本机当前不是用该包管理器装的」）
     note: str | None = None
@@ -169,6 +173,10 @@ class Invocation:
     env: dict[str, str] = field(default_factory=dict)
     cwd: str | None = None
     stdin: str | None = None
+    #: 为 True 时运行器保持 stdin 打开：适配器可以在解析过程中用 ``AgentRun.send()``
+    #: 把后续请求写回内核（双向 JSON-RPC 协议，例如 Codex app-server）。
+    #: 为 False 时照旧写完 ``stdin`` 立刻关闭，让内核看到 EOF。
+    stdin_hold: bool = False
     #: 运行器在启动前必须写入的文件（相对路径 -> 内容）
     files: dict[str, str] = field(default_factory=dict)
     #: 适配器期望事件载荷出现在哪条流上
@@ -409,6 +417,16 @@ class AgentDefinition(ABC):
 
     # -- 技能 ----------------------------------------------------------------
 
+    def skill_roots(self) -> list[SkillRoot]:
+        """本内核的技能根（「技能放在哪」的权威声明）。
+
+        适配器只声明**路径与来源**，框架据此统一扫描（编目），并在安装技能时落到
+        :attr:`SkillRoot.installable` 的那个根里。默认没有技能根；有技能目录的内核
+        （Claude Code、Codex）覆盖此钩子。实现必须是尽力而为的：目录不存在、权限不足
+        都不允许抛错，返回空列表即可。
+        """
+        return []
+
     def discover_skills(self) -> list[SkillSpec]:
         """交给平台统一编目的技能（只读扫描本机文件系统）。
 
@@ -442,6 +460,9 @@ class AgentRun:
         self.session_id = ctx.session_id
         self.tool_calls: list[dict[str, Any]] = []
         self.result: dict[str, Any] = {}
+        #: 适配器声明「本次运行的事件流已经结束」，运行层据此收工（适用于常驻的 JSON-RPC 内核）。
+        self.done = False
+        self._outbound: list[str] = []
 
     def build_invocation(self) -> Invocation:
         return self.definition.build_invocation(self.ctx)
@@ -450,6 +471,26 @@ class AgentRun:
         for event in self.definition.parse_line(line, self):
             self._observe(event)
             yield event
+
+    def send(self, payload: str) -> None:
+        """把一行原始内容排进「写回内核 stdin」的队列。
+
+        适配器只生产数据，不自己碰子进程；真正的写入由运行层统一执行，
+        取消、超时与凭据擦除因此仍然只有一份实现。仅对 ``Invocation.stdin_hold`` 的启动有效。
+        """
+        self._outbound.append(payload)
+
+    def take_outbound(self) -> list[str]:
+        """取出并清空待写队列（运行层每读完一行都会调用一次）。"""
+        if not self._outbound:
+            return []
+        outbound = self._outbound
+        self._outbound = []
+        return outbound
+
+    def mark_done(self) -> None:
+        """声明事件流已结束；运行层会停止读取、关闭 stdin 并等待内核退出。"""
+        self.done = True
 
     def _observe(self, event: AgentEvent) -> None:
         if event.type is EventType.MESSAGE_DELTA and event.text:

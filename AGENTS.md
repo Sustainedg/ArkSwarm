@@ -170,6 +170,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 适配器不需要自己处理，也**不得**把它写进提示词、日志或事件。
 `AgentRun` 是"无状态定义 + 一次具体运行"的绑定，持有 `state`（解析状态）、`emitted_text`、`thinking`、
 `session_id`、`tool_calls`。
+- **双向 stdin（常驻型 JSON-RPC 内核，如 Codex app-server）**：适配器在 `build_invocation()` 里置
+  `Invocation.stdin_hold=True`（`stdin` 只写第一帧且不关闭），解析到应答后用 `AgentRun.send(line)`
+  排队下一帧、用 `AgentRun.mark_done()` 声明收工。**写 stdin / 关 stdin 由执行层统一做**
+  （照旧由 `runner` 负责），适配器仍然只生产数据、不碰子进程。
 
 ### 3.6 领域模型不变量（`models.py`）
 - `Gateway`（网关，API 密钥的唯一来源）→ `AgentProfile`（智能体：内核 + 网关 + 模型 + 人格 + 技能）
@@ -327,8 +331,11 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 
 ### 4.9 让运行时可由平台安装 / 更新 / 卸载
 1. 在适配器声明 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…,
-   update_argv=…, uninstall_argv=…, latest_argv=…)` —— 命令（用哪个包管理器、包名、装到哪）是
-   **适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
+   update_argv=…, uninstall_argv=…, latest_argv=…, prepare_argv=…)` —— 命令（用哪个包管理器、包名、装到哪、
+   动作前要清掉什么残留）是**适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
+   `prepare_argv` 是动作前的清扫命令（清掉上一次被中断的动作留下的残留），失败只回一行告警、不中断动作。
+   npm 系内核的安装 / 更新命令由 `builtin/util.py:npm_install_argv()` 生成：它会先让出被别的安装
+   占着的同名可执行文件（否则 npm 直接失败在 `EEXIST`），失败时再把对方放回去。
 2. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
 3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
    卡片副标题会写明「进程内运行」/「自备可执行文件」。

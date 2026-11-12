@@ -31,7 +31,7 @@ from ..events import (
 )
 from ..registry import register_agent
 from ..skills import SkillMount, SkillSpec, scan_skill_root
-from .util import as_list, flatten_content, truthy
+from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, truthy
 
 
 # Claude Code 拒绝以 root 身份使用 bypassPermissions（"cannot be used with root/sudo
@@ -115,10 +115,13 @@ class ClaudeCodeAgent(AgentDefinition):
     provisioner = RuntimeProvisioner(
         manager="npm",
         package="@anthropic-ai/claude-code",
-        install_argv=["npm", "install", "-g", "@anthropic-ai/claude-code"],
-        update_argv=["npm", "install", "-g", "@anthropic-ai/claude-code@latest"],
+        #: 安装 / 更新走包装命令：本机既有的同名可执行文件（另一个 node 装的、
+        #: 用户手写的垫片）会让 npm 直接失败在 EEXIST，先把这种占位挪开。
+        install_argv=npm_install_argv("@anthropic-ai/claude-code", bin_name="claude"),
+        update_argv=npm_install_argv("@anthropic-ai/claude-code", bin_name="claude", latest=True),
         uninstall_argv=["npm", "uninstall", "-g", "@anthropic-ai/claude-code"],
         latest_argv=["npm", "view", "@anthropic-ai/claude-code", "version"],
+        prepare_argv=npm_prepare_argv("@anthropic-ai/claude-code"),
         homepage="https://docs.claude.com/en/docs/claude-code/setup",
     )
     api_key_env = "ANTHROPIC_AUTH_TOKEN"
