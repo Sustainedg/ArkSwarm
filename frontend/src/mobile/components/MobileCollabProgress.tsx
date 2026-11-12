@@ -1,14 +1,14 @@
 /** 移动端协作进度：与桌面端同一间等距办公室（双指缩放 / 单指拖动 / 点工牌看进度）。 */
-import { buildFlowLinks, type CollabFlowEdge, type CollabRoleProgress } from '../../lib/collabProgress'
+import { buildFlowLinks, type CollabFlowEdge, type CollabAgentProgress } from '../../lib/collabProgress'
 import { CollabOfficeMap } from '../../components/CollabOfficeMap'
 
 interface Props {
-  nodes: CollabRoleProgress[]
+  nodes: CollabAgentProgress[]
   edges: CollabFlowEdge[]
-  onOpenRole: (key: string) => void
+  onOpenNode: (key: string) => void
 }
 
-export function MobileCollabProgress({ nodes, edges, onOpenRole }: Props) {
+export function MobileCollabProgress({ nodes, edges, onOpenNode }: Props) {
   if (nodes.length === 0) return null
   const loops = buildFlowLinks(nodes, edges).filter((link) => link.isLoop)
 
@@ -18,7 +18,7 @@ export function MobileCollabProgress({ nodes, edges, onOpenRole }: Props) {
         <span>协作进度</span>
         <span className="dim">双指缩放 · 点人物看对话</span>
       </div>
-      <CollabOfficeMap nodes={nodes} edges={edges} onOpenRole={onOpenRole} initialView="desks" />
+      <CollabOfficeMap nodes={nodes} edges={edges} onOpenNode={onOpenNode} initialView="desks" />
       {loops.length > 0 && (
         <div className="m-collab-progress-links">
           {loops.map((link) => (

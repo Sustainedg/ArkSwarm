@@ -1,4 +1,4 @@
-# 协作（多角色工单协作）设计方案
+# 协作（多智能体工单协作）设计方案
 
 > 状态：**方案已评审通过，正在按 §11 里程碑落地**（进度见 §13）。本文档描述的是完整设计，
 > M0（契约冻结）、M1（引擎 MVP：后端跑通含返工的闭环）、M2（画布编排 + 协作页）已落地，
@@ -9,8 +9,8 @@
 
 ## 0. 一句话结论
 
-新增一个**物理独立**的协作域 `backend/app/collab/`：用户在画布上把「角色」拖成节点、连成有向图，
-一次运行由引擎**串行推进**，角色之间**只传工单**（结构化交付物）而不传对话历史；
+新增一个**物理独立**的协作域 `backend/app/collab/`：用户在画布上把「智能体」拖成节点、连成有向图，
+一次运行由引擎**串行推进**，智能体之间**只传工单**（结构化交付物）而不传对话历史；
 每个节点的运行仍然走现有的 `runtime.runner.stream_run()`，因此取消、超时、脱敏、
 SSE、前端 Markdown 渲染全部直接复用，**不新增事件类型、不新增依赖、不改适配器**。
 
@@ -42,11 +42,11 @@ SSE、前端 Markdown 渲染全部直接复用，**不新增事件类型、不�
 | # | 需求 | 设计落点 |
 | --- | --- | --- |
 | C1 | 左侧菜单新增「协作」，与「对话」同级 | §7.1 导航 + `/collab` 路由 |
-| C2 | 可视化自定义角色设定 | §7.3 画布节点属性面板（复用 `DynamicForm`、角色下拉） |
-| C3 | 可视化连线串接角色 | §7.3 拖拽连线 + 有向边 + 边类型 |
-| C4 | 角色之间用「工单」分配任务 | §4 工单协议（结构化交接载荷） |
-| C5 | **不共享记忆**，只把任务内容传给下一个角色 | §4.2 交付载荷；强制 `ctx.history=[]`、`ctx.session_id=None` |
-| C6 | 角色能力范围受限（如 CEO 不能写代码） | §4.3 四层约束 + 越权审计 |
+| C2 | 可视化自定义智能体设定 | §7.3 画布节点属性面板（复用 `DynamicForm`、智能体下拉） |
+| C3 | 可视化连线串接智能体 | §7.3 拖拽连线 + 有向边 + 边类型 |
+| C4 | 智能体之间用「工单」分配任务 | §4 工单协议（结构化交接载荷） |
+| C5 | **不共享记忆**，只把任务内容传给下一个智能体 | §4.2 交付载荷；强制 `ctx.history=[]`、`ctx.session_id=None` |
+| C6 | 智能体能力范围受限（如 CEO 不能写代码） | §4.3 四层约束 + 越权审计 |
 | C7 | 审查不过 → 带意见退回 → 返工 → 再审，直到完成 | §3.3 工单状态机（`rework` 回边） |
 | C8 | 功能独立，不污染现有代码 | §2 物理分层 + §2.4 宿主改造点清单（后端共 4 处、每条 1~2 行） |
 
@@ -70,7 +70,7 @@ backend/app/collab/            ← 新目录，协作域的全部逻辑都在这
   tables.py          4 张表（SQLModel），FK 用字符串表名，不 import app.models
   schemas.py         请求/响应 + 编排图（nodes/edges）的 Pydantic 校验
   protocol.py        协作信封事件（collab.*）——独立于 agents/events.py
-  tickets.py         ★ 工单协议：解析角色输出 / 渲染交付载荷（纯函数）
+  tickets.py         ★ 工单协议：解析智能体输出 / 渲染交付载荷（纯函数）
   graph.py           ★ 编排图校验与查询（纯函数）
   prompt.py          ★ 节点上下文 → prompt 组装（纯函数）
   engine.py          ★ 编排状态机（无 HTTP、无 SSE、无 SQL 细节之外的东西）
@@ -113,8 +113,8 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 | --- | --- |
 | 智能体执行 | `execution.py` 调用 `runtime.runner.stream_run(definition, ctx, handle)`；取消、超时、命令回显脱敏、stdin/文件物化全部白得 |
 | 运行句柄 | 复用 `runtime.manager.ActiveRun` 这个数据类（`cancel_event` / `process`），协作层自己持句柄表 |
-| 角色与智能体 | 直接外键引用 `roles` / `agent_instances`，不复制、不派生 |
-| 技能 | 角色的技能分配（`role_skills`）→ `runtime.skills.prepare_skill_home()`（§2.4 第 4 条） |
+| 智能体 | 直接外键引用 `agent_profiles`（自带 `gateway_id`），不复制、不派生 |
+| 技能 | 智能体的技能分配（`agent_skills`）→ `runtime.skills.prepare_skill_home()`（§2.4 第 4 条） |
 | 前端渲染 | `ConversationThread`（内部 `MessageView`）/ `MarkdownView` / `DynamicForm` / `Modal` |
 | 前端流式 | `lib/api.ts:streamPost()` + 从 `ChatPage` 提取出的 `applyEvent` 归约器（§7.4） |
 | SSE 传输 | `transport/sse.py:sse_stream()`（M0 已下沉为通用设施，`api/` 与 `collab/` 共用） |
@@ -149,7 +149,7 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 | 11 | `frontend/src/components/MessageView.tsx` | 加可选 `label` 属性（时间线上显示岗位名，默认仍是「智能体」） | ✅ M2 |
 | 11 | `docs/architecture.md` | §7 扩展点表加一行指向本文档 | ✅ M0 |
 | 12 | `backend/app/collab/schemas.py` `store.py` `execution.py` `prompt.py` | 新建协作任务（run）时可指定工作路径：留空 → 团队默认 → 自动分配；所有岗位统一 cwd，`workspace_scope` 只约束读写权限与越权审计 | ✅ |
-| 13 | `frontend/src/components/ConversationThread.tsx` `CollabRoleThread.tsx` `RoleConversationPanel.tsx`、`src/mobile/components/MobileRoleConversationSheet.tsx` | 对话只有一份展示模块：单聊 / 协作主对话 / 协作看板岗位实时对话（含移动端岗位弹层）共用同一线程与气泡样式 | ✅ |
+| 13 | `frontend/src/components/ConversationThread.tsx` `CollabAgentThread.tsx` `AgentConversationPanel.tsx`、`src/mobile/components/MobileAgentConversationSheet.tsx` | 对话只有一份展示模块：单聊 / 协作主对话 / 协作看板岗位实时对话（含移动端岗位弹层）共用同一线程与气泡样式 | ✅ |
 
 改动总量：后端 4 处（M0 约 7 行；M1 又在 `db.py` 追加约 20 行的"补列"工具）、前端约 6 行，
 全部是"挂载"性质，不含任何业务分支注入。
@@ -175,7 +175,7 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 ```
 Team {
   id, name, description,
-  entry_key,              # 唯一入口节点（唯一能和用户对话的角色）
+  entry_key,              # 唯一入口节点（唯一能和用户对话的智能体）
   workspace_dir,          # 团队默认工作路径；新建协作任务时可覆盖，留空则用团队默认
   graph: { nodes[], edges[] },        # 可视化编排结果，整图 JSON 存储
   budget: { max_steps, max_tickets, max_rounds_per_ticket, max_tokens, timeout_seconds }
@@ -183,7 +183,7 @@ Team {
 
 Node {
   key,                    # 稳定标识（工单里引用它），如 "ceo"
-  role_id,                # 绑定的角色（人格 + 智能体 + 技能 + 参数都来自这里）
+  agent_profile_id,       # 绑定的智能体（内核 + 网关 + 模型 + 人格 + 技能都来自这里）
   label, duty,            # duty ∈ coordinator | engineer | reviewer
   instructions,           # 职责说明（追加到人格之后）
   capability_scope,       # 能力边界文字（"不得写代码、不得访问工作目录"）
@@ -232,15 +232,15 @@ Edge {
 上级可报，由 `ask_user` 收口。两条都由 `graph.effective_output_contract()` 统一给出，
 提示词与运行时校验才会一致。
 
-**收尾汇报（根工单完成后交回入口角色）**：工单沿交接链一路往下走时，用户只能在入口角色那条
+**收尾汇报（根工单完成后交回入口智能体）**：工单沿交接链一路往下走时，用户只能在入口智能体那条
 主会话里说话；活干完了如果没人回来说一声，用户就只能自己去翻工单树。所以**根工单**收尾（`done`）后，
-引擎把它重新交回**入口角色**（`collab_tickets.report_at` 记下这次汇报），由入口角色用一次 `done`
+引擎把它重新交回**入口智能体**（`collab_tickets.report_at` 记下这次汇报），由入口智能体用一次 `done`
 收尾：交给它的 prompt 里附上整次协作的**结构化汇总**（每张工单的标题 / 状态 / 交付摘要 / 产出文件），
 并要求它用几句话讲清结论。这一轮**只允许** `done` / `ask_user` —— 绝不允许从这里重新派活。
 
 三条护栏：
 - 只对根工单：子工单仍按「谁拆的谁汇总」各归各的发起人；
-- 最后拍板的就是入口角色本人时不再汇报（它那一步已经把话说给用户听了）；
+- 最后拍板的就是入口智能体本人时不再汇报（它那一步已经把话说给用户听了）；
 - 每轮收尾只汇报一次（`report_at`），用户追问重新开启根工单时会清零，下一轮收尾再汇报一次。
 
 **打回目标**：`rework` 的终点允许是**协调者**（把审查意见交回 CTO 重新拆解），不限于原实施者。
@@ -250,7 +250,7 @@ Edge {
 `rework_to`）。审查者有多条退路又没指明 → 挂起等人指定，**引擎不替你猜**。
 
 **用户决策卡**：`ask_user` 不再只给一段问题文本，而是应当带 2~12 条 `options`（推荐 2~6 条）：
-`{"label": "选项标题", "value": "点选后回传给角色的完整答复", "description": "可选说明"}`。
+`{"label": "选项标题", "value": "点选后回传给智能体的完整答复", "description": "可选说明"}`。
 需要用户自由填写时追加一条 `{"label": "我来补充", "value": "", "freeform": true}`，点它只把焦点交给输入框。
 `question` 与 `options` 一起落进 `collab_tickets.result`，`collab.notice(level=ask)` 也携带同样字段；
 桌面端与移动端都据此在输入框上方渲染可点卡片。旧记录只有 `question` 时，界面会补出「按你的默认方案来」
@@ -283,14 +283,14 @@ Edge {
 - **同一时刻只有一个步骤在跑**：谁在等谁，UI 才说得清、日志才好查、取消语义才确定。
 - **谁拆的谁汇总**：子工单全部完成 → 父工单自动回到**拆解者**手里（`ticket.owner_key` 记着"谁拆的"，
   `waiting_children → open`），协调者据此继续 `delegate` 或 `done`。
-- 没有就绪工单且没有 `waiting_children` 的工单 → 若根工单已完成但还没汇报，先把它交回入口角色
+- 没有就绪工单且没有 `waiting_children` 的工单 → 若根工单已完成但还没汇报，先把它交回入口智能体
   做收尾汇报（见 §3.3），之后运行才进 `done`。
 
 ---
 
 ## 4. 工单协议（C4 / C5 / C6 的核心）
 
-### 4.1 角色输出格式
+### 4.1 智能体输出格式
 
 每个节点在**一轮发言的末尾**必须附一个可解析的工单块（框架在 prompt 里给出模板与示例）：
 
@@ -352,7 +352,7 @@ Edge {
 解析后再做**语义校验**：`action` 是否在节点的 `output_contract` 内、`assignee` 是否在边的白名单内、
 `pass` 是否带 `review_comment`、必填字段是否齐全。任一不通过 → 同上，作为显式错误。
 
-### 4.2 交付载荷：下一个角色到底看到什么（C5）
+### 4.2 交付载荷：下一个智能体到底看到什么（C5）
 
 框架用**模板**（不是上一轮的对话）拼出下游 prompt：
 
@@ -383,7 +383,7 @@ Edge {
 
 隔离保证（有测试断言，且**在数据通路上结构性成立**，不靠实现者自觉）：
 - `ctx.history = []`、`ctx.session_id = None`（**每个步骤都是全新会话**），绝不续接内核会话；
-- prompt 里**不含**任何角色的完整对话、其他工单正文、其他分支内容；
+- prompt 里**不含**任何智能体的完整对话、其他工单正文、其他分支内容；
 - 上游只能以「工单字段 + 一句话摘要 + 文件路径清单」的形式被看见；
 - **下游**同理，只能以「工单字段 + 一句话摘要 + 文件路径清单」的形式被看见（M5 的「下游交付」区块，
   由 `engine._child_digest_lines()` 派生，**只取直接子工单**；子树的细节沿着每一层自己的 `result`
@@ -397,18 +397,18 @@ Edge {
 | 层 | 机制 | 覆盖面 | 说明 |
 | --- | --- | --- | --- |
 | L1 提示词 | `capability_scope` + 输出契约注入 | 所有内核 | 只是约束，不是保证 |
-| L2 工作目录 | 协作组在新建时可填「工作路径」；留空则按运行 ID 分配默认目录。所有岗位都拿到同一个绝对路径并作为 cwd，prompt 明确它是唯一允许访问的目录 | 所有内核 | 路径不再因角色而异；`none` / `read` 仍由提示词约束 + 越权审计兜底 |
+| L2 工作目录 | 协作组在新建时可填「工作路径」；留空则按运行 ID 分配默认目录。所有岗位都拿到同一个绝对路径并作为 cwd，prompt 明确它是唯一允许访问的目录 | 所有内核 | 路径不再因智能体而异；`none` / `read` 仍由提示词约束 + 越权审计兜底 |
 | L3 参数覆盖 | 节点级 `options_override`（复用 `DynamicForm` 按该智能体类型的 `config_fields` 渲染），如只读/计划模式、关闭工具 | 支持相应能力的内核 | 框架**不写任何内核分支**，纯透传 |
 | L4 越权审计 | 运行前后对共享工作目录做指纹快照（文件路径 + 大小 + mtime + 内容哈希，带文件数/体积上限）；`read`/`none` 节点被检出改动 → `error` 事件 + 卡片标红 + 工单打回 | 所有内核 | 通用、无需内核知识 |
 
 诚实声明（写进文档"已知限制"）：L3 的效果取决于内核自身能力；L4 是**事后发现**而非事前阻止；
 真正的强隔离需要容器/沙箱，属于后续独立议题。
 
-### 4.4 「能力范围」与「角色设定」的分工（C2）
+### 4.4 「能力范围」与「智能体设定」的分工（C2）
 
-- **角色（Role）**回答"他是谁"：人格、绑定智能体、参数、技能 —— 沿用现有「角色」页，不重复造。
+- **智能体（AgentProfile）**回答"他是谁"：内核 + 网关 + 模型 + 人格 + 技能 —— 沿用现有「智能体」页，不重复造。
 - **节点（Node）**回答"他在这个协作里干什么"：职责、能力边界、可发起的动作、可派发给谁、参数覆盖。
-- 两者通过节点上的 `role_id` 下拉绑定；同一个角色可以出现在多个协作组里、担任不同 duty。
+- 两者通过节点上的 `agent_profile_id` 下拉绑定；同一个智能体可以出现在多个协作组里、担任不同 duty。
 
 ---
 
@@ -421,12 +421,12 @@ engine.prepare_turn(run, content)        # 校验图、把用户这句话接到�
 engine.consume_turn(prepared)            # 串行推进直到挂起/完成
  ├─ 选出就绪工单 + 目标节点
  ├─ store 落库 StepMessage(status=streaming) 与 ActiveRun 句柄
- ├─ 载入 Role / AgentInstance → get_agent(type_id) → 组装 AgentContext
+ ├─ 载入 AgentProfile（+ Gateway） → get_agent(type_id) → 组装 AgentContext
  │    ├─ ctx.prompt / system_prompt：由 prompt.py 拼装（人格 + 协作段 + 工单载荷）
  │    ├─ ctx.history=[]、ctx.session_id=None            ← 不共享记忆
  │    ├─ ctx.workspace_dir：所有岗位统一为「本次协作任务」的工作路径（任务指定 > 团队默认；
  │    │                     workspace_scope 只约束读写权限与越权审计）
- │    └─ ctx.skills / ctx.skill_home_dir：按节点绑定的角色分配物化（scope_id = 运行内的作用域）
+ │    └─ ctx.skills / ctx.skill_home_dir：按节点绑定的智能体分配物化（scope_id = 运行内的作用域）
  ├─ async for event in execution.stream(node, ctx, handle):
  │    ├─ 原始 AgentEvent → 包进 collab.step.event 信封 → 立刻 SSE 推给前端（逐字打字效果）
  │    └─ 同时累积 text / parts / usage（复用 consume_run 同样的累积方式）
@@ -490,9 +490,9 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 | `POST` | `/api/collab/teams/{id}/duplicate` | 复制 |
 | `DELETE` | `/api/collab/teams/{id}` | 删除（有运行记录 → 409） |
 | `GET` | `/api/collab/runs?team_id=` | 运行列表（左栏） |
-| `POST` | `/api/collab/runs` | 创建运行 `{team_id, title?}`；目标由第一条 `messages` 给出（保持"用户在跟入口角色对话"的语义） |
+| `POST` | `/api/collab/runs` | 创建运行 `{team_id, title?}`；目标由第一条 `messages` 给出（保持"用户在跟入口智能体对话"的语义） |
 | `GET` | `/api/collab/runs/{id}` | 运行详情（工单 + 时间线 + 状态 + 预算消耗） |
-| `POST` | `/api/collab/runs/{id}/messages` | **SSE**：用户对入口角色说话 / 回复提问 |
+| `POST` | `/api/collab/runs/{id}/messages` | **SSE**：用户对入口智能体说话 / 回复提问 |
 | `GET` | `/api/collab/runs/{id}/stream` | **SSE**：订阅一次运行的实时事件（断开后重连、或在另一台设备上围观） |
 | `POST` | `/api/collab/runs/{id}/cancel` | 停止 |
 | `POST` | `/api/collab/runs/{id}/resume` | 从就绪队列继续推进 |
@@ -500,8 +500,8 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 | `DELETE` | `/api/collab/runs/{id}` | 删除运行（级联删工单与步骤消息） |
 
 校验错误用 **422** + 结构化 `detail`（含 `errors[]`，编辑器逐条高亮节点/边）；
-角色/智能体的删除是**软删除**（见 `docs/architecture.md` §6）：协作历史里引用的角色/智能体
-不会因为删除而消失，仍未被删除的角色引用智能体时删除智能体返回 **409**。
+智能体的删除是**软删除**（见 `docs/architecture.md` §6）：协作历史里引用的智能体
+不会因为删除而消失，仍被**未删除**的智能体引用的网关删除时返回 **409**。
 
 ---
 
@@ -510,7 +510,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 ### 7.1 导航（已确认：单菜单 + 页内页签）
 
 主导航（`App.tsx` 的 `NAV`）新增一项：`{ to: '/collab', icon: '🤝', label: '协作组' }`
-（放在「角色」之后，与移动端抽屉里的叫法一致）。页面内两个页签，四个路由都指向同一个 `CollabPage`：
+（放在「智能体」之后，与移动端抽屉里的叫法一致）。页面内两个页签，四个路由都指向同一个 `CollabPage`：
 
 | 路由 | 页签 | 内容 |
 | --- | --- | --- |
@@ -534,7 +534,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 │                              ││  👩💻 SE：…（返工）✅ 提交                     │
 │                              ││  🔍 审查员：✅ 通过 → 工单 T-12 完成           │
 │                              │├──────────────────────────────────────────────┤
-│                              ││ 底部输入框：直接和入口角色对话（走 SSE）        │
+│                              ││ 底部输入框：直接和入口智能体对话（走 SSE）        │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
                                     岗位抽屉：内部步骤与实时输出；工单看板：工单详情
 ```
@@ -542,10 +542,10 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 > 上图中 CTO、SE、审查员的发言现在只出现在各自岗位抽屉里；主会话只保留用户与入口领导者的往来。
 
 **M2 已落地的部分**：左栏运行列表、主区只展示「用户 ⇄ 入口领导者」的对话、顶栏「协作进度」按钮、
-横向的工单摘要条（状态 / 持有者 / 返工轮次 / 审查意见）、底部输入框直接和入口角色说话、
+横向的工单摘要条（状态 / 持有者 / 返工轮次 / 审查意见）、底部输入框直接和入口智能体说话、
 顶部状态与预算消耗、停止 / 继续 / 重试 / 删除，以及 `collab.notice` 的即时提示。
 `waiting_user` 且存在 `ask_user` 工单时，输入框上方显示决策卡；点选项等价于发送一条用户消息。
-点击「协作进度」打开全屏进度页；每个岗位都可继续点开，查看该角色在本次协作里的历史步骤与当前流式输出；其他角色的发言不会
+点击「协作进度」打开全屏进度页；每个岗位都可继续点开，查看该智能体在本次协作里的历史步骤与当前流式输出；其他智能体的发言不会
 混进主会话。流式推进期间，用户刚发出的消息和入口领导者已完成的回复会先以临时步骤显示，
 整轮结束后再由落库详情替换，避免“领导者明明回复了，主会话却空着”的断层。
 **留到 M4**：右侧工单抽屉（子工单树、产出文件、越权审计）、按状态分列的看板、卡片视觉细化。
@@ -556,27 +556,27 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 禁用并提示等待完成，防止两端同时提交。
 
 **岗位会话的交接链**：一个岗位的抽屉按时间顺序展示「谁对我说了什么 → 我做了什么」——入口领导者
-先显示用户的开场消息，其余岗位显示上游角色派工时的发言（步骤 `content`，即角色说的人话）与该工单
+先显示用户的开场消息，其余岗位显示上游智能体派工时的发言（步骤 `content`，即智能体说的人话）与该工单
 的要点（`brief`）。派工步骤落库 `target_key`（把活交给了哪个节点），据此把交接卡精确挂到接收方；
 旧数据没有 `target_key` 时退化为只显示本岗位自己的步骤（不影响展示，只是少了上游那句话）。
 
-**岗位内部会话的「进行中」表达**：角色的输出只在**这一步跑完时**才落库，所以非本机发起的会话
+**岗位内部会话的「进行中」表达**：智能体的输出只在**这一步跑完时**才落库，所以非本机发起的会话
 （另一台设备、刷新后的页面）拿不到逐字流，只能看到该步落库后的结果。为了避免「进度显示处理中、
 点开却什么都没有」，岗位抽屉对没有产出的步骤渲染明确的占位：`streaming` → 「正在处理中……」，
 `interrupted` / 无产出 → 「被中断、没有留下输出，可点继续重跑」。服务重启时
 （`collab.store.recover_interrupted`）除把残留 `running` 运行标记为 `interrupted` 外，也会把残留的
 `streaming` 步骤一并收尾为 `interrupted`，否则这些步骤会永远停在「处理中」。
 
-- 时间线卡片类型：用户发言 / 角色发言 / **工单卡**（`delegate`）/ **审查卡**（`verdict`）/ **系统提示**（预算、审计、解析失败）。
+- 时间线卡片类型：用户发言 / 智能体发言 / **工单卡**（`delegate`）/ **审查卡**（`verdict`）/ **系统提示**（预算、审计、解析失败）。
 - 工单卡可点击 → 抽屉展示工单字段、子工单树、历史轮次、产出文件、token 用量。
-- "谁把什么交给了谁"用卡片上的 `→ 角色名` 与看板列变化表达，无需用户读日志。
+- "谁把什么交给了谁"用卡片上的 `→ 智能体名` 与看板列变化表达，无需用户读日志。
 
 ### 7.3 可视化编排器（C2 / C3）
 
 ```
-┌ 左：角色抽屉 ┐┌ 中：画布（网格背景） ────────────────────────┐┌ 右：属性面板 ┐
+┌ 左：智能体抽屉 ┐┌ 中：画布（网格背景） ────────────────────────┐┌ 右：属性面板 ┐
 │ 🧑💼 学究CEO   │   ┌────────┐   assign    ┌────────┐            ││ 节点/边属性   │
-│ 🧑🔧 CTO       │   │  CEO   │────────────▶│  CTO   │            ││ 角色 ▾        │
+│ 🧑🔧 CTO       │   │  CEO   │────────────▶│  CTO   │            ││ 智能体 ▾        │
 │ 👩💻 SE        │   │协调者 ⭐│             │实施者   │            ││ 职责说明      │
 │ 🔍 审查员      │   └────────┘             └───┬────┘            ││ 能力边界      │
 │ （拖到画布）   │         ▲  rework            │ assign          ││ 工作目录范围 ▾│
@@ -590,7 +590,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 交互（全部手写，**不引入图库**，铁律 12；M2 已落地）：
 - 节点：`position: absolute` 的 div，`pointerdown/move/up` 拖动（监听挂在 window 上，移出画布也不卡），
   坐标存进 `graph.nodes[].x/y`。
-- 添加节点：三个入口都通往同一个 `addNode()` —— 点选角色抽屉里的角色、把角色**拖放**到画布上、
+- 添加节点：三个入口都通往同一个 `addNode()` —— 点选智能体抽屉里的智能体、把智能体**拖放**到画布上、
   或由第一个节点自动当入口。新节点默认 `engineer`，第一个节点自动设为 `coordinator` + 入口。
 - 连线：SVG `<path>` + 箭头 marker；三种边用颜色/线型区分
   （assign 灰实线 · review 青实线 · rework 黄虚线）。
@@ -604,14 +604,14 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 - 删除：选中节点/边后按 `Delete`、或点面板里的删除按钮；删节点会级联删掉它的边。
 - 校验：每次改动**防抖 500ms** 调一次 `POST /api/collab/teams/{id}/validate`（与运行时同一套规则），
   错误/提醒就地高亮节点、连线和面板，并把「人话提示」列在画布下方；前端不重复实现一遍规则。
-- 属性面板：角色用现有 `listRoles()` 下拉；`options_override` 用 `DynamicForm`
-  按该角色绑定智能体类型的 `config_fields` 渲染（C2 直接白得）。
+- 属性面板：智能体用现有 `listRoles()` 下拉；`options_override` 用 `DynamicForm`
+  按该智能体绑定智能体类型的 `config_fields` 渲染（C2 直接白得）。
 - 校验实时提示（本地 + 服务端双保险）：
   - 必须**唯一入口节点**；非入口节点必须至少有一条入边；
   - 存在 `review` 边则必须有 `rework` 回边（否则无法返工），反之亦然；
   - 环必须显式声明为 `rework`；`assign` 边不许成环；
   - 每个 duty 允许的动作集合与出边类型必须相容（如 `reviewer` 不能有 `assign` 出边）；
-  - 引用的角色存在且绑定了智能体。
+  - 引用的智能体存在且绑定了智能体。
 
 **移动端（`/m/`）同样能编排，只是不画线**：`mobile/pages/MobileCollabTeamPage.tsx` 用表单做同一件事 ——
 岗位是卡片列表（点开底部弹层编辑），连线是「从谁到谁 + 类型」的下拉选择，校验与保存走同一套接口。
@@ -644,14 +644,14 @@ collab_runs(id PK, team_id → collab_teams RESTRICT, title, goal, status,
             idx(team_id), idx(status)
 
 collab_tickets(id PK, run_id → collab_runs CASCADE, parent_ticket_id → collab_tickets SET NULL,
-               from_role_id → roles RESTRICT (可空，用户发起时为空),
-               to_role_id → roles RESTRICT,
+               from_agent_profile_id → agent_profiles RESTRICT (可空，用户发起时为空),
+               to_agent_profile_id → agent_profiles RESTRICT,
                title, brief JSON, holder_key, state, round, max_rounds,
                verdict, review_comment, result JSON, created_at, updated_at, closed_at)
             idx(run_id), idx(state), idx(parent_ticket_id)
 
 collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets SET NULL,
-             role_id → roles RESTRICT, agent_id → agent_instances RESTRICT,
+             agent_profile_id → agent_profiles RESTRICT,
              role_key, duty, sequence, action, status, content, parts JSON, usage JSON,
              error, audit JSON, started_at, finished_at)
             idx(run_id), idx(ticket_id), idx(status)
@@ -662,7 +662,7 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
 - **工单 `brief` / `result` 用 JSON**：工单字段（需求/验收/约束/产出）形态会演进，
   与现有 `messages.parts` 同一思路；同时也是"交付载荷"的直接数据源。
 - **`collab_steps.content` + `parts`**：与 `messages` 表同构 → 前端能直接喂给 `MessageView`。
-- **外键 `RESTRICT`（引用角色/智能体）**：沿用现有不变量，因此删角色/智能体只能软删除
+- **外键 `RESTRICT`（引用智能体 / 网关）**：沿用现有不变量，因此智能体只能软删除
   （打 `deleted_at`，从可选列表消失、历史照旧可读），协作表的外键不会被打断；
   删除"运行"是显式操作，级联清理工单与步骤（等价于"删对话必须清消息"的既有惯例）。
 - **`parent_ticket_id` 用 `SET NULL`**：父工单被拒绝/删除时不连带毁掉子工单记录。
@@ -681,7 +681,7 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
   同一轮出现多个块（取最后一个 + `warning`）/ 完全无法解析（必须产出显式错误而非猜）。
 - `tickets.render()`：**断言下游 prompt 不含上游对话原文**（C5 的守护测试）、只含本工单历史。
 - `graph.validate()`：无入口 / 双入口 / 孤立节点 / `assign` 成环 / `review` 无边 / 缺 `rework` 回边 /
-  reviewer 带 assign 出边 / 引用不存在的角色。
+  reviewer 带 assign 出边 / 引用不存在的智能体。
 - 状态机：§3.3 转移表逐条（含 `round` 超限、`max_steps` 超限）。
 
 **集成（httpx + ASGI，沿用 `tests/conftest.py`）**
@@ -689,8 +689,8 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
   驱动一个 CEO→CTO→SE→审查（拆子工单 + 打回一次后通过）的完整流程：
   断言工单状态流转、`collab_steps` 落库顺序、SSE 事件序列、运行终态、
   以及**每个下游 prompt 的隔离性**。
-- 收尾汇报：根工单完成后交回入口角色（`done`）、汇总里含子工单结论、prompt 只允许 `done`/`ask_user`、
-  入口角色自己收尾时不重复汇报、用户追问后重新开启一轮汇报。
+- 收尾汇报：根工单完成后交回入口智能体（`done`）、汇总里含子工单结论、prompt 只允许 `done`/`ask_user`、
+  入口智能体自己收尾时不重复汇报、用户追问后重新开启一轮汇报。
 - 取消 / 超时 / 解析失败 → 运行状态与事件正确。
 - 重启恢复：造 `running` 残留 → `recover_interrupted()` → `interrupted`。
 
@@ -705,7 +705,7 @@ curl -s http://127.0.0.1:8010/api/health
 ```
 
 **手工验收清单**：导航出现「协作」；画布能拖节点/连线/存图/刷新后还原；
-错误图给得出人话提示；跑一次真实协作（≥3 个角色、≥1 次打回）；
+错误图给得出人话提示；跑一次真实协作（≥3 个智能体、≥1 次打回）；
 工单看板与时间线一致；取消按钮真的能杀掉子进程；`/api/agent-types`、现有对话页无回归。
 
 ---
@@ -730,7 +730,7 @@ curl -s http://127.0.0.1:8010/api/health
 | --- | --- | --- |
 | **M0 契约冻结** ✅ | `tables.py` / `schemas.py` / `protocol.py` / `tickets.py` / `graph.py` + 单测；协作组路由；`init_db` 注册；`sse.py` 下沉 | 已完成，见 §13 |
 | **M1 引擎 MVP** ✅ | `prompt.py` + `execution.py` + `engine.py` + 运行 API：`/runs/{id}/messages`（SSE）串行跑通 CEO→CTO→SE→审查（含拆子工单与一次打回返工），并支持 `cancel`/`resume`/`retry`、预算与轮次上限、`ask_user` 挂起、越权审计 | 已完成，见 §13 |
-| **M2 编排设置** ✅ | 画布编辑器（拖角色/拖节点/连线/实时校验/整图保存）+ 协作设置页；另建了「协作运行」页签的最小可用形态 | 已完成，见 §13（前端 `npm run build` 通过 + 后端契约已按前端调用顺序冒烟） |
+| **M2 编排设置** ✅ | 画布编辑器（拖智能体/拖节点/连线/实时校验/整图保存）+ 协作设置页；另建了「协作运行」页签的最小可用形态 | 已完成，见 §13（前端 `npm run build` 通过 + 后端契约已按前端调用顺序冒烟） |
 | **M3 防死循环收尾** ✅ | 边级 `max_rounds`、工单树深度上限与重名子工单去重、`run.error` 与提示的统一表达 | 已完成：`test_collab_guards.py` 覆盖 §3.3 全表（4 项端到端） |
 | **M4 协作运行页打磨** ✅ | 工单看板抽屉（子工单树 + 工单字段 + 产出文件 + 审查意见 + 越权审计）、顶栏预算「已用 / 上限」与工单状态摘要、编辑器里的边级返工上限 | 已完成：`npm run build` 通过 + 抽屉 SSR 冒烟（空/嵌套/脏数据）；时间线仍复用 `MessageView`（未拆出独立"工单卡"组件） |
 | **M4b 用户决策卡** ✅ | `ask_user` 的 `question + options` 协议、解析与语义校验；桌面端与移动端把等待用户拍板渲染成可点选项；旧记录无选项时按默认方案/自由填写兼容；移动端外壳缓存版本 v6 | 已完成：后端协议/引擎测试；`bash scripts/test.sh` + `npm run build` |
@@ -739,7 +739,7 @@ curl -s http://127.0.0.1:8010/api/health
 | **M4e 运行与连接解耦 + 岗位交接链** ✅ | 推进改跑后台任务（`collab/bus.py`），SSE 断开只退订、不再打断运行；新增 `GET /runs/{id}/stream` 订阅与前端自动重连；步骤记录 `target_key`（把活交给谁），岗位抽屉按时间还原「上游对我说了什么 → 我做了什么」 | 已完成：`test_client_disconnect_does_not_stop_the_run`、`test_stream_endpoint_replays_buffered_events_after_disconnect`（重连先补发再续看）、`test_delegate_step_records_target_for_handoff_chain`、`backend/tests/test_collab_bus.py`（补发 / 断线退订 / 缓冲回收）；`bash scripts/test.sh` + `npm run build` |
 | **M4f 超长单行输出不再打断运行** ✅ | 执行层自建行缓冲（`runtime/runner.py` 的 `_StreamLines`）：内核把整段代码或工具结果塞进一行 JSONL 时，不再抛 「Separator is found, but chunk is longer than limit」把整轮运行判成 error；单行越过 64 MiB 上限只丢该行并补一条 `log(warn)`，stdout 与 stderr 同一条路径 | 已完成：`backend/tests/test_runner.py`（默认 `readline` 会炸的前提、整行读出、内存上限兜底、端到端超长单行跑通）；`bash scripts/test.sh` |
 | **M4g 一轮多个工单块不再判死** ✅ | 同一轮里出现多个 `work_order` 块时取最后一个，并产出一条 `collab.notice(warn)` 说明偏差；草稿块不再进正文；提示词同步要求「整轮只输出一个、正文里不要粘贴草稿」 | 已完成：`test_parse_takes_the_last_block_when_a_round_has_several`、`test_round_with_two_work_order_blocks_uses_the_last_one`；`bash scripts/test.sh` |
-| **M4h 收尾汇报** ✅ | 根工单完成后交回入口角色汇报：引擎附上整次协作的结构化汇总，入口角色用一次 `done` 把结论回复给用户；汇报轮只允许 `done`/`ask_user`；`report_at` 保证每轮只汇报一次（用户追问重新开启后清零） | 已完成：`test_root_ticket_closure_reports_back_to_entry`、`test_entry_closing_the_ticket_itself_does_not_report_twice`、`test_user_follow_up_opens_a_new_report_round`、`test_collab_migration.py` 的补列用例；`bash scripts/test.sh` |
+| **M4h 收尾汇报** ✅ | 根工单完成后交回入口智能体汇报：引擎附上整次协作的结构化汇总，入口智能体用一次 `done` 把结论回复给用户；汇报轮只允许 `done`/`ask_user`；`report_at` 保证每轮只汇报一次（用户追问重新开启后清零） | 已完成：`test_root_ticket_closure_reports_back_to_entry`、`test_entry_closing_the_ticket_itself_does_not_report_twice`、`test_user_follow_up_opens_a_new_report_round`、`test_collab_migration.py` 的补列用例；`bash scripts/test.sh` |
 | **M5 打磨** | 技能物化接入协作运行、用量统计与导出、运行复制/模板 | `pytest` + 前端 build；技能端到端确认"仅分配生效" |
 
 每个里程碑单独提交、单独验证（铁律 8），M1 完成前不碰前端画布。
@@ -774,12 +774,12 @@ curl -s http://127.0.0.1:8010/api/health
 | `backend/app/collab/schemas.py` | 岗位/边类型/动作/状态枚举，节点与边的结构，预算，校验结果，请求响应模型 |
 | `backend/app/collab/protocol.py` | 协作信封事件（`collab.*`），与智能体协议分属两层 |
 | `backend/app/collab/tickets.py` | 工单协议：三级容错解析、语义校验、输出协议说明渲染（纯函数） |
-| `backend/app/collab/graph.py` | 编排图查询与校验（纯函数，角色存在性由调用方注入） |
+| `backend/app/collab/graph.py` | 编排图查询与校验（纯函数，智能体存在性由调用方注入） |
 | `backend/app/collab/store.py` | 协作组持久化、运行计数、启动恢复 |
 | `backend/app/collab/api.py` | `/api/collab/teams` 的 CRUD + `validate` + `duplicate` |
 | `backend/app/transport/sse.py` | 由 `api/sse.py` 平移而来的通用 SSE 设施 |
 | `backend/tests/test_collab_tickets.py` | 11 项：解析容错、语义校验、协议说明 |
-| `backend/tests/test_collab_graph.py` | 14 项：主链通过、缺失入口、孤立节点、审查闭环、assign 成环、岗位边不相容、角色被删… |
+| `backend/tests/test_collab_graph.py` | 14 项：主链通过、缺失入口、孤立节点、审查闭环、assign 成环、岗位边不相容、智能体被删… |
 | `backend/tests/test_collab_api.py` | 6 项：CRUD、草稿可存但报错、`validate`、404、422、有运行记录删除返回 409 |
 | `backend/tests/test_collab_architecture.py` | 7 条分层守卫（§2.5） |
 
@@ -818,7 +818,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `frontend/src/components/CollabCanvas.tsx` | 手写画布：拖节点、左/上输入与右/下输出端口、正交避障连线、拖放添加节点、Delete 删除 |
 | `frontend/src/components/NodeInspector.tsx` | 节点/边/团队三种上下文的属性面板；节点「参数覆盖」直接复用 `DynamicForm` |
 | `frontend/src/components/CollabSettingsPanel.tsx` | 协作组列表 + 画布 + 面板；防抖实时校验、整图保存、放弃改动 |
-| `frontend/src/components/CollabRunsPanel.tsx` | 运行列表 + 时间线（复用 `MessageView`）+ 工单条 + 直接和入口角色说话 |
+| `frontend/src/components/CollabRunsPanel.tsx` | 运行列表 + 时间线（复用 `MessageView`）+ 工单条 + 直接和入口智能体说话 |
 | `frontend/src/pages/CollabPage.tsx` | 页签骨架 + 4 条路由 + 共享数据加载 |
 | `frontend/src/App.tsx` / `index.css` / `MessageView.tsx` | `NAV` + `Routes`；协作样式；`MessageView` 加可选 `label` 显示岗位名 |
 
@@ -860,7 +860,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 「挑最该介入的那张」、以及脏数据类型（`goal` 是数字、`artifacts` 混入 `{kind:'file'}` 与 `null`）不崩。
 其中 `result.artifacts` 为 `{kind: 'file', path}` 这一条正是冒烟发现的坑（原先会显示成 `[object Object]`）。
 
-**下一步（M5）**：技能物化接入协作运行（按角色分配物化技能）、用量统计与导出、运行复制/模板；
+**下一步（M5）**：技能物化接入协作运行（按智能体分配物化技能）、用量统计与导出、运行复制/模板；
 以及 M4 留白的时间线独立「工单卡 / 审查卡」（目前沿用 `MessageView` + `gist` 表达）。
 
 **M4b · 用户决策卡 —— 已完成。**
@@ -883,8 +883,8 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 文件 | 内容 |
 | --- | --- |
 | `frontend/src/lib/collabProgress.ts` | 从入口节点做广度遍历得到用户可理解的推进顺序；按落库步骤、SSE 临时步骤、当前实时步骤、工单持有者与运行状态计算每个岗位的「未开始 / 执行中 / 等你决定 / 需处理 / 已完成」，并保留协作连线语义 |
-| `frontend/src/components/CollabProgressBoard.tsx` / `RoleConversationDrawer.tsx` | 桌面端顶栏「协作进度」按钮与全屏进度页；主线程只渲染 `role_key in (user, entry_key)`，其他角色输出只在岗位抽屉里出现 |
-| `frontend/src/mobile/components/MobileCollabProgress.tsx` / `MobileRoleConversationSheet.tsx` | 移动端横向滑动进度与全屏岗位实时会话；不引用桌面画布，符合移动端独立入口约束 |
+| `frontend/src/components/CollabProgressBoard.tsx` / `AgentConversationPanel.tsx` | 桌面端顶栏「协作进度」按钮与全屏进度页；主线程只渲染 `role_key in (user, entry_key)`，其他智能体输出只在岗位抽屉里出现 |
+| `frontend/src/mobile/components/MobileCollabProgress.tsx` / `MobileAgentConversationSheet.tsx` | 移动端横向滑动进度与全屏岗位实时会话；不引用桌面画布，符合移动端独立入口约束 |
 | `frontend/src/lib/collabStream.ts` | SSE 完成的步骤先进入 `completed` 临时队列；用户发送中的消息也即时回显，详情刷新后清空临时队列并去重 |
 | `backend/app/collab/engine.py` | 根工单完成后续追问会重新打开并交回入口节点；`timeout_seconds` 按 `run.updated_at` 的「距上次进展」计时；`ask_user` 漏选项时补卡片 |
 | `frontend/public/m/sw.js` | 移动端外壳缓存名升到 v6，确保已添加到主屏的应用能拿到新样式与交互 |
@@ -973,22 +973,22 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 「Expecting value」变为解析成功，且 `title / goal / deliverables` 三项都在；
 `bash scripts/test.sh` → **184 passed, 1 skipped**（同一项与本改动无关的既有失败见 M5）。
 
-**M7 · 入口角色常驻对话（任务跑着也能找 CEO）—— 已完成。**
+**M7 · 入口智能体常驻对话（任务跑着也能找 CEO）—— 已完成。**
 
 真实体验问题：一次协作开始推进后，主会话的发送入口会被 `409 / 等待运行结束` 挡住。
-但入口角色（CEO / 领导者）在大多数时间里其实是空闲的 —— 用户理应能继续细化要求、询问进度、
+但入口智能体（CEO / 领导者）在大多数时间里其实是空闲的 —— 用户理应能继续细化要求、询问进度、
 让 CEO 解释方案，甚至只是聊两句。把「协作」和「聊天」绑成同一条串行通道，是把两个生命周期
 完全不同的事情硬塞进了同一个任务里。
 
-设计选择：**给入口角色开一条独立的、持久化的旁路会话**，而不是放宽 `/messages` 的并发限制。
+设计选择：**给入口智能体开一条独立的、持久化的旁路会话**，而不是放宽 `/messages` 的并发限制。
 
 | 关注点 | 处理 |
 | --- | --- |
 | 存储 | 新增 `collab_messages`，与 `collab_steps` 分开。聊天不会进入工单时间线、不增加 `steps_used`、不参与「谁把活交给了谁」的交接链 |
 | 并发 | 新增 `chat_bus` 与 `execution.chat_registry`：聊天有独立后台任务和 SSE 缓冲区，主流程仍按原来的串行引擎推进，两者互不覆盖；`/cancel` 会同时停掉两条通道 |
 | 空闲时也能聊 | 运行中发送自动走聊天；流程空闲（等待、出错、已收尾）时**默认也走聊天**，想继续跑工单再切到「推进任务」。有待回答的问题时自动切回推进，避免把答复误发到聊天里；用户仍可手动切去聊天问进度 |
-| 记忆隔离 | 这是 C5 的**唯一例外**：聊天历史只回放给入口角色本人。其他角色的 prompt 仍然只由 `prompt.build_step_prompt()` 从工单结构化字段拼出，绝不读取 `collab_messages` |
-| 进度问答 | CEO 拿到的是引擎生成的工单快照：标题、状态、当前持有者、目标/需求/验收、最近结论、产出文件、当前正在执行的岗位；不包含其他角色的对话原文 |
+| 记忆隔离 | 这是 C5 的**唯一例外**：聊天历史只回放给入口智能体本人。其他智能体的 prompt 仍然只由 `prompt.build_step_prompt()` 从工单结构化字段拼出，绝不读取 `collab_messages` |
+| 进度问答 | CEO 拿到的是引擎生成的工单快照：标题、状态、当前持有者、目标/需求/验收、最近结论、产出文件、当前正在执行的岗位；不包含其他智能体的对话原文 |
 | 细化要求 | 用户明确补充/修改要求时，CEO 在正常回复后附一个 `chat_update` JSON 块。引擎解析后**只追加**到根工单与所有未收尾工单的 `brief`（去重），从下一轮步骤开始生效；聊天本身不能直接改工单状态、派活或建子工单 |
 | 失败处理 | 聊天解析失败只产生可读告警，不影响这条回复；执行失败会落库为 `error` 并推 `collab.chat.finished`；服务重启/叫停会把残留的 `streaming` 回复收尾为 `interrupted` |
 | API | `POST /api/collab/runs/{id}/chat`（SSE）、`GET /api/collab/runs/{id}/chat`、`GET /api/collab/runs/{id}/chat/stream`；`GET /runs/{id}` 同时返回 `chat_messages` 供首屏恢复 |
@@ -998,14 +998,14 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | --- | --- |
 | `backend/app/collab/tables.py` / `schemas.py` / `store.py` | `collab_messages` 表、`ChatMessageRead`、聊天历史/序列号、运行详情返回 `chat_messages`、重启时收尾残留聊天 |
 | `backend/app/collab/prompt.py` / `tickets.py` | `build_chat_prompt()` 组装「岗位 + 工单快照 + 最近聊天 + 新消息 + 回答规则」；`parse_chat_update()` / `extract_chat_body()` / `merge_chat_update()` 是纯函数，容错与清洗复用既有 JSON 修复逻辑 |
-| `backend/app/collab/execution.py` | `prepare_chat()` 复用角色/智能体解析；聊天使用独立 `chat_registry`。主流程的 `is_running()` 只检查工单步骤，聊天不会把它顶成「正在跑」 |
+| `backend/app/collab/execution.py` | `prepare_chat()` 复用智能体解析；聊天使用独立 `chat_registry`。主流程的 `is_running()` 只检查工单步骤，聊天不会把它顶成「正在跑」 |
 | `backend/app/collab/engine.py` / `protocol.py` / `bus.py` / `api.py` | `prepare_chat()` / `consume_chat()`、聊天事件、独立 `chat_bus` 与三条聊天接口；`/chat` 不再受主流程 409 限制 |
 | `frontend/src/lib/collabChat.ts` / `types.ts` / `api.ts` | 聊天事件归约器与类型；「已同步到 N 张工单」提示；`CollabEventType` 增加三种聊天事件 |
 | `frontend/src/components/CollabRunsPanel.tsx` / `frontend/src/mobile/pages/MobileCollabRunPage.tsx` | 运行中输入框保持可用，聊天状态与主流程 `busy` 分开；两条时间线按时间合并；桌面与移动端都提示「CEO 在线」 |
 | `frontend/public/m/sw.js` | 移动端外壳缓存名 v9 → v10 |
 
 验证：新增端到端用例覆盖「主流程卡在审查步骤时 `/chat` 返回 200 而不是 409」「聊天 prompt 含工单状态、
-结论与产出文件」「聊天原文不出现在任何工单角色 prompt 里」「`chat_update` 写入未收尾工单并在下一轮
+结论与产出文件」「聊天原文不出现在任何工单智能体 prompt 里」「`chat_update` 写入未收尾工单并在下一轮
 审查 prompt 生效」「收尾后仍可只聊天，不重开工单、不增加步数」；`bash scripts/test.sh` → **192 passed, 1 skipped**（技能隔离测试已改为容忍 Codex CLI 自己预置的 `.system` 系统技能，同时继续守住未分配技能不得出现），`npm run build` 通过。
 
 **M8 · 误配 ask_user 与「发消息没反应」—— 已完成。**
@@ -1025,7 +1025,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 关注点 | 处理 |
 | --- | --- |
 | 契约层 | `effective_output_contract(node, allow_ask_user=...)`：非入口节点的动作里强制剔除 `ask_user`；`validate_graph` 对历史误配产出 `node.ask_user_not_entry` 提醒 |
-| 提示词 | 非入口节点的「允许的动作 / 本轮要求」都不再出现 `ask_user`，统一改成「把问题交给上层或入口角色转达」 |
+| 提示词 | 非入口节点的「允许的动作 / 本轮要求」都不再出现 `ask_user`，统一改成「把问题交给上层或入口智能体转达」 |
 | 校验层 | `validate_order` 把「只有入口节点能向用户提问」提到白名单判断之前，报错不再莫名其妙 |
 | 编辑器 | 桌面与移动端：非入口节点的 `ask_user` 选项禁用，并提示只有入口节点可用；历史脏数据在下次改动时自动清掉 |
 | 不再静默 | 用户发了消息但没有任何 ready 工单时，产出 `collab.notice` 说明卡在哪、去哪重试，而不是静静结束 |
@@ -1076,7 +1076,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | `frontend/src/components/{TicketBoard,CollabRunsPanel}.tsx` | `escalated` 状态标签（「已上报」） |
 | `frontend/public/m/sw.js` | 移动端外壳缓存名 v11 → v12 |
 
-验证：新增用例覆盖「se → cto → ceo 逐级上报后由入口角色 ask_user 交给用户并记录整条上报链」
+验证：新增用例覆盖「se → cto → ceo 逐级上报后由入口智能体 ask_user 交给用户并记录整条上报链」
 「上抛件上再 `delegate` 被运行时拦下」「入口节点 `escalate` 被要求改用 `ask_user`」「escalate 缺 reason
 被拒」「上抛件提示词不含 delegate」「用户回答重新打开的是提问的那张工单（非根工单）」；
 `bash scripts/test.sh` → **200 passed, 1 skipped**，`npm run build` 通过。
@@ -1154,8 +1154,8 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 工位按层摆 | `OFFICE_ROW_SIZES = [1, 1, 4, 4]`：第 0 行留给入口领导者（一人一桌，在房间最里面），第 1 行是它直接派活的人（通常是 CTO），再往外的两排并排坐干活的人。`seatFlowRows()` 把 `buildFlowRows()` 分好的层一一落到对应的桌子排上；一层的人比桌子多时从这排第一张桌重新坐起并整圈错开（`LAP_OFFSET`），标记不会叠在一起 |
 | 缩放 / 平移 | 数学都在 `collabOffice.ts` 里（纯函数、可单测）：`fitOffice`（铺满居中）、`zoomOfficeAt`（**以指针为锚点**缩放，缩放前后指针下的内容不动）、`panOffice` + `clampOffice`（拖不出空白、比视口小就居中）。滚轮用**原生监听**挂 `{ passive: false }` —— React 的 `onWheel` 是 passive 的，`preventDefault` 不生效，页面会跟着一起滚 |
 | 标记不跟着画布缩放 | 底图放在 `transform: translate3d() scale()` 的 `.office-map-stage` 里，标记**另算**：`officeToViewport(view, desk)` 得到视口坐标，再用 `left/top` 绝对定位。于是放大地图时标记不会变成巨无霸，名字始终清晰可读 |
-| 点击弹信息卡 | 点标记弹出 `.office-popover`：谁 / 职责 / 状态、粗略进度条、`summary`、跑了多少步、几张工单在处理，以及「查看实时对话 →」（接的是原来的 `RoleConversationPanel`）。缩略图里放的还是 `WorkerAtDesk`，那个会动的 3D 小人没有白做 |
-| 粗略进度是怎么来的 | 后端没有真实百分比，`roleProgressPercent()` 按状态给底数（干活中 45%、等你决定 62%、出错 30%），再按跑过的步数往上抬，停在 96% —— 界面上明写「粗略进度」，不假装精确 |
+| 点击弹信息卡 | 点标记弹出 `.office-popover`：谁 / 职责 / 状态、粗略进度条、`summary`、跑了多少步、几张工单在处理，以及「查看实时对话 →」（接的是原来的 `AgentConversationPanel`）。缩略图里放的还是 `WorkerAtDesk`，那个会动的 3D 小人没有白做 |
+| 粗略进度是怎么来的 | 后端没有真实百分比，`agentProgressPercent()` 按状态给底数（干活中 45%、等你决定 62%、出错 30%），再按跑过的步数往上抬，停在 96% —— 界面上明写「粗略进度」，不假装精确 |
 | 状态色 | 绿=在线工作（`active`，带脉冲动画）、红=忙碌 / 出问题（`error`）、黄=等你决定（`waiting`）、灰=闲置（`pending`）、绿勾=已完成（`done`）。映射表 `OFFICE_STATUS_TONE` 只有一份，两端取同一个 |
 | 触屏 | 容器上 `touch-action: none`（整页外壳仍然是 `pan-x pan-y`，不锁死），`pointerdown/move/up` 里同时处理单指平移与双指捏合（按两指距离比例缩放，锚点是两指中点），`setPointerCapture` 保证手指划出画布也不丢；`tests/test_mobile_web.py` 的守卫相应收紧为「只有办公室画布能锁触摸手势」 |
 | 无障碍 | 标记是 `<button>`（可 Tab、可回车）、带 `aria-label`；画布是 `role="application"` 并说明操作方式；图例把五种颜色写成文字；`prefers-reduced-motion` 下停掉脉冲与进度条动画 |
@@ -1166,7 +1166,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | `frontend/public/office/iso-office.svg` · `iso-office-light.svg`（新增，产物） | 深 / 浅两张底图，几何一致；每张桌子带 `data-desk` / `data-x` / `data-y` |
 | `frontend/src/lib/collabOffice.ts`（新增） | 工位坐标与行布局、`OFFICE_STATUS_TONE`、缩放 / 平移 / 命中数学 |
 | `frontend/src/components/CollabOfficeMap.tsx`（新增） | 画布交互 + 热区标记 + 进度信息卡（两端共用一份） |
-| `frontend/src/lib/collabProgress.ts` | 新增 `roleProgressPercent()` |
+| `frontend/src/lib/collabProgress.ts` | 新增 `agentProgressPercent()` |
 | `frontend/src/components/CollabProgressBoard.tsx` | 流程图区块 → `CollabOfficeMap`；删掉 `FlowConnector` 与工位卡 |
 | `frontend/src/mobile/components/MobileCollabProgress.tsx` | 同一间办公室（双指缩放 / 单指拖动），画布矮一点 |
 | `frontend/src/index.css` / `frontend/src/mobile/mobile.css` | `.office-*` 样式（各端一份）；删掉被替换的 `.collab-flow*` / `.collab-station*` / `.m-station*` 死样式 |
@@ -1215,7 +1215,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 关注点 | 做法 |
 | --- | --- |
 | 三栏 | 左 25% 工单列表（标题两行截断 + 状态徽章 + 当前处理人）、中 50% 流转时间线、右 25% 静态规则；窄屏（< 1180px）自动降为单栏 |
-| 时间线一条 = 一步 | 数据就是 `collab_steps`：头像取节点对应角色的 `avatar`，标题优先用引擎的 `gist`，正文补 `content` 摘要；用户自己的发言单独一种徽章（「你」），只聊天的轮次也不会消失 |
+| 时间线一条 = 一步 | 数据就是 `collab_steps`：头像取节点对应智能体的 `avatar`，标题优先用引擎的 `gist`，正文补 `content` 摘要；用户自己的发言单独一种徽章（「你」），只聊天的轮次也不会消失 |
 | 动作徽章化 | 看板上只有徽章是高饱和色：派发=蓝、完成=绿、出错=红、问用户=紫，提交=青、审查=琥珀、上报=橙、否决=玫红；`error` 来自运行态 `status=error`，`note` 是没有动作的普通轮 |
 | 视觉降噪 | token、耗时、工作目录指纹一律沉到卡片底部的小字；产出、审查意见、上报、调用过的工具名各自成块，不跟正文抢注意力 |
 | 越权高亮 | `workspace_scope=read` 且 `audit.unchanged=false` → 整卡红框 + 红横幅 + 逐条列出 `added / modified / removed`；**可写**节点的改动只给中性青色 chip；`none`（协调者的一次性空目录）不判越权，只作中性说明 |
@@ -1251,11 +1251,11 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 关注点 | 做法 |
 | --- | --- |
 | 主页面是办公室 | 协作运行页主区整屏铺 `MobileCollabProgress`（`/m/` 下那间可双指缩放 / 单指拖动的等距办公室），原来的时间线与「需要你决定」卡片不再平铺在下面 |
-| 聊天点人才出来 | 点办公室里的**入口角色**工牌弹出整屏对话弹层（`MobileSheet full`）；点其他岗位工牌仍开只读的岗位会话。**顶栏不再放对话按钮** —— 聊天界面就是「点人」这一条入口 |
+| 聊天点人才出来 | 点办公室里的**入口智能体**工牌弹出整屏对话弹层（`MobileSheet full`）；点其他岗位工牌仍开只读的岗位会话。**顶栏不再放对话按钮** —— 聊天界面就是「点人」这一条入口 |
 | 底部只有输入框 | 输入区收成屏幕最下面那块（`.composer`，两端共用 `components/Composer.tsx`），框上方只有一行：左边是模式切换按钮，右边一句当前模式说明；「需要你决定 / 正在推进」这类状态跟在下面；平时底部干干净净 |
 | 两种模式由用户切 | 输入框上方只有一个按钮：当前是「普通对话」，点一下变成「推进任务」，再点回「普通对话」（按钮上写的就是当前模式，`aria-pressed` 同步）。推进模式下把这句话接到工单上接着跑；不输入内容直接发就是「让领导者继续推进」（等价于 `POST /runs/{id}/resume`，原来那个「继续推进（不补充内容）」按钮因此取消）。有三处没法自由选，界面直接接管并把按钮置灰：工单正在推进（推进接口会 409，只能问进度）、带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）；任务还没开始时先不显示按钮（第一句就是任务描述） |
 | 输入区只有一份 | 对话页与协作页共用 `frontend/src/components/Composer.tsx`（两端各一份样式、组件一份；受控：草稿、附件、上传、发送 / 停止都由页面给）。框里只有附件 / 语音 / 输入框 / 发送四个图标按钮，**没有 placeholder**，附件与语音的提示回给页面弹横幅 —— 改一处两端一起变 |
-| 协作也能带附件 | 附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词），对话与协作走同一套：新增 `POST /api/collab/runs/{id}/attachments` 把文件存进这次协作的工作目录，`POST /runs/{id}/chat` 的 `attachments` 带相对路径，`engine.prepare_chat()` 用 `compose_with_attachments()` 把路径拼进 prompt 与落库内容（**只有附件、没有正文也允许**）；发消息时带附件会强制走入口角色这条聊天通道（工单推进的输入是结构化工单，没有附件位） |
+| 协作也能带附件 | 附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词），对话与协作走同一套：新增 `POST /api/collab/runs/{id}/attachments` 把文件存进这次协作的工作目录，`POST /runs/{id}/chat` 的 `attachments` 带相对路径，`engine.prepare_chat()` 用 `compose_with_attachments()` 把路径拼进 prompt 与落库内容（**只有附件、没有正文也允许**）；发消息时带附件会强制走入口智能体这条聊天通道（工单推进的输入是结构化工单，没有附件位） |
 | 办公室跟着主题换色 | 底图有深 / 浅两张（`frontend/public/office/iso-office.svg` 与 `iso-office-light.svg`，同一份几何 —— 生成脚本按「反相 + 色相旋转 180°」在构建期换算，免去手机上对整张 1600×1000 图做实时滤镜），`CollabOfficeMap` 按 `lib/theme.ts` 的当前主题选；工牌 / 图例 / 工具按钮 / 信息卡的深色也改成 `--office-*` 变量（`index.css` 与 `mobile.css` 各一份，浅色只在 `[data-theme='light']` 覆盖）。手机是浅色模式时，办公室里的背景与卡片一起变浅 |
 
 | 文件 | 内容 |

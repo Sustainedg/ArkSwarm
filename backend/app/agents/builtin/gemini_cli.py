@@ -53,6 +53,9 @@ class GeminiCliAgent(AgentDefinition):
     base_url_env = "GOOGLE_GEMINI_BASE_URL"
     default_gateway = "https://generativelanguage.googleapis.com"
     default_model = "gemini-2.5-pro"
+    protocol = "gemini"
+    default_auth_style = "query"
+    default_models = ["gemini-2.5-pro"]
     docs_url = "https://github.com/google-gemini/gemini-cli"
     logo = "/icons/kernels/gemini.svg"
     capabilities = Capabilities(
@@ -94,9 +97,8 @@ class GeminiCliAgent(AgentDefinition):
             advanced=True,
             placeholder="例如 gemini-cli-extensions/mcp-toolbox",
         ),
-        ConfigField("include_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
         ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
+        ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- 构造启动命令 --------------------------------------------------------
@@ -121,8 +123,6 @@ class GeminiCliAgent(AgentDefinition):
             argv.append("--sandbox")
         for ext in as_list(options.get("extensions") or []):
             argv += ["--extensions", ext]
-        for directory in as_list(options.get("include_dirs") or []):
-            argv += ["--include-directories", directory]
         argv += [str(a) for a in as_list(options.get("extra_args") or [])]
 
         prompt = ctx.prompt

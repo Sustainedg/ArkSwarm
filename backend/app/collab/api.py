@@ -13,7 +13,7 @@ from sqlmodel import select
 
 from .. import attachments
 from ..db import SessionLocal, get_session
-from ..models import Role, utcnow
+from ..models import AgentProfile, utcnow
 from ..transport.sse import sse_stream
 from .bus import bus, chat_bus
 from . import engine, execution, graph as graph_service, store
@@ -38,23 +38,23 @@ def _conflict(exc: store.TeamInUse) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
-async def _known_role_ids(session: AsyncSession) -> set[str]:
-    """把「角色是否还存在」这类事实注入纯函数，校验层不碰数据库。"""
-    rows = (await session.execute(select(Role.id))).all()
+async def _known_agent_profile_ids(session: AsyncSession) -> set[str]:
+    """把「智能体是否还存在」这类事实注入纯函数，校验层不碰数据库。"""
+    rows = (await session.execute(select(AgentProfile.id))).all()
     return {row[0] for row in rows}
 
 
 @router.get("/teams")
 async def list_teams(session: AsyncSession = Depends(get_session)) -> dict:
     rows = await store.list_teams(session)
-    known = await _known_role_ids(session)
+    known = await _known_agent_profile_ids(session)
     return {"items": [store.to_read(row, known) for row in rows]}
 
 
 @router.post("/teams", status_code=201)
 async def create_team(payload: TeamCreate, session: AsyncSession = Depends(get_session)) -> TeamRead:
     team = await store.create_team(session, payload)
-    return store.to_read(team, await _known_role_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session))
 
 
 @router.get("/teams/{team_id}")
@@ -63,7 +63,7 @@ async def get_team(team_id: str, session: AsyncSession = Depends(get_session)) -
         team = await store.get_team(session, team_id)
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_role_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session))
 
 
 @router.put("/teams/{team_id}")
@@ -74,7 +74,7 @@ async def save_team(
         team = await store.save_team(session, team_id, payload)
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_role_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session))
 
 
 @router.post("/teams/{team_id}/validate")
@@ -96,7 +96,7 @@ async def validate_team(
         except ValueError:
             spec = GraphSpec()
     entry_key = body.entry_key if body.entry_key is not None else team.entry_key
-    known = await _known_role_ids(session)
+    known = await _known_agent_profile_ids(session)
     return graph_service.validate_graph(spec, entry_key, known).model_dump()
 
 
@@ -106,7 +106,7 @@ async def duplicate_team(team_id: str, session: AsyncSession = Depends(get_sessi
         team = await store.duplicate_team(session, team_id)
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_role_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session))
 
 
 @router.delete("/teams/{team_id}", status_code=204)
@@ -261,7 +261,7 @@ async def send_message(
 async def list_chat(
     run_id: str, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    """入口角色对话历史；运行推进期间也可以随时读取。"""
+    """入口智能体对话历史；运行推进期间也可以随时读取。"""
     try:
         await store.get_run(session, run_id)
     except store.RunNotFound as exc:
@@ -283,7 +283,7 @@ async def stream_chat(run_id: str, session: AsyncSession = Depends(get_session))
 async def send_chat(
     run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
 ) -> StreamingResponse:
-    """和入口角色聊天：**不受**主流程是否正在推进影响。"""
+    """和入口智能体聊天：**不受**主流程是否正在推进影响。"""
     if not (payload.content or "").strip() and not payload.attachments:
         raise HTTPException(status_code=422, detail="请先输入想对 CEO 说的话，或附上一个文件")
     if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):

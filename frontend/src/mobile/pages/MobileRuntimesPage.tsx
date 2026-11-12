@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../../lib/types'
 import { RefreshIcon } from '../../components/Icons'
 import { KernelLogo } from '../../components/KernelLogo'
-import { MobileAgentSettings } from '../components/MobileAgentSettings'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError, relativeTime } from '../util'
@@ -31,11 +31,11 @@ interface Job {
 /**
  * 运行时（移动端）：与桌面端同一套接口，交互改成卡片 + 底部弹层。
  *
- * 一个内核 = 一份安装 + N 份智能体配置，所以「装 / 升 / 卸」与「这个内核怎么跑」
- * 都在这里：卡片里的「设置」直接编辑该内核下的智能体实例（网关 · 密钥 · 模型 · 适配器选项）。
+ * 这里只管「装 / 升 / 卸」这一件事；用某个内核的智能体（网关 · 模型 · 人格）在「智能体」页维护。
  * 日志在弹层里滚动，可随时中止。
  */
 export function MobileRuntimesPage() {
+  const navigate = useNavigate()
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -43,8 +43,6 @@ export function MobileRuntimesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
-  /** 正在编辑设置的内核（适配器类型 id）：非空时弹出该内核的智能体设置 */
-  const [settingsFor, setSettingsFor] = useState<AgentRuntime | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const checkLatest = async (runtime: AgentRuntime) => {
@@ -227,8 +225,8 @@ export function MobileRuntimesPage() {
                         卸载
                       </button>
                     ) : null}
-                    <button className="btn sm primary" onClick={() => setSettingsFor(runtime)} disabled={busy}>
-                      设置
+                    <button className="btn sm" onClick={() => navigate('/agents')}>
+                      管理智能体（{runtime.agents}）
                     </button>
                     {runtime.docs_url && (
                       <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
@@ -242,19 +240,6 @@ export function MobileRuntimesPage() {
           </div>
         </div>
       </div>
-
-      {settingsFor && (
-        <MobileSheet
-          full
-          title={`${settingsFor.name} · 设置`}
-          onClose={() => {
-            setSettingsFor(null)
-            void reload()
-          }}
-        >
-          <MobileAgentSettings typeId={settingsFor.id} />
-        </MobileSheet>
-      )}
 
       {job && (
         <MobileSheet

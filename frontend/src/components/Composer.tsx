@@ -47,6 +47,8 @@ interface Props {
   inputRef?: Ref<HTMLTextAreaElement>
   /** 框上方的一条说明（token 用量、协作状态…）：贴着输入框，但不进框里 */
   header?: ReactNode
+  /** 框下方的一条说明（用量统计之类）：贴着输入框下沿，也不进框里 */
+  footer?: ReactNode
 }
 
 /** 读成 base64（去掉 data URL 前缀），交给上传接口。 */
@@ -79,6 +81,7 @@ export function Composer({
   inputLabel = '输入消息',
   inputRef,
   header,
+  footer,
 }: Props) {
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -261,6 +264,8 @@ export function Composer({
           </button>
         )}
       </div>
+
+      {footer && <div className="composer-foot">{footer}</div>}
     </div>
   )
 }

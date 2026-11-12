@@ -18,7 +18,7 @@ import type {
   CollabTicket,
   CollabTicketAction,
   CollabWorkspaceScope,
-  Role,
+  AgentProfile,
 } from './types'
 
 /* ------------------------------------------------------------------ *
@@ -85,7 +85,7 @@ export interface BoardEntry {
   id: string
   /** 发起这一轮的节点 key；用户自己的发言是 `user` */
   roleKey: string
-  roleLabel: string
+  agentLabel: string
   avatar: string
   duty: string
   tone: BoardEntryTone
@@ -163,8 +163,8 @@ export interface BuildBoardArgs {
   steps: CollabStep[]
   /** 本次运行的协作图（取节点的作用域 / 岗位） */
   graph?: CollabGraph | null
-  roles: Role[]
-  /** 把节点 key 翻成人看的角色名（各端文案不同：桌面用节点标签，移动端也一样传） */
+  agents: AgentProfile[]
+  /** 把节点 key 翻成人看的智能体名（各端文案不同：桌面用节点标签，移动端也一样传） */
   nodeLabel: (key: string) => string
 }
 
@@ -361,7 +361,7 @@ function entryFromStep(step: CollabStep, context: StepContext): BoardEntry {
   return {
     id: step.id,
     roleKey,
-    roleLabel: isUser ? '你' : context.nodeLabel(roleKey) || step.role_name || roleKey,
+    agentLabel: isUser ? '你' : context.nodeLabel(roleKey) || step.profile_name || roleKey,
     avatar: isUser ? '🙋' : context.avatarOf(roleKey),
     duty: context.dutyOf(roleKey),
     tone,
@@ -405,13 +405,13 @@ function depthOf(ticket: CollabTicket, byId: Map<string, CollabTicket>): number 
 }
 
 /** 把运行详情折成看板模型；两端都调这一个函数。 */
-export function buildBoardModel({ tickets, steps, graph, roles, nodeLabel }: BuildBoardArgs): BoardModel {
+export function buildBoardModel({ tickets, steps, graph, agents, nodeLabel }: BuildBoardArgs): BoardModel {
   const nodes = new Map((graph?.nodes ?? []).map((node) => [node.key, node]))
-  const roleById = new Map(roles.map((role) => [role.id, role]))
+  const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
 
   const avatarOf = (key: string): string => {
-    const roleId = nodes.get(key)?.role_id
-    return (roleId ? roleById.get(roleId)?.avatar : '') || '🧑💻'
+    const agentId = nodes.get(key)?.agent_profile_id
+    return (agentId ? agentsById.get(agentId)?.avatar : '') || '🧑💻'
   }
   const dutyOf = (key: string): string => nodes.get(key)?.duty ?? ''
   const scopeOf = (key: string): CollabWorkspaceScope | null =>

@@ -47,7 +47,7 @@ export function collabAskOptions(question: string, raw: unknown): CollabChoice[]
     fallback.push({
       label: '按你的默认方案来',
       value: '按你的默认方案来',
-      description: '让入口角色按它给出的默认方案继续。',
+      description: '让入口智能体按它给出的默认方案继续。',
     })
   }
   fallback.push({ label: '我来补充说明', value: '', description: '在下方输入你的答复。', freeform: true })

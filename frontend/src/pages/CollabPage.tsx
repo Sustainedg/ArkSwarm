@@ -9,7 +9,7 @@ import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { CollabRunsPanel } from '../components/CollabRunsPanel'
 import { CollabSettingsPanel } from '../components/CollabSettingsPanel'
 import { api, ApiError } from '../lib/api'
-import type { AgentType, CollabTeam, Role } from '../lib/types'
+import type { AgentType, CollabTeam, AgentProfile } from '../lib/types'
 
 export function CollabPage() {
   const location = useLocation()
@@ -18,19 +18,19 @@ export function CollabPage() {
   const settingsTab = location.pathname.startsWith('/collab/settings')
 
   const [teams, setTeams] = useState<CollabTeam[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
-      const [teamList, roleList, typeList] = await Promise.all([
+      const [teamList, agentList, typeList] = await Promise.all([
         api.listCollabTeams(),
-        api.listRoles(),
+        api.listAgents(),
         api.agentTypes(),
       ])
       setTeams(teamList)
-      setRoles(roleList)
+      setAgents(agentList)
       setAgentTypes(typeList)
       setError(null)
     } catch (e) {
@@ -48,7 +48,7 @@ export function CollabPage() {
         <div>
           <h1 className="page-title">协作</h1>
           <p className="page-desc">
-            把多个角色连成一张图：角色之间只用「工单」交接任务，串行推进，审查不过就带意见打回返工。
+            把多个智能体连成一张图：它们之间只用「工单」交接任务，串行推进，审查不过就带意见打回返工。
           </p>
         </div>
         <div className="spacer" />
@@ -72,7 +72,7 @@ export function CollabPage() {
         <CollabSettingsPanel
           teamId={teamId}
           teams={teams}
-          roles={roles}
+          agents={agents}
           agentTypes={agentTypes}
           onOpenTeam={(id) => navigate(id ? `/collab/settings/${id}` : '/collab/settings')}
           onTeamsChanged={reload}
@@ -81,7 +81,7 @@ export function CollabPage() {
         <CollabRunsPanel
           runId={runId}
           teams={teams}
-          roles={roles}
+          agents={agents}
           onOpenRun={(id) => navigate(id ? `/collab/runs/${id}` : '/collab')}
         />
       )}

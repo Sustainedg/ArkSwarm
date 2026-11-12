@@ -22,8 +22,8 @@
  │
  ├─ api/conversations.send_message()
  │    └─ service.prepare_run()
- │         ├─ 载入 Conversation → Role → AgentInstance → AgentDefinition
- │         ├─ 角色技能：role_skills → skills 表 → 物化到 agent-homes/<对话>/<内核配置目录>
+ │         ├─ 载入 Conversation → AgentProfile → AgentDefinition（+ Gateway 提供密钥/地址）
+ │         ├─ 智能体技能：agent_skills → skills 表 → 物化到 agent-homes/<对话>/<内核配置目录>
  │         ├─ capability 决策：
  │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接
  │         │    不支持 session → 回放数据库里的最近 N 轮（transcript）
@@ -68,8 +68,8 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
            ├─ ctx.history = []、ctx.session_id = None   ← 每一步都是全新会话，不共享记忆
            └─ ctx.prompt = prompt.build_step_prompt(...) # 只含工单字段与 gist 摘要
       └─ runner.stream_run(ctx) → AgentEvent → 累积 → 解析 work_order → 更新工单 → 交给下一个岗位
-      └─ 根工单收尾 → 交回入口角色做一次收尾汇报（附全流程工单汇总）→ 结论回到用户那条主会话
-      └─ 入口角色聊天（并行）→ prepare_chat() → 只读工单快照 + 最近聊天（+ 附件路径）→ 独立 chat_bus 推给用户
+      └─ 根工单收尾 → 交回入口智能体做一次收尾汇报（附全流程工单汇总）→ 结论回到用户那条主会话
+      └─ 入口智能体聊天（并行）→ prepare_chat() → 只读工单快照 + 最近聊天（+ 附件路径）→ 独立 chat_bus 推给用户
 ```
 
 协作域使用自有的信封协议 `collab.*`（`app/collab/protocol.py`），与下面的智能体事件协议**分属两层**，
@@ -106,6 +106,7 @@ collab.engine.consume_turn()  ── 串行取一张就绪工单
 class AgentDefinition(ABC):
     id / name / vendor / runtime / capabilities / config_fields   # 元数据（驱动 UI）
     api_key_env / base_url_env / default_gateway / default_model  # BYO gateway 约定
+    protocol / default_auth_style / default_models                 # 官方链路与自定义网关的匹配依据
     executable                                                    # 安装探测
 
     def availability() -> Availability          # 依赖 shutil.which + --version
@@ -191,22 +192,74 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 - 未声明 `provisioner` 的适配器（进程内 API 内核、`custom-cli`）卡片副标题写明
   「进程内运行」/「自备可执行文件」，平台不代管它们的环境。卸载属于破坏性操作，接口要求显式 `confirm`。
 
+### 4.2 凭据库（Credential）
+
+网关密钥是**模型提供方**的密钥；智能体干活时还会用到别的密钥（GitHub token、数据库口令…），
+这类叫**凭据**，与网关彻底分开。凭据是**全局一份**：
+
+- `credentials(id, name, description, value_encrypted)`：凭据本身，在「设置 → 凭据库」里维护；
+- `agent_credentials(agent_profile_id, credential_id, position)`：智能体 → 凭据的引用关系，
+  与 `agent_skills` 同一套思路 —— 智能体运行时能拿到的凭据只能来自这张表。
+
+纯逻辑在 `app/credentials.py`（叶子模块，对话域与协作域共用），读库 / 落库 / 引用关系在
+`runtime/credentials.py`：
+
+- **落库即加密**：值只经 `security.encrypt()`；接口只回 `{id, name, description, has_value, masked}`，
+  明文永不出库（`reads()`）。改值时值留空 = 不换值，所以回显掩码不会被写回去。
+- **名即环境变量名**：`name` 必须是合法环境变量名（`^[A-Za-z_][A-Za-z0-9_]{0,63}$`），否则 422；
+  库里重名同样 422。
+- **两条入口**：智能体弹窗里点名字输入框就是凭据库（挑一条＝建立引用；输入新名字 + 值＝顺手新建一条
+  并引用），设置页的「凭据库」负责改名 / 换值 / 删除。仍被未删除的智能体引用时删除返回 409。
+- **只以环境变量注入**：`runner` 把 `ctx.credentials` 合并进子进程环境（适配器/网关给的同名变量
+  优先，网关仍是模型密钥的唯一来源）；进程内 API 内核把同一份交给它的 `run_shell`。
+  模型只知道变量名 —— 框架把人名的名字清单（`notice()`）并进人格文本，**值不进提示词**。
+- **值会被擦除**：运行层对每条事件过一遍 `scrub_event()`，即使子进程把值回显出来，
+  也进不了 SSE、落库内容与命令行回显（`runner._redact`）。
+
+### 4.3 网关与密钥（Gateway）
+
+**网关是 API 密钥的唯一来源**（`gateways` 表）：每个网关一条 `base_url` + 一份加密密钥，
+由两类组成 ——
+
+- **官方链路**（`kind="official"`）：启动播种按适配器声明的 `default_gateway` / `default_model`
+  / `protocol` / `default_auth_style` / `default_models` 生成，一个内核一条，不能被删除；
+- **自定义网关**（`kind="custom"`）：用户在「设置 → 自定义网关」里创建，带 `protocol`
+  （openai / anthropic / gemini）与 `auth_style`（bearer / x-api-key / query / none）。
+
+界面约定：设置页只列**自定义网关**（官方链路不在这里维护）；智能体配置里的「官方默认」
+就是 `gateway_id = null` —— 等价于「平台不接管路由」，`resolve_runtime()` 回落到适配器从本机
+读到的配置（`system_defaults()`）并且不注入密钥，由内核自己按环境 / 配置文件里的凭据处理。
+因此智能体侧永远只有两个选项：官方默认，或一条自定义网关。
+
+智能体（`AgentProfile`）只引用一个 `gateway_id` 并从它的 `selected_models` 白名单里选模型；
+运行时由 `runtime/gateway.py:bind_gateway()` 决定这次注入什么（`resolve_runtime()` 只做转发）：
+只有**自定义**网关才注入 `base_url` + 解密后的密钥 + `auth_style`，官方默认（或没选）一律
+回落到 `resolve_gateway(None)`。密钥**从不下发**：接口只回掩码（`api_key_set` /
+`api_key_preview`）。
+
+- **「获取模型」= 服务端探测**：`POST /api/gateways/probe` 按协议打对应端点
+  （openai `/models`、anthropic `/v1/models`、gemini `/v1beta/models`），返回清单但不落库；
+  `runtime/gateway_probe.py` 负责 URL 归一化与各协议的鉴权头。
+- **「必须成功才能保存」是服务端不变量**：`selected_models` 至少一项 —— 探测成功勾选，
+  或走「手动旁路」录入（界面在探测失败时自动展开）。
+- 被**未删除**的智能体引用的网关不能删（409）；官方链路一律 409。
+
 ## 5. 技能（Skill）
 
 技能是各智能体内核自带的能力包（一个目录 + ``SKILL.md``）。平台把它们**统一编目**，
-再通过**角色分配**决定某个角色能用哪些技能：
+再通过**智能体分配**决定某个智能体能用哪些技能：
 
 ```
-各内核技能根 ──discover_skills()──▶ 统一目录(skills 表) ──分配──▶ role_skills ──▶ 运行时物化
-  ~/.claude/skills                        （只读索引）        （角色弹窗）       agent-homes/<对话>/…
+各内核技能根 ──discover_skills()──▶ 统一目录(skills 表) ──分配──▶ agent_skills ──▶ 运行时物化
+  ~/.claude/skills                        （只读索引）       （智能体弹窗）      agent-homes/<对话>/…
   $CODEX_HOME/skills
 ```
 
 - **编目**：适配器的 `discover_skills()` 只读扫描自己内核的技能根（个人 / 项目 / 插件 / 系统），
   框架去重（同名技能按「个人 > 项目 > 插件 > 系统」取优先级最高的一份）后写入 `skills` 表。
-  目录消失时只把 `available` 置 False，**不删行**，角色分配不会断链。
-- **分配**：`role_skills` 是角色能用的技能的**唯一来源**；`PUT /api/roles/{id}/skills` 整表替换。
-  类型与角色绑定的智能体不一致的技能，界面直接禁止选择，服务端再兜底返回 422。
+  目录消失时只把 `available` 置 False，**不删行**，智能体分配不会断链。
+- **分配**：`agent_skills` 是智能体能用的技能的**唯一来源**；`PUT /api/agents/{id}/skills` 整表替换。
+  类型与智能体的内核不一致的技能，界面直接禁止选择，服务端再兜底返回 422。
 - **物化（严格仅分配）**：适配器的 `skill_mount(ctx)` 声明「我的内核从哪里读技能」——
   例如 Claude Code 用 `CLAUDE_CONFIG_DIR` 指向一个只含「分配到的技能 + 本机 settings」的隔离
   配置目录，并关闭内核自带的 bundled 技能与内置插件；Codex 用 `CODEX_HOME`。
@@ -222,54 +275,65 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 ## 6. 数据模型
 
 ```
-agent_instances(id, name, type_id, gateway_url, model, api_key_encrypted, options JSON, enabled,
-                deleted_at)
-roles(id, name, avatar, tagline, system_prompt, agent_id→agent_instances, workspace_dir,
-      parameters JSON, deleted_at)
-conversations(id, title, role_id→roles, agent_id→agent_instances, session_id, workspace_dir, archived)
+gateways(id, name, kind(official|custom), type_id, protocol, auth_style, base_url,
+         api_key_encrypted, selected_models JSON, model_catalog JSON, extra_headers JSON,
+         enabled, last_probed_at, deleted_at)                ← API 密钥的唯一来源
+agent_profiles(id, name, avatar, tagline, description, system_prompt, type_id,
+               gateway_id→gateways, model, options JSON, enabled, deleted_at)
+credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at)
+agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
+conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, archived)
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
        available, note)
-role_skills(role_id→roles, skill_id→skills，复合主键 + position)
+agent_skills(agent_profile_id→agent_profiles, skill_id→skills，复合主键 + position)
 
 -- 协作域（独立于对话域，见 docs/collaboration-design.md）
 collab_teams(id, name, description, entry_key, workspace_dir, graph JSON, budget JSON)
 collab_runs(id, team_id→collab_teams, title, goal, status, entry_key, workspace_dir, budget, usage,
             steps_used, tickets_used, error)
-collab_tickets(id, run_id→collab_runs, parent_ticket_id→collab_tickets, from_role_id→roles,
-               to_role_id→roles, owner_key, holder_key, submitter_key, title, brief JSON, state,
+collab_tickets(id, run_id→collab_runs, parent_ticket_id→collab_tickets,
+               from_agent_profile_id→agent_profiles, to_agent_profile_id→agent_profiles,
+               owner_key, holder_key, submitter_key, title, brief JSON, state,
                round, max_rounds, verdict, review_comment, result JSON, closed_at, report_at)
-collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, role_id→roles, agent_id→agent_instances,
+collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, agent_profile_id→agent_profiles,
              role_key, duty, sequence, action, status, content, gist, parts JSON, usage JSON,
              error, audit JSON)
-collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, agent_id→agent_instances,
+collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→agent_profiles,
                 sequence, status, content, parts JSON, usage JSON, error, meta JSON)
 ```
 
 设计取舍：
 
-- **对话快照 `agent_id`**：之后即便角色改绑别的智能体，历史对话仍可复现。
+- **对话快照 `agent_profile_id`**：之后即便智能体改了内核 / 网关 / 模型，历史对话仍可复现。
+- **默认智能体全局只有一颗星**：`agent_profiles.is_default`（至多一个，点亮时会摘掉别人的星，
+  删掉带星的那颗会自动补一颗）；新建对话不传 `agent_profile_id` 时回落到它 —— 还没有星时
+  先用「唯一启用的那个」，一个可用的都没有才报 422。老库启动时由 `ensure_default_agent` 补星。
 - **`parts` 用 JSON**：工具调用/结果/推理的形态随智能体变化，无需为每种智能体建表；
   它是按真实发生顺序排列的时间线（`thinking` / `text` / `tool_call` / `tool_result`），
   前端据此原样渲染「思考→正文→工具调用→工具结果→正文…」，不做按类型归组。
   旧消息没有内联 `text` 段，前端会用 `content` 合成一段兜底，保持向后兼容。
-- **`parameters` 允许角色级覆盖** `model` / `gateway_url`：同一个智能体可以让不同角色走不同模型。
+- **密钥只存在网关里**：智能体不直接持有密钥，只引用 `gateway_id`；要换密钥改网关一处即可，
+  多个智能体共享同一条链路时不会各存一份。
+- **凭据是全局一份 + 引用**：`credentials` 存值、`agent_credentials` 存「哪个智能体能拿到」，
+  多个智能体能共用同一条（改一处即全体生效）；加密落库、只以环境变量注入、值不进提示词 /
+  日志 / 事件 / 响应。工作目录不在智能体上（建对话、建协作任务时才指定，
+  `workspace_dir` 只属于 `Conversation` / `collab_*`）。
 - **技能只增不删**：技能是从文件系统扫描出来的，目录消失只标记 `available=false`，
-  因此角色分配（`role_skills`）永远指向真实存在的记录；角色被删除时分配关系保留（见下条）。
-- **删除角色/智能体只做软删除**：外键全是 `RESTRICT`，而历史对话与历史工单都引用着角色与智能体，
-  硬删会连历史一起打断。所以 `DELETE /api/roles/{id}`、`DELETE /api/agents/{id}` 只写
-  `deleted_at`：实体从所有可选列表里消失（新建对话、新建角色都拒绝它），
-  但历史对话仍能显示当时的角色名/头像、也仍能继续对话；因此角色删除不再受"有没有历史对话"影响。
+  因此智能体分配（`agent_skills`）永远指向真实存在的记录；智能体被删除时分配关系保留（见下条）。
+- **删除智能体 / 网关只做软删除**：外键全是 `RESTRICT`，而历史对话与历史工单都引用着智能体，
+  硬删会连历史一起打断。所以 `DELETE /api/agents/{id}` 只写 `deleted_at`：它从所有可选列表里
+  消失（新建对话、新建协作节点都拒绝它），但历史对话仍能显示当时的名字 / 头像、也仍能继续对话。
 - **协作域的分工键**：工单用 `owner_key`（谁拆的谁汇总）、`holder_key`（现在谁握着）、
   `submitter_key`（最近提交者，打回时默认退回给他）记岗位流转；步骤用 `gist` 存**引擎派生**的
   一句话摘要 —— 拼下游 prompt 时只读 `gist`、不读 `content`，从数据通路上保证"下游只看工单、
-  看不到上游对话"。岗位用 key 而不是角色 id，是因为角色可以改绑，历史工单仍要能复现。
+  看不到上游对话"。岗位用 key 而不是智能体 id，是因为智能体可以改绑，历史工单仍要能复现。
 - **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以"后加的可选列"
   登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）与 `collab/tables.py` 的
   `ADDITIVE_COLUMNS`（协作域），由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
   幂等补齐：现有 `magenta.db` 启动后自动对齐，不重建、不丢数据。
-- **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的角色引用的智能体不能删（409，避免历史断裂）；
+- **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
 ## 7. 扩展点
@@ -283,7 +347,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, age
 | 新增可配置项 | 在该适配器加一个 `ConfigField`，前端表单自动出现 |
 | 新增移动端页面 | 在 `frontend/src/mobile/` 加页面并在 `MobileApp.tsx` 注册路由（桌面端不受影响） |
 | 让某个适配器支持技能 | 声明 `capabilities.skills=True`，实现 `discover_skills()` 与 `skill_mount()` |
-| 新增协作能力（多角色工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
+| 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
 
@@ -294,7 +358,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, role_id→roles, age
 - `codex exec resume` 的子命令形式在不同 Codex 版本间有差异，所以做成了可选策略。
 - Gemini CLI 的人格注入依赖 `GEMINI_SYSTEM_MD`，若目标版本不支持可切换为 prepend 模式。
 - 工具循环（API harness）的权限模型是「工作目录沙箱」，没有做命令级审批。
-- 技能「严格仅分配」只保证**平台注入的技能 == 角色分配**：内核自带的个别技能（Claude Code 的
+- 技能「严格仅分配」只保证**平台注入的技能 == 智能体分配**：内核自带的个别技能（Claude Code 的
   `doctor`）要靠 `skillOverrides` 关闭；工作目录自带的 `.claude/skills` 会被内核直接读取，
   平台只提示、不删除用户文件。
 - 技能目前只支持「查看 + 分配」；编辑、安装与上传留待后续（技能目录仍由各内核自己管理）。
@@ -318,12 +382,12 @@ frontend/
     └── mobile/                                       # 移动端（独立页面与样式表）
         ├── main.tsx · MobileApp.tsx · mobile.css
         ├── components/（顶栏 · 左侧抽屉 · 底部弹层）
-        └── pages/（对话 · 角色 · 智能体 · 技能 · 协作 · 设置）
+        └── pages/（对话 · 智能体 · 技能 · 协作 · 设置）
 ```
 
 - **只共享基础设施，不共享界面**：两端共用 `lib/`（`api` / `types` / `agentStream` / `usage` / `collabDraft`）
   与纯展示组件（`DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` /
-  `CollabRoleThread` / `Composer` / `Icons`）；页面、路由、样式表各自独立
+  `CollabAgentThread` / `Composer` / `Icons`）；页面、路由、样式表各自独立
   （移动端用底部弹层替代桌面端的居中 Modal）。
 - **后端只保留一个 SPA 兜底**：`main.py:resolve_spa_target()` 按前缀把深链分派到 `dist/index.html`
   或 `dist/m/index.html`，其余静态文件原样返回；`/assets` 由两端口共享。
@@ -343,10 +407,10 @@ frontend/
   注销 SW、清掉 `magenta-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
 - **移动端没有底部 Tab，只有左侧抽屉**：打开就是聊天界面（`/chat` 自动进入最近一次对话，
   一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
-  （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 角色 / 协作组 / 技能 / 设置，
-  与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选角色开聊）。
+  （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 智能体 / 协作组 / 技能 / 设置，
+  与曾经的底部 Tab 一一对应），**下半部分是对话列表**（`＋ 新建` 直接选智能体开聊）。
   桌面端左侧栏（`App.tsx` 的 `NAV` + `components/ConversationList.tsx`）现在是**同一份菜单**
-  （顺序、命名、行样式都对齐）；「智能体配置」「运行时」两边都不占菜单，收在「设置」页的配置入口。
+  （顺序、命名、行样式都对齐）；「运行时」与「自定义网关」两边都不占菜单，收在「设置」页的配置入口。
   抽屉由 `MobileApp` 统一持有，任何顶级页面的顶栏默认就是那个 logo 按钮（`MobileTopBar`
   在没有 `onBack` 时自动渲染），子页面仍是返回箭头。
   两端的对话列表项都显示时间：今天只显示 `14:23`，其余显示日期 + 时间（口径统一在 `lib/datetime.ts`）。
@@ -361,9 +425,9 @@ frontend/
 - **分享成长图**：对话页顶栏的分享按钮把当前对话（标题 + 气泡 + 代码块 + 页脚）用 Canvas 画成
   一张长图（`lib/shareImage.ts`，不引第三方依赖），优先交系统分享面板（`navigator.share({files})`），
   不支持就退回下载；过长时整体降采样，避免撞上 iOS 的画布面积上限。
-- **智能体设置并入运行时**：移动端不再有独立的智能体配置页（`/agents` 已取消）。一个内核 = 一份
-  安装 + N 份配置，运行时页每张卡片的「设置」打开 `MobileAgentSettings`，在里面增删改该内核的
-  智能体实例（网关 · 密钥 · 模型 · 适配器选项，选项仍由 `DynamicForm` 渲染）。
+- **配置在「智能体」页，安装在「运行时」页**：网关升格为密钥的唯一来源后，「实例配置」这个概念
+  取消了 —— 智能体（内核 + 网关 + 模型 + 人格 + 技能）在两端各自的「智能体」页维护，
+  适配器选项仍由 `DynamicForm` 渲染；运行时页只管装 / 升 / 卸，卡片上的按钮跳到「智能体」页。
 - **移动端设置页**只留「外观 / 配置 / 更多」三节：运行概览、版本记录这类信息看桌面端即可；
   「更新到最新版本」（自助清缓存重载）保留在「更多」里 —— 独立应用没有刷新按钮。
 - **移动端输入框**：附件下沉成共享模块 `app/attachments.py`（校验 / 落盘 / 拼提示词只有一份）；
@@ -382,7 +446,7 @@ frontend/
   页面给），两端的对话页与协作运行页（含聊天弹层）共用，交互与样式必须完全一致；
   样式段在 `index.css` 与 `mobile.css` 各写一份（桌面端 / 移动端各一段微调），共享那段逐字一致。
 - **协作运行页 = 一间办公室**：`/m/collab/runs/:id` 主区整屏铺那间可双指缩放 / 单指拖动的等距办公室
-  （`MobileCollabProgress`），时间线与「需要你决定」卡片收进整屏对话弹层 —— **点入口角色工牌**才
+  （`MobileCollabProgress`），时间线与「需要你决定」卡片收进整屏对话弹层 —— **点入口智能体工牌**才
   出来（顶栏不放对话按钮），点其他岗位开只读岗位会话。输入框上方是一个模式按钮：点一下切
   「推进任务」、再点回「普通对话」。对话走 `/chat`（可带附件），推进走 `/messages`，推进模式下
   空内容直接发就是 `/resume`；工单正在推进、带着附件、或有待回答的问题时，界面接管模式并置灰按钮。

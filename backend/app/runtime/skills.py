@@ -1,8 +1,8 @@
-"""技能：统一编目、角色分配与运行时物化。
+"""技能：统一编目、智能体分配与运行时物化。
 
 各智能体内核的技能目录由适配器的 :meth:`AgentDefinition.discover_skills` 只读扫描，
-这里把它们汇成一份统一目录（``skills`` 表），并按角色的分配结果在运行时物化到
-该内核的隔离目录，从而保证「角色能用的技能 == 分配到的技能」。
+这里把它们汇成一份统一目录（``skills`` 表），并按智能体的分配结果在运行时物化到
+该内核的隔离目录，从而保证「智能体能用的技能 == 分配到的技能」。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from ..agents.skills import (
     SkillSpec,
     safe_skill_dirname,
 )
-from ..models import AgentInstance, Conversation, Role, RoleSkill, Skill
+from ..models import AgentProfile, AgentSkill, Conversation, Skill
 from ..settings import get_settings
 
 logger = logging.getLogger("magenta")
@@ -72,7 +72,7 @@ def _rank(spec: SkillSpec) -> int:
 async def rescan(session: AsyncSession) -> dict[str, int]:
     """重新扫描所有内核的技能目录，并同步到 ``skills`` 表。
 
-    目录消失的技能只标记 ``available=False``，不删除记录，避免角色分配断链。
+    目录消失的技能只标记 ``available=False``，不删除记录，避免智能体分配断链。
     """
     discovered = discover_catalog()
     rows = {row.id: row for row in (await session.execute(select(Skill))).scalars().all()}
@@ -138,11 +138,11 @@ async def get_row(session: AsyncSession, skill_id: str) -> Skill | None:
 
 
 async def usage_counts(session: AsyncSession) -> dict[str, int]:
-    """每个技能被多少个角色使用（已软删除的角色不再算"使用中"）。"""
+    """每个技能被多少个智能体使用（已软删除的智能体不再算"使用中"）。"""
     statement = (
-        select(RoleSkill.skill_id)
-        .join(Role, Role.id == RoleSkill.role_id)
-        .where(Role.deleted_at.is_(None))
+        select(AgentSkill.skill_id)
+        .join(AgentProfile, AgentProfile.id == AgentSkill.agent_profile_id)
+        .where(AgentProfile.deleted_at.is_(None))
     )
     counts: dict[str, int] = {}
     for skill_id in (await session.execute(statement)).scalars().all():
@@ -150,12 +150,12 @@ async def usage_counts(session: AsyncSession) -> dict[str, int]:
     return counts
 
 
-async def roles_using(session: AsyncSession, skill_id: str) -> list[Role]:
+async def agents_using(session: AsyncSession, skill_id: str) -> list[AgentProfile]:
     statement = (
-        select(Role)
-        .join(RoleSkill, RoleSkill.role_id == Role.id)
-        .where(RoleSkill.skill_id == skill_id, Role.deleted_at.is_(None))
-        .order_by(Role.created_at)
+        select(AgentProfile)
+        .join(AgentSkill, AgentSkill.agent_profile_id == AgentProfile.id)
+        .where(AgentSkill.skill_id == skill_id, AgentProfile.deleted_at.is_(None))
+        .order_by(AgentProfile.created_at)
     )
     return list((await session.execute(statement)).scalars().all())
 
@@ -174,49 +174,49 @@ def read_body(skill_path: str) -> tuple[str, bool]:
 # --- 分配 -------------------------------------------------------------------
 
 
-async def role_skill_ids(session: AsyncSession, role_id: str) -> list[str]:
+async def agent_skill_ids(session: AsyncSession, profile_id: str) -> list[str]:
     rows = (
         await session.execute(
-            select(RoleSkill).where(RoleSkill.role_id == role_id).order_by(RoleSkill.position)
+            select(AgentSkill).where(AgentSkill.agent_profile_id == profile_id).order_by(AgentSkill.position)
         )
     ).scalars().all()
     return [row.skill_id for row in rows]
 
 
-async def set_role_skills(
-    session: AsyncSession, role: Role, agent_type_id: str, skill_ids: list[str]
+async def set_agent_skills(
+    session: AsyncSession, profile: AgentProfile, skill_ids: list[str]
 ) -> list[str]:
-    """整表替换角色的技能分配；返回实际写入的 skill_id 列表。
+    """整表替换智能体的技能分配；返回实际写入的 skill_id 列表。
 
-    只接受「与角色绑定的智能体类型一致且可用」的技能：界面已经禁止选择不匹配的
-    技能，这里是服务端兜底。
+    只接受「与智能体内核一致且可用」的技能：界面已经禁止选择不匹配的技能，
+    这里是服务端兜底。
     """
     wanted = list(dict.fromkeys(skill_ids))
     for skill_id in wanted:
         row = await session.get(Skill, skill_id)
         if row is None:
             raise ValueError(f"技能不存在：{skill_id}")
-        if row.type_id != agent_type_id:
+        if row.type_id != profile.type_id:
             raise ValueError(
                 f"技能「{row.name}」属于 {row.type_id}，"
-                f"与本角色绑定的智能体（{agent_type_id}）不匹配"
+                f"与该智能体的内核（{profile.type_id}）不匹配"
             )
 
     for link in (
-        await session.execute(select(RoleSkill).where(RoleSkill.role_id == role.id))
+        await session.execute(select(AgentSkill).where(AgentSkill.agent_profile_id == profile.id))
     ).scalars().all():
         await session.delete(link)
     await session.flush()
 
     for position, skill_id in enumerate(wanted):
-        session.add(RoleSkill(role_id=role.id, skill_id=skill_id, position=position))
+        session.add(AgentSkill(agent_profile_id=profile.id, skill_id=skill_id, position=position))
     await session.commit()
     return wanted
 
 
-async def skills_for_role(session: AsyncSession, role: Role, agent_type_id: str) -> list[SkillSpec]:
-    """角色在本轮运行中真正生效的技能（只取同类型且目录仍在的）。"""
-    ids = await role_skill_ids(session, role.id)
+async def skills_for_agent(session: AsyncSession, profile: AgentProfile) -> list[SkillSpec]:
+    """智能体在本轮运行中真正生效的技能（只取同内核且目录仍在的）。"""
+    ids = await agent_skill_ids(session, profile.id)
     if not ids:
         return []
     rows = (await session.execute(select(Skill).where(Skill.id.in_(ids)))).scalars().all()
@@ -224,7 +224,7 @@ async def skills_for_role(session: AsyncSession, role: Role, agent_type_id: str)
     specs: list[SkillSpec] = []
     for skill_id in ids:
         row = by_id.get(skill_id)
-        if row is None or not row.available or row.type_id != agent_type_id:
+        if row is None or not row.available or row.type_id != profile.type_id:
             continue
         specs.append(spec_from_row(row))
     return specs
@@ -254,16 +254,15 @@ def spec_from_row(row: Skill) -> SkillSpec:
 async def prepare_skill_home(
     session: AsyncSession,
     definition: AgentDefinition,
-    agent: AgentInstance,
-    role: Role,
+    profile: AgentProfile,
     conversation: Conversation,
     ctx: AgentContext,
 ) -> list[str]:
-    """把角色分配到的技能物化进该内核的隔离目录，并把结果写回 ``ctx``。
+    """把智能体分配到的技能物化进该内核的隔离目录，并把结果写回 ``ctx``。
 
     返回需要提示给用户的说明/告警（由运行层作为 ``log`` 事件暴露）。
     """
-    ctx.skills = await skills_for_role(session, role, agent.type_id)
+    ctx.skills = await skills_for_agent(session, profile)
     mount = definition.skill_mount(ctx)
     if mount is None:
         return []

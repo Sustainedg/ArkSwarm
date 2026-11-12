@@ -2,7 +2,7 @@
   "id": "/m/",
   "name": "Magenta Agents 多智能体控制台",
   "short_name": "Magenta",
-  "description": "多智能体对话控制台移动端：在手机上查看角色、智能体与对话。",
+  "description": "多智能体对话控制台移动端：在手机上查看智能体、网关与对话。",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/m/",

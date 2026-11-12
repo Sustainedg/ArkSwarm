@@ -1,8 +1,9 @@
 import type {
-  AgentEvent, AgentInstance, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
+  AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
-  ConversationDetail, Overview, ProvisionEvent, Role, RuntimeLatest, Skill, SkillDetail,
+  ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  SkillDetail,
   SkillRescanResult, TestResult,
 } from './types'
 
@@ -78,13 +79,47 @@ export const api = {
   architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
   agentTypes: () => request<{ items: AgentType[] }>('/api/agent-types').then((r) => r.items),
 
-  listAgents: () => request<{ items: AgentInstance[] }>('/api/agents').then((r) => r.items),
-  createAgent: (body: unknown) => request<AgentInstance>('/api/agents', { method: 'POST', body: JSON.stringify(body) }),
+  // --- 网关（API 密钥的唯一来源；官方链路 + 自定义网关）-----------------------
+  listGateways: () => request<GatewayList>('/api/gateways'),
+  createGateway: (body: unknown) => request<Gateway>('/api/gateways', { method: 'POST', body: JSON.stringify(body) }),
+  updateGateway: (id: string, body: unknown) =>
+    request<Gateway>(`/api/gateways/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteGateway: (id: string) => request<void>(`/api/gateways/${id}`, { method: 'DELETE' }),
+  /** 「获取模型」：探测一次并返回模型清单（不落库）。密钥留空且带 gateway_id 时复用已存密钥。 */
+  probeGateway: (body: {
+    base_url: string
+    protocol: string
+    auth_style: string
+    api_key?: string | null
+    extra_headers?: Record<string, unknown>
+    gateway_id?: string | null
+  }) => request<GatewayProbeResult>('/api/gateways/probe', { method: 'POST', body: JSON.stringify(body) }),
+  /** 用已存的配置重新拉一次模型，更新 model_catalog（不动白名单）。 */
+  refreshGatewayModels: (id: string) =>
+    request<GatewayProbeResult>(`/api/gateways/${id}/refresh-models`, { method: 'POST' }),
+
+  // --- 智能体（人格 + 内核 + 网关 + 模型 + 技能）-----------------------------
+  listAgents: () => request<{ items: AgentProfile[] }>('/api/agents').then((r) => r.items),
+  createAgent: (body: unknown) => request<AgentProfile>('/api/agents', { method: 'POST', body: JSON.stringify(body) }),
   updateAgent: (id: string, body: unknown) =>
-    request<AgentInstance>(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<AgentProfile>(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteAgent: (id: string) => request<void>(`/api/agents/${id}`, { method: 'DELETE' }),
-  duplicateAgent: (id: string) => request<AgentInstance>(`/api/agents/${id}/duplicate`, { method: 'POST' }),
+  duplicateAgent: (id: string) => request<AgentProfile>(`/api/agents/${id}/duplicate`, { method: 'POST' }),
   testAgent: (id: string) => request<TestResult>(`/api/agents/${id}/test`, { method: 'POST' }),
+  // 凭据库（全局一份，智能体按引用使用）
+  listCredentials: () => request<{ items: Credential[] }>('/api/credentials'),
+  createCredential: (body: unknown) =>
+    request<Credential>('/api/credentials', { method: 'POST', body: JSON.stringify(body) }),
+  updateCredential: (id: string, body: unknown) =>
+    request<Credential>(`/api/credentials/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteCredential: (id: string) => request<void>(`/api/credentials/${id}`, { method: 'DELETE' }),
+
+  /** 整表替换智能体分配到的技能。 */
+  setAgentSkills: (id: string, skillIds: string[]) =>
+    request<AgentProfile>(`/api/agents/${id}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify({ skill_ids: skillIds }),
+    }),
 
   // --- 运行时（各 CLI 内核的安装 / 更新 / 卸载）-----------------------------
   listRuntimes: () => request<{ items: AgentRuntime[] }>('/api/runtimes').then((r) => r.items),
@@ -117,17 +152,6 @@ export const api = {
   },
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
-  setRoleSkills: (roleId: string, skillIds: string[]) =>
-    request<Role>(`/api/roles/${roleId}/skills`, {
-      method: 'PUT',
-      body: JSON.stringify({ skill_ids: skillIds }),
-    }),
-
-  listRoles: () => request<{ items: Role[] }>('/api/roles').then((r) => r.items),
-  createRole: (body: unknown) => request<Role>('/api/roles', { method: 'POST', body: JSON.stringify(body) }),
-  updateRole: (id: string, body: unknown) => request<Role>(`/api/roles/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteRole: (id: string) => request<void>(`/api/roles/${id}`, { method: 'DELETE' }),
-  duplicateRole: (id: string) => request<Role>(`/api/roles/${id}/duplicate`, { method: 'POST' }),
 
   listConversations: () => request<{ items: Conversation[] }>('/api/conversations').then((r) => r.items),
   createConversation: (body: unknown) =>

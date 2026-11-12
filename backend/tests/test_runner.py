@@ -77,7 +77,7 @@ async def _read_sse(response: httpx.Response) -> list[dict]:
 
 async def test_cli_run_survives_a_very_long_output_line(client: httpx.AsyncClient):
     """端到端：真实 CLI 输出超长单行时，整轮运行必须完整落库、不得产出 error 事件。"""
-    agent = (
+    role = (
         await client.post(
             "/api/agents",
             json={
@@ -95,8 +95,7 @@ async def test_cli_run_survives_a_very_long_output_line(client: httpx.AsyncClien
             },
         )
     ).json()
-    role = (await client.post("/api/roles", json={"name": "长行", "agent_id": agent["id"]})).json()
-    conversation = (await client.post("/api/conversations", json={"role_id": role["id"]})).json()
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": role["id"]})).json()
 
     async with client.stream(
         "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "写个系统"}

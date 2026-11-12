@@ -32,7 +32,6 @@ def make_context(tmp_path, **overrides) -> AgentContext:
         gateway_url="https://gateway.example/v1",
         api_key="sk-test",
         model="gpt-4o-mini",
-        role_name="Analyst",
         system_prompt="You are an analyst.",
         workspace_dir=str(tmp_path),
         prompt="check the workspace",

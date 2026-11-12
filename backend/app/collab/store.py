@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from ..models import Role, new_id, utcnow
+from ..models import AgentProfile, new_id, utcnow
 from ..settings import get_settings
 from . import graph as graph_service
 from .schemas import (
@@ -45,7 +45,7 @@ class TeamInUse(Exception):
     """协作组下还有运行记录，不能删除（沿用既有 409 语义）。"""
 
 
-def to_read(team: CollabTeam, known_role_ids: set[str] | None = None) -> TeamRead:
+def to_read(team: CollabTeam, known_agent_profile_ids: set[str] | None = None) -> TeamRead:
     """把行转成响应模型，并**每次都重新校验**图（编辑器要能实时看到问题）。"""
     try:
         spec = graph_service.from_storable(team.graph)
@@ -61,7 +61,7 @@ def to_read(team: CollabTeam, known_role_ids: set[str] | None = None) -> TeamRea
             ],
         )
     else:
-        validation = graph_service.validate_graph(spec, team.entry_key, known_role_ids)
+        validation = graph_service.validate_graph(spec, team.entry_key, known_agent_profile_ids)
     try:
         budget = graph_service.budget_from_storable(team.budget)
     except (ValueError, ValidationError):
@@ -211,7 +211,7 @@ def _chat_read(message: CollabMessage) -> ChatMessageRead:
 
 
 async def list_chat_messages(session: AsyncSession, run_id: str) -> list[ChatMessageRead]:
-    """按发生顺序读出入口角色对话。"""
+    """按发生顺序读出入口智能体对话。"""
     rows = (
         await session.execute(
             select(CollabMessage)
@@ -370,9 +370,9 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
             select(CollabStep).where(CollabStep.run_id == run.id).order_by(CollabStep.sequence)
         )
     ).scalars().all()
-    role_names = {
-        role.id: role.name
-        for role in (await session.execute(select(Role))).scalars().all()
+    profile_names = {
+        profile.id: profile.name
+        for profile in (await session.execute(select(AgentProfile))).scalars().all()
     }
     read = await run_read(session, run)
     return RunDetail(
@@ -383,9 +383,8 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
                 id=step.id,
                 run_id=step.run_id,
                 ticket_id=step.ticket_id,
-                role_id=step.role_id,
-                agent_id=step.agent_id,
-                role_name="你" if step.role_key == "user" else role_names.get(step.role_id or ""),
+                agent_profile_id=step.agent_profile_id,
+                profile_name="你" if step.role_key == "user" else profile_names.get(step.agent_profile_id or ""),
                 role_key=step.role_key,
                 duty=step.duty,
                 sequence=step.sequence,

@@ -4,7 +4,7 @@ import type { Skill, SkillDetail } from '../lib/types'
 
 /**
  * 技能页：把各智能体内核的技能目录统一编目后集中展示。
- * 技能只能通过「角色 → 技能」的分配被某个角色使用，这里只负责查看与重新扫描。
+ * 技能只能通过「智能体 → 技能」的分配被某个智能体使用，这里只负责查看与重新扫描。
  */
 export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
@@ -77,8 +77,8 @@ export function SkillsPage() {
         <div>
           <h1 className="page-title">技能</h1>
           <p className="page-desc">
-            各智能体内核自带的技能在这里统一编目。技能通过「角色分配」生效，
-            未分配的技能不会被任何角色使用。
+            各智能体内核自带的技能在这里统一编目。技能通过「智能体分配」生效，
+            未分配的技能不会被任何智能体使用。
           </p>
         </div>
         <div className="spacer" />
@@ -138,8 +138,8 @@ export function SkillsPage() {
                     <span className={`pill${skill.available ? '' : ' err'}`}>
                       {skill.available ? skill.source_label : '目录已消失'}
                     </span>
-                    {skill.used_by_roles > 0 && (
-                      <span className="pill brand">被 {skill.used_by_roles} 个角色使用</span>
+                    {skill.used_by_agents > 0 && (
+                      <span className="pill brand">被 {skill.used_by_agents} 个智能体使用</span>
                     )}
                   </div>
                 </div>
@@ -175,16 +175,16 @@ function SkillDetailPane({ skill }: { skill: SkillDetail }) {
 
       {skill.note && <div className="banner info">{skill.note}</div>}
 
-      {skill.roles.length > 0 ? (
+      {skill.agents.length > 0 ? (
         <div className="chips">
-          {skill.roles.map((role) => (
-            <span className="pill ok" key={role.id}>
-              {role.avatar} {role.name}
+          {skill.agents.map((agent) => (
+            <span className="pill ok" key={agent.id}>
+              {agent.avatar} {agent.name}
             </span>
           ))}
         </div>
       ) : (
-        <div className="card-sub">尚未分配给任何角色，当前不会被使用。</div>
+        <div className="card-sub">尚未分配给任何智能体，当前不会被使用。</div>
       )}
 
       <div>

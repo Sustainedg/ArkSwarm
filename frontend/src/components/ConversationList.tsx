@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../lib/api'
 import { notifyConversationsChanged, useConversationsChanged } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
-import type { Conversation, Role } from '../lib/types'
+import type { Conversation, AgentProfile } from '../lib/types'
 import { sameConversationList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { MoreIcon, PencilIcon, TrashIcon } from './Icons'
 
@@ -24,10 +24,15 @@ export function ConversationList() {
   const { pathname } = useLocation()
 
   const [conversations, setConversations] = useState<Conversation[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  /** true 时下半部分换成「选角色新建对话」 */
+  /**
+   * true 时下半部分换成「选智能体新建对话」。
+   *
+   * 这只是**兜底**：正常情况下「＋ 新建」直接用默认智能体开一条对话，
+   * 只有还没设过默认（且可选智能体不止一个）时才退回来让用户挑一个。
+   */
   const [pickerOpen, setPickerOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   /** 正在就地重命名的对话 id（下面那支输入框） */
@@ -65,23 +70,31 @@ export function ConversationList() {
     setPickerOpen(true)
     setError(null)
     try {
-      setRoles(await api.listRoles())
+      setAgents(await api.listAgents())
     } catch (e) {
       setError(describe(e))
     }
   }
 
-  const create = async (roleId: string) => {
+  /**
+   * 新建对话。
+   *
+   * 不带智能体 = 用「默认智能体」（智能体卡片右上角那颗五角星），工作目录也先留空
+   * （进去后在输入框上方那两个小图标里随时改）—— 所以点一下「＋ 新建」就能直接说话。
+   */
+  const create = async (agentId?: string) => {
     setCreating(true)
     setError(null)
     try {
-      const conversation = await api.createConversation({ role_id: roleId })
+      const conversation = await api.createConversation({ agent_profile_id: agentId })
       setPickerOpen(false)
       await load()
       notifyConversationsChanged()
       navigate(`/chat/${conversation.id}`)
     } catch (e) {
+      // 还没设过默认智能体（或者一个智能体都没有）：退回「挑一个」的老路径，并把原因说清楚。
       setError(describe(e))
+      await openPicker()
     } finally {
       setCreating(false)
     }
@@ -134,8 +147,10 @@ export function ConversationList() {
         <span className="card-section-title">对话</span>
         <button
           className="btn sm ghost"
-          onClick={() => (pickerOpen ? setPickerOpen(false) : void openPicker())}
+          disabled={creating}
+          onClick={() => (pickerOpen ? setPickerOpen(false) : void create())}
           aria-expanded={pickerOpen}
+          title="用默认智能体开一条新对话（智能体与工作目录进去后还能改）"
         >
           {pickerOpen ? '取消' : '＋ 新建'}
         </button>
@@ -145,25 +160,26 @@ export function ConversationList() {
 
       <div className="sidebar-scroll">
         {pickerOpen ? (
-          roles.length === 0 ? (
+          agents.length === 0 ? (
             <p className="dim small" style={{ padding: '8px 8px 4px', lineHeight: 1.6 }}>
-              还没有角色。先到「角色」页创建一个：角色 = 人格设定 + 绑定的智能体。
+              还没有智能体。先到「智能体」页创建一个：内核 + 网关 + 模型 + 人格设定。
             </p>
           ) : (
             <div className="sidebar-picker">
-              {roles.map((role) => (
+              {agents.map((agent) => (
                 <button
-                  key={role.id}
+                  key={agent.id}
                   className="chat-item"
                   disabled={creating}
-                  onClick={() => void create(role.id)}
-                  title={`与「${role.name}」开始新对话`}
+                  onClick={() => void create(agent.id)}
+                  title={`与「${agent.name}」开始新对话`}
                 >
                   <span className="chat-item-title">
-                    {role.avatar} {role.name}
+                    {agent.avatar} {agent.name}
+                    {agent.is_default && <span className="pill brand">默认</span>}
                   </span>
                   <span className="chat-item-meta">
-                    <span>{role.agent_name}</span>
+                    <span>{agent.type_name ?? agent.type_id}</span>
                   </span>
                 </button>
               ))}
@@ -175,7 +191,7 @@ export function ConversationList() {
           </p>
         ) : conversations.length === 0 ? (
           <p className="dim small" style={{ padding: '8px 8px 4px', lineHeight: 1.6 }}>
-            还没有对话，点上面的「＋ 新建」选一个角色开始。
+            还没有对话：点上面的「＋ 新建」直接用默认智能体开始，进去后还能在输入框上方换智能体与工作目录。
           </p>
         ) : (
           conversations.map((conversation) => (
@@ -203,7 +219,7 @@ export function ConversationList() {
                 <button className="chat-item-main" onClick={() => navigate(`/chat/${conversation.id}`)}>
                   <span className="chat-item-title">{conversation.title}</span>
                   <span className="chat-item-meta">
-                    <span>{conversation.role_name}</span>
+                    <span>{conversation.agent_name}</span>
                     <span>·</span>
                     <span>{conversation.message_count} 条</span>
                     <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>

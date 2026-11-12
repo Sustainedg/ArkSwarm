@@ -12,7 +12,7 @@
 
 | 项 | 事实 |
 | --- | --- |
-| 产品 | Magenta Agents —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体并给它们套角色 |
+| 产品 | Magenta Agents —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体，为它们配置网关、模型与人格 |
 | 后端 | Python 3.11 · FastAPI 0.115 · SQLModel + SQLite(aiosqlite) · Pydantic v2 · httpx（依赖见 `backend/requirements.txt`） |
 | 前端 | React 18 + TypeScript + Vite 6 · react-router · **无 UI 框架，手写 CSS**（`frontend/src/index.css`） |
 | 后端入口 | `backend/app/main.py`（`uvicorn app.main:app --app-dir backend`） |
@@ -23,8 +23,8 @@
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
-| 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过角色分配生效**（`role_skills`） |
-| 协作域 | `backend/app/collab/` —— 多角色「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
+| 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
+| 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
 
 ---
 
@@ -52,7 +52,7 @@
     禁止 `except Exception: pass` 静默吞掉。
 12. **不要新增依赖**（后端 `requirements*.txt`、前端 `package.json`），除非任务确实需要；
     新增必须说明理由并与现有版本风格一致（精确版本号）。
-13. **角色能用的技能只能来自分配。** 技能的权威来源是 `role_skills` 表；运行时必须「严格仅分配」——
+13. **智能体能用的技能只能来自分配。** 技能的权威来源是 `agent_skills` 表；运行时必须「严格仅分配」——
     把分配到的技能物化进该内核的隔离配置目录，不允许把本机个人/插件技能顺手带进一次运行。
     某个内核把技能放在哪、怎么隔离，是**适配器**的知识（`discover_skills()` / `skill_mount()`）；
     框架层禁止硬编码技能目录或内核配置变量。
@@ -93,6 +93,7 @@
 协作域 `collab/` 是**旁路功能**，不在主干上：`api` 只把它当一条子路由挂上去，它在内部经**唯一边界**
 `collab/execution.py` 调用 `runtime.runner`。硬约束（有守卫测试 `tests/test_collab_architecture.py`）：
 `collab/*` 只允许依赖 `agents.events`（事件契约）、`models/db/settings` 与叶子工具模块
+`app.credentials`（凭据解密 / 掩码 / 事件擦除，与对话域共用同一份）、
 `app.attachments`（附件落盘 / 拼提示词，与对话域共用同一份），**不得** `import app.api.*`，
 也**不得**绕过 `execution.py` 直接 `import app.runtime.*`；`tickets.py`/`graph.py`/`prompt.py` 必须是
 不碰存储与 HTTP 的纯函数。框架层禁止反向依赖 `collab`。协作事件是自有的 `collab.*` 信封
@@ -105,8 +106,8 @@
 | `agents/builtin/*` | 怎么调用某个智能体、怎么把它的输出翻译成事件 | 存储、HTTP、UI、取消（框架统一做） |
 | `agents/base.py` `events.py` `registry.py` `skills.py` | 契约与协议（改动影响面最大，慎改） | 具体产品逻辑 |
 | `runtime/runner.py` | 起子进程/发 HTTP、读流、超时、取消、脱敏 | 业务规则 |
-| `runtime/service.py` | 载入 对话→角色→智能体→适配器、能力决策、历史回放、落库 | 具体命令拼装 |
-| `runtime/skills.py` | 技能统一编目、角色分配、物化进内核隔离目录 | 哪个内核把技能放哪（那是适配器的事） |
+| `runtime/service.py` | 载入 对话→智能体→适配器（网关提供密钥与地址）、能力决策、历史回放、落库 | 具体命令拼装 |
+| `runtime/skills.py` | 技能统一编目、智能体分配、物化进内核隔离目录 | 哪个内核把技能放哪（那是适配器的事） |
 | `api/*` | 参数校验、状态码、把 service 的结果转成响应/SSE | 业务决策（尽量薄） |
 | `models.py` `schemas.py` | 表结构与请求/响应契约 | 编排逻辑 |
 | 前端 | 展示与交互 | 任何智能体特异逻辑 |
@@ -118,7 +119,7 @@ if agent.type_id == "codex":
     ctx.prompt = special_codex_wrapper(ctx.prompt)
 
 # ✗ 适配器直接读数据库
-from ..models import AgentInstance   # in agents/builtin/foo.py
+from ..models import AgentProfile   # in agents/builtin/foo.py
 
 # ✗ 前端硬编码某适配器的字段
 {typeId === 'gemini-cli' && <input name="approval_mode" />}
@@ -140,7 +141,8 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ### 3.2 `AgentDefinition` 契约（新增适配器要实现/声明）
 必需：`id`、`name`、`runtime`、`build_invocation()`、`parse_line()`（CLI）或 `stream()`（API）。
 常用可选：`description`、`vendor`、`capabilities`、`config_fields`、`api_key_env`、`base_url_env`、
-`default_gateway`、`default_model`、`docs_url`、`logo`（官方 Logo 的前端静态资源路径，如
+`default_gateway`、`default_model`、`protocol`（openai / anthropic / gemini）、`default_auth_style`、
+`default_models`（官方链路预置模型）、`docs_url`、`logo`（官方 Logo 的前端静态资源路径，如
 `/icons/kernels/claude.svg`）、`executable`、`auto_provision`、
 `availability()`、`probe()`/`probe_api()`、`resume_supported(ctx)`（可选钩子）。
 - `parse_line(line, run)` 里**不要吞异常**：解析不了就 `yield log(...)` 或忽略该行，别让整个运行崩掉。
@@ -160,23 +162,41 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 **新增一个可配置项 = 在适配器加一个 `ConfigField`**，前端表单自动出现，无需动前端。
 
 ### 3.5 `AgentContext` / `AgentRun`
-`AgentContext` 是框架→适配器的唯一输入（`agent_id/name`、`options`、`gateway_url`、`api_key`、`model`、
-`role_name`、`system_prompt`、`workspace_dir`、`session_id`、`history`、`prompt`），用 `ctx.option(key, default)` 取值。
+`AgentContext` 是框架→适配器的唯一输入（`agent_id/name`、`options`、`gateway_url`、`api_key`、
+`credentials`、`auth_style`、`model`、`system_prompt`、`workspace_dir`、`session_id`、`history`、
+`prompt`、`skills`、`skill_home_dir`），用 `ctx.option(key, default)` 取值。
+`gateway_url` / `api_key` / `auth_style` 由框架从智能体引用的**网关**解密后注入（`runtime/gateway.py:bind_gateway`）；
+`credentials` 是智能体自己的凭据（解密后的「环境变量名 → 明文」），由框架合并进子进程环境变量，
+适配器不需要自己处理，也**不得**把它写进提示词、日志或事件。
 `AgentRun` 是"无状态定义 + 一次具体运行"的绑定，持有 `state`（解析状态）、`emitted_text`、`thinking`、
 `session_id`、`tool_calls`。
 
 ### 3.6 领域模型不变量（`models.py`）
-- `AgentInstance`（配置好的智能体）→ `Role`（角色绑定一个智能体）→ `Conversation`（对话绑定一个角色）。
-- **Conversation 快照 `agent_id`**：角色改绑智能体后，历史对话仍按原智能体复现，别改成实时跟随。
-- 外键 `ON DELETE RESTRICT`：**不要**为了"方便"改成级联删除。删角色 / 删智能体走**软删除**
+- `Gateway`（网关，API 密钥的唯一来源）→ `AgentProfile`（智能体：内核 + 网关 + 模型 + 人格 + 技能）
+  → `Conversation`（对话绑定一个智能体）。原「角色」与「智能体实例」已合并为 `AgentProfile`。
+- **Conversation 快照 `agent_profile_id`**：智能体改了内核 / 网关 / 模型后，历史对话仍按原智能体复现，
+  别改成实时跟随。
+- 外键 `ON DELETE RESTRICT`：**不要**为了"方便"改成级联删除。删智能体 / 删自定义网关走**软删除**
   （写 `deleted_at`，新列登记在 `models.py` 的 `ADDITIVE_COLUMNS`）：实体从所有可选列表消失，
-  但历史对话与协作历史照旧可读（历史对话仍能显示当时的角色名/头像，也仍可继续）。
-  只有仍被**未删除**的角色引用的智能体才返回 **409**。
+  但历史对话与协作历史照旧可读（历史对话仍能显示当时的名字/头像，也仍可继续）。
+  只有仍被**未删除**的智能体引用的网关才返回 **409**；官方链路（`kind="official"`）一律不可删。
 - 删除对话需显式清理消息（`api/conversations.py` 已处理）；SQLite 已开 `PRAGMA foreign_keys=ON`。
+
+### 3.7 网关与密钥（`gateways` 表 + `api/gateways.py`）
+网关是 API 密钥的**唯一来源**，分两类：`kind="official"`（启动播种按适配器声明生成、不可删）与
+`kind="custom"`（用户在「设置 → 自定义网关」创建）。智能体只引用一个 `gateway_id`，模型必须从网关的
+`selected_models` 白名单里选。
+- **密钥只经 `app/security.py`**：明文密钥禁止入库 / 进日志 / 进 SSE payload / 进接口响应；
+  接口只回 `api_key_set` 与掩码 `api_key_preview`。
+- **「必须成功才能保存」是服务端不变量**：`selected_models` 至少一项；`POST /api/gateways/probe`
+  只探测不落库，探测失败可由用户「手动旁路」录入模型名。
+- 协议与鉴权方式固定为 `PROTOCOLS` / `AUTH_STYLES`（`runtime/gateway_probe.py`），新增要在那里声明。
+- **界面只维护自定义网关**：设置页只列 `kind="custom"`；智能体配置里的「官方默认」是
+  `gateway_id = null`（平台不接管路由，回落到适配器读到的本机配置），官方链路不作为可选项。
 
 ---
 
-### 3.7 技能契约（`agents/skills.py`）
+### 3.8 技能契约（`agents/skills.py`）
 - `SkillSpec`：一个技能的只读描述（`type_id` / `slug` / `name` / `description` / `source_kind` / `path` /
   `fingerprint` / `files` …），`id` 固定为 `<type_id>:<slug>`。
 - `SkillMount`：适配器声明的**物化计划**（`home_name`、`skills_subdir`、`carry` 要携带的配置文件、
@@ -225,7 +245,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 - **移动端（`/m/`）**：`src/mobile/pages/MobileXxxPage.tsx`，在 `src/mobile/MobileApp.tsx` 注册路由；
   样式写进 `src/mobile/mobile.css`。移动端页面**不得**引用 `src/pages/`、`src/App.tsx` 或
   `src/index.css`（有守卫测试 `tests/test_mobile_web.py`），但可以复用 `src/lib/*` 与
-  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
+  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabAgentThread` /
   `KernelLogo` /
   `TicketBoardKit`
   这些纯展示组件（对话气泡只有 `MessageView` 一份，线程装配只有 `ConversationThread` 一份）。
@@ -262,7 +282,7 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
   语义（协作的模式切换按钮、状态条）走 `header` 插槽传进去；要允许空发送就开
   `allowEmptySend`（别为这类差异复制一份输入区，也别把页面语义塞进组件）。
 - **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，
-  时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口角色工牌**才出来
+  时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口智能体工牌**才出来
   （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。输入区上方有一个**模式按钮**（不是两档
   选项框）：点一下切「推进任务」，再点回「普通对话」。推进模式下空内容直接发 = 让领导者继续推进
   （`/resume`）；工单正在推进（接口 409）、带着附件（工单通道没有附件位）、有待回答的问题时，
@@ -283,11 +303,12 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
   由聊天页弹面板 —— 不要再往顶栏塞「⋯」。
 - **分享成长图**：`src/lib/shareImage.ts`（Canvas 手绘，不引依赖）：对话页顶栏的分享按钮把当前
   对话渲染成 PNG，优先走 `navigator.share({ files })`，不支持就退回下载。
-- **智能体设置并入「运行时」**：移动端**没有**独立的智能体配置页（`/agents` 已取消）。一个内核
-  = 一份安装 + N 份配置，所以内核的安装 / 更新 / 卸载与它的智能体实例（网关 · 密钥 · 模型 ·
-  适配器选项）都在运行时页：卡片上的「设置」打开 `mobile/components/MobileAgentSettings.tsx`。
-  适配器选项仍由 `DynamicForm` 渲染，**不要**在前端硬编码字段。
-- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（技能 / 运行时）+ 一行「更多」。
+- **安装归「运行时」，配置归「智能体」**：一个内核 = 一份安装 + N 个智能体，所以内核的
+  安装 / 更新 / 卸载留在运行时页，智能体（网关 · 模型 · 人格 · 技能 · 适配器选项）有自己的
+  配置页 `mobile/pages/MobileAgentsPage.tsx`。适配器选项仍由 `DynamicForm` 渲染，**不要**在前端硬编码字段。
+- **网关是 API 密钥的唯一来源**：移动端设 `mobile/pages/MobileGatewaysPage.tsx`（自定义网关 CRUD +
+  获取模型 + 手动旁路）。官方链路由启动播种生成，用户在智能体配置里直接选。
+- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（网关 / 技能 / 运行时 / 智能体）+ 一行「更多」。
   运行概览、版本记录这些信息看桌面端即可；「更新到最新版本」（`pwa.ts:refreshShell()`）必须留着 ——
   独立应用里没有刷新按钮，那是卡在旧外壳时的唯一出口。
 - **移动端锁定缩放**：移动端是「固定外壳」的应用形态（顶栏 + 左侧抽屉 + 内部滚动），入口视口写
@@ -342,11 +363,12 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 | 统一用词 | 不要写成 |
 | --- | --- |
 | 智能体（agent） | Agent、agent（正文里） |
-| 智能体类型 / 智能体实例 | Agent Type、adapters（指概念时） |
+| 智能体类型 | Agent Type、adapters（指概念时） |
 | 网关 | Gateway |
 | API 密钥 | API Key、API key |
 | 适配器 | adapter（指概念时） |
-| 角色 · 对话 · 消息 | Role、Conversation、Message（指概念时） |
+| 智能体 · 对话 · 消息 | Agent、Conversation、Message（指概念时） |
+| 智能体配置（`AgentProfile`） | Agent Instance、Role |
 | 工作目录 | workspace |
 
 ---
@@ -354,6 +376,15 @@ from ..models import AgentInstance   # in agents/builtin/foo.py
 ## 7. 凭据与安全
 
 - 读写密钥只用 `security.encrypt/decrypt/mask`；接口只回传掩码，永不回传明文。
+- **网关密钥**（模型提供方）只属于 `Gateway`；**凭据**（工具/服务要用的第三方密钥）是**全局一份**
+  （`credentials` 表），某个智能体能拿到哪些由 `agent_credentials` 引用关系决定（同「技能」的思路）。
+  两者都只经 `security` 加解密。凭据的纯逻辑在 `app/credentials.py`、读库 / 落库 / 引用关系在
+  `runtime/credentials.py`：
+  校验（`validate_name`）、解密（`decrypt_all`）、只读掩码视图（`reads`）、提示词里的名字清单（`notice`）、
+  文本擦除（`scrub` / `scrub_event`）只此一份；整表替换引用关系走 `runtime/credentials.py:set_agent_credentials`。
+- 凭据**只以环境变量**注入子进程（`runner` 合并 `ctx.credentials`，网关/适配器给的同名变量优先），
+  模型只知道变量名；运行层逐条事件擦除凭据值**与网关密钥**（`runner._run_secrets` → `scrub_event`），
+  因此它们进不了 SSE、落库内容与日志。
 - 新增会把凭据放进 env/argv 的适配器时，确认 `runner._redact` 能覆盖（env 键名含 KEY/TOKEN/SECRET/PASSWORD）。
 - `Runtime.API` 型智能体的文件/命令工具必须限制在工作目录内（见 `builtin/harness_tools.py` 的 `_resolve`）。
 - `bypassPermissions` / `danger-full-access` 这类无人值守选项只应出现在显式配置里，不要设为默认值。
@@ -395,12 +426,15 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 | `agents/base.py` 契约 | 全部内置适配器 + 测试 |
 | `agents/events.py` | `runtime/service.consume_run`、前端 `applyEvent` + `types.ts`、`docs/architecture.md` |
 | `agents/skills.py` / 技能契约 | 全部声明 `skills=True` 的适配器 + `runtime/skills.py` + `tests/test_skills.py` |
-| `runtime/skills.py` | 角色分配接口、`service.prepare_run` 的物化步骤、前端技能页与角色弹窗 |
+| `runtime/skills.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端技能页与智能体弹窗 |
+| `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
 | `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封、超时、取消、脱敏 |
 | 新增「运行时可由平台安装 / 更新」 | 适配器的 `provisioner`（`RuntimeProvisioner`）+ `docs/architecture.md` §4.1 |
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
+| `AgentProfile` 新增字段 | `schemas.py` 读写、`ADDITIVE_COLUMNS` 登记、前端 `types.ts` 与智能体弹窗、旧数据兼容 |
+| 新增「全局一份 + 多智能体引用」的实体（如凭据） | 独立表 + 引用表（仿 `agent_skills` / `agent_credentials`）、运行时按引用注入、接口只回掩码、设置页与智能体弹窗两条入口 |
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
@@ -420,8 +454,10 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 - ❌ 新增可配置项却只在后端读、忘了声明 `ConfigField`（界面上无法配置）。
 - ❌ 用"清空/重建数据库"来解决 schema 变更。
 - ❌ 在框架层硬编码某个内核的技能目录或配置变量（应通过 `discover_skills()` / `skill_mount()` 声明）。
-- ❌ 让角色用到未分配的技能（把本机个人/插件技能顺手带进一次运行）。
-- ❌ 把技能目录删了就顺手删 `skills` 记录（应只把 `available` 置 False，保住角色分配）。
+- ❌ 让智能体用到未分配的技能（把本机个人/插件技能顺手带进一次运行）。
+- ❌ 把技能目录删了就顺手删 `skills` 记录（应只把 `available` 置 False，保住智能体分配）。
+- ❌ 在网关之外另存 API 密钥（或让智能体直填密钥）——密钥只经网关、只经 `security`。
+- ❌ 把凭据值写进提示词 / 日志 / 事件 / 接口响应（只能以环境变量注入，值一律掩码或擦除）。
 - ❌ 前端改完不 build、不重启就宣称完成。
 - ❌ 静默吞异常，或把错误只打到 stdout 不产出 `error` 事件。
 - ❌ 引入 UI 框架/状态管理库/新依赖来解决一个 CSS 或几行状态能解决的问题。

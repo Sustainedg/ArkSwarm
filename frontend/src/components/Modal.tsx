@@ -7,16 +7,19 @@ interface Props {
   footer?: ReactNode
   wide?: boolean
   extraClass?: string
+  /** 关闭 Esc 关闭（例如里面又开了一层弹层时，Esc 该只关最上面那层） */
+  escapeDisabled?: boolean
 }
 
-export function Modal({ title, onClose, children, footer, wide, extraClass }: Props) {
+export function Modal({ title, onClose, children, footer, wide, extraClass, escapeDisabled }: Props) {
   useEffect(() => {
+    if (escapeDisabled) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, escapeDisabled])
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

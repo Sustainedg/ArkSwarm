@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { buildBoardModel, formatTokens } from '../../lib/ticketBoard'
-import type { CollabRunDetail, CollabTeam, Role } from '../../lib/types'
+import type { CollabRunDetail, CollabTeam, AgentProfile } from '../../lib/types'
 import { useAutoRefresh } from '../../lib/useAutoRefresh'
 import {
   BoardAvatar,
@@ -31,7 +31,7 @@ export function MobileTicketBoardPage() {
 
   const [detail, setDetail] = useState<CollabRunDetail | null>(null)
   const [teams, setTeams] = useState<CollabTeam[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [tab, setTab] = useState<Tab>('flow')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -48,11 +48,11 @@ export function MobileTicketBoardPage() {
   useEffect(() => {
     if (!runId) return
     void load(runId)
-    // 角色名与头像只是「好看一点」，拿不到也不能挡住看板，所以失败静默。
-    void Promise.all([api.listCollabTeams(), api.listRoles()])
-      .then(([teamList, roleList]) => {
+    // 智能体名与头像只是「好看一点」，拿不到也不能挡住看板，所以失败静默。
+    void Promise.all([api.listCollabTeams(), api.listAgents()])
+      .then(([teamList, agentList]) => {
         setTeams(teamList)
-        setRoles(roleList)
+        setAgents(agentList)
       })
       .catch(() => undefined)
   }, [runId, load])
@@ -77,11 +77,11 @@ export function MobileTicketBoardPage() {
             tickets: detail.tickets,
             steps: detail.steps,
             graph: team?.graph ?? null,
-            roles,
+            agents,
             nodeLabel,
           })
         : null,
-    [detail, team, roles, nodeLabel],
+    [detail, team, agents, nodeLabel],
   )
   const active = model
     ? model.tickets.find((ticket) => ticket.id === (selectedId ?? model.focusedId)) ?? model.tickets[0] ?? null
@@ -197,7 +197,7 @@ export function MobileTicketBoardPage() {
                 )}
 
                 {active.entries.length === 0 ? (
-                  <p className="dim small">还没有角色处理过它。</p>
+                  <p className="dim small">还没有智能体处理过它。</p>
                 ) : (
                   <ol className="m-board-list">
                     {active.entries.map((entry) => (
@@ -234,7 +234,7 @@ export function MobileTicketBoardPage() {
       ) : (
         <div className="m-page-body">
           {detail && model && model.tickets.length === 0 ? (
-            <p className="dim small">这次协作还没有工单。入口角色把活派出去之后就会出现。</p>
+            <p className="dim small">这次协作还没有工单。入口智能体把活派出去之后就会出现。</p>
           ) : (
             <p className="dim small">{error ? '' : '正在读取这次协作的工单……'}</p>
           )}

@@ -13,9 +13,11 @@ from sqlmodel import select
 from ..agents import AgentContext, AgentDefinition, EventType, get_agent
 from ..agents.events import AgentEvent, error, log, run_finished
 from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
-from ..models import AgentInstance, Conversation, Message, Role
-from ..security import decrypt
+from ..credentials import with_notice
+from ..models import AgentProfile, Conversation, Gateway, Message
 from ..settings import get_settings
+from .credentials import decrypt_for_profile
+from .gateway import bind_gateway
 from .manager import ActiveRun, registry
 from .runner import stream_run
 from .skills import prepare_skill_home
@@ -28,8 +30,8 @@ DEFAULT_TITLE = "新对话"
 @dataclass
 class PreparedRun:
     conversation: Conversation
-    role: Role
-    agent: AgentInstance
+    profile: AgentProfile
+    gateway: Gateway | None
     definition: AgentDefinition
     ctx: AgentContext
     run: ActiveRun
@@ -50,9 +52,10 @@ async def _load(session: AsyncSession, model: Any, pk: str) -> Any:
     return entity
 
 
-def resolve_workspace(conversation: Conversation, role: Role) -> str:
+def resolve_workspace(conversation: Conversation) -> str:
+    """对话的工作目录：建对话时指定，没指定就按对话 ID 分配一个独立沙箱。"""
     settings = get_settings()
-    raw = conversation.workspace_dir or role.workspace_dir
+    raw = conversation.workspace_dir
     base = Path(raw).expanduser() if raw else settings.workspaces_root / conversation.id
     try:
         base = base.resolve()
@@ -62,35 +65,47 @@ def resolve_workspace(conversation: Conversation, role: Role) -> str:
     return str(base)
 
 
-def build_context(
+def resolve_runtime(
     definition: AgentDefinition,
-    agent: AgentInstance,
-    role: Role,
+    profile: AgentProfile,
+    gateway: Gateway | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """解析一次运行要用的网关地址 / API 密钥 / 鉴权方式 / 默认模型。
+
+    地址、密钥与鉴权方式由 ``bind_gateway`` 统一决定（只有自定义网关才注入，
+    官方链路与「没选网关」同义、由内核按自己的配置处理）。
+    """
+    binding = bind_gateway(definition, gateway)
+    model = profile.model or definition.resolve_model(None)
+    return binding.url, binding.api_key, binding.auth_style, model
+
+
+async def build_context(
+    session: AsyncSession,
+    definition: AgentDefinition,
+    profile: AgentProfile,
+    gateway: Gateway | None,
     conversation: Conversation,
     prompt: str,
     history: list[dict[str, str]],
     workspace: str,
 ) -> AgentContext:
-    options = definition.coerce_options(agent.options or {})
-    # 角色级覆盖优先于智能体实例上的默认值
-    options = {**options, **(role.parameters or {})}
-    if not options.get("model") and agent.model:
-        options["model"] = definition.resolve_model(agent.model)
-
-    # 未被用户显式修改的网关/模型，回落到适配器读到的本机真实配置。
-    model = role.parameters.get("model") if role.parameters else None
-    model = model or definition.resolve_model(agent.model)
-    gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(agent.gateway_url)
-
+    gateway_url, api_key, auth_style, model = resolve_runtime(definition, profile, gateway)
+    options = definition.coerce_options(profile.options or {})
+    if model:
+        options.setdefault("model", model)
+    # 凭据：本地加密保存、运行时解密后按环境变量注入（见 app.credentials），永远不进提示词。
+    credentials = await decrypt_for_profile(session, profile.id)
     return AgentContext(
-        agent_id=agent.id,
-        agent_name=agent.name,
+        agent_id=profile.id,
+        agent_name=profile.name,
         options=options,
-        gateway_url=gateway,
-        api_key=decrypt(agent.api_key_encrypted),
+        gateway_url=gateway_url,
+        api_key=api_key,
+        auth_style=auth_style,
         model=model,
-        role_name=role.name,
-        system_prompt=role.system_prompt or None,
+        system_prompt=with_notice(profile.system_prompt or None, credentials),
+        credentials=credentials,
         workspace_dir=workspace,
         session_id=conversation.session_id,
         history=history,
@@ -152,19 +167,47 @@ def transcript_prompt(system_prompt: str | None, history: list[dict[str, str]], 
     return "\n\n".join(lines)
 
 
-async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any) -> PreparedRun:
-    conversation = await _load(session, Conversation, conversation_id)
-    role = await _load(session, Role, conversation.role_id)
-    agent = await _load(session, AgentInstance, conversation.agent_id)
-    if not agent.enabled:
-        raise ConfigurationError(f"智能体「{agent.name}」已停用")
-
+async def load_profile(
+    session: AsyncSession, profile_id: str
+) -> tuple[AgentProfile, Gateway | None, AgentDefinition]:
+    profile = await _load(session, AgentProfile, profile_id)
+    if profile.deleted_at is not None:
+        raise ConfigurationError(f"智能体「{profile.name}」已删除")
+    if not profile.enabled:
+        raise ConfigurationError(f"智能体「{profile.name}」已停用")
+    gateway = await session.get(Gateway, profile.gateway_id) if profile.gateway_id else None
     try:
-        definition = get_agent(agent.type_id)
+        definition = get_agent(profile.type_id)
     except KeyError as exc:
         raise ConfigurationError(str(exc)) from None
+    return profile, gateway, definition
 
-    workspace = payload.workspace_dir or resolve_workspace(conversation, role)
+
+async def pick_default_profile(session: AsyncSession) -> AgentProfile | None:
+    """新建对话时「不问就用它」的智能体，按顺序挑第一个命中的：
+
+    1. 点过五角星的默认智能体（`is_default`）；
+    2. 全场只有一个启用的智能体时，就是它（刚装好、还没点过星的那会儿）；
+    3. 都没有 → None，由调用方给出「去智能体页点个星」的中文提示。
+    """
+    active = (
+        await session.execute(
+            select(AgentProfile)
+            .where(AgentProfile.deleted_at.is_(None), AgentProfile.enabled == True)  # noqa: E712
+            .order_by(AgentProfile.created_at)
+        )
+    ).scalars().all()
+    for profile in active:
+        if profile.is_default:
+            return profile
+    return active[0] if len(active) == 1 else None
+
+
+async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any) -> PreparedRun:
+    conversation = await _load(session, Conversation, conversation_id)
+    profile, gateway, definition = await load_profile(session, conversation.agent_profile_id)
+
+    workspace = payload.workspace_dir or resolve_workspace(conversation)
     if payload.reset_session:
         conversation.session_id = None
 
@@ -183,8 +226,8 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     session.add(user_message)
 
     history = _clip_history(list(existing))
-    ctx = build_context(definition, agent, role, conversation, content, history, workspace)
-    skill_warnings = await prepare_skill_home(session, definition, agent, role, conversation, ctx)
+    ctx = await build_context(session, definition, profile, gateway, conversation, content, history, workspace)
+    skill_warnings = await prepare_skill_home(session, definition, profile, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -204,11 +247,11 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     await session.refresh(user_message)
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, agent.name)
+    run = registry.register(conversation.id, profile.name)
     return PreparedRun(
         conversation=conversation,
-        role=role,
-        agent=agent,
+        profile=profile,
+        gateway=gateway,
         definition=definition,
         ctx=ctx,
         run=run,
@@ -268,7 +311,8 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
                 prepared.conversation.session_id = event.payload.get("session_id")
                 session.add(prepared.conversation)
             elif event.type is EventType.ERROR:
-                error_text = event.text or "智能体返回了错误"
+                status = "error"
+                error_text = event.payload.get("message") or "智能体返回了错误"
             elif event.type is EventType.RUN_FINISHED:
                 extra = dict(event.payload or {})
                 if extra.get("status") in ("error", "cancelled"):
@@ -298,7 +342,7 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
 
 
 async def regenerate_last(session: AsyncSession, conversation_id: str) -> PreparedRun:
-    """用当前角色配置重跑最近一轮用户消息。"""
+    """用当前智能体配置重跑最近一轮用户消息。"""
     conversation = await _load(session, Conversation, conversation_id)
     rows = (
         await session.execute(
@@ -317,15 +361,8 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         await session.delete(message)
     await session.commit()
 
-    role = await _load(session, Role, conversation.role_id)
-    agent = await _load(session, AgentInstance, conversation.agent_id)
-    try:
-        definition = get_agent(agent.type_id)
-    except KeyError as exc:
-        # 适配器被下架后，历史智能体实例仍留在库里：这里要给一句可读的中文提示，
-        # 而不是让 KeyError 冒成 500（铁律 11）。
-        raise ConfigurationError(str(exc)) from None
-    workspace = resolve_workspace(conversation, role)
+    profile, gateway, definition = await load_profile(session, conversation.agent_profile_id)
+    workspace = resolve_workspace(conversation)
     history_rows = (
         await session.execute(
             select(Message)
@@ -334,8 +371,10 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         )
     ).scalars().all()
     history = _clip_history(list(history_rows))
-    ctx = build_context(definition, agent, role, conversation, last_user.content, history, workspace)
-    skill_warnings = await prepare_skill_home(session, definition, agent, role, conversation, ctx)
+    ctx = await build_context(
+        session, definition, profile, gateway, conversation, last_user.content, history, workspace
+    )
+    skill_warnings = await prepare_skill_home(session, definition, profile, conversation, ctx)
     if not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
@@ -349,11 +388,11 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     await session.commit()
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, agent.name)
+    run = registry.register(conversation.id, profile.name)
     return PreparedRun(
         conversation=conversation,
-        role=role,
-        agent=agent,
+        profile=profile,
+        gateway=gateway,
         definition=definition,
         ctx=ctx,
         run=run,
@@ -363,11 +402,10 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     )
 
 
-def new_conversation(role: Role, title: str | None, workspace_dir: str | None) -> Conversation:
+def new_conversation(profile: AgentProfile, title: str | None, workspace_dir: str | None) -> Conversation:
     return Conversation(
         title=(title or DEFAULT_TITLE).strip() or DEFAULT_TITLE,
-        role_id=role.id,
-        agent_id=role.agent_id,
+        agent_profile_id=profile.id,
         workspace_dir=workspace_dir,
     )
 

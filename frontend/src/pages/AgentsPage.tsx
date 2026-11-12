@@ -1,25 +1,69 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  CredentialEditor,
+  credentialsToDraft,
+  draftsToPayload,
+  validateCredentials,
+} from '../components/CredentialEditor'
 import { DynamicForm } from '../components/DynamicForm'
 import { Modal } from '../components/Modal'
+import { StarIcon } from '../components/Icons'
+import { SkillPicker } from '../components/SkillPicker'
 import { api, ApiError } from '../lib/api'
-import type { AgentInstance, AgentType, TestResult } from '../lib/types'
+import type { AgentProfile, AgentType, Credential, Gateway, Skill, TestResult } from '../lib/types'
 
+const AVATARS = ['🛠️', '🧪', '🔎', '🐳', '🔗', '🎨', '📚', '🧠', '⚡', '🛰️', '🧭', '🦾']
+const PROMPT_TEMPLATES: { label: string; body: string }[] = [
+  {
+    label: '严格代码审查',
+    body: '你是一名严格的资深工程师。先阅读仓库再动手，指出风险与权衡，只提交最小且可验证的改动，并说明如何验证。',
+  },
+  {
+    label: '结对的编程搭子',
+    body: '你是务实的结对编程伙伴。改动小步提交，每次修改后运行相关测试，用一两句话总结改动与后续建议。',
+  },
+  {
+    label: '调研助手',
+    body: '你是研究型助手。先收集证据，引用你读过的文件路径，明确区分「事实」与「推测」。',
+  },
+]
+
+/**
+ * 智能体：人格 + 内核 + 网关 + 模型。
+ *
+ * 一个智能体就是「用哪个内核、走哪个网关、选哪个模型、带什么人格」的一份完整配置，
+ * 也是对话与协作唯一的最小单位（原「角色」与「智能体实例」合并而来）。
+ */
 export function AgentsPage() {
   const [types, setTypes] = useState<AgentType[]>([])
-  const [agents, setAgents] = useState<AgentInstance[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
+  const [gateways, setGateways] = useState<Gateway[]>([])
+  const [credentials, setCredentials] = useState<Credential[]>([])
+  const [protocolLabels, setProtocolLabels] = useState<Record<string, string>>({})
+  const [skills, setSkills] = useState<Skill[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const [editing, setEditing] = useState<AgentInstance | null>(null)
+  const [editing, setEditing] = useState<AgentProfile | null>(null)
   const [creating, setCreating] = useState(false)
-  const [testing, setTesting] = useState<{ agent: AgentInstance; result: TestResult | null; busy: boolean } | null>(null)
+  const [testing, setTesting] = useState<{ agent: AgentProfile; result: TestResult | null; busy: boolean } | null>(null)
 
   const reload = async () => {
     setLoading(true)
     try {
-      const [typeList, agentList] = await Promise.all([api.agentTypes(), api.listAgents()])
+      const [typeList, agentList, gatewayList, skillList, credentialList] = await Promise.all([
+        api.agentTypes(),
+        api.listAgents(),
+        api.listGateways(),
+        api.listSkills(),
+        api.listCredentials(),
+      ])
       setTypes(typeList)
       setAgents(agentList)
+      setGateways(gatewayList.items)
+      setCredentials(credentialList.items)
+      setProtocolLabels(Object.fromEntries(gatewayList.protocols.map((item) => [item.value, item.label])))
+      setSkills(skillList)
       setError(null)
     } catch (e) {
       setError(describe(e))
@@ -34,8 +78,18 @@ export function AgentsPage() {
 
   const typeMap = useMemo(() => Object.fromEntries(types.map((t) => [t.id, t])), [types])
 
-  const remove = async (agent: AgentInstance) => {
-    if (!confirm(`删除智能体「${agent.name}」？`)) return
+  /** 点卡片右上角的五角星：设为默认智能体（再点一下取消），全局只有一颗。 */
+  const toggleDefault = async (agent: AgentProfile) => {
+    try {
+      await api.updateAgent(agent.id, { is_default: !agent.is_default })
+      await reload()
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const remove = async (agent: AgentProfile) => {
+    if (!confirm(`删除智能体「${agent.name}」？已有对话会保留在历史里。`)) return
     try {
       await api.deleteAgent(agent.id)
       await reload()
@@ -44,7 +98,26 @@ export function AgentsPage() {
     }
   }
 
-  const runTest = async (agent: AgentInstance) => {
+  /** 启停：只改 enabled，不动其它配置（停用后仍保留配置、历史对话照旧可读）。 */
+  const toggleEnabled = async (agent: AgentProfile) => {
+    try {
+      await api.updateAgent(agent.id, { enabled: !agent.enabled })
+      await reload()
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const duplicate = async (agent: AgentProfile) => {
+    try {
+      await api.duplicateAgent(agent.id)
+      await reload()
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const runTest = async (agent: AgentProfile) => {
     setTesting({ agent, result: null, busy: true })
     try {
       const result = await api.testAgent(agent.id)
@@ -58,9 +131,9 @@ export function AgentsPage() {
     <>
       <header className="page-header">
         <div>
-          <h1 className="page-title">智能体配置</h1>
+          <h1 className="page-title">智能体</h1>
           <p className="page-desc">
-            每个智能体都是「适配器类型 + 自定义网关 + API 密钥 + 模型」的一个实例，可被多个角色复用。
+            智能体 = 内核 + 网关 + 模型 + 人格设定。同一个内核可以用不同网关 / 模型配置出多个智能体，供对话与协作使用。
           </p>
         </div>
         <div className="spacer" />
@@ -76,16 +149,16 @@ export function AgentsPage() {
         {error && <div className="banner err">{error}</div>}
 
         <div className="banner info">
-          支持的适配器：{types.map((t) => t.name).join(' · ')}。新增一种智能体只需在后端放入一个适配器模块，
-          或直接用「自定义 CLI」声明式接入。
+          支持的内核：{types.map((t) => t.name).join(' · ')}。密钥与模型白名单由「设置 → 自定义网关」统一管理，
+          这里只选择走哪条网关。
         </div>
 
         {agents.length === 0 && !loading ? (
           <div className="empty">
-            <div className="empty-icon">⚙️</div>
+            <div className="empty-icon">🤖</div>
             <p>还没有配置任何智能体。</p>
             <p className="dim small" style={{ marginTop: 6 }}>
-              点击「新建智能体」选择 Claude Code / Codex / Gemini CLI 等类型。
+              点击「新建智能体」，选择内核与网关，写下它的人格设定。
             </p>
           </div>
         ) : (
@@ -93,23 +166,47 @@ export function AgentsPage() {
             {agents.map((agent) => {
               const type = typeMap[agent.type_id]
               const availability = agent.availability ?? type?.availability
+              // 可用性那一颗已经写着「2.1.316 (Claude Code)」这类版本串时，别再重复一遍内核名
+              // （只写「0.68.0」这种没有内核名的版本串，仍然要保留名字那颗）
+              const showTypeName = !versionCarriesName(
+                availability?.installed ? availability.version : null,
+                agent.type_name ?? agent.type_id,
+              )
               return (
                 <article className="card" key={agent.id}>
                   <div className="card-head">
+                    <div className="avatar" style={{ width: 40, height: 40, fontSize: 19 }}>
+                      {agent.avatar}
+                    </div>
                     <div style={{ minWidth: 0 }}>
                       <div className="card-title">{agent.name}</div>
-                      <div className="card-sub">
-                        {type?.vendor ?? '未知类型'} · {type?.name ?? agent.type_id}
-                      </div>
+                      <div className="card-sub">{agent.tagline ?? '无备注'}</div>
                     </div>
-                    <div className="card-actions">
-                      <span className={`pill ${agent.runtime === 'api' ? 'brand' : ''}`}>
-                        {agent.runtime === 'api' ? '进程内 API' : '本地 CLI'}
-                      </span>
-                    </div>
+                    <button
+                      type="button"
+                      className={`star-btn${agent.is_default ? ' on' : ''}`}
+                      onClick={() => void toggleDefault(agent)}
+                      aria-pressed={agent.is_default}
+                      aria-label={
+                        agent.is_default
+                          ? `取消「${agent.name}」的默认智能体`
+                          : `把「${agent.name}」设为默认智能体`
+                      }
+                      title={
+                        agent.is_default
+                          ? '默认智能体：新建对话直接用它（点一下取消）'
+                          : '设为默认智能体：新建对话直接用它'
+                      }
+                    >
+                      <StarIcon size={18} on={agent.is_default} />
+                    </button>
                   </div>
 
                   <div className="chips">
+                    {showTypeName && <span className="pill brand">{agent.type_name ?? agent.type_id}</span>}
+                    <span className={`pill ${agent.runtime === 'api' ? 'brand' : ''}`}>
+                      {agent.runtime === 'api' ? '进程内 API' : '本地 CLI'}
+                    </span>
                     {availability &&
                       (availability.installed ? (
                         <span className="pill ok">
@@ -122,35 +219,33 @@ export function AgentsPage() {
                           未安装
                         </span>
                       ))}
-                    {agent.enabled ? <span className="pill">已启用</span> : <span className="pill warn">已停用</span>}
-                    {agent.api_key_set ? (
-                      <span className="pill">🔑 {agent.api_key_preview}</span>
-                    ) : (
-                      <span className="pill warn">未配置 API 密钥</span>
-                    )}
+                    {agent.enabled ? <span className="pill ok">已启用</span> : <span className="pill warn">已停用</span>}
+                    {agent.skills.length > 0 && <span className="pill ok">🧩 {agent.skills.length} 个技能</span>}
+                    {agent.credentials.length > 0 && <span className="pill">🔑 {agent.credentials.length} 条凭据</span>}
                   </div>
 
-                  <dl className="kv">
+                  <dl className="kv tight">
                     <dt>网关</dt>
-                    <dd title={agent.gateway_url ?? ''}>{agent.gateway_url ?? '—'}</dd>
+                    <dd title={agent.gateway_base_url ?? ''}>
+                      {agent.gateway_kind === 'official' || !agent.gateway_name
+                        ? '官方默认'
+                        : agent.gateway_name}
+                    </dd>
                     <dt>模型</dt>
-                    <dd>{agent.model ?? '—'}</dd>
+                    <dd>{agent.model ?? '默认'}</dd>
                   </dl>
 
                   <div className="card-actions" style={{ marginLeft: 0 }}>
                     <button className="btn sm primary" onClick={() => void runTest(agent)}>
                       连通性测试
                     </button>
+                    <button className="btn sm" onClick={() => void toggleEnabled(agent)}>
+                      {agent.enabled ? '停用' : '启用'}
+                    </button>
                     <button className="btn sm" onClick={() => setEditing(agent)}>
                       编辑
                     </button>
-                    <button
-                      className="btn sm"
-                      onClick={async () => {
-                        await api.duplicateAgent(agent.id)
-                        await reload()
-                      }}
-                    >
+                    <button className="btn sm" onClick={() => void duplicate(agent)}>
                       复制
                     </button>
                     <button className="btn sm danger" onClick={() => void remove(agent)}>
@@ -167,6 +262,10 @@ export function AgentsPage() {
       {(creating || editing) && (
         <AgentModal
           types={types}
+          gateways={gateways}
+          protocolLabels={protocolLabels}
+          skills={skills}
+          library={credentials}
           agent={editing}
           onClose={() => {
             setCreating(false)
@@ -216,62 +315,125 @@ export function AgentsPage() {
   )
 }
 
+/**
+ * 可以选择的自定义网关。
+ *
+ * 官方链路不在这里选：选「官方默认」就等于平台不接管路由、沿用内核自带的网关与凭据。
+ * 自定义网关全部列出（协议与内核不一致的排到后面并标注），由用户自己判断能不能用。
+ */
+function gatewaysFor(type: AgentType | null, gateways: Gateway[]): Gateway[] {
+  const custom = gateways.filter((g) => g.kind === 'custom')
+  const protocol = type?.protocol
+  if (!protocol) return custom
+  const matches = (g: Gateway) => g.protocol === protocol
+  return [...custom.filter(matches), ...custom.filter((g) => !matches(g))]
+}
+
 function AgentModal({
   types,
+  gateways,
+  protocolLabels,
+  skills,
+  library,
   agent,
   onClose,
   onSaved,
 }: {
   types: AgentType[]
-  agent: AgentInstance | null
+  gateways: Gateway[]
+  protocolLabels: Record<string, string>
+  skills: Skill[]
+  library: Credential[]
+  agent: AgentProfile | null
   onClose: () => void
   onSaved: () => void
 }) {
-  const [typeId, setTypeId] = useState<string | null>(agent?.type_id ?? null)
+  const [typeId, setTypeId] = useState<string>(agent?.type_id ?? types[0]?.id ?? '')
   const selected = types.find((t) => t.id === typeId) ?? null
 
   const [name, setName] = useState(agent?.name ?? '')
+  const [avatar, setAvatar] = useState(agent?.avatar ?? '🛠️')
+  const [tagline, setTagline] = useState(agent?.tagline ?? '')
   const [description, setDescription] = useState(agent?.description ?? '')
-  const [gateway, setGateway] = useState(agent?.gateway_url ?? '')
+  const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt ?? '')
+  // 官方链路统一显示为「官方默认」（等于平台不接管路由），因此这里归一化成空值。
+  const [gatewayId, setGatewayId] = useState(
+    agent && agent.gateway_kind !== 'official' ? agent.gateway_id ?? '' : '',
+  )
   const [model, setModel] = useState(agent?.model ?? '')
-  const [apiKey, setApiKey] = useState('')
   const [options, setOptions] = useState<Record<string, unknown>>(agent?.options ?? {})
+  const [credentials, setCredentials] = useState(() => credentialsToDraft(agent?.credentials))
+  const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? [])
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // 新建时按当前内核补齐适配器选项的默认值（换内核走 chooseType）。
+  useEffect(() => {
+    if (agent) return
+    const initial = types.find((type) => type.id === typeId) ?? types[0]
+    if (!initial) return
+    if (!typeId) setTypeId(initial.id)
+    setOptions((prev) =>
+      Object.keys(prev).length > 0
+        ? prev
+        : Object.fromEntries(initial.config_fields.map((field) => [field.key, field.default])),
+    )
+  }, [agent, typeId, types])
+
+  const gatewayChoices = useMemo(() => gatewaysFor(selected, gateways), [selected, gateways])
+  const gateway = gateways.find((g) => g.id === gatewayId) ?? null
+  const modelChoices = gateway?.selected_models ?? []
+  // 自定义网关的协议与内核期望的协议不一致时提醒（不拦，由用户判断代理是否兼容）。
+  const protocolMismatch = !!(gateway && selected?.protocol && gateway.protocol !== selected.protocol)
+  const supportsSkills = !!selected?.capabilities.skills
+  const matchingSkills = useMemo(
+    () => skills.filter((s) => s.type_id === typeId),
+    [skills, typeId],
+  )
+  const pickedSkills = useMemo(
+    () => matchingSkills.filter((skill) => skillIds.includes(skill.id)),
+    [matchingSkills, skillIds],
+  )
+  const otherSkills = skills.length - matchingSkills.length
+
   const chooseType = (type: AgentType) => {
+    if (type.id === typeId) return
     setTypeId(type.id)
-    if (!agent) {
-      const sys = type.system_defaults
-      setName((prev) => prev || type.name)
-      // 优先读取本机真实配置（如 Claude Code 的 ~/.claude/settings.json），再退回适配器占位值。
-      setGateway(sys?.gateway_url ?? type.default_gateway ?? '')
-      setModel(sys?.model ?? type.default_model ?? '')
-      setOptions(
-        Object.fromEntries(type.config_fields.map((f) => [f.key, sys?.options?.[f.key] ?? f.default])),
-      )
-    }
+    setOptions(Object.fromEntries(type.config_fields.map((f) => [f.key, f.default])))
+    // 换内核后原网关可能不再匹配，清掉让用户重新选。
+    setGatewayId('')
+    setModel('')
+    setSkillIds([])
+    if (!agent) setName((prev) => prev || type.name)
   }
 
+  const toggleSkill = (id: string) =>
+    setSkillIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+
   const save = async () => {
-    if (!selected) return setError('请先选择智能体类型')
+    if (!selected) return setError('请先选择内核类型')
     if (!name.trim()) return setError('请填写名称')
+    const credentialError = validateCredentials(credentials, library)
+    if (credentialError) return setError(credentialError)
     setSaving(true)
     setError(null)
     try {
       const payload: Record<string, unknown> = {
         name: name.trim(),
+        type_id: selected.id,
+        avatar,
+        tagline: tagline.trim() || null,
         description: description.trim() || null,
-        gateway_url: gateway.trim() || null,
+        system_prompt: systemPrompt,
+        gateway_id: gatewayId || null,
         model: model.trim() || null,
         options,
+        credentials: draftsToPayload(credentials),
       }
-      if (agent) {
-        if (apiKey.trim()) payload.api_key = apiKey.trim()
-        await api.updateAgent(agent.id, payload)
-      } else {
-        await api.createAgent({ ...payload, type_id: selected.id, api_key: apiKey.trim() || null })
-      }
+      // 技能分配紧随智能体保存：未分配的技能对这次运行不生效。
+      const saved = agent ? await api.updateAgent(agent.id, payload) : await api.createAgent(payload)
+      await api.setAgentSkills(saved.id, skillIds)
       onSaved()
     } catch (e) {
       setError(describe(e))
@@ -285,6 +447,7 @@ function AgentModal({
       wide
       title={agent ? `编辑智能体 · ${agent.name}` : '新建智能体'}
       onClose={onClose}
+      escapeDisabled={skillsOpen}
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>
@@ -299,91 +462,189 @@ function AgentModal({
       {error && <div className="banner err">{error}</div>}
 
       <div className="field">
-        <span className="field-label">适配器类型</span>
-        <div className="stack" style={{ gap: 8 }}>
+        <label className="field-label">内核类型</label>
+        <select
+          className="select"
+          value={typeId}
+          onChange={(e) => {
+            const next = types.find((type) => type.id === e.target.value)
+            if (next) chooseType(next)
+          }}
+        >
           {types.map((type) => (
-            <div
-              key={type.id}
-              className={[
-                'agent-type-row',
-                typeId === type.id ? 'selected' : '',
-                type.availability.installed ? '' : 'disabled',
-              ].join(' ')}
-              onClick={() => (agent ? undefined : chooseType(type))}
-              style={{ cursor: agent ? 'not-allowed' : 'pointer' }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="agent-type-name">
-                  {type.name} <span className="dim mono-sm">{type.vendor}</span>
-                </div>
-                <div className="agent-type-desc">{type.description}</div>
-              </div>
-              <div className="chips">
-                <span className={`pill ${type.runtime === 'api' ? 'brand' : ''}`}>
-                  {type.runtime === 'api' ? '进程内 API' : '本地 CLI'}
-                </span>
-                {type.availability.installed ? (
-                  <span className="pill ok">可用</span>
-                ) : (
-                  <span className="pill err" title={type.availability.detail ?? ''}>
-                    未安装
-                  </span>
-                )}
-              </div>
-            </div>
+            <option key={type.id} value={type.id}>
+              {type.name} · {type.vendor}
+              {type.availability.installed ? '' : '（未安装）'}
+            </option>
           ))}
-        </div>
+        </select>
+        <span className="field-help">
+          {selected?.description}
+          {selected && !selected.availability.installed
+            ? ' ⚠️ 该内核的运行时还没安装，可到「运行时」页安装。'
+            : ''}
+        </span>
       </div>
 
       {selected && (
         <>
-          <SystemDefaultsHint type={selected} />
           <div className="form-grid">
             <div className="field">
               <label className="field-label">名称</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 Claude Code（公司网关）" />
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 代码审查员" />
             </div>
             <div className="field">
-              <label className="field-label">模型</label>
+              <label className="field-label">头像</label>
+              <div className="row wrap" style={{ gap: 6 }}>
+                {AVATARS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`btn sm${item === avatar ? ' primary' : ''}`}
+                    onClick={() => setAvatar(item)}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="field span-2">
+              <label className="field-label">一句话简介</label>
               <input
-                className="input mono"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={selected.default_model ?? '例如 sonnet / gpt-5-codex'}
+                className="input"
+                value={tagline}
+                onChange={(e) => setTagline(e.target.value)}
+                placeholder="显示在对话列表里"
               />
             </div>
+
             <div className="field span-2">
-              <label className="field-label">
-                网关地址
-                {selected.base_url_env && <span className="mono-sm dim">→ {selected.base_url_env}</span>}
-              </label>
-              <input
-                className="input mono"
-                value={gateway}
-                onChange={(e) => setGateway(e.target.value)}
-                placeholder={selected.default_gateway ?? 'https://your-gateway.example/v1'}
-              />
+              <label className="field-label">网关</label>
+              <select className="select" value={gatewayId} onChange={(e) => setGatewayId(e.target.value)}>
+                <option value="">官方默认（平台不接管路由 · 沿用内核自带的网关与凭据）</option>
+                {gatewayChoices.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} · {item.base_url}
+                    {protocolLabels[item.protocol] ? ` · ${protocolLabels[item.protocol]}` : ''}
+                  </option>
+                ))}
+              </select>
               <span className="field-help">
-                可留空以使用官方地址或环境里的默认凭据。填成中转网关即可统一收口所有智能体的流量。
+                选「官方默认」= 平台不接管路由，沿用内核自带的网关与凭据；自定义网关在
+                「设置 → 自定义网关」里维护，选中后平台会把它的地址、密钥与模型白名单注入这次运行。
+                {gateway && !gateway.api_key_set ? ' ⚠️ 该网关还没配置密钥。' : ''}
+                {protocolMismatch
+                  ? ` ⚠️ 该网关协议是 ${protocolLabels[gateway!.protocol] ?? gateway!.protocol}，与内核期望的 ${
+                      protocolLabels[selected!.protocol ?? ''] ?? selected!.protocol
+                    } 不一致，运行可能失败。`
+                  : ''}
               </span>
             </div>
-            <div className="field span-2">
-              <label className="field-label">
-                API 密钥
-                {selected.api_key_env && <span className="mono-sm dim">→ {selected.api_key_env}</span>}
-              </label>
-              <div className="secret-row">
+
+            <div className="field">
+              <label className="field-label">默认模型</label>
+              {gateway && modelChoices.length > 0 ? (
+                <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
+                  <option value="">内核默认（{selected.default_model ?? '由内核决定'}）</option>
+                  {modelChoices.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                  {model && !modelChoices.includes(model) && <option value={model}>{model}（不在白名单）</option>}
+                </select>
+              ) : (
                 <input
                   className="input mono"
-                  type="password"
-                  autoComplete="new-password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={agent?.api_key_set ? `已保存 ${agent.api_key_preview ?? ''} · 留空则不修改` : 'sk-...'}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={selected.default_model ?? '例如 sonnet / gpt-5-codex'}
                 />
-              </div>
-              <span className="field-help">密钥使用 Fernet 加密存储，接口只返回掩码，绝不会回传明文。</span>
+              )}
+              <span className="field-help">
+                新对话默认使用的模型。
+                {gateway ? '只允许选择该网关白名单里的模型。' : '官方默认时可直接填写模型名，留空则用内核默认。'}
+              </span>
             </div>
+
+            <div className="field span-2">
+              <label className="field-label">
+                系统提示词
+                <span className="dim small" style={{ marginLeft: 'auto' }}>
+                  <button className="btn ghost sm" type="button" onClick={() => setSystemPrompt('')}>
+                    清空
+                  </button>
+                </span>
+              </label>
+              <textarea
+                className="textarea"
+                style={{ minHeight: 130 }}
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                placeholder="描述这个智能体的身份、风格与工作方式…"
+              />
+              <div className="chips">
+                {PROMPT_TEMPLATES.map((template) => (
+                  <button
+                    key={template.label}
+                    type="button"
+                    className="btn sm"
+                    onClick={() => setSystemPrompt(template.body)}
+                  >
+                    {template.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="field span-2">
+              <label className="field-label">
+                技能
+                <span className="dim small" style={{ marginLeft: 'auto' }}>
+                  已选 {skillIds.length} 个
+                </span>
+              </label>
+              {!supportsSkills ? (
+                <div className="banner info">该内核不支持技能，这个智能体不会加载任何技能。</div>
+              ) : (
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    onClick={() => setSkillsOpen(true)}
+                    disabled={matchingSkills.length === 0}
+                  >
+                    {skillIds.length > 0 ? '管理技能' : '选择技能'}（可选 {matchingSkills.length} 个）
+                  </button>
+                  {pickedSkills.map((skill) => (
+                    <span className="pill" key={skill.id}>
+                      {skill.name}
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        onClick={() => toggleSkill(skill.id)}
+                        aria-label={`移除技能「${skill.name}」`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {supportsSkills && matchingSkills.length === 0 && (
+                <span className="field-help">
+                  还没有属于「{selected.name}」的技能，请先到「技能」页重新扫描。
+                </span>
+              )}
+              <span className="field-help">
+                智能体能用的技能只能来自这里的分配：未勾选的技能不会被加载。换内核时，不匹配的技能会被自动移除。
+              </span>
+              {otherSkills > 0 && (
+                <span className="field-help">另有 {otherSkills} 个技能来自其它内核，与当前内核不匹配，无法选择。</span>
+              )}
+            </div>
+
             <div className="field span-2">
               <label className="field-label">备注</label>
               <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
@@ -392,28 +653,55 @@ function AgentModal({
 
           <div className="stack">
             <div className="card-section-title">适配器设置</div>
-            <DynamicForm fields={selected.config_fields} value={options} onChange={setOptions} />
+            <DynamicForm
+              fields={selected.config_fields}
+              value={options}
+              onChange={setOptions}
+              advancedExtra={
+                <div className="field span-2">
+                  <label className="field-label">
+                    凭据
+                    <span className="dim small" style={{ marginLeft: 'auto' }}>
+                      已配置 {credentials.length} 条
+                    </span>
+                  </label>
+                  <CredentialEditor drafts={credentials} library={library} onChange={setCredentials} />
+                  <span className="field-help">
+                    点名字输入框会列出凭据库里已有的数据：挑一条就引用它，也可以输入新名字 + 值
+                    顺手新建（保存后进入凭据库）。取用方式是把值注入成环境变量，智能体直接读取，
+                    值不会出现在提示词、对话记录与接口响应里；完整清单在「设置 → 凭据库」。
+                    与「网关」无关 —— 网关密钥只属于模型提供方。
+                  </span>
+                </div>
+              }
+            />
           </div>
         </>
+      )}
+
+      {skillsOpen && selected && (
+        <Modal
+          wide
+          title={`选择技能 · ${selected.name}`}
+          onClose={() => setSkillsOpen(false)}
+          footer={
+            <button className="btn primary" onClick={() => setSkillsOpen(false)}>
+              完成（已选 {skillIds.length}）
+            </button>
+          }
+        >
+          <SkillPicker skills={matchingSkills} selected={skillIds} onChange={setSkillIds} />
+        </Modal>
       )}
     </Modal>
   )
 }
 
-function SystemDefaultsHint({ type }: { type: AgentType }) {
-  const sys = type.system_defaults
-  if (!sys || (!sys.gateway_url && !sys.model && !sys.api_key_set)) return null
-  const parts = [
-    sys.gateway_url ? `网关 ${sys.gateway_url}` : null,
-    sys.model ? `模型 ${sys.model}` : null,
-    sys.api_key_set ? `凭据 ${sys.api_key_preview ?? '已配置'}` : null,
-  ].filter(Boolean)
-  return (
-    <div className="banner info">
-      已读取该智能体的本机默认配置：{parts.join(' · ')}。
-      <span className="dim"> 新建实例时会自动带上这些值，也可以在此覆盖。</span>
-    </div>
-  )
+/** 版本串里是否已经带上了内核名（忽略大小写与连字符之类的分隔符）。 */
+function versionCarriesName(version: string | null | undefined, typeName: string): boolean {
+  if (!version) return false
+  const normalize = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return normalize(version).includes(normalize(typeName))
 }
 
 function describe(error: unknown): string {

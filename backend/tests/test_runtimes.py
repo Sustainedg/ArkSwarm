@@ -237,7 +237,7 @@ async def test_list_runtimes_reports_status_and_provisioning(client: httpx.Async
     assert claude["provisioning"]["supported"] is True
     assert claude["provisioning"]["manager"] == "npm"
     assert claude["provisioning"]["commands"]["install"]
-    assert isinstance(claude["instances"], int)
+    assert isinstance(claude["agents"], int)
     # 界面按这个路径渲染官方 Logo，必须随接口一起下发（不能只在前端硬编码）
     assert claude["logo"] == "/icons/kernels/claude.svg"
     assert all(item["logo"] for item in payload["items"])

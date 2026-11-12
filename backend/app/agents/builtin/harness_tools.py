@@ -74,10 +74,18 @@ class ToolError(Exception):
 
 
 class WorkspaceTools:
-    def __init__(self, root: str, allow_shell: bool = True, timeout: int = DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        root: str,
+        allow_shell: bool = True,
+        timeout: int = DEFAULT_TIMEOUT,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.root = Path(root or os.getcwd()).resolve()
         self.allow_shell = allow_shell
         self.timeout = timeout
+        #: 额外注入给 shell 的环境变量（智能体凭据）；不写进任何回显。
+        self.env = dict(env or {})
 
     # -- 辅助方法 ------------------------------------------------------------
 
@@ -99,6 +107,7 @@ class WorkspaceTools:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(self.root),
+            env={**os.environ, **self.env},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

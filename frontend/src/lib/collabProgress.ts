@@ -12,18 +12,18 @@ import type {
   CollabRunStatus,
   CollabStep,
   CollabTicket,
-  Role,
+  AgentProfile,
 } from './types'
 
-export type CollabRoleState = 'pending' | 'active' | 'waiting' | 'error' | 'done'
+export type CollabAgentState = 'pending' | 'active' | 'waiting' | 'error' | 'done'
 
-export interface CollabRoleProgress {
+export interface CollabAgentProgress {
   key: string
   label: string
   avatar: string
   duty: string
   isEntry: boolean
-  state: CollabRoleState
+  state: CollabAgentState
   stateLabel: string
   stepCount: number
   summary: string
@@ -33,7 +33,7 @@ export interface CollabRoleProgress {
 }
 
 /** 各状态对应的「粗略进度」底数——后端没有真实百分比，这里只给进度条一个说法。 */
-const STATE_PROGRESS: Record<CollabRoleState, number> = {
+const STATE_PROGRESS: Record<CollabAgentState, number> = {
   pending: 0,
   active: 45,
   waiting: 62,
@@ -45,7 +45,7 @@ const STATE_PROGRESS: Record<CollabRoleState, number> = {
  * 粗估一个岗位跑到了几成：已完成 100%、闲置 0%，干活中按跑过的步数往上抬，
  * 最多停在 96%——免得「还在干」看起来像已经收工。
  */
-export function roleProgressPercent(node: CollabRoleProgress): number {
+export function agentProgressPercent(node: CollabAgentProgress): number {
   if (node.state === 'done') return 100
   if (node.state === 'pending') return 0
   return Math.min(96, STATE_PROGRESS[node.state] + node.stepCount * 9)
@@ -178,7 +178,7 @@ interface BuildProgressArgs {
   entryKey?: string | null
   steps: CollabStep[]
   tickets: CollabTicket[]
-  roles: Role[]
+  agents: AgentProfile[]
   live?: LiveStep | null
   streamed?: FinishedStep[]
   runStatus: CollabRunStatus
@@ -242,7 +242,7 @@ export function stepHasOutput(step: { content?: string | null; parts?: unknown[]
 /**
  * 一步还没产出时，给出一句人话说明它当前的状态。
  *
- * 关键场景：角色正在跑（`streaming`）但输出只在跑完后才落库，此时点开抽屉若渲染空气泡，
+ * 关键场景：智能体正在跑（`streaming`）但输出只在跑完后才落库，此时点开抽屉若渲染空气泡，
  * 用户会以为「显示处理中却什么都没发生」；中断/出错也要说清楚，避免看起来像卡死。
  */
 export function stepStatusHint(status: string, hasOutput: boolean): string | null {
@@ -260,15 +260,15 @@ export function buildCollabProgress({
   entryKey,
   steps,
   tickets,
-  roles,
+  agents,
   live,
   streamed = [],
   runStatus,
-}: BuildProgressArgs): { nodes: CollabRoleProgress[]; edges: CollabFlowEdge[] } {
+}: BuildProgressArgs): { nodes: CollabAgentProgress[]; edges: CollabFlowEdge[] } {
   if (!graph || graph.nodes.length === 0) return { nodes: [], edges: [] }
 
-  const roleById = new Map(roles.map((role) => [role.id, role]))
-  const nodes = orderedCollabNodes(graph, entryKey).map((node): CollabRoleProgress => {
+  const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
+  const nodes = orderedCollabNodes(graph, entryKey).map((node): CollabAgentProgress => {
     const ownSteps = steps.filter((step) => step.role_key === node.key)
     const persistedIds = new Set(ownSteps.map((step) => step.id))
     const ownStreamed = streamed.filter(
@@ -288,7 +288,7 @@ export function buildCollabProgress({
     const stalled =
       !isLive && runStatus !== 'running' && (last?.status === 'streaming' || last?.status === 'interrupted')
 
-    let state: CollabRoleState = 'pending'
+    let state: CollabAgentState = 'pending'
     let stateLabel = '未开始'
     if (isLive) {
       state = 'active'
@@ -325,7 +325,7 @@ export function buildCollabProgress({
     return {
       key: node.key,
       label: node.label || node.key,
-      avatar: roleById.get(node.role_id)?.avatar ?? '🤖',
+      avatar: agentsById.get(node.agent_profile_id)?.avatar ?? '🤖',
       duty: node.duty,
       isEntry: node.key === entryKey,
       state,

@@ -12,12 +12,12 @@ import {
 } from '../../lib/collabNotices'
 import { buildCollabProgress } from '../../lib/collabProgress'
 import type {
-  AttachmentRef, CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
+  AttachmentRef, CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, AgentProfile, StreamClosedEvent,
 } from '../../lib/types'
 import { useAutoRefresh } from '../../lib/useAutoRefresh'
 import { MobileCollabProgress } from '../components/MobileCollabProgress'
 import { Composer } from '../../components/Composer'
-import { MobileRoleConversationSheet } from '../components/MobileRoleConversationSheet'
+import { MobileAgentConversationSheet } from '../components/MobileAgentConversationSheet'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -60,7 +60,7 @@ export function MobileCollabRunPage() {
 
   const [detail, setDetail] = useState<CollabRunDetail | null>(null)
   const [teams, setTeams] = useState<CollabTeam[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [turn, setTurn] = useState<CollabTurnState | null>(null)
   //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
   const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
@@ -70,12 +70,12 @@ export function MobileCollabRunPage() {
   const [chatBusy, setChatBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [selectedRoleKey, setSelectedRoleKey] = useState<string | null>(null)
-  /** 与入口角色的对话界面：默认不显示，点动画里的人物才弹出来 */
+  const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
+  /** 与入口智能体的对话界面：默认不显示，点动画里的人物才弹出来 */
   const [chatOpen, setChatOpen] = useState(false)
-  /** 已上传、等待随消息发出的附件（只走入口角色的聊天通道） */
+  /** 已上传、等待随消息发出的附件（只走入口智能体的聊天通道） */
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
-  /** 发送模式：对话（只和入口角色聊）还是推进任务（把这句话接到工单上接着跑） */
+  /** 发送模式：对话（只和入口智能体聊）还是推进任务（把这句话接到工单上接着跑） */
   const [sendMode, setSendMode] = useState<'chat' | 'work'>('chat')
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -119,13 +119,13 @@ export function MobileCollabRunPage() {
     }
   }, [dismissedNotices])
 
-  // 协作组与角色只用于把步骤渲染成「谁的产出」：头像与岗位名。
+  // 协作组与智能体只用于把步骤渲染成「谁的产出」：头像与岗位名。
   useEffect(() => {
     void (async () => {
       try {
-        const [teamList, roleList] = await Promise.all([api.listCollabTeams(), api.listRoles()])
+        const [teamList, agentList] = await Promise.all([api.listCollabTeams(), api.listAgents()])
         setTeams(teamList)
-        setRoles(roleList)
+        setAgents(agentList)
       } catch (e) {
         setError(describeError(e))
       }
@@ -197,7 +197,7 @@ export function MobileCollabRunPage() {
     [load],
   )
 
-  /** 入口角色独立聊天通道：主流程在跑时也不占用、不打断这里的流。 */
+  /** 入口智能体独立聊天通道：主流程在跑时也不占用、不打断这里的流。 */
   const subscribeChat = useCallback(
     async (
       target: string,
@@ -244,7 +244,7 @@ export function MobileCollabRunPage() {
     chatAbortRef.current?.abort()
     if (!runId) return
     setError(null)
-    setSelectedRoleKey(null)
+    setSelectedNodeKey(null)
     setChatOpen(false)
     setAttachments([])
     setSendMode('chat')
@@ -275,8 +275,8 @@ export function MobileCollabRunPage() {
   /**
    * 发一条消息，走哪条线由输入区的「对话 / 推进任务」决定（见 `effectiveWork`）。
    *
-   * - **对话**：交给入口角色的聊天通道；带附件时一定走这条 —— 附件只落在聊天这条线上
-   *   （工单推进的输入是结构化工单，没有附件位），而入口角色本来就能把新要求同步进工单；
+   * - **对话**：交给入口智能体的聊天通道；带附件时一定走这条 —— 附件只落在聊天这条线上
+   *   （工单推进的输入是结构化工单，没有附件位），而入口智能体本来就能把新要求同步进工单；
    * - **推进任务**：把这句话接到工单上接着跑（`/messages`）；正文为空就是让领导者继续推进
    *   （`/resume`，不追加用户消息）。
    */
@@ -333,13 +333,13 @@ export function MobileCollabRunPage() {
     void sendMessage(text, attachments, effectiveWork ? 'work' : 'chat')
   }
 
-  /** 点动画里的人物：入口角色打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
-  const openRole = (key: string) => {
+  /** 点动画里的人物：入口智能体打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
+  const openNode = (key: string) => {
     if (key === leaderKey) {
       setChatOpen(true)
       return
     }
-    setSelectedRoleKey(key)
+    setSelectedNodeKey(key)
   }
 
   /** 关掉一条提醒：立即移除，并记住「用户已经看过」，刷新后不再冒出来。 */
@@ -407,11 +407,11 @@ export function MobileCollabRunPage() {
             }
           }
           const node = team?.graph.nodes.find((item) => item.key === step.role_key)
-          const role = roles.find((item) => item.id === (step.role_id ?? node?.role_id))
+          const agent = agents.find((item) => item.id === (step.agent_profile_id ?? node?.agent_profile_id))
           return {
             id: step.id,
-            avatar: role?.avatar ?? '🤖',
-            label: node?.label ?? step.role_name ?? step.role_key,
+            avatar: agent?.avatar ?? '🤖',
+            label: node?.label ?? step.profile_name ?? step.role_key,
             message: {
               id: step.id,
               role: 'assistant' as const,
@@ -434,7 +434,7 @@ export function MobileCollabRunPage() {
             }
           : {
               id: row.id,
-              avatar: roles.find((role) => role.id === row.role_id)?.avatar ?? '🤖',
+              avatar: agents.find((agent) => agent.id === row.agent_profile_id)?.avatar ?? '🤖',
               label: leaderLabel,
               message: {
                 id: row.id,
@@ -462,11 +462,11 @@ export function MobileCollabRunPage() {
     for (const step of turn?.completed ?? []) {
       if (step.nodeKey !== leaderKey || persisted.has(step.stepId)) continue
       const node = team?.graph.nodes.find((item) => item.key === step.nodeKey)
-      const role = roles.find((item) => item.id === node?.role_id)
+      const agent = agents.find((item) => item.id === node?.agent_profile_id)
       entries.push({
         id: step.stepId,
-        avatar: role?.avatar ?? '🤖',
-        label: node?.label ?? step.roleName,
+        avatar: agent?.avatar ?? '🤖',
+        label: node?.label ?? step.agentName,
         message: {
           id: step.stepId,
           role: 'assistant',
@@ -480,15 +480,15 @@ export function MobileCollabRunPage() {
       })
     }
     return entries
-  }, [detail, team, roles, visibleSteps, chatMessages, pendingUser, turn?.completed, leaderKey, leaderLabel])
+  }, [detail, team, agents, visibleSteps, chatMessages, pendingUser, turn?.completed, leaderKey, leaderLabel])
 
   const liveEntry: TimelineEntry | null = leaderLive
     ? {
         id: 'live',
-        avatar: roles.find(
-          (role) => role.id === team?.graph.nodes.find((node) => node.key === leaderLive.nodeKey)?.role_id,
+        avatar: agents.find(
+          (agent) => agent.id === team?.graph.nodes.find((node) => node.key === leaderLive.nodeKey)?.agent_profile_id,
         )?.avatar ?? '🤖',
-        label: leaderLive.roleName,
+        label: leaderLive.agentName,
         message: {
           id: 'live',
           role: 'assistant',
@@ -506,12 +506,12 @@ export function MobileCollabRunPage() {
   const chatLiveEntry: TimelineEntry | null = chatTurn.live
     ? {
         id: `chat-live-${chatTurn.live.messageId}`,
-        avatar: roles.find((role) => role.id === team?.graph.nodes.find(
+        avatar: agents.find((agent) => agent.id === team?.graph.nodes.find(
           (node) => node.key === (chatTurn.live?.roleKey || leaderKey),
-        )?.role_id)?.avatar ?? '🤖',
+        )?.agent_profile_id)?.avatar ?? '🤖',
         label: team?.graph.nodes.find(
           (node) => node.key === (chatTurn.live?.roleKey || leaderKey),
-        )?.label ?? chatTurn.live.roleName,
+        )?.label ?? chatTurn.live.agentName,
         message: {
           id: `chat-live-${chatTurn.live.messageId}`,
           role: 'assistant',
@@ -535,14 +535,14 @@ export function MobileCollabRunPage() {
         entryKey: leaderKey,
         steps: detail?.steps ?? [],
         tickets: detail?.tickets ?? [],
-        roles,
+        agents,
         live: turn?.live ?? null,
         streamed: turn?.completed ?? [],
         runStatus: status,
       }),
-    [team?.graph, leaderKey, detail?.steps, detail?.tickets, roles, turn?.live, turn?.completed, status],
+    [team?.graph, leaderKey, detail?.steps, detail?.tickets, agents, turn?.live, turn?.completed, status],
   )
-  const selectedRole = progress.nodes.find((node) => node.key === selectedRoleKey) ?? null
+  const selectedNode = progress.nodes.find((node) => node.key === selectedNodeKey) ?? null
   const besideLeader = turn?.live && turn.live.nodeKey !== leaderKey ? turn.live : null
   const pendingAsks = useMemo(
     () =>
@@ -556,7 +556,7 @@ export function MobileCollabRunPage() {
   /**
    * 协作有两条线，走哪条由输入区的「对话 / 推进任务」决定：
    *
-   * - **对话**：只和入口角色聊，不推进工单（问进度、补要求），新要求会在下一轮步骤生效；
+   * - **对话**：只和入口智能体聊，不推进工单（问进度、补要求），新要求会在下一轮步骤生效；
    * - **推进任务**：把这句话接到工单上接着跑。
    *
    * 有两处没法自由选，界面会直接把选择权接管过去（对应的那一档同时禁用）：
@@ -584,7 +584,7 @@ export function MobileCollabRunPage() {
         ? draft.trim()
           ? '发送后接着跑工单'
           : '发送即让领导者继续推进'
-        : '不推进工单，只和入口角色聊'
+        : '不推进工单，只和入口智能体聊'
   const composerHeader = showComposerHeader ? (
     // 外层容器由共享的 Composer 渲染（`.composer-head`），这里只放内容，别再套一层。
     <>
@@ -621,7 +621,7 @@ export function MobileCollabRunPage() {
       {(busy || remoteRunning) && (
         <div className="m-collab-running-bar">
           <span className="dim small">
-            领导者团队正在推进{turn?.live ? `「${turn.live.roleName}」` : ''}；点办公室里的领导者可以问进度
+            领导者团队正在推进{turn?.live ? `「${turn.live.agentName}」` : ''}；点办公室里的领导者可以问进度
           </span>
           <button className="btn sm danger" onClick={() => void stop()}>
             {busy ? '■ 停止' : '叫停'}
@@ -654,7 +654,7 @@ export function MobileCollabRunPage() {
     />
   )
 
-  /** 对话时间线：入口角色的产出、你与它的对话、以及需要你拍板的问题。 */
+  /** 对话时间线：入口智能体的产出、你与它的对话、以及需要你拍板的问题。 */
   const thread = (
     <>
       {timeline.length === 0 && !liveEntry && !chatLiveEntry && pendingAsks.length === 0 && !busy && (
@@ -737,7 +737,7 @@ export function MobileCollabRunPage() {
 
       {/* 主页面就是那间可缩放 / 拖动的 3D 办公室；聊天界面点人物才出来。 */}
       <div className="m-run-stage">
-        <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenRole={openRole} />
+        <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenNode={openNode} />
       </div>
 
       {reconnecting && (
@@ -785,7 +785,7 @@ export function MobileCollabRunPage() {
       {besideLeader && (
         <div style={{ padding: '8px 12px 0' }}>
           <div className="banner info">
-            协作正在由「{besideLeader.roleName}」处理，点上方进度可查看实时输出。
+            协作正在由「{besideLeader.agentName}」处理，点上方进度可查看实时输出。
           </div>
         </div>
       )}
@@ -824,15 +824,15 @@ export function MobileCollabRunPage() {
         </MobileSheet>
       )}
 
-      {selectedRole && detail && (
-        <MobileRoleConversationSheet
-          node={selectedRole}
+      {selectedNode && detail && (
+        <MobileAgentConversationSheet
+          node={selectedNode}
           roster={progress.nodes}
           steps={detail.steps}
           tickets={detail.tickets}
           live={turn?.live ?? null}
           streamed={turn?.completed ?? []}
-          onClose={() => setSelectedRoleKey(null)}
+          onClose={() => setSelectedNodeKey(null)}
         />
       )}
 

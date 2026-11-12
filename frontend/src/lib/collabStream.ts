@@ -14,7 +14,7 @@ export interface LiveStep {
   /** 岗位 key（图上的节点） */
   nodeKey: string
   duty: string
-  roleName: string
+  agentName: string
   ticketId?: string | null
   agent: AgentStreamState
 }
@@ -84,11 +84,11 @@ function staleFailureNotices(
   dismissed: ReadonlySet<string>,
 ): CollabNotice[] {
   if (run.status === 'done' || run.status === 'cancelled') return []
-  const lastByRole = new Map<string, CollabStep>()
-  for (const step of steps) lastByRole.set(step.role_key, step)
+  const lastByNode = new Map<string, CollabStep>()
+  for (const step of steps) lastByNode.set(step.role_key, step)
   const notices: CollabNotice[] = []
   for (const step of steps) {
-    if (lastByRole.get(step.role_key)?.id !== step.id) continue
+    if (lastByNode.get(step.role_key)?.id !== step.id) continue
     if (step.status !== 'error') continue
     const key = `step:${step.id}`
     if (dismissed.has(key)) continue
@@ -154,7 +154,7 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
           stepId: event.step_id ?? '',
           nodeKey: event.node_key ?? '',
           duty: event.duty ?? '',
-          roleName: event.role_name ?? event.node_key ?? '角色',
+          agentName: event.agent_name ?? event.node_key ?? '智能体',
           ticketId: event.ticket_id ?? null,
           agent: emptyAgentStream(),
         },

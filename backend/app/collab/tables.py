@@ -1,8 +1,7 @@
 """协作域的数据表。
 
 刻意与对话域（``Conversation`` / ``Message``）分开：协作里的「一次发言」是**工单交付物**，
-不是聊天记录 —— 生命周期、状态机、查询方式都不同。两者只共享 `roles` / `agent_instances`
-这两个既有的领域对象。
+不是聊天记录 —— 生命周期、状态机、查询方式都不同。两者只共享 `agent_profiles` 这一个既有的领域对象。
 
 外键一律用字符串表名声明，因此本模块不 import ``app.models`` 的实体类，
 避免与 ``db.init_db`` 的导入顺序互相纠缠。
@@ -50,7 +49,7 @@ def empty_graph() -> dict[str, Any]:
 
 
 class CollabTeam(SQLModel, table=True):
-    """协作组：一张可视化编排图（节点 = 角色在协作中的岗位，边 = 允许的流转）。"""
+    """协作组：一张可视化编排图（节点 = 智能体在协作中的岗位，边 = 允许的流转）。"""
 
     __tablename__ = "collab_teams"
 
@@ -83,7 +82,7 @@ class CollabRun(SQLModel, table=True):
         )
     )
     title: str = Field(default="新协作", sa_column=Column(String(200), nullable=False))
-    #: 用户下达的原始目标（入口角色的第一份输入）
+    #: 用户下达的原始目标（入口智能体的第一份输入）
     goal: str = Field(default="", sa_column=Column(Text, nullable=False))
     #: running / waiting_user / done / error / cancelled / interrupted
     status: str = Field(default="running", sa_column=Column(String(24), nullable=False, index=True))
@@ -119,17 +118,17 @@ class CollabTicket(SQLModel, table=True):
             String(64), ForeignKey("collab_tickets.id", ondelete="SET NULL"), index=True
         ),
     )
-    #: 发起者角色；由用户发起时为空
-    from_role_id: str | None = Field(
-        default=None, sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"))
+    #: 发起者智能体；由用户发起时为空
+    from_agent_profile_id: str | None = Field(
+        default=None, sa_column=Column(String(64), ForeignKey("agent_profiles.id", ondelete="RESTRICT"))
     )
-    #: 当前承担者角色
-    to_role_id: str = Field(
-        sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    #: 当前承担者智能体
+    to_agent_profile_id: str = Field(
+        sa_column=Column(String(64), ForeignKey("agent_profiles.id", ondelete="RESTRICT"), nullable=False, index=True)
     )
     #: 发起/汇总该工单的节点 key（子工单完成后回到这里）
     owner_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
-    #: 承担者的节点 key（节点可能改绑角色，这里保留当时的岗位）
+    #: 承担者的节点 key（节点可能改绑智能体，这里保留当时的岗位）
     holder_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
     #: 最近一次「提交待审」的节点 key（审查者打回时默认退给它）
     submitter_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
@@ -157,7 +156,7 @@ class CollabTicket(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     closed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
-    #: 把「收尾汇报」交回入口角色的时间；为空表示还没汇报过。
+    #: 把「收尾汇报」交回入口智能体的时间；为空表示还没汇报过。
     #: 根工单每次收尾只汇报一次，用户追问重新开启后会清零（见 ``engine.prepare_turn``）。
     report_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
@@ -165,8 +164,8 @@ class CollabTicket(SQLModel, table=True):
 class CollabStep(SQLModel, table=True):
     """协作时间线上的一个条目。
 
-    大多数条目是「某个角色在一个工单上的一轮发言」；用户自己说的话也存在这里
-    （``role_key="user"``、``role_id``/``agent_id`` 为空），这样一次运行的时间线
+    大多数条目是「某个智能体在一个工单上的一轮发言」；用户自己说的话也存在这里
+    （``role_key="user"``、``agent_profile_id`` 为空），这样一次运行的时间线
     只有一张表、天然有序。结构刻意与 ``messages`` 表同构（``content`` + ``parts``），
     前端可以直接用 ``MessageView`` 渲染。
     """
@@ -185,13 +184,9 @@ class CollabStep(SQLModel, table=True):
             String(64), ForeignKey("collab_tickets.id", ondelete="SET NULL"), index=True
         ),
     )
-    #: 用户自己的发言没有角色与智能体
-    role_id: str | None = Field(
-        default=None, sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"))
-    )
-    agent_id: str | None = Field(
-        default=None,
-        sa_column=Column(String(64), ForeignKey("agent_instances.id", ondelete="RESTRICT")),
+    #: 用户自己的发言没有智能体
+    agent_profile_id: str | None = Field(
+        default=None, sa_column=Column(String(64), ForeignKey("agent_profiles.id", ondelete="RESTRICT"))
     )
     role_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
     duty: str = Field(default="", sa_column=Column(String(24), nullable=False))
@@ -221,9 +216,9 @@ class CollabStep(SQLModel, table=True):
 
 
 class CollabMessage(SQLModel, table=True):
-    """入口角色与用户的一对一对话（CEO 常驻联络通道）。
+    """入口智能体与用户的一对一对话（CEO 常驻联络通道）。
 
-    这是协作域里**唯一**允许携带历史原文的地方：它只面向入口角色，用于细化要求、
+    这是协作域里**唯一**允许携带历史原文的地方：它只面向入口智能体，用于细化要求、
     询问进度和日常沟通；工单步骤的 prompt 永远不读取这张表。单独建表而不是塞进
     ``collab_steps``，是为了不让聊天污染工单时间线、步骤计数与“谁把活交给了谁”的交接链。
     """
@@ -236,16 +231,12 @@ class CollabMessage(SQLModel, table=True):
             String(64), ForeignKey("collab_runs.id", ondelete="CASCADE"), nullable=False, index=True
         )
     )
-    #: user = 用户本人；leader = 入口角色。没有其他发送者。
+    #: user = 用户本人；leader = 入口智能体。没有其他发送者。
     sender: str = Field(default="user", sa_column=Column(String(16), nullable=False, index=True))
-    #: 入口角色岗位 key（用户发言也记下当时的入口，便于界面显示）
+    #: 入口智能体岗位 key（用户发言也记下当时的入口，便于界面显示）
     role_key: str = Field(default="", sa_column=Column(String(64), nullable=False))
-    role_id: str | None = Field(
-        default=None, sa_column=Column(String(64), ForeignKey("roles.id", ondelete="RESTRICT"))
-    )
-    agent_id: str | None = Field(
-        default=None,
-        sa_column=Column(String(64), ForeignKey("agent_instances.id", ondelete="RESTRICT")),
+    agent_profile_id: str | None = Field(
+        default=None, sa_column=Column(String(64), ForeignKey("agent_profiles.id", ondelete="RESTRICT"))
     )
     sequence: int = Field(default=0)
     #: streaming / complete / error / cancelled

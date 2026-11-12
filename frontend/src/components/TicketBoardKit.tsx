@@ -23,7 +23,7 @@ export function BoardStatePill({ ticket }: { ticket: BoardTicket }) {
   return <span className={`pill ${ticket.statePill}`}>{ticket.stateLabel}</span>
 }
 
-/** 岗位头像：角色的 emoji + 岗位提示。 */
+/** 岗位头像：智能体的 emoji + 岗位提示。 */
 export function BoardAvatar({
   avatar, label, duty, size = 'md',
 }: {
@@ -108,11 +108,11 @@ export function BoardEntryCard({ entry }: { entry: BoardEntry }) {
 
   return (
     <li className={`board-entry${entry.violation ? ' violation' : ''}`}>
-      <BoardAvatar avatar={entry.avatar} label={entry.roleLabel} duty={entry.duty} />
+      <BoardAvatar avatar={entry.avatar} label={entry.agentLabel} duty={entry.duty} />
       <article className="board-entry-card">
         <div className="board-entry-head">
           <BoardActionTag tone={entry.tone} label={entry.toneLabel} />
-          <span className="board-entry-actor">{entry.roleLabel}</span>
+          <span className="board-entry-actor">{entry.agentLabel}</span>
           {entry.targetLabel && (
             <>
               <span className="board-entry-arrow">→</span>

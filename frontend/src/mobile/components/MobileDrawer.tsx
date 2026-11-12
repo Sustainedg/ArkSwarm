@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { formatListTime } from '../../lib/datetime'
-import type { Conversation, Role } from '../../lib/types'
+import type { Conversation, AgentProfile } from '../../lib/types'
 import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { describeError } from '../util'
 
 /** 抽屉上半部分的主导航：对应曾经固定在底部的 Tab（「对话」是回聊天页的入口）。 */
 const NAV = [
   { to: '/chat', icon: '💬', label: '对话' },
-  { to: '/roles', icon: '🎭', label: '角色' },
+  { to: '/agents', icon: '🤖', label: '智能体' },
   { to: '/collab', icon: '🤝', label: '协作组' },
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/settings', icon: '⚙️', label: '设置' },
@@ -30,7 +30,7 @@ interface Props {
  * 每个对话行右侧的「⋯」是会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）的入口：
  * 它把信号（路由 state）交给聊天页去弹面板 —— 那几件事要用到那边的消息与会话状态。
  *
- * 对话行只留文字（标题 + 角色/条数 + 时间）与那个「⋯」：一行一行的头像在这里只是噪音，
+ * 对话行只留文字（标题 + 智能体/条数 + 时间）与那个「⋯」：一行一行的头像在这里只是噪音，
  * 去掉之后列表更紧凑，字号也比其它列表小一档（见 mobile.css 的 `.m-conv-row`）。
  */
 export function MobileDrawer({ open, onClose, version }: Props) {
@@ -38,20 +38,25 @@ export function MobileDrawer({ open, onClose, version }: Props) {
   const { pathname } = useLocation()
 
   const [conversations, setConversations] = useState<Conversation[]>([])
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  /** true 时下半部分换成「选角色新建对话」 */
+  /**
+   * true 时下半部分换成「选智能体新建对话」。
+   *
+   * 这只是**兜底**：正常情况下「＋ 新建」直接用默认智能体开一条对话，
+   * 只有还没设过默认（且可选智能体不止一个）时才退回来让用户挑一个。
+   */
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const activeId = /^\/chat\/([^/]+)/.exec(pathname)?.[1] ?? null
 
   const load = useCallback(async () => {
     try {
-      const [list, roleList] = await Promise.all([api.listConversations(), api.listRoles()])
+      const [list, agentList] = await Promise.all([api.listConversations(), api.listAgents()])
       setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
-      setRoles(roleList)
+      setAgents(agentList)
       setError(null)
     } catch (e) {
       setError(describeError(e))
@@ -67,7 +72,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
   // 抽屉开着时保持最新：另一台设备新发的消息会让标题、条数与时间自己变。
   useAutoRefresh(load, { intervalMs: 8000, enabled: open })
 
-  // 收起后回到对话列表，下次打开不会停在上次的「选角色」那一步。
+  // 收起后回到对话列表，下次打开不会停在上次的「选智能体」那一步。
   useEffect(() => {
     if (!open) setPickerOpen(false)
   }, [open])
@@ -81,15 +86,24 @@ export function MobileDrawer({ open, onClose, version }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  const start = async (roleId: string) => {
+  /**
+   * 新建对话。
+   *
+   * 不带智能体 = 用「默认智能体」（智能体卡片右上角那颗五角星），工作目录也先留空
+   * （进去后在输入框上方那两个小图标里随时改）—— 所以点一下「＋ 新建」就能直接说话。
+   */
+  const start = async (agentId?: string) => {
     setCreating(true)
     setError(null)
     try {
-      const conversation = await api.createConversation({ role_id: roleId })
+      const conversation = await api.createConversation({ agent_profile_id: agentId })
+      setPickerOpen(false)
       onClose()
       navigate(`/chat/${conversation.id}`)
     } catch (e) {
+      // 还没设过默认智能体（或者一个智能体都没有）：退回「挑一个」的老路径，并把原因说清楚。
       setError(describeError(e))
+      setPickerOpen(true)
     } finally {
       setCreating(false)
     }
@@ -133,31 +147,34 @@ export function MobileDrawer({ open, onClose, version }: Props) {
           {pickerOpen ? (
             <>
               <div className="m-drawer-section-head">
-                <span>选择角色</span>
+                <span>选择智能体</span>
                 <button className="m-icon-btn" onClick={() => setPickerOpen(false)} aria-label="返回对话列表">
                   ‹
                 </button>
               </div>
               {error && <div className="banner err">{error}</div>}
-              {roles.length === 0 ? (
+              {agents.length === 0 ? (
                 <div className="banner info" style={{ margin: '0 12px' }}>
-                  还没有角色。角色 = 人格设定 + 绑定的智能体，请先到「角色」页创建。
+                  还没有智能体。智能体 = 内核 + 网关 + 模型 + 人格设定，请先到「智能体」页创建。
                 </div>
               ) : (
                 <div className="m-drawer-scroll">
                   <div className="m-list">
-                    {roles.map((role) => (
+                    {agents.map((agent) => (
                       <button
-                        key={role.id}
+                        key={agent.id}
                         className="m-item"
                         disabled={creating}
-                        onClick={() => void start(role.id)}
+                        onClick={() => void start(agent.id)}
                       >
-                        <span className="avatar">{role.avatar}</span>
+                        <span className="avatar">{agent.avatar}</span>
                         <span className="m-item-main">
-                          <span className="m-item-title">{role.name}</span>
+                          <span className="m-item-title">
+                            {agent.name}
+                            {agent.is_default && <span className="pill brand">默认</span>}
+                          </span>
                           <span className="m-item-sub">
-                            {role.agent_name} · {role.tagline ?? '无备注'}
+                            {agent.type_name ?? agent.type_id} · {agent.tagline ?? '无备注'}
                           </span>
                         </span>
                         <span className="pill brand">开始</span>
@@ -173,10 +190,9 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                 <span>对话</span>
                 <button
                   className="btn sm primary"
-                  onClick={() => {
-                    setError(null)
-                    setPickerOpen(true)
-                  }}
+                  disabled={creating}
+                  onClick={() => void start()}
+                  title="用默认智能体开一条新对话（智能体与工作目录进去后还能改）"
                 >
                   ＋ 新建
                 </button>
@@ -186,7 +202,9 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                 {loading ? (
                   <p className="dim small">正在加载对话…</p>
                 ) : conversations.length === 0 ? (
-                  <p className="dim small">还没有对话，点「＋ 新建」选一个角色开始。</p>
+                  <p className="dim small">
+                    还没有对话：点「＋ 新建」直接用默认智能体开始，进去后还能在输入框上方换智能体与工作目录。
+                  </p>
                 ) : (
                   <div className="m-list">
                     {conversations.map((conversation) => (
@@ -206,7 +224,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                             <span className="m-item-title">{conversation.title}</span>
                             <span className="m-item-sub m-item-sub-row">
                               <span className="m-item-meta">
-                                {conversation.role_name} · {conversation.message_count} 条
+                                {conversation.agent_name} · {conversation.message_count} 条
                               </span>
                               <span className="m-item-time">{formatListTime(conversation.updated_at)}</span>
                             </span>

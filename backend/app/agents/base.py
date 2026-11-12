@@ -181,13 +181,17 @@ class AgentContext:
 
     agent_id: str
     agent_name: str
-    #: 智能体实例上合并后的 options
+    #: 智能体上合并后的 options
     options: dict[str, Any] = field(default_factory=dict)
     gateway_url: str | None = None
     api_key: str | None = None
+    #: 智能体自己的凭据（解密后的「环境变量名 → 明文」）；由框架合并进子进程环境变量，
+    #: 值不得出现在提示词、日志、事件与接口响应里（见 app.credentials）
+    credentials: dict[str, str] = field(default_factory=dict)
+    #: 所选网关声明的鉴权方式（bearer / x-api-key / query / none）；官方默认时为 None
+    auth_style: str | None = None
     model: str | None = None
-    #: 人格
-    role_name: str | None = None
+    #: 人格（智能体的系统提示词，已由框架解析成最终文本）
     system_prompt: str | None = None
     #: 工作目录
     workspace_dir: str | None = None
@@ -196,7 +200,7 @@ class AgentContext:
     #: 对话记录；注入给无法在服务端续接会话的智能体
     history: list[dict[str, str]] = field(default_factory=list)
     prompt: str = ""
-    #: 角色分配到的技能（框架按绑定智能体的类型过滤后注入）
+    #: 智能体分配到的技能（框架按内核类型过滤后注入）
     skills: list[SkillSpec] = field(default_factory=list)
     #: 框架物化好的技能主目录；适配器据此设置内核的配置目录环境变量
     skill_home_dir: str | None = None
@@ -221,6 +225,11 @@ class AgentDefinition(ABC):
     base_url_env: ClassVar[str | None] = None
     default_gateway: ClassVar[str | None] = None
     default_model: ClassVar[str | None] = None
+    #: 官方链路的协议与鉴权方式（决定「获取模型」怎么请求，以及播种官方网关的默认值）
+    protocol: ClassVar[str] = "openai"
+    default_auth_style: ClassVar[str] = "bearer"
+    #: 官方链路可选的模型清单（播种官方网关时作为默认白名单；用户可再改）
+    default_models: ClassVar[list[str]] = []
     docs_url: ClassVar[str | None] = None
     #: 该内核的官方 Logo（前端静态资源路径，如 ``/icons/kernels/claude.svg``）；
     #: ``None`` 表示界面退回只用文字名。它只是「一张图」，不参与任何运行行为。
@@ -255,6 +264,9 @@ class AgentDefinition(ABC):
             "base_url_env": self.base_url_env,
             "default_gateway": self.default_gateway,
             "default_model": self.default_model,
+            "protocol": self.protocol,
+            "default_auth_style": self.default_auth_style,
+            "default_models": list(self.default_models),
             "docs_url": self.docs_url,
             "logo": self.logo,
             "executable": self.executable,
@@ -406,7 +418,7 @@ class AgentDefinition(ABC):
         return []
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount | None:
-        """声明「把角色分配到的技能物化到哪里」；返回 ``None`` 表示该内核不支持技能。
+        """声明「把智能体分配到的技能物化到哪里」；返回 ``None`` 表示该内核不支持技能。
 
         适配器负责声明自己内核的隔离方式（配置目录、需要携带的配置文件、
         需要关闭的内核自带技能）；框架只按声明执行，不关心具体是哪个内核。

@@ -12,7 +12,7 @@
 
 * **串行**：同一时刻只有一个步骤在跑，因此"谁在等谁"永远确定。
 * **工单是唯一的交接物**：每个步骤的输入由 ``prompt.py`` 从工单字段拼出来，
-  不携带任何角色的对话原文。
+  不携带任何智能体的对话原文。
 * **每一步都落库**：``collab_steps`` 既用于展示时间线，也用于审计与重跑。
 * **预算与轮次上限**：任何一项超限都挂起（``waiting_user``）并给出可读原因，绝不静默。
 """
@@ -27,7 +27,7 @@ from sqlmodel import select
 
 from ..agents.events import AgentEvent, EventType
 from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
-from ..models import Role, utcnow
+from ..models import AgentProfile, utcnow
 from . import execution, protocol
 from .graph import (
     allowed_assignees,
@@ -107,7 +107,7 @@ class TurnError(Exception):
 
 
 class ChatError(Exception):
-    """入口角色聊天没法开始（没写内容、图不合法、上一条还在回复等）。"""
+    """入口智能体聊天没法开始（没写内容、图不合法、上一条还在回复等）。"""
 
 
 @dataclass
@@ -121,7 +121,7 @@ class PreparedTurn:
 
 @dataclass
 class PreparedChat:
-    """一次入口角色聊天：已经落库的用户消息 + 拼好的 prompt。"""
+    """一次入口智能体聊天：已经落库的用户消息 + 拼好的 prompt。"""
 
     run: CollabRun
     team: CollabTeam
@@ -164,7 +164,7 @@ async def _tickets(session: AsyncSession, run_id: str) -> list[CollabTicket]:
 async def _pending_question_ticket(session: AsyncSession, run_id: str) -> CollabTicket | None:
     """最近一张在等用户回答的工单（``state=blocked`` 且 ``result`` 里有 question）。
 
-    入口角色提问时工单会挂起；但提问的**未必是根工单** —— 上抛件是在发起人手里转成
+    入口智能体提问时工单会挂起；但提问的**未必是根工单** —— 上抛件是在发起人手里转成
     ``ask_user`` 的。用户回答后要把它交回提问者，所以这里不写死 ``parent_ticket_id is None``。
     """
     rows = (
@@ -226,7 +226,7 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     text = (content or "").strip()
     tickets = await _tickets(session, run_id)
     root = next((t for t in tickets if t.parent_ticket_id is None), None)
-    # 用户可能在回答**某个角色**的提问；上抛件会在发起人手里 ask_user，未必是根工单，
+    # 用户可能在回答**某个智能体**的提问；上抛件会在发起人手里 ask_user，未必是根工单，
     # 所以先找出「最近一张在等用户回答的工单」，下面优先把它重新打开。
     asked = await _pending_question_ticket(session, run_id) if text else None
 
@@ -252,12 +252,12 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
 
     if root is None:
         if not text:
-            raise TurnError("请先告诉入口角色你想做什么")
+            raise TurnError("请先告诉入口智能体你想做什么")
         root = CollabTicket(
             run_id=run.id,
             parent_ticket_id=None,
-            from_role_id=None,
-            to_role_id=entry.role_id,
+            from_agent_profile_id=None,
+            to_agent_profile_id=entry.agent_profile_id,
             owner_key=entry.key,
             holder_key=entry.key,
             title=_first_line(text),
@@ -280,7 +280,7 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
         asked.updated_at = utcnow()
         session.add(asked)
     elif text and root.state == TicketState.BLOCKED.value:
-        # 入口角色问过话，用户现在回答了 → 工单重新回到提问者（当前持有者）手里
+        # 入口智能体问过话，用户现在回答了 → 工单重新回到提问者（当前持有者）手里
         root.state = TicketState.OPEN.value
         # 上一轮的提问已经答复，清掉卡片数据；否则下一次因别的原因挂起时会把旧卡片带出来
         result = dict(root.result or {})
@@ -288,11 +288,11 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
         result.pop("options", None)
         root.result = result
     elif text and root.state == TicketState.DONE.value:
-        # 运行完成后用户仍可继续找入口角色：重新打开根工单，让领导者接手这次追问。
+        # 运行完成后用户仍可继续找入口智能体：重新打开根工单，让领导者接手这次追问。
         # 历史工单与产出保留，后续派活会继续挂在同一棵工单树上。
         root.state = TicketState.OPEN.value
         root.holder_key = entry.key
-        root.to_role_id = entry.role_id
+        root.to_agent_profile_id = entry.agent_profile_id
         root.closed_at = None
         root.verdict = None
         # 新一轮收尾要重新汇报一次：清掉上一轮的汇报标记（用户追问 → 干完 → 再来一次汇报）
@@ -307,7 +307,7 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     return PreparedTurn(run=run, team=team, graph=graph, entry=entry, content=text or None)
 
 
-# --- 入口角色常驻聊天 -------------------------------------------------------
+# --- 入口智能体常驻聊天 -------------------------------------------------------
 
 
 async def _next_chat_sequence(session: AsyncSession, run_id: str) -> int:
@@ -322,7 +322,7 @@ async def _next_chat_sequence(session: AsyncSession, run_id: str) -> int:
 async def _chat_history(
     session: AsyncSession, run_id: str, limit: int = 20
 ) -> list[CollabMessage]:
-    """最近若干条聊天，按时间正序返回（只给入口角色本人回放）。"""
+    """最近若干条聊天，按时间正序返回（只给入口智能体本人回放）。"""
     rows = list(
         (
             await session.execute(
@@ -356,7 +356,7 @@ async def _active_step_label(
     if step is None:
         return None
     node = node_map(graph).get(step.role_key)
-    label = _node_label(node) if node else (step.role_key or "某个角色")
+    label = _node_label(node) if node else (step.role_key or "某个智能体")
     ticket = await session.get(CollabTicket, step.ticket_id) if step.ticket_id else None
     if ticket is not None:
         return f"{label}（{step.role_key}）正在处理《{ticket.title}》"
@@ -386,7 +386,7 @@ def _chat_ticket_view(ticket: CollabTicket, labels: dict[str, str]) -> ChatTicke
 async def prepare_chat(
     session: AsyncSession, run_id: str, content: str, attachments: Sequence[str] | None = None
 ) -> PreparedChat:
-    """校验并落库一条用户消息，拼出入口角色这次的聊天 prompt。
+    """校验并落库一条用户消息，拼出入口智能体这次的聊天 prompt。
 
     这里刻意**不碰工单状态**，也不检查主流程是否正在跑：CEO 的聊天通道与工单推进并行，
     是用户随时能找到负责人的唯一入口。
@@ -519,7 +519,7 @@ async def _apply_chat_update(
 async def consume_chat(
     session: AsyncSession, prepared: PreparedChat
 ) -> AsyncIterator[protocol.CollabEvent]:
-    """执行入口角色的一次聊天回复，并把可选的 chat_update 落进工单。"""
+    """执行入口智能体的一次聊天回复，并把可选的 chat_update 落进工单。"""
     run = prepared.run
     entry = prepared.entry
     assistant = CollabMessage(
@@ -547,20 +547,18 @@ async def consume_chat(
         yield protocol.chat_finished(assistant.id, "error", error=str(exc))
         return
 
-    assistant.role_id = prepared_step.role.id
-    assistant.agent_id = prepared_step.agent.id
+    assistant.agent_profile_id = prepared_step.profile.id
     session.add(assistant)
     await session.commit()
     yield protocol.chat_started(
         assistant.id,
         run.id,
-        prepared_step.role.name,
-        prepared_step.agent.name,
+        prepared_step.profile.name,
         entry.key,
     )
 
     handle = execution.chat_registry.register(
-        run.id, f"chat:{assistant.id}", prepared_step.agent.name, entry.key
+        run.id, f"chat:{assistant.id}", prepared_step.profile.name, entry.key
     )
     text_parts: list[str] = []
     parts: list[dict[str, Any]] = []
@@ -658,7 +656,7 @@ async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIt
             state.stop, state.reason, state.budget_exhausted = True, reason, True
             break
 
-        # 根工单收尾后，把最后一步交回入口角色：让它把结论汇报给用户（主会话里唯一看得到的人）
+        # 根工单收尾后，把最后一步交回入口智能体：让它把结论汇报给用户（主会话里唯一看得到的人）
         async for event in _hand_back_to_entry(session, prepared, run):
             yield event
 
@@ -770,7 +768,7 @@ async def _run_step(
         if label and label != key and label_counts[label] == 1
     }
 
-    # 收尾汇报（见 _hand_back_to_entry）：根工单已完成、现在轮到入口角色对用户交代结论。
+    # 收尾汇报（见 _hand_back_to_entry）：根工单已完成、现在轮到入口智能体对用户交代结论。
     # 这一步只允许 done / ask_user —— 活已经干完了，绝不允许从这里重新派活。
     closing_report = (
         ticket.parent_ticket_id is None
@@ -842,25 +840,24 @@ async def _run_step(
         )
     except execution.StepError as exc:
         step.status, step.error, step.finished_at = "error", str(exc), utcnow()
-        step.role_id, step.agent_id = node.role_id, None
+        step.agent_profile_id = node.agent_profile_id
         session.add(step)
         await session.commit()
         yield protocol.step_finished(step.id, "error", error=str(exc))
         state.stop, state.reason, state.status = True, str(exc), RunStatus.ERROR.value
         return
 
-    step.role_id = prepared_step.role.id
-    step.agent_id = prepared_step.agent.id
+    step.agent_profile_id = prepared_step.profile.id
     session.add(step)
     await session.commit()
 
     yield protocol.step_started(
-        step.id, run.id, ticket.id, node.key, node.duty.value, prepared_step.role.name, prepared_step.agent.name
+        step.id, run.id, ticket.id, node.key, node.duty.value, prepared_step.profile.name
     )
     for warning in prepared_step.warnings:
         yield protocol.notice(warning, "warn", step_id=step.id)
 
-    handle = execution.registry.register(run.id, step.id, prepared_step.agent.name, node.key)
+    handle = execution.registry.register(run.id, step.id, prepared_step.profile.name, node.key)
     text_parts: list[str] = []
     parts: list[dict[str, Any]] = []
     usage: dict[str, Any] = {}
@@ -940,7 +937,7 @@ async def _run_step(
 
     if audit and not audit.get("unchanged", True):
         yield protocol.notice(
-            f"越权提醒：「{prepared_step.role.name}」本该只读，但共享工作目录有 "
+            f"越权提醒：「{prepared_step.profile.name}」本该只读，但共享工作目录有 "
             f"{audit.get('count')} 个文件发生变化（审计已记录）",
             "warn",
             step_id=step.id,
@@ -1090,8 +1087,8 @@ async def _ticket_history(session: AsyncSession, ticket_id: str) -> list[History
 # --- 收尾汇报 ---------------------------------------------------------------
 
 
-async def _last_role_step(session: AsyncSession, ticket_id: str) -> CollabStep | None:
-    """这张工单上最后一次**角色**发言（用户自己的发言不算）。"""
+async def _last_agent_step(session: AsyncSession, ticket_id: str) -> CollabStep | None:
+    """这张工单上最后一次**智能体**发言（用户自己的发言不算）。"""
     rows = (
         await session.execute(
             select(CollabStep)
@@ -1143,7 +1140,7 @@ def _child_digest_lines(children: Sequence[CollabTicket]) -> list[str]:
     """把子工单压成几行**结构化事实**，让上游看得见「我派出去的活交回了什么」。
 
     与 :func:`_run_digest` 同一套约束：只取工单字段（标题 / 状态 / 最后经手 / 交付摘要 /
-    产出文件），不取任何角色的对话原文 —— 与「只传工单」是同一套隔离。
+    产出文件），不取任何智能体的对话原文 —— 与「只传工单」是同一套隔离。
     """
     lines: list[str] = []
     for child in children:
@@ -1164,9 +1161,9 @@ def _child_digest_lines(children: Sequence[CollabTicket]) -> list[str]:
 
 
 def _run_digest(tickets: Sequence[CollabTicket], reporting_id: str | None = None) -> list[str]:
-    """把整次协作的结果压成几行**结构化事实**，供入口角色向用户汇报。
+    """把整次协作的结果压成几行**结构化事实**，供入口智能体向用户汇报。
 
-    只取工单字段（标题 / 状态 / 交付摘要 / 产出文件），不取任何角色的对话原文 ——
+    只取工单字段（标题 / 状态 / 交付摘要 / 产出文件），不取任何智能体的对话原文 ——
     与「只传工单」是同一套约束。``reporting_id`` 是本次汇报的那张工单：它为了汇报被重新
     打开了，清单里仍按「已收尾」表述，免得模型以为活还没干完。
     """
@@ -1192,15 +1189,15 @@ def _run_digest(tickets: Sequence[CollabTicket], reporting_id: str | None = None
 async def _hand_back_to_entry(
     session: AsyncSession, prepared: PreparedTurn, run: CollabRun
 ) -> AsyncIterator[protocol.CollabEvent]:
-    """根工单收尾后，把最后一步交回**入口角色**：由它把结论汇报给用户。
+    """根工单收尾后，把最后一步交回**入口智能体**：由它把结论汇报给用户。
 
-    工单沿着交接链一路往下走时，用户能看到的只有入口角色那条主会话；活干完了如果没人回来说一声，
-    用户在界面上就只能自己去翻工单树。所以这里在「根工单已完成」时把工单重新交回入口角色，
+    工单沿着交接链一路往下走时，用户能看到的只有入口智能体那条主会话；活干完了如果没人回来说一声，
+    用户在界面上就只能自己去翻工单树。所以这里在「根工单已完成」时把工单重新交回入口智能体，
     让它用一次 ``done`` 收尾（prompt 会要求它讲清结论，并禁止重新派活）。
 
     三条护栏：
     * 只有根工单收尾才汇报：子工单各归各的发起人（沿用「谁拆的谁汇总」）；
-    * 最后拍板的就是入口角色本人时不再汇报（它那一步已经把话说给用户听了）；
+    * 最后拍板的就是入口智能体本人时不再汇报（它那一步已经把话说给用户听了）；
     * ``report_at`` 保证每轮收尾只汇报一次（用户追问重新开启后才清零）。
     """
     tickets = await _tickets(session, run.id)
@@ -1209,13 +1206,13 @@ async def _hand_back_to_entry(
         return
 
     entry = prepared.entry
-    last = await _last_role_step(session, root.id)
+    last = await _last_agent_step(session, root.id)
     if last is None or last.role_key == entry.key:
         return
 
     root.state = TicketState.OPEN.value
     root.holder_key = entry.key
-    root.to_role_id = entry.role_id
+    root.to_agent_profile_id = entry.agent_profile_id
     root.closed_at = None
     root.report_at = utcnow()
     root.updated_at = utcnow()
@@ -1338,8 +1335,8 @@ async def _apply_action(
             child = CollabTicket(
                 run_id=run.id,
                 parent_ticket_id=ticket.id,
-                from_role_id=node.role_id,
-                to_role_id=target.role_id,
+                from_agent_profile_id=node.agent_profile_id,
+                to_agent_profile_id=target.agent_profile_id,
                 owner_key=node.key,
                 holder_key=target.key,
                 title=title,
@@ -1364,7 +1361,7 @@ async def _apply_action(
         # handoff：同一张工单换人做
         ticket.owner_key = ticket.owner_key or node.key
         ticket.holder_key = target.key
-        ticket.to_role_id = target.role_id
+        ticket.to_agent_profile_id = target.agent_profile_id
         ticket.state = TicketState.WORKING.value
         if order.ticket and order.ticket.title:
             ticket.title = order.ticket.title
@@ -1387,7 +1384,7 @@ async def _apply_action(
             ticket.state = TicketState.REVIEW.value
             ticket.holder_key = reviewer
             if target is not None:
-                ticket.to_role_id = target.role_id
+                ticket.to_agent_profile_id = target.agent_profile_id
         else:
             ticket.state = TicketState.DONE.value
             ticket.closed_at = utcnow()
@@ -1452,7 +1449,7 @@ async def _apply_action(
         ticket.verdict = VERDICT_CHANGES
         ticket.review_comment = order.review_comment
         ticket.holder_key = target_node.key
-        ticket.to_role_id = target_node.role_id
+        ticket.to_agent_profile_id = target_node.agent_profile_id
         ticket.updated_at = utcnow()
         session.add(ticket)
         await session.commit()
@@ -1482,7 +1479,7 @@ async def _apply_action(
         return
 
     if action is TicketAction.ASK_USER:
-        question = order.question or "入口角色需要你补充信息"
+        question = order.question or "入口智能体需要你补充信息"
         options = [option.to_dict() for option in order.options]
         ticket.state = TicketState.BLOCKED.value
         ticket.result = {**(ticket.result or {}), "question": question, "options": options}
@@ -1505,7 +1502,7 @@ async def _apply_action(
                 ticket,
                 state,
                 "这张工单没有可接手的上一级（发起人已不在图里，或已经到顶）："
-                "需要用户拍板的事请让入口角色用 ask_user 交给用户",
+                "需要用户拍板的事请让入口智能体用 ask_user 交给用户",
             )
             yield protocol.ticket_updated(_ticket_payload(ticket))
             return
@@ -1517,7 +1514,7 @@ async def _apply_action(
         target = nodes[target_key]
         ticket.state = TicketState.ESCALATED.value
         ticket.holder_key = target_key
-        ticket.to_role_id = target.role_id
+        ticket.to_agent_profile_id = target.agent_profile_id
         ticket.escalation = {
             "from": node.key,
             "reason": order.reason or "",
@@ -1635,8 +1632,8 @@ def _ticket_payload(ticket: CollabTicket) -> dict[str, Any]:
         "id": ticket.id,
         "run_id": ticket.run_id,
         "parent_ticket_id": ticket.parent_ticket_id,
-        "from_role_id": ticket.from_role_id,
-        "to_role_id": ticket.to_role_id,
+        "from_agent_profile_id": ticket.from_agent_profile_id,
+        "to_agent_profile_id": ticket.to_agent_profile_id,
         "owner_key": ticket.owner_key,
         "holder_key": ticket.holder_key,
         "submitter_key": ticket.submitter_key,

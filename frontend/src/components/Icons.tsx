@@ -37,6 +37,43 @@ function Icon({ size = 20, className, children }: IconProps & { children: ReactN
   )
 }
 
+/** 文件夹：聊天页输入框上方「选工作目录」那个小图标（纯线条，跟文字同色）。 */
+export function FolderIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3.2 7.6a2 2 0 0 1 2-2h3.1a2 2 0 0 1 1.6.8l.9 1.2h8a2 2 0 0 1 2 2v6.8a2 2 0 0 1-2 2H5.2a2 2 0 0 1-2-2z" />
+      <path d="M3.4 10.4h17.2" />
+    </Icon>
+  )
+}
+
+/** 智能体：一个圆头机器人（天线 + 两只眼睛 + 两侧耳朵），同样跟文字同色。 */
+export function AgentIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="4.2" y="8.4" width="15.6" height="11" rx="3.4" />
+      <path d="M12 8.2V5.6" />
+      <circle cx="12" cy="4.3" r="1.2" />
+      <path d="M9.3 13.2v1.6" />
+      <path d="M14.7 13.2v1.6" />
+      <path d="M3 12.6v2.8" />
+      <path d="M21 12.6v2.8" />
+    </Icon>
+  )
+}
+
+/** 五角星：实心 = 默认智能体（新建对话直接用它），空心 = 不是。 */
+export function StarIcon({ on = false, ...props }: IconProps & { on?: boolean }) {
+  return (
+    <Icon {...props}>
+      <path
+        d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.8-5.2-2.75L6.8 19.65l1-5.8-4.2-4.1 5.8-.85z"
+        fill={on ? 'currentColor' : 'none'}
+      />
+    </Icon>
+  )
+}
+
 /** 喇叭：关闭时只有喇叭本体，开启时多两道声波（不靠颜色也能看出状态）。 */
 export function SpeakerIcon({ on = false, ...props }: IconProps & { on?: boolean }) {
   return (

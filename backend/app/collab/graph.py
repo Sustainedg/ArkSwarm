@@ -139,7 +139,7 @@ def effective_output_contract(
 
     三条规则只在这里给出，提示词与运行时校验才会一致：
 
-    * ``ask_user`` 只有入口节点能用（用户只和入口角色对话）——非入口节点即使在编辑器里
+    * ``ask_user`` 只有入口节点能用（用户只和入口智能体对话）——非入口节点即使在编辑器里
       勾了它也要剔除，避免「提示词说能做、运行时又报只有入口能提问」的自相矛盾；
     * ``escalate`` 反过来：**非入口节点无条件保留**。它是「我搞不定」的保底出路，
       不能被节点契约配成死路（真实事故：实施者的生效动作只剩 done，卡住后只能硬撑）；
@@ -227,13 +227,13 @@ def _has_assign_cycle(graph: GraphSpec, keys: set[str]) -> list[str]:
 
 
 def validate_graph(
-    graph: GraphSpec, entry_key: str | None, known_role_ids: set[str] | None = None
+    graph: GraphSpec, entry_key: str | None, known_agent_profile_ids: set[str] | None = None
 ) -> GraphValidation:
     errors: list[GraphIssue] = []
     warnings: list[GraphIssue] = []
 
     if not graph.nodes:
-        errors.append(GraphIssue(code="graph.empty", message="编排图还没有节点，先拖一个角色进来"))
+        errors.append(GraphIssue(code="graph.empty", message="编排图还没有节点，先拖一个智能体进来"))
         return GraphValidation.build(errors, warnings)
 
     nodes = node_map(graph)
@@ -246,13 +246,13 @@ def validate_graph(
                 )
             seen.add(node.key)
 
-    if known_role_ids is not None:
+    if known_agent_profile_ids is not None:
         for node in graph.nodes:
-            if node.role_id not in known_role_ids:
+            if node.agent_profile_id not in known_agent_profile_ids:
                 errors.append(
                     GraphIssue(
-                        code="node.role_missing",
-                        message=f"节点「{node.label or node.key}」绑定的角色已经不存在了，请重新选择",
+                        code="node.agent_missing",
+                        message=f"节点「{node.label or node.key}」绑定的智能体已经不存在了，请重新选择",
                         node_key=node.key,
                     )
                 )
@@ -305,7 +305,7 @@ def validate_graph(
     # 入口
     entry = entry_node(graph, entry_key)
     if not entry_key:
-        errors.append(GraphIssue(code="entry.missing", message="还没有指定入口节点（唯一能和用户对话的角色）"))
+        errors.append(GraphIssue(code="entry.missing", message="还没有指定入口节点（唯一能和用户对话的智能体）"))
     elif entry is None:
         errors.append(GraphIssue(code="entry.not_found", message=f"入口节点不存在：{entry_key}"))
     elif entry.duty is not Duty.COORDINATOR:

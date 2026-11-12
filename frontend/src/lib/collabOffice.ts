@@ -11,7 +11,7 @@
  *
  * 这里不碰 DOM、不发请求，桌面端与移动端共用。
  */
-import type { CollabRoleState } from './collabProgress'
+import type { CollabAgentState } from './collabProgress'
 
 /** 办公室画布的尺寸（也是背景图的 viewBox）。 */
 export const OFFICE_WIDTH = 1600
@@ -120,7 +120,7 @@ export interface OfficeStatusTone {
   label: string
 }
 
-export const OFFICE_STATUS_TONE: Record<CollabRoleState, OfficeStatusTone> = {
+export const OFFICE_STATUS_TONE: Record<CollabAgentState, OfficeStatusTone> = {
   active: { tone: 'working', label: '在线工作中' },
   error: { tone: 'busy', label: '忙碌 / 出问题了' },
   waiting: { tone: 'ask', label: '在等你决定' },

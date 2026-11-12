@@ -6,20 +6,20 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { ACTIONS } from '../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../lib/collabStream'
-import { stepHasOutput, stepStatusHint, type CollabRoleProgress } from '../lib/collabProgress'
-import { buildRoleThread, ticketHighlights } from '../lib/collabThread'
+import { stepHasOutput, stepStatusHint, type CollabAgentProgress } from '../lib/collabProgress'
+import { buildAgentThread, ticketHighlights } from '../lib/collabThread'
 import type { CollabStep, CollabTicket } from '../lib/types'
 import { ConversationThread, type ConversationThreadItem } from './ConversationThread'
 import type { RenderMessage } from './MessageView'
 
 interface Props {
-  node: CollabRoleProgress
-  roster: CollabRoleProgress[]
+  node: CollabAgentProgress
+  roster: CollabAgentProgress[]
   steps: CollabStep[]
   tickets: CollabTicket[]
   live: LiveStep | null
   streamed: FinishedStep[]
-  /** 容器类名：桌面端用 `collab-role-thread`，移动端用 `m-collab-role-thread` */
+  /** 容器类名：桌面端用 `collab-agent-thread`，移动端用 `m-collab-agent-thread` */
   className?: string
   empty?: ReactNode
 }
@@ -33,7 +33,7 @@ const STEP_STATUS_LABELS: Record<string, string> = {
   cancelled: '已取消',
 }
 
-export function CollabRoleThread({
+export function CollabAgentThread({
   node, roster, steps, tickets, live, streamed, className, empty,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -54,7 +54,7 @@ export function CollabRoleThread({
   const labelOf = (key: string) => roster.find((item) => item.key === key)?.label ?? key
   const avatarOf = (key: string) => roster.find((item) => item.key === key)?.avatar ?? '🤖'
   const thread = useMemo(
-    () => buildRoleThread({ nodeKey: node.key, isEntry: node.isEntry, steps, tickets, labelOf, avatarOf }),
+    () => buildAgentThread({ nodeKey: node.key, isEntry: node.isEntry, steps, tickets, labelOf, avatarOf }),
     // labelOf/avatarOf 只是 roster 的查询，依赖 roster 即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [node.key, node.isEntry, steps, tickets, roster],
@@ -89,7 +89,7 @@ export function CollabRoleThread({
       threadItems.push({
         id: entry.id,
         custom: (
-          <div className="bubble-row user collab-role-handoff-row">
+          <div className="bubble-row user collab-agent-handoff-row">
             <div className="avatar user">{entry.fromAvatar}</div>
             <div className="bubble">
               <div className="bubble-head">
@@ -97,11 +97,11 @@ export function CollabRoleThread({
                 <span>→ {node.label}</span>
                 <span className="pill brand">交接</span>
               </div>
-              <div className="collab-role-handoff">
-                {entry.text && <div className="collab-role-handoff-text">{entry.text}</div>}
+              <div className="collab-agent-handoff">
+                {entry.text && <div className="collab-agent-handoff-text">{entry.text}</div>}
                 {entry.ticket && (
-                  <div className="collab-role-handoff-ticket">
-                    <div className="collab-role-handoff-title">📋 {entry.ticket.title}</div>
+                  <div className="collab-agent-handoff-ticket">
+                    <div className="collab-agent-handoff-title">📋 {entry.ticket.title}</div>
                     {highlights.map((line) => (
                       <div className="dim small" key={line}>{line}</div>
                     ))}
@@ -133,7 +133,7 @@ export function CollabRoleThread({
         </>
       ),
       custom: hint ? (
-        <div className={`collab-role-placeholder${step.status === 'streaming' ? ' live' : ''}`}>{hint}</div>
+        <div className={`collab-agent-placeholder${step.status === 'streaming' ? ' live' : ''}`}>{hint}</div>
       ) : undefined,
       message: hint ? undefined : {
         id: step.id,

@@ -1,6 +1,6 @@
 """工单协议：三级容错解析、语义校验与交付载荷渲染。
 
-这套用例是整条协作链路的保险丝 —— 解析器一旦开始「猜」，角色之间就会传错话。
+这套用例是整条协作链路的保险丝 —— 解析器一旦开始「猜」，智能体之间就会传错话。
 """
 from __future__ import annotations
 
@@ -218,7 +218,7 @@ def test_step_prompt_hides_ask_user_from_non_entry_nodes():
 
     node = NodeSpec(
         key="dev",
-        role_id="r-dev",
+        agent_profile_id="r-dev",
         duty=Duty.ENGINEER,
         output_contract=[TicketAction.DONE, TicketAction.ASK_USER],
     )
@@ -275,7 +275,7 @@ def test_validate_order_escalate_needs_reason_and_barred_at_the_top():
 
 
 def test_step_prompt_for_escalated_ticket_bars_delegate():
-    """上抛件：提示词不许再教它往下派；到了入口角色则要求用 ask_user 交给用户。
+    """上抛件：提示词不许再教它往下派；到了入口智能体则要求用 ask_user 交给用户。
 
     真实事故：UI 卡在「环境禁止执行」后只能把失败写进 done，CTO 手里没有上报动作，
     只好把同一件事改写成「静态核对」又派给码农 —— 阻塞原地转了一圈。
@@ -283,8 +283,8 @@ def test_step_prompt_for_escalated_ticket_bars_delegate():
     from app.collab.prompt import TicketView, build_step_prompt
     from app.collab.schemas import Duty, NodeSpec, TicketState
 
-    cto = NodeSpec(key="cto", role_id="r-cto", duty=Duty.COORDINATOR)
-    ceo = NodeSpec(key="ceo", role_id="r-ceo", duty=Duty.COORDINATOR)
+    cto = NodeSpec(key="cto", agent_profile_id="r-cto", duty=Duty.COORDINATOR)
+    ceo = NodeSpec(key="ceo", agent_profile_id="r-ceo", duty=Duty.COORDINATOR)
     ticket = TicketView(
         id="t1",
         title="跑运行时验收",
@@ -319,7 +319,7 @@ def test_step_prompt_for_escalated_ticket_bars_delegate():
 
     top = prompt(ceo, is_entry=True)
     assert "ask_user" in top
-    # 已经到顶：入口角色的动作里不再有 escalate，只剩「转给用户」
+    # 已经到顶：入口智能体的动作里不再有 escalate，只剩「转给用户」
     top_actions = next(line for line in top.splitlines() if "允许的动作" in line)
     assert "escalate" not in top_actions and "ask_user" in top_actions
 
@@ -451,7 +451,7 @@ def test_ticket_draft_keeps_description_field():
     assert with_goal.requirements == ["细节一", "细节二"]
 
 
-# --- 入口角色聊天里的需求细化块 ------------------------------------------------
+# --- 入口智能体聊天里的需求细化块 ------------------------------------------------
 
 
 def test_chat_update_is_optional_and_stripped_from_display_text():

@@ -15,9 +15,9 @@ import httpx
 from app.collab import graph as graph_service
 from app.collab.schemas import Duty, EdgeKind, EdgeSpec, GraphSpec, NodeSpec
 from app.db import SessionLocal
-from app.models import AgentInstance, Role
+from app.models import AgentProfile
+from helpers import collab_options
 
-FAKE_AGENT = str(Path(__file__).parent / "fakes" / "fake_collab_agent.py")
 
 ROLE_NAMES = (("ceo", "CEO"), ("cto", "CTO"), ("se", "SE"), ("qa", "审查员"))
 
@@ -54,40 +54,37 @@ async def read_sse(response: httpx.Response) -> list[dict]:
 
 
 async def make_env(script: dict, tmp_path: Path) -> dict:
-    """建一个假智能体 + 四个角色；剧本决定每个岗位每次说什么。"""
+    """建一个假智能体 + 四个智能体；剧本决定每个岗位每次说什么。"""
     script_path = tmp_path / "script.json"
     script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     async with SessionLocal() as session:
-        agent = AgentInstance(
+        anchor = AgentProfile(
             name="假协作智能体",
             type_id="custom-cli",
-            options={
-                "command": sys.executable,
-                "args": [FAKE_AGENT, str(script_path), str(state_dir)],
-                "prompt_mode": "stdin",
-                "output_format": "jsonl",
-                "text_path": "delta",
-                "delta_mode": True,
-                "session_path": "session_id",
-                "usage_path": "usage",
-            },
+            options=collab_options(script_path, state_dir),
         )
-        session.add(agent)
+        session.add(anchor)
         await session.commit()
-        await session.refresh(agent)
+        await session.refresh(anchor)
 
         roles: dict[str, str] = {}
         for key, name in ROLE_NAMES:
-            role = Role(name=name, avatar="🧑", system_prompt=f"你是 {name}。", agent_id=agent.id)
+            role = AgentProfile(
+                name=name,
+                avatar="🧑",
+                system_prompt=f"你是 {name}。",
+                type_id="custom-cli",
+                options=collab_options(script_path, state_dir),
+            )
             session.add(role)
             await session.commit()
             await session.refresh(role)
             roles[key] = role.id
 
-    return {"roles": roles, "state_dir": state_dir}
+    return {"agent_profiles": roles, "state_dir": state_dir}
 
 
 async def create_team(
@@ -115,10 +112,10 @@ def linear_graph(roles: dict[str, str], rework_max_rounds: int = 0) -> GraphSpec
     """CEO → CTO → SE，SE 提交给审查员，审查员打回 SE（可带边级返工上限）。"""
     return GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR),
-            NodeSpec(key="cto", role_id=roles["cto"], label="CTO", duty=Duty.COORDINATOR),
-            NodeSpec(key="se", role_id=roles["se"], label="SE", duty=Duty.ENGINEER),
-            NodeSpec(key="qa", role_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
+            NodeSpec(key="ceo", agent_profile_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="cto", agent_profile_id=roles["cto"], label="CTO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=roles["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="qa", agent_profile_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
         ],
         edges=[
             EdgeSpec(from_key="ceo", to_key="cto", kind=EdgeKind.ASSIGN),
@@ -147,7 +144,7 @@ async def test_edge_max_rounds_cuts_off_endless_rework(client: httpx.AsyncClient
         },
         tmp_path,
     )
-    team = await create_team(client, linear_graph(env["roles"], rework_max_rounds=1))
+    team = await create_team(client, linear_graph(env["agent_profiles"], rework_max_rounds=1))
     run_id, events = await start_run(client, team["id"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
@@ -183,9 +180,9 @@ async def test_ticket_depth_guard_stops_nested_splitting(client: httpx.AsyncClie
     )
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=env["roles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="ceo", agent_profile_id=env["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
             *[
-                NodeSpec(key=key, role_id=env["roles"]["se"], label=key.upper(), duty=Duty.ENGINEER)
+                NodeSpec(key=key, agent_profile_id=env["agent_profiles"]["se"], label=key.upper(), duty=Duty.ENGINEER)
                 for key in chain[1:]
             ],
         ],
@@ -219,8 +216,8 @@ async def test_duplicate_child_titles_guard(client: httpx.AsyncClient, tmp_path:
     )
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=env["roles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
-            NodeSpec(key="se", role_id=env["roles"]["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="ceo", agent_profile_id=env["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=env["agent_profiles"]["se"], label="SE", duty=Duty.ENGINEER),
         ],
         edges=[EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN)],
     )
@@ -250,8 +247,8 @@ async def test_duplicate_child_titles_guard_catches_tail_tweaks(client: httpx.As
     )
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=env["roles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
-            NodeSpec(key="se", role_id=env["roles"]["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="ceo", agent_profile_id=env["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=env["agent_profiles"]["se"], label="SE", duty=Duty.ENGINEER),
         ],
         edges=[EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN)],
     )
@@ -276,7 +273,7 @@ async def test_run_detail_reports_budget(client: httpx.AsyncClient, tmp_path: Pa
         "max_tokens": 0,
         "timeout_seconds": 600,
     }
-    team = await create_team(client, linear_graph(env["roles"]), budget=budget)
+    team = await create_team(client, linear_graph(env["agent_profiles"]), budget=budget)
     run_id, _ = await start_run(client, team["id"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()

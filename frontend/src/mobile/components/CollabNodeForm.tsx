@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { DynamicForm } from '../../components/DynamicForm'
 import { ACTIONS, DUTIES, SCOPES, sanitizeKey } from '../../lib/collabDraft'
 import type {
-  AgentType, CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope, Role,
+  AgentType, CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope, AgentProfile,
 } from '../../lib/types'
 
 
@@ -10,11 +10,11 @@ import type {
  * 协作「岗位」表单（移动端）：底部弹层里的内容，本地编辑、点「保存岗位」才写回草稿。
  *
  * 只编辑这一个节点；改名会同步连线，所以 key 输入框每次按键都按后端规则规整（`sanitizeKey`）。
- * 「参数覆盖」直接复用 `DynamicForm`（按该角色绑定智能体类型的 `config_fields` 渲染）。
+ * 「参数覆盖」直接复用 `DynamicForm`（按该智能体类型的 `config_fields` 渲染）。
  */
 export function CollabNodeForm({
   node,
-  roles,
+  agents,
   agentTypes,
   isEntry,
   onSave,
@@ -22,7 +22,7 @@ export function CollabNodeForm({
   onSetEntry,
 }: {
   node: CollabNode
-  roles: Role[]
+  agents: AgentProfile[]
   agentTypes: AgentType[]
   isEntry: boolean
   onSave: (next: CollabNode) => void
@@ -31,8 +31,8 @@ export function CollabNodeForm({
 }) {
   const [form, setForm] = useState<CollabNode>(node)
   const [keyInput, setKeyInput] = useState(node.key)
-  const role = roles.find((item) => item.id === form.role_id)
-  const type = agentTypes.find((item) => item.id === role?.agent_type_id)
+  const agent = agents.find((item) => item.id === form.agent_profile_id)
+  const type = agentTypes.find((item) => item.id === agent?.type_id)
 
   const set = (next: Partial<CollabNode>) => setForm((prev) => ({ ...prev, ...next }))
   // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
@@ -50,16 +50,16 @@ export function CollabNodeForm({
   return (
     <>
       <div className="field">
-        <label className="field-label">角色</label>
-        <select className="select" value={form.role_id} onChange={(event) => set({ role_id: event.target.value })}>
-          {roles.map((item) => (
+        <label className="field-label">智能体</label>
+        <select className="select" value={form.agent_profile_id} onChange={(event) => set({ agent_profile_id: event.target.value })}>
+          {agents.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.avatar} {item.name} · {item.agent_name}
+              {item.avatar} {item.name} · {item.type_name ?? item.type_id}
             </option>
           ))}
         </select>
         <span className="field-help">
-          {role ? `智能体：${role.agent_name}（${role.agent_type_id}）` : '该角色已不存在，请重新选择'}
+          {agent ? `内核：${agent.type_name ?? agent.type_id} · 模型：${agent.model ?? '默认'}` : '该智能体已不存在，请重新选择'}
         </span>
       </div>
 
@@ -102,7 +102,7 @@ export function CollabNodeForm({
           style={{ minHeight: 74 }}
           value={form.instructions}
           onChange={(event) => set({ instructions: event.target.value })}
-          placeholder="追加在角色人格之后，例如：负责拆解任务与汇总"
+          placeholder="追加在智能体人格之后，例如：负责拆解任务与汇总"
         />
       </div>
 

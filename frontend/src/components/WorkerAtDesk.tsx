@@ -4,10 +4,10 @@
  * 人本身来自共享组件 `CollabWorker`（等距办公室地图也用同一份结构）；这里补上它面前的那张桌子。
  * 外观尺寸由各自的样式表决定（`index.css` / `mobile.css`），状态差靠外层 `state-*` 类名。
  */
-import type { CollabRoleState } from '../lib/collabProgress'
+import type { CollabAgentState } from '../lib/collabProgress'
 import { CollabWorker } from './CollabWorker'
 
-export function WorkerAtDesk({ state, live = false }: { state: CollabRoleState; live?: boolean }) {
+export function WorkerAtDesk({ state, live = false }: { state: CollabAgentState; live?: boolean }) {
   return (
     <span
       className={`collab-station-scene state-${state}${live ? ' live' : ''}`}

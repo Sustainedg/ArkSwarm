@@ -1,11 +1,11 @@
-/** 入口角色聊天事件（`collab.chat.*`）的纯归约器，与工单推进状态互不干扰。 */
+/** 入口智能体聊天事件（`collab.chat.*`）的纯归约器，与工单推进状态互不干扰。 */
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from './agentStream'
 import type { CollabEvent } from './types'
 
 export interface LiveChatReply {
   messageId: string
   roleKey: string
-  roleName: string
+  agentName: string
   agent: AgentStreamState
 }
 
@@ -33,7 +33,7 @@ export function applyChatEvent(state: ChatTurnState, event: CollabEvent): ChatTu
         live: {
           messageId: event.message_id ?? '',
           roleKey: event.role_key ?? '',
-          roleName: event.role_name ?? 'CEO',
+          agentName: event.agent_name ?? '领导者',
           agent: emptyAgentStream(),
         },
       }

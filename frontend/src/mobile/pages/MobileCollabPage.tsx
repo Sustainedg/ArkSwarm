@@ -95,7 +95,7 @@ export function MobileCollabPage() {
     <div className="m-page">
       <MobileTopBar
         title="协作"
-        subtitle="多角色按工单串行推进"
+        subtitle="多智能体按工单串行推进"
         actions={
           <>
             <button
@@ -231,7 +231,7 @@ export function MobileCollabPage() {
               onChange={(event) => setWorkspace(event.target.value)}
               placeholder="例如 /vol1/projects/my-app；留空用默认路径"
             />
-            <span className="field-help">不填写就使用协作组默认路径；填写后所有角色只能在这个路径内读写。</span>
+            <span className="field-help">不填写就使用协作组默认路径；填写后所有智能体只能在这个路径内读写。</span>
           </div>
           <button className="btn primary block" onClick={() => void start()} disabled={busy || !teamId}>
             {busy ? '创建中…' : '创建并进入运行'}

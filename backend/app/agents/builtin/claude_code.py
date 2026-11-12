@@ -125,6 +125,9 @@ class ClaudeCodeAgent(AgentDefinition):
     base_url_env = "ANTHROPIC_BASE_URL"
     default_gateway = "https://api.anthropic.com"
     default_model = "sonnet"
+    protocol = "anthropic"
+    default_auth_style = "x-api-key"
+    default_models = ["sonnet"]
     docs_url = "https://docs.claude.com/en/docs/claude-code"
     logo = "/icons/kernels/claude.svg"
     capabilities = Capabilities(
@@ -157,18 +160,6 @@ class ClaudeCodeAgent(AgentDefinition):
             ),
         ),
         ConfigField(
-            "auth_style",
-            "凭据请求头",
-            FieldType.SELECT,
-            default="auth_token",
-            options=[
-                {"value": "auth_token", "label": "Authorization: Bearer（中转网关）"},
-                {"value": "api_key", "label": "x-api-key（直连 Anthropic 官方）"},
-                {"value": "both", "label": "两个请求头都发送"},
-            ],
-            help="直连 api.anthropic.com 用 x-api-key；绝大多数中转网关用 Bearer。",
-        ),
-        ConfigField(
             "system_prompt_mode",
             "人格注入方式",
             FieldType.SELECT,
@@ -187,10 +178,8 @@ class ClaudeCodeAgent(AgentDefinition):
             placeholder="例如 Bash(git *) Edit Read",
         ),
         ConfigField("disallowed_tools", "工具黑名单", FieldType.STRING_LIST, advanced=True),
-        ConfigField("add_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
-        ConfigField("fallback_model", "备用模型", FieldType.STRING, advanced=True),
         ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
+        ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     def system_defaults(self) -> dict[str, Any]:
@@ -230,7 +219,7 @@ class ClaudeCodeAgent(AgentDefinition):
         return specs
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
-        """严格仅分配：只让内核看到角色分配到的技能。
+        """严格仅分配：只让内核看到智能体分配到的技能。
 
         做法是把运行环境指向一个隔离的配置目录（只放分配到的技能 + 本机
         ``settings*.json``），并关闭内核自带的 bundled 技能与内置插件。
@@ -240,7 +229,7 @@ class ClaudeCodeAgent(AgentDefinition):
             extra = Path(ctx.workspace_dir) / ".claude" / "skills"
             if extra.is_dir() and any(extra.iterdir()):
                 notes.append(
-                    f"工作目录自带的 {extra} 会被内核额外加载，这些技能不在角色分配范围内"
+                    f"工作目录自带的 {extra} 会被内核额外加载，这些技能不在智能体分配范围内"
                 )
         root = config_dir()
         return SkillMount(
@@ -272,8 +261,6 @@ class ClaudeCodeAgent(AgentDefinition):
 
         if ctx.model:
             argv += ["--model", ctx.model]
-        if options.get("fallback_model"):
-            argv += ["--fallback-model", str(options["fallback_model"])]
 
         mode = options.get("permission_mode") or "acceptEdits"
         argv += ["--permission-mode", mode]
@@ -295,8 +282,6 @@ class ClaudeCodeAgent(AgentDefinition):
             argv += ["--allowedTools", *as_list(options["allowed_tools"])]
         if options.get("disallowed_tools"):
             argv += ["--disallowedTools", *as_list(options["disallowed_tools"])]
-        for directory in as_list(ctx.option("add_dirs") or []):
-            argv += ["--add-dir", directory]
         argv += [str(a) for a in as_list(options.get("extra_args") or [])]
 
         env = self.effective_env(ctx)
@@ -314,16 +299,19 @@ class ClaudeCodeAgent(AgentDefinition):
         return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=ctx.prompt)
 
     def _apply_auth_style(self, env: dict[str, str], ctx: AgentContext) -> None:
-        """把通用的 api_key 转换成本网关期望的请求头写法。"""
+        """按网关声明的鉴权方式，把密钥放进内核期望的请求头。
+
+        直连 Anthropic 官方用 ``x-api-key``；中转网关几乎都用 ``Authorization: Bearer``
+        —— 选哪一种是**网关**的属性（``Gateway.auth_style``），不在智能体上重复配置。
+        """
         if not ctx.api_key:
             return
-        style = ctx.option("auth_style") or "auth_token"
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
-        if style in ("auth_token", "both"):
-            env["ANTHROPIC_AUTH_TOKEN"] = ctx.api_key
-        if style in ("api_key", "both"):
+        if ctx.auth_style == "x-api-key":
             env["ANTHROPIC_API_KEY"] = ctx.api_key
+        else:
+            env["ANTHROPIC_AUTH_TOKEN"] = ctx.api_key
 
     def new_session_hint(self, ctx: AgentContext) -> str | None:
         return None if ctx.session_id else str(uuid.uuid4())
@@ -371,7 +359,7 @@ class ClaudeCodeAgent(AgentDefinition):
                 run.state["model"] = payload.get("model")
                 tools = payload.get("tools") or []
                 # 内核只认「平台注入到配置目录里的技能」，把这一轮真实加载到的技能回显出来，
-                # 用户才能确认「角色分配」是否生效。
+                # 用户才能确认「智能体分配」是否生效。
                 skills = [str(name) for name in (payload.get("skills") or [])]
                 run.state["skills"] = skills
                 if tools:

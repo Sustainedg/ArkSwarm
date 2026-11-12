@@ -2,23 +2,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Composer } from '../components/Composer'
 import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
-import { ShareIcon, SpeakerIcon } from '../components/Icons'
+import { AgentIcon, FolderIcon, ShareIcon, SpeakerIcon } from '../components/Icons'
 import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, streamPost } from '../lib/api'
 import { notifyConversationsChanged } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
+import { shortPath } from '../lib/paths'
 import { shareConversationImage } from '../lib/shareImage'
 import { useThemeMode } from '../lib/theme'
 import { useSpeechOutput } from '../lib/tts'
-import type { AttachmentRef, Conversation, ConversationDetail, Message } from '../lib/types'
+import type { AgentProfile, AttachmentRef, Conversation, ConversationDetail, Message } from '../lib/types'
 import { sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn extends AgentStreamState {
   userText: string
-  roleName: string
+  agentName: string
   avatar: string
 }
 
@@ -55,6 +56,13 @@ export function ChatPage() {
   const [actionsOpen, setActionsOpen] = useState(false)
   /** 正在生成长图（要几百毫秒，期间按钮置灰避免连点出两张） */
   const [sharing, setSharing] = useState(false)
+  /** 输入框上方那两个小图标打开的面板：工作目录 / 智能体 */
+  const [scopePanel, setScopePanel] = useState<'workspace' | 'agent' | null>(null)
+  const [scopeAgents, setScopeAgents] = useState<AgentProfile[]>([])
+  /** 面板里最近用过的几个工作目录（从对话列表里挑，省得手打长路径） */
+  const [scopeRecent, setScopeRecent] = useState<string[]>([])
+  const [workspaceDraft, setWorkspaceDraft] = useState('')
+  const [scopeSaving, setScopeSaving] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -201,8 +209,8 @@ export function ChatPage() {
     setLive({
       ...emptyAgentStream(),
       userText: regenerate ? '' : content,
-      roleName: conversation.role_name ?? '智能体',
-      avatar: conversation.role_avatar ?? '🤖',
+      agentName: conversation.agent_name ?? '智能体',
+      avatar: conversation.agent_avatar ?? '🤖',
     })
     if (!regenerate) setDraft('')
 
@@ -258,7 +266,7 @@ export function ChatPage() {
     try {
       const outcome = await shareConversationImage({
         title: active.title,
-        subtitle: [active.role_name, active.agent_name].filter(Boolean).join(' · '),
+        subtitle: [active.agent_name, active.agent_type_id].filter(Boolean).join(' · '),
         theme,
         messages: messages.map((message) => ({
           role: message.role,
@@ -311,6 +319,64 @@ export function ChatPage() {
     }
   }
 
+  /** 打开「工作目录」面板：顺手把别人用过的目录捞出来当快捷选项。 */
+  const openWorkspacePanel = () => {
+    if (!active) return
+    setWorkspaceDraft(active.workspace_dir ?? '')
+    setScopePanel('workspace')
+    void api
+      .listConversations()
+      .then((list) =>
+        setScopeRecent(
+          [
+            ...new Set(
+              list
+                .map((item) => item.workspace_dir)
+                .filter((item): item is string => Boolean(item)),
+            ),
+          ].slice(0, 5),
+        ),
+      )
+      .catch(() => setScopeRecent([]))
+  }
+
+  const openAgentPanel = () => {
+    setScopePanel('agent')
+    void api
+      .listAgents()
+      .then(setScopeAgents)
+      .catch((e) => setError(describe(e)))
+  }
+
+  /**
+   * 改这条对话的「工作目录」或「智能体」。
+   *
+   * 两件事都在后端会清空会话记忆（内核的会话是绑在智能体 + 工作目录上的），所以：
+   * 点中的就是当前值 → 什么都不做，免得白丢一次记忆。
+   */
+  const applyScope = async (patch: { workspace_dir?: string; agent_profile_id?: string }) => {
+    if (!active) return
+    const sameAgent = patch.agent_profile_id === undefined || patch.agent_profile_id === active.agent_profile_id
+    const sameWorkspace =
+      patch.workspace_dir === undefined || patch.workspace_dir === (active.workspace_dir ?? '')
+    if (sameAgent && sameWorkspace) {
+      setScopePanel(null)
+      return
+    }
+    setScopeSaving(true)
+    setError(null)
+    try {
+      await api.updateConversation(active.id, patch)
+      setScopePanel(null)
+      await openConversation(active.id)
+      notifyConversationsChanged()
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setScopeSaving(false)
+    }
+  }
+
   const chatMessages: RenderMessage[] = messages.map((message) => ({
     id: message.id,
     role: message.role,
@@ -339,7 +405,7 @@ export function ChatPage() {
     ...chatMessages.map((message) => ({
       id: message.id,
       message,
-      avatar: active?.role_avatar ?? undefined,
+      avatar: active?.agent_avatar ?? undefined,
     })),
     ...(live?.userText
       ? [{
@@ -372,11 +438,11 @@ export function ChatPage() {
         {active ? (
           <>
             <div className="chat-topbar">
-              <div className="avatar">{active.role_avatar}</div>
+              <div className="avatar">{active.agent_avatar}</div>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>{active.role_name}</div>
+                <div style={{ fontWeight: 600 }}>{active.agent_name}</div>
                 <div className="dim small">
-                  {active.agent_name} · {active.session_id ? `会话 ${active.session_id.slice(0, 8)}` : '新会话'}
+                  {active.agent_type_id ?? '智能体'} · {active.session_id ? `会话 ${active.session_id.slice(0, 8)}` : '新会话'}
                 </div>
               </div>
               <div className="spacer" style={{ flex: 1 }} />
@@ -417,10 +483,10 @@ export function ChatPage() {
                 items={threadItems}
                 empty={chatMessages.length === 0 && !liveMessage ? (
                   <div className="empty">
-                    <div className="empty-icon">{active.role_avatar}</div>
-                    <p>与「{active.role_name}」的对话已就绪</p>
+                    <div className="empty-icon">{active.agent_avatar}</div>
+                    <p>与「{active.agent_name}」的对话已就绪</p>
                     <p className="dim small" style={{ marginTop: 6 }}>
-                      智能体：{active.agent_name} · 工作目录：{active.workspace_dir ?? '默认'}
+                      内核：{active.agent_type_id ?? '智能体'} · 工作目录：{active.workspace_dir ?? '默认'}
                     </p>
                   </div>
                 ) : undefined}
@@ -447,6 +513,8 @@ export function ChatPage() {
 
             <div className="chat-composer">
               <div className="chat-composer-inner">
+                {/* 输入框上方是「工作目录 + 智能体」两个小图标（新建对话时不用先选，这里随时改）；
+                    用量统计挪到输入框下面 —— 贴底的是输入框。 */}
                 <Composer
                   value={draft}
                   onChange={setDraft}
@@ -460,8 +528,30 @@ export function ChatPage() {
                   submitOnEnter
                   inputRef={inputRef}
                   onNotice={setError}
-                  inputLabel={`发消息给 ${active.role_name}`}
+                  inputLabel={`发消息给 ${active.agent_name}`}
                   header={
+                    <div className="composer-scope">
+                      <button
+                        type="button"
+                        className="composer-scope-btn"
+                        onClick={openWorkspacePanel}
+                        title={`工作目录：${active.workspace_dir ?? '按对话自动分配'}（点一下改）`}
+                      >
+                        <FolderIcon size={15} />
+                        <span>{shortPath(active.workspace_dir)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="composer-scope-btn"
+                        onClick={openAgentPanel}
+                        title={`智能体：${active.agent_name ?? '未知'}（点一下换）`}
+                      >
+                        <AgentIcon size={15} />
+                        <span>{active.agent_name}</span>
+                      </button>
+                    </div>
+                  }
+                  footer={
                     usageSummary.messages > 0 ? (
                       <div className="usage-bar" title="整段对话累计消耗">
                         <span className="usage-tag">本对话消耗</span>
@@ -510,6 +600,115 @@ export function ChatPage() {
         )}
       </section>
 
+      {scopePanel === 'workspace' && active && (
+        <Modal
+          title="工作目录"
+          onClose={() => setScopePanel(null)}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setScopePanel(null)}>
+                取消
+              </button>
+              <button
+                className="btn primary"
+                disabled={scopeSaving}
+                onClick={() => void applyScope({ workspace_dir: workspaceDraft.trim() })}
+              >
+                {scopeSaving ? '保存中…' : '保存'}
+              </button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 10 }}>
+            <label className="field">
+              <span className="field-label">路径</span>
+              <input
+                className="input mono"
+                autoFocus
+                value={workspaceDraft}
+                onChange={(event) => setWorkspaceDraft(event.target.value)}
+                placeholder="例如 /vol1/projects/my-app"
+              />
+            </label>
+            <p className="field-help">
+              留空 = 按这条对话自动分配一个独立沙箱目录。智能体就在这个目录里读写文件，
+              换目录会重置这条对话的记忆（会话重新开始）。
+            </p>
+            {scopeRecent.length > 0 && (
+              <div className="stack" style={{ gap: 6 }}>
+                <span className="field-help">最近用过</span>
+                <div className="chips">
+                  {scopeRecent.map((path) => (
+                    <button
+                      key={path}
+                      type="button"
+                      className="chip-btn mono-sm"
+                      onClick={() => setWorkspaceDraft(path)}
+                      title={path}
+                    >
+                      {shortPath(path)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="field-help">当前：{active.workspace_dir ?? '按对话自动分配'}</p>
+          </div>
+        </Modal>
+      )}
+
+      {scopePanel === 'agent' && active && (
+        <Modal
+          title="换智能体"
+          onClose={() => setScopePanel(null)}
+          footer={
+            <button className="btn ghost" onClick={() => setScopePanel(null)}>
+              关闭
+            </button>
+          }
+        >
+          <div className="stack" style={{ gap: 6 }}>
+            <p className="field-help">
+              换智能体会重置这条对话的记忆：不同内核的会话不通用，换了就从头开始。
+            </p>
+            {scopeAgents.length === 0 && (
+              <p className="dim small">正在加载智能体…（一个都没有的话，先到「智能体」页创建）</p>
+            )}
+            {scopeAgents.map((agent) => {
+              const current = agent.id === active.agent_profile_id
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={`agent-pick${current ? ' active' : ''}`}
+                  disabled={scopeSaving || !agent.enabled}
+                  onClick={() => void applyScope({ agent_profile_id: agent.id })}
+                  title={agent.enabled ? undefined : '这个智能体已停用'}
+                >
+                  <span className="avatar" style={{ width: 30, height: 30, fontSize: 16 }}>
+                    {agent.avatar}
+                  </span>
+                  <span className="agent-pick-main">
+                    <span className="agent-pick-name">
+                      {agent.name}
+                      {agent.is_default && <span className="pill brand">默认</span>}
+                    </span>
+                    <span className="card-sub">
+                      {agent.type_name ?? agent.type_id} ·{' '}
+                      {agent.gateway_kind === 'official' || !agent.gateway_name
+                        ? '官方默认'
+                        : agent.gateway_name}{' '}
+                      · {agent.model ?? '默认模型'}
+                    </span>
+                  </span>
+                  {current && <span className="pill ok">当前</span>}
+                </button>
+              )
+            })}
+          </div>
+        </Modal>
+      )}
+
       {actionsOpen && active && (
         <Modal
           title={`「${active.title}」的操作`}
@@ -551,3 +750,4 @@ function describe(error: unknown): string {
   if (error instanceof ApiError) return `${error.status} · ${error.message}`
   return error instanceof Error ? error.message : String(error)
 }
+

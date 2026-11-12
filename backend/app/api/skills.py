@@ -1,7 +1,7 @@
-"""技能：统一编目与角色分配。
+"""技能：统一编目与智能体分配。
 
-技能目录由各智能体适配器只读扫描，平台把它们汇成一份统一目录；角色能用的技能
-只能通过这里分配的分配关系获得（``role_skills`` 表）。
+技能目录由各智能体适配器只读扫描，平台把它们汇成一份统一目录；智能体能用的技能
+只能通过这里的分配关系获得（``agent_skills`` 表）。
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _describe(row: Skill, counts: dict[str, int]) -> SkillRead:
         total_bytes=row.total_bytes or 0,
         file_count=len(row.files or []),
         note=row.note,
-        used_by_roles=counts.get(row.id, 0),
+        used_by_agents=counts.get(row.id, 0),
     )
 
 
@@ -87,9 +87,9 @@ async def get_skill(skill_id: str, session: AsyncSession = Depends(get_session))
         meta=dict(row.meta or {}),
         body=body,
         body_truncated=truncated,
-        roles=[
-            {"id": role.id, "name": role.name, "avatar": role.avatar}
-            for role in await skill_service.roles_using(session, skill_id)
+        agents=[
+            {"id": profile.id, "name": profile.name, "avatar": profile.avatar}
+            for profile in await skill_service.agents_using(session, skill_id)
         ],
     )
     return detail.model_dump()

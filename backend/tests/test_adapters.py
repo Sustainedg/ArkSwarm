@@ -13,7 +13,6 @@ def ctx(**overrides) -> AgentContext:
         gateway_url="https://gateway.example/v1",
         api_key="sk-secret",
         model="some-model",
-        role_name="Tester",
         system_prompt="You are a tester.",
         workspace_dir="/tmp/ws",
         prompt="hello world",
@@ -37,9 +36,8 @@ def test_claude_code_invocation_and_auth_styles():
     assert invocation.env["ANTHROPIC_AUTH_TOKEN"] == "sk-secret"
     assert "ANTHROPIC_API_KEY" not in invocation.env
 
-    keyed = get_agent("claude-code").build_invocation(
-        ctx(options={"auth_style": "api_key"}, gateway_url=None)
-    )
+    # 网关声明 x-api-key（直连 Anthropic 官方）时换用 API_KEY 请求头
+    keyed = get_agent("claude-code").build_invocation(ctx(auth_style="x-api-key"))
     assert keyed.env["ANTHROPIC_API_KEY"] == "sk-secret"
     assert "ANTHROPIC_AUTH_TOKEN" not in keyed.env
 

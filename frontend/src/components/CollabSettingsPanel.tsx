@@ -21,18 +21,18 @@ import {
   toTeamDraft,
   type TeamDraft,
 } from '../lib/collabDraft'
-import type { AgentType, CollabEdge, CollabIssue, CollabNode, CollabTeam, Role } from '../lib/types'
+import type { AgentType, CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile } from '../lib/types'
 
 interface Props {
   teamId?: string
   teams: CollabTeam[]
-  roles: Role[]
+  agents: AgentProfile[]
   agentTypes: AgentType[]
   onOpenTeam: (teamId: string | null) => void
   onTeamsChanged: () => void | Promise<void>
 }
 
-export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTeam, onTeamsChanged }: Props) {
+export function CollabSettingsPanel({ teamId, teams, agents, agentTypes, onOpenTeam, onTeamsChanged }: Props) {
   const [draft, setDraft] = useState<TeamDraft | null>(null)
   const [selection, setSelection] = useState<CollabSelection | null>(null)
   const [issues, setIssues] = useState<CollabIssue[]>([])
@@ -126,9 +126,9 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
     setDirty(true)
   }
 
-  /** 从角色抽屉添加一个岗位节点（点选或拖放都会走到这里） */
-  const addNode = (role: Role, at?: { x: number; y: number }) => {
-    setDraft((prev) => (prev ? addNodeToDraft(prev, role, at) : prev))
+  /** 从智能体抽屉添加一个岗位节点（点选或拖放都会走到这里） */
+  const addNode = (agent: AgentProfile, at?: { x: number; y: number }) => {
+    setDraft((prev) => (prev ? addNodeToDraft(prev, agent, at) : prev))
     setDirty(true)
   }
 
@@ -187,7 +187,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
         ))}
         {teams.length === 0 && (
           <p className="dim small" style={{ padding: '14px 8px', lineHeight: 1.6 }}>
-            还没有协作组。新建一个，然后把角色拖到画布上连起来。
+            还没有协作组。新建一个，然后把智能体拖到画布上连起来。
           </p>
         )}
       </aside>
@@ -195,23 +195,23 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
       {draft && teamId ? (
         <div className="collab-editor">
           <div className="collab-toolbar">
-            <div className="collab-role-palette">
-              <span className="dim small">角色</span>
-              <div className="collab-role-chips">
-                {roles.map((role) => (
+            <div className="collab-agent-palette">
+              <span className="dim small">智能体</span>
+              <div className="collab-agent-chips">
+                {agents.map((agent) => (
                   <button
-                    key={role.id}
-                    className="collab-role-chip"
+                    key={agent.id}
+                    className="collab-agent-chip"
                     draggable
                     title={`拖到画布上，或点击直接添加`}
-                    onDragStart={(event) => event.dataTransfer.setData('text/collab-role', role.id)}
-                    onClick={() => addNode(role)}
+                    onDragStart={(event) => event.dataTransfer.setData('text/collab-agent', agent.id)}
+                    onClick={() => addNode(agent)}
                   >
-                    <span>{role.avatar}</span>
-                    <span>{role.name}</span>
+                    <span>{agent.avatar}</span>
+                    <span>{agent.name}</span>
                   </button>
                 ))}
-                {roles.length === 0 && <span className="dim small">还没有角色，请先到「角色」页创建</span>}
+                {agents.length === 0 && <span className="dim small">还没有智能体，请先到「智能体」页创建</span>}
               </div>
             </div>
             <div className="spacer" style={{ flex: 1 }} />
@@ -232,7 +232,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
             <CollabCanvas
               nodes={draft.nodes}
               edges={draft.edges}
-              roles={roles}
+              agents={agents}
               entryKey={draft.entry_key}
               selected={selection}
               issues={issues}
@@ -241,15 +241,15 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
                 setDirty(true)
               }}
               onSelect={setSelection}
-              onDropRole={(roleId, at) => {
-                const role = roles.find((item) => item.id === roleId)
-                if (role) addNode(role, at)
+              onDropAgent={(agentId, at) => {
+                const agent = agents.find((item) => item.id === agentId)
+                if (agent) addNode(agent, at)
               }}
             />
             <NodeInspector
               draft={draft}
               selection={selection}
-              roles={roles}
+              agents={agents}
               agentTypes={agentTypes}
               issues={issues}
               onPatchTeam={patchTeam}
@@ -277,7 +277,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
           <div className="empty-icon">🤝</div>
           <p>选择一个协作组开始编排，或新建一个</p>
           <p className="dim small" style={{ marginTop: 8 }}>
-            画布上每个节点 = 一个角色在这次协作里的岗位
+            画布上每个节点 = 一个智能体在这次协作里的岗位
           </p>
           <button className="btn primary" style={{ marginTop: 14 }} onClick={() => setCreating(true)}>
             + 新建协作组
@@ -312,7 +312,7 @@ export function CollabSettingsPanel({ teamId, teams, roles, agentTypes, onOpenTe
             />
           </label>
           <span className="field-help">
-            创建后进入画布：从上方角色抽屉拖入（或点选）角色，再从节点右/下输出圆点拖到目标左/上输入圆点。
+            创建后进入画布：从上方智能体抽屉拖入（或点选）智能体，再从节点右/下输出圆点拖到目标左/上输入圆点。
           </span>
         </Modal>
       )}

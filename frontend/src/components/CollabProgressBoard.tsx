@@ -9,13 +9,13 @@
  */
 import { useEffect, useState } from 'react'
 import type { FinishedStep, LiveStep } from '../lib/collabStream'
-import { buildFlowLinks, type CollabFlowEdge, type CollabRoleProgress } from '../lib/collabProgress'
+import { buildFlowLinks, type CollabFlowEdge, type CollabAgentProgress } from '../lib/collabProgress'
 import type { CollabStep, CollabTicket } from '../lib/types'
 import { CollabOfficeMap } from './CollabOfficeMap'
-import { RoleConversationPanel } from './RoleConversationPanel'
+import { AgentConversationPanel } from './AgentConversationPanel'
 
 interface Props {
-  nodes: CollabRoleProgress[]
+  nodes: CollabAgentProgress[]
   edges: CollabFlowEdge[]
   steps: CollabStep[]
   tickets: CollabTicket[]
@@ -31,21 +31,21 @@ interface Props {
 export function CollabProgressBoard({
   nodes, edges, steps, tickets, live, streamed, runTitle, teamName, statusLabel, statusPill, onClose,
 }: Props) {
-  const [selectedRoleKey, setSelectedRoleKey] = useState<string | null>(null)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
-      if (selectedRoleKey) setSelectedRoleKey(null)
+      if (selectedKey) setSelectedKey(null)
       else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, selectedRoleKey])
+  }, [onClose, selectedKey])
 
   if (nodes.length === 0) return null
 
-  const selectedRole = nodes.find((node) => node.key === selectedRoleKey) ?? null
+  const selectedNode = nodes.find((node) => node.key === selectedKey) ?? null
   const total = nodes.length
   const done = nodes.filter((node) => node.state === 'done').length
 
@@ -70,7 +70,7 @@ export function CollabProgressBoard({
           </button>
         </header>
 
-        <div className={`collab-progress-board-body${selectedRole ? ' has-conversation' : ''}`}>
+        <div className={`collab-progress-board-body${selectedNode ? ' has-conversation' : ''}`}>
           <div className="collab-progress-board-main">
             <section className="collab-progress-section">
               <div className="collab-progress-section-head">
@@ -84,7 +84,7 @@ export function CollabProgressBoard({
                 </div>
                 <span className="collab-progress-count">{done}/{total} 个岗位已完成</span>
               </div>
-              <CollabOfficeMap nodes={nodes} edges={edges} onOpenRole={setSelectedRoleKey} />
+              <CollabOfficeMap nodes={nodes} edges={edges} onOpenNode={setSelectedKey} />
             </section>
 
             {loops.length > 0 && (
@@ -108,16 +108,16 @@ export function CollabProgressBoard({
             )}
           </div>
 
-          {selectedRole && (
+          {selectedNode && (
             <aside className="collab-progress-conversation">
-              <RoleConversationPanel
-                node={selectedRole}
+              <AgentConversationPanel
+                node={selectedNode}
                 roster={nodes}
                 steps={steps}
                 tickets={tickets}
                 live={live}
                 streamed={streamed}
-                onClose={() => setSelectedRoleKey(null)}
+                onClose={() => setSelectedKey(null)}
                 closeLabel="← 返回概览"
                 variant="embedded"
               />

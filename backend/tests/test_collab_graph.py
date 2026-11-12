@@ -25,7 +25,7 @@ ROLES = {"r-ceo", "r-cto", "r-se", "r-qa"}
 
 
 def node(key: str, role: str, duty: Duty, **kw) -> NodeSpec:
-    return NodeSpec(key=key, role_id=role, duty=duty, label=key, **kw)
+    return NodeSpec(key=key, agent_profile_id=role, duty=duty, label=key, **kw)
 
 
 def canonical() -> GraphSpec:
@@ -150,10 +150,10 @@ def test_duplicate_keys_ids_self_loop_and_no_engineer():
 
 def test_unknown_role_is_reported_only_when_roles_are_known():
     graph = canonical()
-    graph.nodes[3].role_id = "r-deleted"
-    assert "node.role_missing" in codes(g.validate_graph(graph, "ceo", ROLES))
-    # 不注入角色集合时不做这项判断（纯函数不碰数据库）
-    assert "node.role_missing" not in codes(g.validate_graph(graph, "ceo"))
+    graph.nodes[3].agent_profile_id = "r-deleted"
+    assert "node.agent_missing" in codes(g.validate_graph(graph, "ceo", ROLES))
+    # 不注入智能体集合时不做这项判断（纯函数不碰数据库）
+    assert "node.agent_missing" not in codes(g.validate_graph(graph, "ceo"))
 
 
 def test_write_scope_on_non_engineer_is_only_a_warning():

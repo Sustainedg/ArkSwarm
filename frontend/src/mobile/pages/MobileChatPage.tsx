@@ -4,13 +4,14 @@ import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
 import { api, ApiError, streamPost } from '../../lib/api'
 import { formatListTime } from '../../lib/datetime'
+import { shortPath } from '../../lib/paths'
 import { shareConversationImage } from '../../lib/shareImage'
 import { useThemeMode } from '../../lib/theme'
 import { useSpeechOutput } from '../../lib/tts'
-import type { AttachmentRef, Conversation, ConversationDetail, Message } from '../../lib/types'
+import type { AgentProfile, AttachmentRef, Conversation, ConversationDetail, Message } from '../../lib/types'
 import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
-import { PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
+import { AgentIcon, FolderIcon, PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
 import { Composer } from '../../components/Composer'
 import { useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
@@ -57,6 +58,12 @@ export function MobileChatPage() {
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   /** 正在生成长图（生成要几百毫秒，期间按钮置灰，避免连点出两张） */
   const [sharing, setSharing] = useState(false)
+  /** 输入框上方那两个小图标打开的面板：工作目录 / 智能体 */
+  const [scopePanel, setScopePanel] = useState<'workspace' | 'agent' | null>(null)
+  const [scopeAgents, setScopeAgents] = useState<AgentProfile[]>([])
+  const [scopeRecent, setScopeRecent] = useState<string[]>([])
+  const [workspaceDraft, setWorkspaceDraft] = useState('')
+  const [scopeSaving, setScopeSaving] = useState(false)
   /** 一次性的提示（分享图已下载之类），与错误分开显示 */
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -251,7 +258,7 @@ export function MobileChatPage() {
     try {
       const outcome = await shareConversationImage({
         title: active.title,
-        subtitle: [active.role_name, active.agent_name].filter(Boolean).join(' · '),
+        subtitle: [active.agent_name, active.agent_type_id].filter(Boolean).join(' · '),
         theme,
         messages: messages.map((message) => ({
           role: message.role,
@@ -317,6 +324,61 @@ export function MobileChatPage() {
     }
   }
 
+  /** 打开「工作目录」面板：顺手把别人用过的目录捞出来当快捷选项。 */
+  const openWorkspacePanel = () => {
+    if (!active) return
+    setWorkspaceDraft(active.workspace_dir ?? '')
+    setScopePanel('workspace')
+    void api
+      .listConversations()
+      .then((list) =>
+        setScopeRecent(
+          [
+            ...new Set(
+              list.map((item) => item.workspace_dir).filter((item): item is string => Boolean(item)),
+            ),
+          ].slice(0, 5),
+        ),
+      )
+      .catch(() => setScopeRecent([]))
+  }
+
+  const openAgentPanel = () => {
+    setScopePanel('agent')
+    void api
+      .listAgents()
+      .then(setScopeAgents)
+      .catch((e) => setError(describeError(e)))
+  }
+
+  /**
+   * 改这条对话的「工作目录」或「智能体」。
+   *
+   * 两件事在后端都会清空会话记忆（内核的会话是绑在智能体 + 工作目录上的），所以：
+   * 点中的就是当前值 → 什么都不做，免得白丢一次记忆。
+   */
+  const applyScope = async (patch: { workspace_dir?: string; agent_profile_id?: string }) => {
+    if (!active) return
+    const sameAgent = patch.agent_profile_id === undefined || patch.agent_profile_id === active.agent_profile_id
+    const sameWorkspace =
+      patch.workspace_dir === undefined || patch.workspace_dir === (active.workspace_dir ?? '')
+    if (sameAgent && sameWorkspace) {
+      setScopePanel(null)
+      return
+    }
+    setScopeSaving(true)
+    setError(null)
+    try {
+      await api.updateConversation(active.id, patch)
+      setScopePanel(null)
+      await open(active.id)
+    } catch (e) {
+      setError(describeError(e))
+    } finally {
+      setScopeSaving(false)
+    }
+  }
+
   const chatMessages: RenderMessage[] = messages.map((message) => ({
     id: message.id,
     role: message.role,
@@ -349,10 +411,10 @@ export function MobileChatPage() {
   return (
     <div className="m-page">
       <MobileTopBar
-        title={active?.role_name ?? 'Magenta Agents'}
+        title={active?.agent_name ?? 'Magenta Agents'}
         subtitle={
           active
-            ? `${active.agent_name ?? ''} · ${active.session_id ? `会话 ${short(active.session_id, 8)}` : '新会话'}`
+            ? `${active.agent_type_id ?? '智能体'} · ${active.session_id ? `会话 ${short(active.session_id, 8)}` : '新会话'}`
             : resolving
               ? '正在加载…'
               : '多智能体控制台'
@@ -397,7 +459,7 @@ export function MobileChatPage() {
           <div className="m-empty">
             <div className="m-empty-icon">💬</div>
             <p>还没有对话</p>
-            <p className="dim small">打开左上角的菜单，选一个角色开始第一句。</p>
+            <p className="dim small">打开左上角的菜单，选一个智能体开始第一句。</p>
             <button className="btn sm primary" style={{ marginTop: 6 }} onClick={openMenu}>
               打开菜单
             </button>
@@ -406,8 +468,8 @@ export function MobileChatPage() {
 
         {chatMessages.length === 0 && !liveMessage && active && (
           <div className="m-empty">
-            <div className="m-empty-icon">{active.role_avatar ?? '🤖'}</div>
-            <p>与「{active.role_name}」的对话已就绪</p>
+            <div className="m-empty-icon">{active.agent_avatar ?? '🤖'}</div>
+            <p>与「{active.agent_name}」的对话已就绪</p>
             <p className="dim small">所有输出都会写回工作目录 {short(active.workspace_dir ?? '默认', 40)}</p>
           </div>
         )}
@@ -416,8 +478,8 @@ export function MobileChatPage() {
           <MessageView
             key={message.id}
             message={message}
-            avatar={active?.role_avatar ?? undefined}
-            label={active?.role_name ?? undefined}
+            avatar={active?.agent_avatar ?? undefined}
+            label={active?.agent_name ?? undefined}
           />
         ))}
 
@@ -428,7 +490,7 @@ export function MobileChatPage() {
         )}
 
         {liveMessage && (
-          <MessageView message={liveMessage} avatar={active?.role_avatar ?? undefined} label={active?.role_name ?? undefined} />
+          <MessageView message={liveMessage} avatar={active?.agent_avatar ?? undefined} label={active?.agent_name ?? undefined} />
         )}
       </div>
 
@@ -461,8 +523,33 @@ export function MobileChatPage() {
         busy={busy}
         disabled={!active || remoteRunning}
         onNotice={setError}
-        // token 用量在输入框「上方」：输入框要贴着屏幕底部，中间不留空档。
+        // 输入框上方：工作目录 + 智能体两个小图标（新建对话时不用先选，这里随时改）。
         header={
+          active ? (
+            <div className="composer-scope">
+              <button
+                type="button"
+                className="composer-scope-btn"
+                onClick={openWorkspacePanel}
+                title={`工作目录：${active.workspace_dir ?? '按对话自动分配'}（点一下改）`}
+              >
+                <FolderIcon size={15} />
+                <span>{shortPath(active.workspace_dir)}</span>
+              </button>
+              <button
+                type="button"
+                className="composer-scope-btn"
+                onClick={openAgentPanel}
+                title={`智能体：${active.agent_name ?? '未知'}（点一下换）`}
+              >
+                <AgentIcon size={15} />
+                <span>{active.agent_name}</span>
+              </button>
+            </div>
+          ) : null
+        }
+        // 用量统计挪到输入框「下面」：贴底的是输入框。
+        footer={
           usage.messages > 0 ? (
             <div className="m-usage">
               <span>
@@ -507,6 +594,95 @@ export function MobileChatPage() {
             <button className="btn block danger" onClick={() => void removeConversation()}>
               删除这个对话
             </button>
+          </div>
+        </MobileSheet>
+      )}
+
+      {scopePanel === 'workspace' && active && (
+        <MobileSheet
+          title="工作目录"
+          onClose={() => setScopePanel(null)}
+          footer={
+            <button
+              className="btn primary"
+              disabled={scopeSaving}
+              onClick={() => void applyScope({ workspace_dir: workspaceDraft.trim() })}
+            >
+              {scopeSaving ? '保存中…' : '保存'}
+            </button>
+          }
+        >
+          <div className="field">
+            <label className="field-label">路径</label>
+            <input
+              className="input mono"
+              value={workspaceDraft}
+              onChange={(event) => setWorkspaceDraft(event.target.value)}
+              placeholder="例如 /vol1/projects/my-app"
+            />
+          </div>
+          <p className="field-help">
+            留空 = 按这条对话自动分配一个独立沙箱目录。智能体就在这个目录里读写文件，
+            换目录会重置这条对话的记忆（会话重新开始）。
+          </p>
+          {scopeRecent.length > 0 && (
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="field-help">最近用过</span>
+              <div className="chips">
+                {scopeRecent.map((path) => (
+                  <button
+                    key={path}
+                    type="button"
+                    className="chip-btn mono-sm"
+                    onClick={() => setWorkspaceDraft(path)}
+                  >
+                    {shortPath(path)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="field-help">当前：{active.workspace_dir ?? '按对话自动分配'}</p>
+        </MobileSheet>
+      )}
+
+      {scopePanel === 'agent' && active && (
+        <MobileSheet title="换智能体" onClose={() => setScopePanel(null)}>
+          <p className="field-help">
+            换智能体会重置这条对话的记忆：不同内核的会话不通用，换了就从头开始。
+          </p>
+          {scopeAgents.length === 0 && (
+            <p className="dim small">正在加载智能体…（一个都没有的话，先到「智能体」页创建）</p>
+          )}
+          <div className="stack" style={{ gap: 8 }}>
+            {scopeAgents.map((agent) => {
+              const current = agent.id === active.agent_profile_id
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={`agent-pick${current ? ' active' : ''}`}
+                  disabled={scopeSaving || !agent.enabled}
+                  onClick={() => void applyScope({ agent_profile_id: agent.id })}
+                >
+                  <span className="avatar">{agent.avatar}</span>
+                  <span className="agent-pick-main">
+                    <span className="agent-pick-name">
+                      {agent.name}
+                      {agent.is_default && <span className="pill brand">默认</span>}
+                    </span>
+                    <span className="card-sub">
+                      {agent.type_name ?? agent.type_id} ·{' '}
+                      {agent.gateway_kind === 'official' || !agent.gateway_name
+                        ? '官方默认'
+                        : agent.gateway_name}{' '}
+                      · {agent.model ?? '默认模型'}
+                    </span>
+                  </span>
+                  {current && <span className="pill ok">当前</span>}
+                </button>
+              )
+            })}
           </div>
         </MobileSheet>
       )}

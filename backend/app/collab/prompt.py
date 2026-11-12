@@ -1,9 +1,9 @@
 """节点输入组装：把「岗位说明 + 工单载荷 + 本工单历史」拼成一次步骤的 prompt。
 
 这是「不共享记忆」的落地处（需求 C5）：交给下游的**只有工单字段、一句话摘要与文件清单**，
-不带任何角色的对话原文，也不带其他工单的内容。纯函数模块，可以被直接断言。
+不带任何智能体的对话原文，也不带其他工单的内容。纯函数模块，可以被直接断言。
 
-人格（``role.system_prompt``）不在这里拼 —— 它由 ``execution.py`` 按适配器的
+人格（``profile.system_prompt``）不在这里拼 —— 它由 ``execution.py`` 按适配器的
 ``native_system_prompt`` 能力决定放进 system prompt 还是折进 prompt。
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ WORKSPACE_NOTES: dict[WorkspaceScope, str] = {
     WorkspaceScope.WRITE: "可读写；所有读取与写入都必须在该路径内完成，禁止访问该路径之外的位置。",
 }
 
-#: 收尾汇报（根工单完成后交回入口角色）允许的动作：只汇报或提问，绝不允许重新派活。
+#: 收尾汇报（根工单完成后交回入口智能体）允许的动作：只汇报或提问，绝不允许重新派活。
 ENTRY_REPORT_ACTIONS: tuple[TicketAction, ...] = (TicketAction.DONE, TicketAction.ASK_USER)
 
 
@@ -70,7 +70,7 @@ class HistoryEntry:
 
 @dataclass(slots=True)
 class ChatTicketView:
-    """给入口角色看的一张工单快照（只含结构化字段，不含其他角色的对话原文）。"""
+    """给入口智能体看的一张工单快照（只含结构化字段，不含其他智能体的对话原文）。"""
 
     id: str
     title: str
@@ -88,7 +88,7 @@ class ChatTicketView:
 
 @dataclass(slots=True)
 class ChatHistoryEntry:
-    """入口角色与用户的一条历史发言。"""
+    """入口智能体与用户的一条历史发言。"""
 
     sender: str
     content: str
@@ -168,7 +168,7 @@ def build_step_prompt(
     # 上抛件：这张工单正等发起人处理（state 为 escalated）。只有这一段「在办」期间才收窄动作、
     # 才显示上报表；一旦交到用户手里（ask_user）或被解决，它就该回到正常工单的规则。
     escalated = ticket.state == TicketState.ESCALATED.value
-    # 收尾汇报：入口角色不再派活，只看全流程结果，对用户说清结论。
+    # 收尾汇报：入口智能体不再派活，只看全流程结果，对用户说清结论。
     if closing_report:
         actions = ENTRY_REPORT_ACTIONS
     else:
@@ -274,11 +274,11 @@ def expected_instruction(
     否则会出现「协议说只能 done、本轮要求却催 submit」的自相矛盾 —— 自定义动作契约的错误来源之一。
     """
     can_submit = actions is None or TicketAction.SUBMIT in actions
-    # ask_user 只有入口节点能做；非入口节点要用户拍板时，只能让上游/入口角色转达。
+    # ask_user 只有入口节点能做；非入口节点要用户拍板时，只能让上游/入口智能体转达。
     ask_note = (
         "需要用户拍板时用 ask_user（必须带 2-6 个可点 options）。"
         if allow_ask_user
-        else "需要用户拍板时不要自己问：把问题写进正文和 remark，交给上层或入口角色统一向用户确认。"
+        else "需要用户拍板时不要自己问：把问题写进正文和 remark，交给上层或入口智能体统一向用户确认。"
     )
     if closing_report:
         return (
@@ -302,7 +302,7 @@ def expected_instruction(
             "上面这张工单是下游**上报**的阻塞。请不要再往下派："
             "能解决就解决并收尾（自己动手然后 submit/done，或按需交给真正能解决的岗位）；"
             "解决不了就继续 escalate 往上（reason 写清这一轮为什么没解决、你需要谁做什么），"
-            "由发起人一路报到入口角色那里去问用户。"
+            "由发起人一路报到入口智能体那里去问用户。"
         )
 
     if ticket.state == TicketState.REVIEW.value and node.duty is Duty.REVIEWER:
@@ -414,10 +414,10 @@ def build_chat_prompt(
     active_label: str | None = None,
     node_labels: dict[str, str] | None = None,
 ) -> str:
-    """组装入口角色的「常驻聊天」输入。
+    """组装入口智能体的「常驻聊天」输入。
 
-    这是 C5（角色之间不共享记忆）的**唯一例外**，但例外只发生在「用户 ↔ 入口角色」这条
-    线上：聊天历史只回放给入口角色本人；工单步骤的 prompt 仍然只拿结构化字段。
+    这是 C5（智能体之间不共享记忆）的**唯一例外**，但例外只发生在「用户 ↔ 入口智能体」这条
+    线上：聊天历史只回放给入口智能体本人；工单步骤的 prompt 仍然只拿结构化字段。
     """
     labels = node_labels or {}
     role_label = node.label or labels.get(node.key) or node.key
@@ -430,9 +430,9 @@ def build_chat_prompt(
         )
     else:
         history_text = "（这是你们的第一轮对话）"
-    running = f"当前正在执行：{active_label}" if active_label else "当前没有角色在动手（流程在等待或已收尾）"
+    running = f"当前正在执行：{active_label}" if active_label else "当前没有智能体在动手（流程在等待或已收尾）"
 
-    return f"""[协作对话] 你是这次协作的入口角色，正在和用户一对一沟通。这不是工单步骤。
+    return f"""[协作对话] 你是这次协作的入口智能体，正在和用户一对一沟通。这不是工单步骤。
 团队：{team_name}
 你的岗位：{role_label}（{node.key}）
 任务：{run_title}
@@ -447,7 +447,7 @@ def build_chat_prompt(
 {ticket_text}
 {running}
 
-—— 你们最近的对话（只属于你和用户，不会传给其他角色）——
+—— 你们最近的对话（只属于你和用户，不会传给其他智能体）——
 {history_text}
 
 —— 用户刚刚说 ——
@@ -470,5 +470,5 @@ def build_chat_prompt(
 }}
 ```
 5. chat_update 块只能放在最后；块里不要写注释，也不要把聊天正文塞进去。
-6. 其他角色看不到聊天原文，所以真正需要执行的新要求必须写进 chat_update，光在正文里说“按这个做”是不会传下去的。
+6. 其他智能体看不到聊天原文，所以真正需要执行的新要求必须写进 chat_update，光在正文里说“按这个做”是不会传下去的。
 """

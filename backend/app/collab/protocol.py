@@ -26,7 +26,7 @@ class CollabEventType(str, Enum):
     TICKET_UPDATED = "collab.ticket.updated"
     RUN_STATUS = "collab.run.status"
     NOTICE = "collab.notice"
-    #: 入口角色聊天通道：与工单步骤分开，客户端用独立的归约器渲染
+    #: 入口智能体聊天通道：与工单步骤分开，客户端用独立的归约器渲染
     CHAT_STARTED = "collab.chat.started"
     CHAT_EVENT = "collab.chat.event"
     CHAT_FINISHED = "collab.chat.finished"
@@ -48,7 +48,7 @@ def run_started(run_id: str, team_id: str, title: str, entry_key: str | None) ->
     )
 
 
-def step_started(step_id: str, run_id: str, ticket_id: str | None, node_key: str, duty: str, role_name: str, agent_name: str) -> CollabEvent:
+def step_started(step_id: str, run_id: str, ticket_id: str | None, node_key: str, duty: str, agent_name: str) -> CollabEvent:
     return CollabEvent(
         CollabEventType.STEP_STARTED,
         {
@@ -57,7 +57,6 @@ def step_started(step_id: str, run_id: str, ticket_id: str | None, node_key: str
             "ticket_id": ticket_id,
             "node_key": node_key,
             "duty": duty,
-            "role_name": role_name,
             "agent_name": agent_name,
         },
     )
@@ -92,14 +91,13 @@ def notice(text: str, level: str = "info", **extra: Any) -> CollabEvent:
 
 
 def chat_started(
-    message_id: str, run_id: str, role_name: str, agent_name: str, role_key: str = ""
+    message_id: str, run_id: str, agent_name: str, role_key: str = ""
 ) -> CollabEvent:
     return CollabEvent(
         CollabEventType.CHAT_STARTED,
         {
             "message_id": message_id,
             "run_id": run_id,
-            "role_name": role_name,
             "agent_name": agent_name,
             "role_key": role_key,
         },

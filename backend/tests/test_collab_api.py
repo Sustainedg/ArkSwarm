@@ -8,20 +8,26 @@ from app.collab import graph as g
 from app.collab.schemas import Duty, EdgeKind, EdgeSpec, GraphSpec, NodeSpec
 from app.collab.tables import CollabRun
 from app.db import SessionLocal
-from app.models import AgentInstance, Role
+from app.models import AgentProfile, Gateway
 
 
 @pytest_asyncio.fixture
 async def roles() -> dict[str, str]:
-    """直接落库几个角色，避免把协作用例绑死在「智能体配置」接口上。"""
+    """直接落库几个智能体，避免把协作用例绑死在「智能体」接口上。"""
     async with SessionLocal() as session:
-        agent = AgentInstance(name="假智能体", type_id="custom-cli", options={})
-        session.add(agent)
+        gateway = Gateway(name="测试网关", kind="custom", base_url="https://gw.example/v1")
+        session.add(gateway)
         await session.commit()
-        await session.refresh(agent)
+        await session.refresh(gateway)
         created = {}
         for key, name in (("ceo", "CEO"), ("cto", "CTO"), ("se", "SE"), ("qa", "审查员")):
-            role = Role(name=name, agent_id=agent.id, system_prompt="")
+            role = AgentProfile(
+                name=name,
+                type_id="custom-cli",
+                gateway_id=gateway.id,
+                options={},
+                system_prompt="",
+            )
             session.add(role)
             await session.commit()
             await session.refresh(role)
@@ -32,9 +38,9 @@ async def roles() -> dict[str, str]:
 def graph_body(roles: dict[str, str]) -> dict:
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR),
-            NodeSpec(key="se", role_id=roles["se"], label="SE", duty=Duty.ENGINEER),
-            NodeSpec(key="qa", role_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
+            NodeSpec(key="ceo", agent_profile_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=roles["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="qa", agent_profile_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
         ],
         edges=[
             EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN),
@@ -100,7 +106,7 @@ async def test_unknown_team_is_404(client: httpx.AsyncClient):
 async def test_structurally_invalid_graph_is_422(client: httpx.AsyncClient):
     response = await client.post(
         "/api/collab/teams",
-        json={"name": "坏图", "graph": {"nodes": [{"key": "ceo", "role_id": "r1", "duty": "老板"}]}},
+        json={"name": "坏图", "graph": {"nodes": [{"key": "ceo", "agent_profile_id": "r1", "duty": "老板"}]}},
     )
     assert response.status_code == 422
 
@@ -118,8 +124,8 @@ async def test_team_with_runs_cannot_be_deleted(client: httpx.AsyncClient, roles
 
 
 async def test_deleted_role_is_reported_as_validation_error(client: httpx.AsyncClient, roles):
-    body = {"name": "角色被删的组", "entry_key": "ceo", "graph": graph_body(roles)}
-    body["graph"]["nodes"][1]["role_id"] = "r-deleted"
+    body = {"name": "智能体被删的组", "entry_key": "ceo", "graph": graph_body(roles)}
+    body["graph"]["nodes"][1]["agent_profile_id"] = "r-deleted"
     created = await client.post("/api/collab/teams", json=body)
     codes = {issue["code"] for issue in created.json()["validation"]["errors"]}
-    assert "node.role_missing" in codes
+    assert "node.agent_missing" in codes

@@ -35,7 +35,7 @@ frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 +
         │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
-runtime/service.py  编排：对话→角色→智能体→适配器、能力决策、历史回放、落库
+runtime/service.py  编排：对话→智能体→适配器（网关解密密钥与地址）、能力决策、历史回放、落库
 runtime/runner.py   执行：起子进程 / 发 HTTP、逐行/逐块转事件、超时、取消、脱敏
 runtime/manager.py  运行表：注册、查询、取消、快照
         │
@@ -75,8 +75,8 @@ models.py db.py schemas.py settings.py security.py bootstrap.py   存储 / 契�
 ```
 POST /api/conversations/{id}/messages
   api/conversations.send_message()
-    └ runtime/service.prepare_run()          ← 载入 Conversation→Role→AgentInstance→AgentDefinition
-         ├ build_context()                   ← 组装 AgentContext（合并 options、解密密钥、算最终 model/gateway）
+    └ runtime/service.prepare_run()          ← 载入 Conversation→AgentProfile→Gateway→AgentDefinition
+         ├ build_context()                   ← 组装 AgentContext（合并 options、解密网关密钥、算最终 model/gateway）
          ├ supports_sessions() / transcript_prompt()  ← 能力决策：续接 or 回放
          └ registry.register()               ← 生成 run_id，供取消/追踪
   StreamingResponse(sse_stream(event_source()))
@@ -128,7 +128,8 @@ POST /api/conversations/{id}/messages
 | `capabilities` | ✅ | 见 4.3，声明式驱动框架行为 |
 | `config_fields` | 视需要 | 见 4.4 |
 | `api_key_env` / `base_url_env` | 视需要 | 走"自带网关/自带密钥"约定时声明 |
-| `default_gateway` / `default_model` | 视需要 | 新建实例时的默认值，同时供播种使用 |
+| `protocol` / `default_auth_style` | 视需要 | 官方链路的协议（openai / anthropic / gemini）与鉴权头风格 |
+| `default_gateway` / `default_model` / `default_models` | 视需要 | 播种官方网关与新建智能体时的默认值（`default_models` 是官方链路的预置模型清单） |
 | `executable` | CLI 必填 | 用于 `shutil.which` 探测是否安装 |
 | `auto_provision` | 视需要 | 首次播种是否自动建实例（模板类设为 `False`，如 `custom-cli`） |
 | `docs_url` | 可选 | 配置页的"查看文档"链接 |
@@ -158,9 +159,11 @@ POST /api/conversations/{id}/messages
 
 ### 4.5 `AgentContext` / `AgentRun`
 
-`AgentContext` 字段语义：`options`（合并后的配置）、`gateway_url`/`api_key`/`model`（已解析最终值，
-角色级覆盖优先）、`role_name`/`system_prompt`（人格）、`workspace_dir`（cwd）、`session_id`（
-续接或 `None`）、`history`（回放用的历史轮次）、`prompt`（本轮输入）。
+`AgentContext` 字段语义：`options`（合并后的配置）、`gateway_url`/`api_key`/`auth_style`/`model`
+（已解析最终值，由智能体引用的网关与所选模型解析而来；官方默认时不注入地址与密钥）、
+`credentials`（智能体自己的凭据解密后的「环境变量名 → 明文」，框架合并进子进程环境，
+**适配器不得写进提示词 / 日志 / 事件**）、`agent_name`/`system_prompt`（人格）、
+`workspace_dir`(cwd)、`session_id`（续接或 `None`）、`history`（回放用的历史轮次）、`prompt`（本轮输入）。
 
 `AgentRun` 提供：`state`（本次运行私有字典）、`emitted_text`/`thinking`/`tool_calls`（框架自动累积）、
 `build_invocation()`、`feed(line)`，以及**结束时补发事件的钩子 `finish()`**。
@@ -169,12 +172,14 @@ POST /api/conversations/{id}/messages
 
 ## 5. 数据模型与存储演进
 
-- 关系链：`AgentInstance → Role → Conversation → Message`。
-- **Conversation 快照 `agent_id`**：历史对话必须可复现，即使角色之后改绑了别的智能体。
-- 外键 `ON DELETE RESTRICT`：仍被**未删除**的角色引用的智能体删除返回 409（避免历史断裂）；
-  角色与智能体本身用 `deleted_at` 软删除 —— 被历史引用时只打标记，从可选列表消失但不打断历史。
+- 关系链：`Gateway → AgentProfile → Conversation → Message`；技能经 `AgentSkill`、凭据经
+  `AgentCredential` 挂到智能体上（两者都是「全局一份 + 智能体引用」：技能来自身份内核扫描，
+  凭据来自「设置 → 凭据库」）。
+- **Conversation 快照 `agent_profile_id`**：历史对话必须可复现，即使智能体之后改了内核 / 网关 / 模型。
+- 外键 `ON DELETE RESTRICT`：仍被**未删除**的智能体引用的网关删除返回 409（避免历史断裂）；
+  智能体与自定义网关本身用 `deleted_at` 软删除 —— 被历史引用时只打标记，从可选列表消失但不打断历史。
 - `parts` / `usage` / `parameters` / `options` 用 JSON 列：智能体之间形态差异极大，不为其建表。
-- `Role.parameters` 支持角色级覆盖 `model` / `gateway_url`，让同一智能体可按角色走不同模型。
+- 网关是 API 密钥的**唯一来源**：智能体只引用 `gateway_id`，模型必须取自网关的 `selected_models` 白名单。
 
 **后加的可选列**：SQLite 的 `create_all` 不会给已存在的表加列，所以新列要登记在
 `models.py`（对话域）或 `collab/tables.py`（协作域）的 `ADDITIVE_COLUMNS`，由 `db.init_db` 幂等补齐。
@@ -205,7 +210,7 @@ POST /api/conversations/{id}/messages
 │     → 新增规范化事件（§6.5）
 ├─ 换存储 / 换传输
 │     → 只动 db.py+settings（存储）或 transport/sse.py+前端 streamPost（传输）
-└─ 其它（角色、对话、页面、样式）
+└─ 其它（智能体、网关、对话、页面、样式）
       → 按 §2.1 分层表定位到唯一一层，不要在多层同时改
 ```
 
@@ -278,7 +283,7 @@ class AcmeHarness(OpenAIHarnessBase):
 
 ### 6.3 零代码接入
 
-用 `custom-cli`：填 `command`、`args`（支持 `{prompt} {model} {gateway} {api_key} {workspace} {session} {role} {agent}`
+用 `custom-cli`：填 `command`、`args`（支持 `{prompt} {model} {gateway} {api_key} {workspace} {session} {agent}`
 占位符）、`prompt_mode`、`output_format`、以及 `text_path/tool_path/..._path` JSON 取值路径。
 只有在"声明式表达不了"时才升级为写适配器。
 
@@ -318,14 +323,14 @@ class AcmeHarness(OpenAIHarnessBase):
 - 表单统一用 `DynamicForm`（读 `config_fields`）；消息统一用 `MessageView`（读 `MessagePart`）。
 - **对话只有一份展示模块**：所有对话（单聊、协作主对话、协作岗位实时对话，含移动端）都渲染
   `ConversationThread`（内部只用 `MessageView` 画气泡）；岗位线程的装配逻辑只有
-  `CollabRoleThread` 一份。禁止再写第二套气泡 / 线程布局。
+  `CollabAgentThread` 一份。禁止再写第二套气泡 / 线程布局。
 - 事件并入状态统一在 `ChatPage.applyEvent`，新增事件类型在这里加一个 `case`。
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
 - **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、左侧抽屉与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
-  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabRoleThread` /
+  `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabAgentThread` /
   `TicketBoardKit` / `Composer` / `Icons`
   等纯展示组件，以及 `lib/agentStream` 里的事件归约。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
@@ -386,6 +391,8 @@ class AcmeHarness(OpenAIHarnessBase):
 - [ ] 新增的配置项是否用 `ConfigField` 声明，而不是改前端？
 - [ ] 如果动了事件协议，四处是否同步？
 - [ ] 凭据有没有可能进入日志 / SSE / 接口响应？命令行回显是否被 `_redact` 覆盖？
+- [ ] 新增的智能体密钥是不是放在了 `credentials`（工具用）而不是网关（模型用）？值是否只经
+      `security`、只以环境变量注入、事件是否过了 `scrub_event`？
 - [ ] 错误是否显式暴露（HTTPException 或 `error` 事件），而不是被吞掉？
 - [ ] 长任务是否响应取消与超时？
 - [ ] 中文规范：界面文案、注释、docstring 是否都是中文？专有名词是否保留？

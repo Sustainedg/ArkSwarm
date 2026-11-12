@@ -15,7 +15,7 @@ from sqlmodel import select
 from ..agents import AgentDefinition, all_agents, get_agent
 from ..agents.base import Availability
 from ..db import get_session
-from ..models import AgentInstance
+from ..models import AgentProfile
 from ..runtime import availability as availability_service
 from ..runtime import provisioning
 from ..schemas import RuntimeAction
@@ -24,7 +24,7 @@ from ..transport.sse import sse_stream
 router = APIRouter(prefix="/runtimes", tags=["runtimes"])
 
 
-def _describe(definition: AgentDefinition, instances: int, availability: Availability) -> dict:
+def _describe(definition: AgentDefinition, agents: int, availability: Availability) -> dict:
     """一张运行时卡片的全部数据；安装状态来自框架缓存的检测结果（不实时探测）。"""
     return {
         "id": definition.id,
@@ -35,8 +35,8 @@ def _describe(definition: AgentDefinition, instances: int, availability: Availab
         "docs_url": definition.docs_url,
         "logo": definition.logo,
         "executable": definition.executable,
-        #: 有多少个未删除的智能体实例在用这个运行时（卸载前提示影响面）
-        "instances": instances,
+        #: 有多少个未删除的智能体在用这个内核（卸载前提示影响面）
+        "agents": agents,
         "provisioning": definition.provisioning(availability),
     }
 
@@ -45,9 +45,9 @@ def _describe(definition: AgentDefinition, instances: int, availability: Availab
 async def list_runtimes(session: AsyncSession = Depends(get_session)) -> dict:
     rows = (
         await session.execute(
-            select(AgentInstance.type_id, func.count(AgentInstance.id))
-            .where(AgentInstance.deleted_at.is_(None))
-            .group_by(AgentInstance.type_id)
+            select(AgentProfile.type_id, func.count(AgentProfile.id))
+            .where(AgentProfile.deleted_at.is_(None))
+            .group_by(AgentProfile.type_id)
         )
     ).all()
     counts = {type_id: count for type_id, count in rows}

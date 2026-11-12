@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, collab
 from .agents import all_agents
 from .api import api_router
-from .bootstrap import seed_if_empty
+from .bootstrap import ensure_default_agent, seed_if_empty
 from .db import SessionLocal, init_db
 from .runtime import availability as availability_service
 from .runtime import skills as skill_service
@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session, all_agents())
+        # 老库升级上来时可能一颗星都没有：补一次，保证「新建对话」直接可用
+        await ensure_default_agent(session)
         await _scan_skills(session)
         recovered = await collab.recover_interrupted(session)
         if recovered:
@@ -66,7 +68,7 @@ app = FastAPI(
     title="Magenta Agents 多智能体控制台",
     version=__version__,
     description="多智能体对话控制台：把 Claude Code、Codex、Gemini CLI 等 "
-                "智能体配置成实例，再绑定到角色上进行对话。",
+                "内核配成智能体，给它们挑选网关、模型与人格后进行对话。",
     lifespan=lifespan,
 )
 

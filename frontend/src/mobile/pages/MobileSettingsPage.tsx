@@ -74,7 +74,23 @@ export function MobileSettingsPage({ version }: { version: string }) {
               <span style={{ fontSize: 18 }}>🧩</span>
               <span className="m-item-main">
                 <span className="m-item-title">技能</span>
-                <span className="m-item-sub">统一编目各内核的技能，通过角色分配生效</span>
+                <span className="m-item-sub">统一编目各内核的技能，通过智能体分配生效</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
+            <button className="m-item" onClick={() => navigate('/gateways')}>
+              <span style={{ fontSize: 18 }}>🔌</span>
+              <span className="m-item-main">
+                <span className="m-item-title">自定义网关</span>
+                <span className="m-item-sub">API 密钥的唯一来源；官方链路 + 自建网关</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
+            <button className="m-item" onClick={() => navigate('/credentials')}>
+              <span style={{ fontSize: 18 }}>🔑</span>
+              <span className="m-item-main">
+                <span className="m-item-title">凭据库</span>
+                <span className="m-item-sub">工具 / 服务要用的密钥，本地加密保存，智能体按引用使用</span>
               </span>
               <span className="m-item-chevron">›</span>
             </button>
@@ -82,9 +98,7 @@ export function MobileSettingsPage({ version }: { version: string }) {
               <span style={{ fontSize: 18 }}>🧬</span>
               <span className="m-item-main">
                 <span className="m-item-title">运行时</span>
-                <span className="m-item-sub">
-                  内核的安装 / 更新 / 卸载，以及每个内核的智能体设置（网关 · 密钥 · 模型）
-                </span>
+                <span className="m-item-sub">内核的安装 / 更新 / 卸载，以及当前版本与检测状态</span>
               </span>
               <span className="m-item-chevron">›</span>
             </button>

@@ -1,14 +1,14 @@
-/** 岗位内部实时对话面板：进度页内嵌与独立抽屉共用同一套外壳，线程本身复用 `CollabRoleThread`。 */
+/** 岗位内部实时对话面板：进度页内嵌与独立抽屉共用同一套外壳，线程本身复用 `CollabAgentThread`。 */
 import { useMemo } from 'react'
 import { DUTIES } from '../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../lib/collabStream'
-import type { CollabRoleProgress } from '../lib/collabProgress'
+import type { CollabAgentProgress } from '../lib/collabProgress'
 import type { CollabStep, CollabTicket } from '../lib/types'
-import { CollabRoleThread } from './CollabRoleThread'
+import { CollabAgentThread } from './CollabAgentThread'
 
 interface Props {
-  node: CollabRoleProgress
-  roster: CollabRoleProgress[]
+  node: CollabAgentProgress
+  roster: CollabAgentProgress[]
   steps: CollabStep[]
   tickets: CollabTicket[]
   live: LiveStep | null
@@ -18,7 +18,7 @@ interface Props {
   variant?: 'embedded' | 'drawer'
 }
 
-export function RoleConversationPanel({
+export function AgentConversationPanel({
   node, roster, steps, tickets, live, streamed, onClose, closeLabel = '关闭', variant = 'drawer',
 }: Props) {
   const liveHere = live?.nodeKey === node.key ? live : null
@@ -28,24 +28,24 @@ export function RoleConversationPanel({
   )
 
   return (
-    <div className={`collab-role-panel ${variant}`} aria-label={`${node.label}的实时对话`}>
-      <header className="collab-role-panel-head">
+    <div className={`collab-agent-panel ${variant}`} aria-label={`${node.label}的实时对话`}>
+      <header className="collab-agent-panel-head">
         <span className="collab-progress-avatar">{node.avatar}</span>
-        <div className="collab-role-panel-title">
-          <div className="collab-role-panel-name">{node.label} · 实时对话</div>
-          <div className="collab-role-panel-meta">
+        <div className="collab-agent-panel-title">
+          <div className="collab-agent-panel-name">{node.label} · 实时对话</div>
+          <div className="collab-agent-panel-meta">
             {dutyLabel} · {node.stepCount} 步 · {node.stateLabel}
             {node.isEntry ? ' · 入口领导者' : ' · 只读内部对话'}
           </div>
         </div>
-        {liveHere && <span className="pill brand collab-role-live-pill">实时输出中</span>}
-        <button className="btn sm ghost collab-role-panel-close" onClick={onClose}>
+        {liveHere && <span className="pill brand collab-agent-live-pill">实时输出中</span>}
+        <button className="btn sm ghost collab-agent-panel-close" onClick={onClose}>
           {closeLabel}
         </button>
       </header>
 
       {node.activeTickets.length > 0 && (
-        <div className="collab-role-tickets">
+        <div className="collab-agent-tickets">
           {node.activeTickets.map((ticket) => (
             <span className="pill" key={ticket.id}>
               当前工单：{ticket.title}
@@ -54,17 +54,17 @@ export function RoleConversationPanel({
         </div>
       )}
 
-      <CollabRoleThread
+      <CollabAgentThread
         node={node}
         roster={roster}
         steps={steps}
         tickets={tickets}
         live={live}
         streamed={streamed}
-        className="collab-role-thread"
+        className="collab-agent-thread"
         empty={(
-          <div className="collab-role-empty">
-            <div className="collab-role-empty-icon">{node.avatar}</div>
+          <div className="collab-agent-empty">
+            <div className="collab-agent-empty-icon">{node.avatar}</div>
             {node.state === 'active' ? (
               <>
                 <p>「{node.label}」正在处理中…</p>

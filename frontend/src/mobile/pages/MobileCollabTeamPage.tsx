@@ -21,7 +21,7 @@ import type {
   CollabEdgeKind,
   CollabIssue,
   CollabNode,
-  Role,
+  AgentProfile,
 } from '../../lib/types'
 import { CollabEdgeForm } from '../components/CollabEdgeForm'
 import { CollabNodeForm } from '../components/CollabNodeForm'
@@ -46,11 +46,11 @@ export function MobileCollabTeamPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [roles, setRoles] = useState<Role[]>([])
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [nodeKey, setNodeKey] = useState<string | null>(null)
   const [edgeId, setEdgeId] = useState<string | null>(null)
-  const [rolePickerOpen, setRolePickerOpen] = useState(false)
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false)
   const [runOpen, setRunOpen] = useState(false)
   const [runTitle, setRunTitle] = useState('')
   const versionRef = useRef(0)
@@ -76,8 +76,8 @@ export function MobileCollabTeamPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [roleList, typeList] = await Promise.all([api.listRoles(), api.agentTypes()])
-        setRoles(roleList)
+        const [agentList, typeList] = await Promise.all([api.listAgents(), api.agentTypes()])
+        setAgents(agentList)
         setAgentTypes(typeList)
       } catch (e) {
         setError(describeError(e))
@@ -110,12 +110,12 @@ export function MobileCollabTeamPage() {
     setDirty(true)
   }
 
-  const addRole = (role: Role) => {
+  const addAgent = (agent: AgentProfile) => {
     if (!draft) return
-    const next = addNodeToDraft(draft, role)
+    const next = addNodeToDraft(draft, agent)
     setDraft(next)
     setDirty(true)
-    setRolePickerOpen(false)
+    setAgentPickerOpen(false)
     setNodeKey(next.nodes[next.nodes.length - 1].key)
   }
 
@@ -226,7 +226,7 @@ export function MobileCollabTeamPage() {
   const warnings = issues.filter(isWarningIssue)
   const node = draft && nodeKey ? draft.nodes.find((item) => item.key === nodeKey) : undefined
   const edge = draft && edgeId ? draft.edges.find((item) => item.id === edgeId) : undefined
-  const roleById = new Map(roles.map((role) => [role.id, role]))
+  const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const nodeLabel = (key: string) => {
     const target = draft?.nodes.find((item) => item.key === key)
     return target ? `${target.label || target.key}（${target.key}）` : key
@@ -265,12 +265,12 @@ export function MobileCollabTeamPage() {
             </div>
           ) : (
             <>
-              {roles.length === 0 && (
+              {agents.length === 0 && (
                 <div className="banner info">
-                  还没有角色。协作组里的每个岗位都要绑一个角色，请先创建角色。
+                  还没有智能体。协作组里的每个岗位都要绑一个智能体，请先创建智能体。
                   <div style={{ marginTop: 8 }}>
-                    <button className="btn sm" onClick={() => navigate('/roles')}>
-                      去创建角色
+                    <button className="btn sm" onClick={() => navigate('/agents')}>
+                      去创建智能体
                     </button>
                   </div>
                 </div>
@@ -382,22 +382,22 @@ export function MobileCollabTeamPage() {
               <div className="stack" style={{ gap: 8 }}>
                 <div className="card-section-title">岗位（{draft.nodes.length}）</div>
                 {draft.nodes.length === 0 ? (
-                  <p className="dim small">还没有岗位。添加岗位 = 把某个角色请进这次协作，并给它一个职责。</p>
+                  <p className="dim small">还没有岗位。添加岗位 = 把某个智能体请进这次协作，并给它一个职责。</p>
                 ) : (
                   draft.nodes.map((item) => {
-                    const role = roleById.get(item.role_id)
+                    const agent = agentsById.get(item.agent_profile_id)
                     return (
                       <div className="m-node-card" key={item.key}>
                         <div className="m-node-head">
-                          <span className="avatar">{role?.avatar ?? '🤖'}</span>
+                          <span className="avatar">{agent?.avatar ?? '🤖'}</span>
                           <div className="m-item-main">
                             <div className="m-node-title">
-                              {item.label || role?.name || item.key}
+                              {item.label || agent?.name || item.key}
                               {item.key === draft.entry_key && <span className="pill brand">入口</span>}
                             </div>
                             <div className="m-node-sub mono-sm">
                               {item.key} · {dutyLabel(item.duty)}
-                              {role ? ` · ${role.name}` : ' · 角色已删除，请重新选择'}
+                              {agent ? ` · ${agent.name}` : ' · 智能体已删除，请重新选择'}
                             </div>
                           </div>
                         </div>
@@ -415,10 +415,10 @@ export function MobileCollabTeamPage() {
                 )}
                 <button
                   className="btn block"
-                  onClick={() => setRolePickerOpen(true)}
-                  disabled={roles.length === 0}
+                  onClick={() => setAgentPickerOpen(true)}
+                  disabled={agents.length === 0}
                 >
-                  ＋ 添加岗位（选一个角色）
+                  ＋ 添加岗位（选一个智能体）
                 </button>
               </div>
 
@@ -474,15 +474,15 @@ export function MobileCollabTeamPage() {
         </div>
       </div>
 
-      {rolePickerOpen && (
-        <MobileSheet title="添加岗位" onClose={() => setRolePickerOpen(false)}>
+      {agentPickerOpen && (
+        <MobileSheet title="添加岗位" onClose={() => setAgentPickerOpen(false)}>
           <div className="m-list">
-            {roles.map((role) => (
-              <button key={role.id} className="m-item" onClick={() => addRole(role)}>
-                <span className="avatar">{role.avatar}</span>
+            {agents.map((agent) => (
+              <button key={agent.id} className="m-item" onClick={() => addAgent(agent)}>
+                <span className="avatar">{agent.avatar}</span>
                 <span className="m-item-main">
-                  <span className="m-item-title">{role.name}</span>
-                  <span className="m-item-sub">{role.agent_name} · {role.tagline ?? '无备注'}</span>
+                  <span className="m-item-title">{agent.name}</span>
+                  <span className="m-item-sub">{agent.type_name ?? agent.type_id} · {agent.tagline ?? '无备注'}</span>
                 </span>
                 <span className="m-item-chevron">›</span>
               </button>
@@ -495,7 +495,7 @@ export function MobileCollabTeamPage() {
         <MobileSheet full title={`岗位 · ${node.label || node.key}`} onClose={() => setNodeKey(null)}>
           <CollabNodeForm
             node={node}
-            roles={roles}
+            agents={agents}
             agentTypes={agentTypes}
             isEntry={node.key === draft?.entry_key}
             onSave={(next) => saveNode(node.key, next)}

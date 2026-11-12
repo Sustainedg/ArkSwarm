@@ -1,7 +1,7 @@
 /**
  * 编排编辑器的右侧属性面板：节点 / 边 / 团队三种上下文共用一个面板。
  *
- * 节点上的「参数覆盖」直接复用 `DynamicForm`（读该角色绑定智能体类型的 `config_fields`），
+ * 节点上的「参数覆盖」直接复用 `DynamicForm`（读该智能体类型的 `config_fields`），
  * 因此新增一个可配置项不需要动协作页（与 AGENTS.md §4.4 一致）。
  */
 import type { ReactNode } from 'react'
@@ -10,13 +10,13 @@ import type { CollabSelection } from './CollabCanvas'
 import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, isWarningIssue, type TeamDraft } from '../lib/collabDraft'
 import type {
   AgentType, CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
-  CollabWorkspaceScope, CollabDuty as Duty, Role,
+  CollabWorkspaceScope, CollabDuty as Duty, AgentProfile,
 } from '../lib/types'
 
 interface Props {
   draft: TeamDraft
   selection: CollabSelection | null
-  roles: Role[]
+  agents: AgentProfile[]
   agentTypes: AgentType[]
   issues: CollabIssue[]
   onPatchTeam: (patch: Partial<TeamDraft>) => void
@@ -28,7 +28,7 @@ interface Props {
 }
 
 export function NodeInspector({
-  draft, selection, roles, agentTypes, issues,
+  draft, selection, agents, agentTypes, issues,
   onPatchTeam, onPatchNode, onPatchEdge, onRenameNode, onDeleteNode, onDeleteEdge,
 }: Props) {
   const node = selection?.kind === 'node' ? draft.nodes.find((item) => item.key === selection.id) : undefined
@@ -41,7 +41,7 @@ export function NodeInspector({
           node={node}
           nodes={draft.nodes}
           entryKey={draft.entry_key}
-          roles={roles}
+          agents={agents}
           agentTypes={agentTypes}
           issues={issues}
           onPatch={(patch) => onPatchNode(node.key, patch)}
@@ -73,12 +73,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function NodePanel({
-  node, nodes, entryKey, roles, agentTypes, issues, onPatch, onRename, onDelete, onSetEntry,
+  node, nodes, entryKey, agents, agentTypes, issues, onPatch, onRename, onDelete, onSetEntry,
 }: {
   node: CollabNode
   nodes: CollabNode[]
   entryKey: string | null
-  roles: Role[]
+  agents: AgentProfile[]
   agentTypes: AgentType[]
   issues: CollabIssue[]
   onPatch: (patch: Partial<CollabNode>) => void
@@ -86,8 +86,8 @@ function NodePanel({
   onDelete: () => void
   onSetEntry: () => void
 }) {
-  const role = roles.find((item) => item.id === node.role_id)
-  const type = agentTypes.find((item) => item.id === role?.agent_type_id)
+  const agent = agents.find((item) => item.id === node.agent_profile_id)
+  const type = agentTypes.find((item) => item.id === agent?.type_id)
   const nodeIssues = issues.filter((issue) => issue.node_key === node.key)
   const isEntry = entryKey === node.key
   // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
@@ -99,9 +99,9 @@ function NodePanel({
   return (
     <>
       <div className="collab-inspector-head">
-        <span className="collab-node-avatar">{role?.avatar ?? '🤖'}</span>
+        <span className="collab-node-avatar">{agent?.avatar ?? '🤖'}</span>
         <div style={{ minWidth: 0 }}>
-          <div className="collab-inspector-title">{node.label || role?.name || node.key}</div>
+          <div className="collab-inspector-title">{node.label || agent?.name || node.key}</div>
           <div className="dim small mono-sm">{node.key}</div>
         </div>
       </div>
@@ -118,16 +118,16 @@ function NodePanel({
 
       <Section title="这个节点是谁">
         <label className="field">
-          <span className="field-label">角色</span>
-          <select className="select" value={node.role_id} onChange={(e) => onPatch({ role_id: e.target.value })}>
-            {roles.map((item) => (
+          <span className="field-label">智能体</span>
+          <select className="select" value={node.agent_profile_id} onChange={(e) => onPatch({ agent_profile_id: e.target.value })}>
+            {agents.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.avatar} {item.name} · {item.agent_name}
+                {item.avatar} {item.name} · {item.type_name ?? item.type_id}
               </option>
             ))}
           </select>
           <span className="field-help">
-            {role ? `智能体：${role.agent_name}（${role.agent_type_id}）` : '该角色已不存在，请重新选择'}
+            {agent ? `内核：${agent.type_name ?? agent.type_id} · 模型：${agent.model ?? '默认'}` : '该智能体已不存在，请重新选择'}
           </span>
         </label>
         <label className="field">
@@ -165,7 +165,7 @@ function NodePanel({
             style={{ minHeight: 74 }}
             value={node.instructions}
             onChange={(e) => onPatch({ instructions: e.target.value })}
-            placeholder="追加在角色人格之后，例如：负责拆解任务与汇总"
+            placeholder="追加在智能体人格之后，例如：负责拆解任务与汇总"
           />
         </label>
         <label className="field">

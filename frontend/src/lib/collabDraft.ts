@@ -22,7 +22,7 @@ import type {
   CollabTicketState,
   CollabValidation,
   CollabWorkspaceScope,
-  Role,
+  AgentProfile,
 } from './types'
 
 /** 编辑中的一张完整协作图（保存前只存在于本地）。 */
@@ -168,14 +168,14 @@ export function inferEdgeKind(from?: CollabNode, to?: CollabNode): CollabEdgeKin
 }
 
 /** 新增一个岗位节点；第一个节点默认兼任入口（协调者）。 */
-export function addNodeToDraft(draft: TeamDraft, role: Role, at?: { x: number; y: number }): TeamDraft {
+export function addNodeToDraft(draft: TeamDraft, agent: AgentProfile, at?: { x: number; y: number }): TeamDraft {
   const taken = new Set(draft.nodes.map((node) => node.key))
   const index = draft.nodes.length
   const duty: CollabDuty = index === 0 ? 'coordinator' : 'engineer'
   const node: CollabNode = {
     key: defaultNodeKey(duty, taken),
-    role_id: role.id,
-    label: role.name,
+    agent_profile_id: agent.id,
+    label: agent.name,
     duty,
     instructions: '',
     capability_scope: '',

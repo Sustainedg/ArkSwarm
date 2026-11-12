@@ -32,7 +32,7 @@ class CustomCliAgent(AgentDefinition):
     vendor = "自定义"
     description = (
         "声明式适配器：指向任意命令行智能体，描述它的参数与输出结构，"
-        "它就能成为可绑定给角色的一等公民。"
+        "它就能成为可绑定给智能体的一等公民。"
     )
     runtime = Runtime.CLI
     logo = "/icons/kernels/cli.svg"
@@ -131,7 +131,7 @@ class CustomCliAgent(AgentDefinition):
                     placeholder="MY_AGENT_API_KEY"),
         ConfigField("gateway_env", "网关环境变量名", FieldType.STRING, advanced=True,
                     placeholder="MY_AGENT_BASE_URL"),
-        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
+        ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     # -- 元数据与自省 --------------------------------------------------------
@@ -163,7 +163,6 @@ class CustomCliAgent(AgentDefinition):
             "workspace": ctx.workspace_dir or "",
             "session": ctx.session_id or "",
             "agent": ctx.agent_name,
-            "role": ctx.role_name or "",
         }
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:

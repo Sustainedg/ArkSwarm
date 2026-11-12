@@ -13,13 +13,14 @@ from sqlmodel import select
 
 from .. import attachments
 from ..db import SessionLocal, get_session
-from ..models import AgentInstance, Conversation, Message, Role
+from ..models import AgentProfile, Conversation, Message
 from ..runtime import registry
 from ..runtime import skills as skill_service
 from ..runtime.service import (
     ConfigurationError,
     consume_run,
     new_conversation,
+    pick_default_profile,
     prepare_run,
     regenerate_last,
     resolve_workspace,
@@ -40,37 +41,31 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 MAX_ATTACHMENT_BYTES = attachments.MAX_ATTACHMENT_BYTES
 
 
-async def _related(
-    session: AsyncSession, conversation: Conversation
-) -> tuple[Role | None, AgentInstance | None]:
-    """取对话引用的角色与智能体快照。
+async def _related(session: AsyncSession, conversation: Conversation) -> AgentProfile | None:
+    """取对话绑定的智能体（创建时的快照）。
 
     只给「单条响应」用；列表接口走批量查询，避免查询数随对话数线性增长（N+1）。
     """
-    role = await session.get(Role, conversation.role_id)
-    agent = await session.get(AgentInstance, conversation.agent_id)
-    return role, agent
+    return await session.get(AgentProfile, conversation.agent_profile_id)
 
 
 def _conversation_read(
     conversation: Conversation,
-    role: Role | None,
-    agent: AgentInstance | None,
+    profile: AgentProfile | None,
     count: int = 0,
 ) -> ConversationRead:
     return ConversationRead(
         id=conversation.id,
         title=conversation.title,
-        role_id=conversation.role_id,
-        agent_id=conversation.agent_id,
+        agent_profile_id=conversation.agent_profile_id,
         session_id=conversation.session_id,
         workspace_dir=conversation.workspace_dir,
         archived=conversation.archived,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
-        role_name=role.name if role else None,
-        role_avatar=role.avatar if role else None,
-        agent_name=agent.name if agent else None,
+        agent_name=profile.name if profile else None,
+        agent_avatar=profile.avatar if profile else None,
+        agent_type_id=profile.type_id if profile else None,
         message_count=count,
     )
 
@@ -87,20 +82,16 @@ async def list_conversations(
     counts = dict(
         (await session.execute(select(Message.conversation_id, func.count(Message.id)).group_by(Message.conversation_id))).all()
     )
-    # 角色与智能体各批量取一次：逐个 session.get 会让一次列表请求打出 2N 条查询。
-    role_ids = {c.role_id for c in rows}
-    agent_ids = {c.agent_id for c in rows}
-    roles = {
-        r.id: r for r in (await session.execute(select(Role).where(Role.id.in_(role_ids)))).scalars()
-    }
-    agents = {
-        a.id: a
-        for a in (
-            await session.execute(select(AgentInstance).where(AgentInstance.id.in_(agent_ids)))
+    # 智能体批量取一次：逐个 session.get 会让一次列表请求打出 N 条查询。
+    profile_ids = {c.agent_profile_id for c in rows}
+    profiles = {
+        row.id: row
+        for row in (
+            await session.execute(select(AgentProfile).where(AgentProfile.id.in_(profile_ids)))
         ).scalars()
     }
     items = [
-        _conversation_read(c, roles.get(c.role_id), agents.get(c.agent_id), counts.get(c.id, 0)).model_dump()
+        _conversation_read(c, profiles.get(c.agent_profile_id), counts.get(c.id, 0)).model_dump()
         for c in rows
     ]
     return {"items": items, "active_runs": registry.list()}
@@ -110,15 +101,27 @@ async def list_conversations(
 async def create_conversation(
     payload: ConversationCreate, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    role = await session.get(Role, payload.role_id)
-    if role is None or role.deleted_at is not None:
-        raise HTTPException(status_code=422, detail="指定的 role_id 不存在")
-    conversation = new_conversation(role, payload.title, payload.workspace_dir)
+    """新建对话：不指定智能体就用「默认智能体」（卡片右上角那颗五角星）。
+
+    工作目录同理可以留空（按对话自动分配独立沙箱），进去之后在聊天页输入框上方
+    那两个小图标里随时改 —— 所以「新建」这一步不再需要先做任何选择。
+    """
+    if payload.agent_profile_id:
+        profile = await session.get(AgentProfile, payload.agent_profile_id)
+        if profile is None or profile.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="指定的智能体不存在")
+    else:
+        profile = await pick_default_profile(session)
+        if profile is None:
+            raise HTTPException(
+                status_code=422,
+                detail="还没有可用的智能体：先到「智能体」页创建，并点卡片右上角的五角星设为默认",
+            )
+    conversation = new_conversation(profile, payload.title, payload.workspace_dir)
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
-    agent = await session.get(AgentInstance, conversation.agent_id)
-    return _conversation_read(conversation, role, agent, 0).model_dump()
+    return _conversation_read(conversation, profile, 0).model_dump()
 
 
 @router.get("/{conversation_id}")
@@ -131,9 +134,9 @@ async def get_conversation(conversation_id: str, session: AsyncSession = Depends
             select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
         )
     ).scalars().all()
-    role, agent = await _related(session, conversation)
+    profile = await _related(session, conversation)
     return {
-        "conversation": _conversation_read(conversation, role, agent, len(messages)).model_dump(),
+        "conversation": _conversation_read(conversation, profile, len(messages)).model_dump(),
         "messages": [MessageRead.model_validate(m).model_dump() for m in messages],
         "active_run": registry.active_for(conversation_id).snapshot() if registry.active_for(conversation_id) else None,
     }
@@ -146,15 +149,36 @@ async def update_conversation(
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="对话不存在")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+
+    # 换智能体 / 换工作目录都要让会话记忆重来：内核的 session 是绑在「智能体 + 工作目录」
+    # 上的，留着上一个内核的会话 id 只会把新的一轮带偏（CLI 甚至直接报 resume 失败）。
+    scope_changed = False
+    if data.get("agent_profile_id") and data["agent_profile_id"] != conversation.agent_profile_id:
+        profile = await session.get(AgentProfile, data.pop("agent_profile_id"))
+        if profile is None or profile.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="指定的智能体不存在")
+        conversation.agent_profile_id = profile.id
+        scope_changed = True
+    if "workspace_dir" in data:
+        workspace = (data.pop("workspace_dir") or "").strip()
+        if workspace != (conversation.workspace_dir or ""):
+            scope_changed = True
+        conversation.workspace_dir = workspace or None
+    if scope_changed and registry.active_for(conversation_id):
+        raise HTTPException(status_code=409, detail="这条对话正在运行，先停止或等它结束再改")
+    if scope_changed:
+        conversation.session_id = None
+
+    for field, value in data.items():
         if value is not None:
             setattr(conversation, field, value)
     conversation.updated_at = datetime.now(timezone.utc)
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
-    role, agent = await _related(session, conversation)
-    return _conversation_read(conversation, role, agent).model_dump()
+    profile = await _related(session, conversation)
+    return _conversation_read(conversation, profile).model_dump()
 
 
 @router.delete("/{conversation_id}", status_code=204)
@@ -196,13 +220,13 @@ async def upload_attachment(
     conversation = await session.get(Conversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="对话不存在")
-    role = await session.get(Role, conversation.role_id)
-    if role is None:
-        raise HTTPException(status_code=409, detail="对话绑定的角色已不存在，无法保存附件")
+    profile = await session.get(AgentProfile, conversation.agent_profile_id)
+    if profile is None:
+        raise HTTPException(status_code=409, detail="对话绑定的智能体已不存在，无法保存附件")
 
     try:
         raw = attachments.decode_attachment(payload.content_base64, limit=MAX_ATTACHMENT_BYTES)
-        workspace = Path(resolve_workspace(conversation, role))
+        workspace = Path(resolve_workspace(conversation))
         return attachments.store_attachment(workspace, payload.name, raw).to_dict()
     except attachments.AttachmentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
@@ -225,8 +249,7 @@ def _stream_prepared(prepared) -> StreamingResponse:
                 "conversation_id": prepared.conversation.id,
                 "user_message_id": prepared.user_message.id,
                 "assistant_message_id": prepared.assistant_message.id,
-                "agent": prepared.agent.name,
-                "role": prepared.role.name,
+                "agent": prepared.profile.name,
             }
             async for event in consume_run(session, prepared):
                 yield event.to_dict()

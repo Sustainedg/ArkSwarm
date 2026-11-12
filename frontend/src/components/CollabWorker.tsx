@@ -7,10 +7,10 @@
  * 状态差靠**祖先**上的状态类名（`state-pending` 打盹、`state-active` 敲键盘、`state-waiting` 举手、
  * `state-error` 出错、`state-done` 收工）加 `.collab-station-scene` 触发，样式在两端样式表里各一份。
  */
-import type { CollabRoleState } from '../lib/collabProgress'
+import type { CollabAgentState } from '../lib/collabProgress'
 
 /** 小人头顶的小气泡：一眼看出这个岗位这会儿在忙什么。 */
-const STATE_BUBBLE: Record<CollabRoleState, string> = {
+const STATE_BUBBLE: Record<CollabAgentState, string> = {
   pending: '💤',
   active: '⌨️',
   waiting: '❓',
@@ -18,7 +18,7 @@ const STATE_BUBBLE: Record<CollabRoleState, string> = {
   done: '✅',
 }
 
-export function CollabWorker({ state }: { state: CollabRoleState }) {
+export function CollabWorker({ state }: { state: CollabAgentState }) {
   return (
     <span className="collab-worker">
       <span className="collab-worker-chair" />

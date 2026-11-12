@@ -1,6 +1,6 @@
 """协作域的请求/响应契约与编排图结构。
 
-这里是「画布上的那张图」的权威定义：节点（角色在协作里的岗位）与有向边（允许的流转）。
+这里是「画布上的那张图」的权威定义：节点（智能体在协作里的岗位）与有向边（允许的流转）。
 图的问题分两类：
 
 * **结构性错误**（不是合法的 JSON 形状、类型不对）→ Pydantic 直接 422；
@@ -104,15 +104,15 @@ def _edge_id() -> str:
 
 
 class NodeSpec(BaseModel):
-    """协作图上的一个节点 = 某个角色在本次协作里担任的岗位。"""
+    """协作图上的一个节点 = 某个智能体在本次协作里担任的岗位。"""
 
     model_config = ConfigDict(extra="allow")
 
     key: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
-    role_id: str = Field(min_length=1, max_length=64)
+    agent_profile_id: str = Field(min_length=1, max_length=64)
     label: str = Field(default="", max_length=120)
     duty: Duty = Duty.ENGINEER
-    #: 职责说明，追加在角色人格之后
+    #: 职责说明，追加在智能体人格之后
     instructions: str = ""
     #: 能力边界（写给人看、也写进 prompt 的约束）
     capability_scope: str = ""
@@ -277,8 +277,8 @@ class TicketRead(BaseModel):
     id: str
     run_id: str
     parent_ticket_id: str | None = None
-    from_role_id: str | None = None
-    to_role_id: str
+    from_agent_profile_id: str | None = None
+    to_agent_profile_id: str
     owner_key: str = ""
     holder_key: str = ""
     submitter_key: str = ""
@@ -301,10 +301,9 @@ class StepRead(BaseModel):
     id: str
     run_id: str
     ticket_id: str | None = None
-    #: 用户自己的发言没有角色与智能体
-    role_id: str | None = None
-    agent_id: str | None = None
-    role_name: str | None = None
+    #: 用户自己的发言没有智能体
+    agent_profile_id: str | None = None
+    profile_name: str | None = None
     role_key: str = ""
     duty: str = ""
     sequence: int = 0
@@ -324,15 +323,14 @@ class StepRead(BaseModel):
 
 
 class ChatMessageRead(BaseModel):
-    """入口角色对话的一条消息（``collab_messages``）。"""
+    """入口智能体对话的一条消息（``collab_messages``）。"""
 
     id: str
     run_id: str
     #: user / leader
     sender: str
     role_key: str = ""
-    role_id: str | None = None
-    agent_id: str | None = None
+    agent_profile_id: str | None = None
     sequence: int = 0
     status: str = "complete"
     content: str = ""
@@ -369,7 +367,7 @@ class RunRead(BaseModel):
 class RunDetail(RunRead):
     tickets: list[TicketRead] = Field(default_factory=list)
     steps: list[StepRead] = Field(default_factory=list)
-    #: 入口角色与用户的一对一对话；与工单步骤分开保存、在界面上按时间合并展示
+    #: 入口智能体与用户的一对一对话；与工单步骤分开保存、在界面上按时间合并展示
     chat_messages: list[ChatMessageRead] = Field(default_factory=list)
     #: 当前是否有一条 CEO 回复正在生成（前端刷新后可据此重新订阅聊天流）
     chat_active: bool = False

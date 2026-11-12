@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CredentialVault } from '../components/CredentialVault'
+import { GatewayManager } from '../components/GatewayManager'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
@@ -96,18 +98,10 @@ export function SettingsPage() {
           <p className="dim small">外观是这台设备的个人偏好，只存在本机，不影响别人。</p>
         </section>
 
-        {/* 不在主导航里的两个页面（与移动端设置页的配置入口一致）：一个内核 = 一份安装 + N 份配置。 */}
+        {/* 不在主导航里的配置入口（与移动端设置页一致）：运行时管安装，网关卡管密钥。 */}
         <section className="stack">
           <h2 className="card-section-title">配置</h2>
           <div className="settings-entries">
-            <button className="settings-entry" onClick={() => navigate('/agents')}>
-              <span className="settings-entry-icon">⚙️</span>
-              <span className="settings-entry-main">
-                <span className="settings-entry-title">智能体配置</span>
-                <span className="settings-entry-sub">每个内核的实例：网关 · API 密钥 · 模型 · 适配器选项</span>
-              </span>
-              <span className="settings-entry-chevron">›</span>
-            </button>
             <button className="settings-entry" onClick={() => navigate('/runtimes')}>
               <span className="settings-entry-icon">🧬</span>
               <span className="settings-entry-main">
@@ -118,6 +112,10 @@ export function SettingsPage() {
             </button>
           </div>
         </section>
+
+        <GatewayManager />
+
+        <CredentialVault />
 
         {versionHistory.length > 0 && (
           <section className="stack">

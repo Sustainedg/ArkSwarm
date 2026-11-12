@@ -8,7 +8,9 @@ import { MobileCollabPage } from './pages/MobileCollabPage'
 import { MobileCollabRunPage } from './pages/MobileCollabRunPage'
 import { MobileCollabTeamPage } from './pages/MobileCollabTeamPage'
 import { MobileTicketBoardPage } from './pages/MobileTicketBoardPage'
-import { MobileRolesPage } from './pages/MobileRolesPage'
+import { MobileAgentsPage } from './pages/MobileAgentsPage'
+import { MobileCredentialsPage } from './pages/MobileCredentialsPage'
+import { MobileGatewaysPage } from './pages/MobileGatewaysPage'
 import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
 import { MobileSkillsPage } from './pages/MobileSkillsPage'
@@ -46,7 +48,9 @@ export function MobileApp() {
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<MobileChatPage />} />
         <Route path="/chat/:conversationId" element={<MobileChatPage />} />
-        <Route path="/roles" element={<MobileRolesPage />} />
+        <Route path="/agents" element={<MobileAgentsPage />} />
+        <Route path="/gateways" element={<MobileGatewaysPage />} />
+        <Route path="/credentials" element={<MobileCredentialsPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
         <Route path="/runtimes" element={<MobileRuntimesPage />} />
         <Route path="/collab" element={<MobileCollabPage />} />

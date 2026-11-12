@@ -75,8 +75,8 @@ export interface AgentRuntime {
   /** 官方 Logo 的静态资源路径（后端按适配器声明给出，前端只负责显示） */
   logo?: string | null
   executable?: string | null
-  /** 有多少个智能体实例在用这个运行时 */
-  instances: number
+  /** 有多少个智能体在用这个运行时 */
+  agents: number
   provisioning: RuntimeProvisioning
 }
 
@@ -126,6 +126,12 @@ export interface AgentType {
   base_url_env?: string | null
   default_gateway?: string | null
   default_model?: string | null
+  /** 该内核访问模型时使用的协议（openai / anthropic / gemini），用于匹配自定义网关 */
+  protocol?: string | null
+  /** 该内核默认的鉴权方式（bearer / x-api-key / query / none） */
+  default_auth_style?: string | null
+  /** 该内核官方链路的预置模型（网关「必须成功才能保存」时的兜底清单） */
+  default_models?: string[]
   docs_url?: string | null
   executable?: string | null
   /** 运行时的安装 / 更新方式（`/api/agent-types` 也带上，与「运行时」页同源） */
@@ -134,25 +140,56 @@ export interface AgentType {
   system_defaults?: SystemDefaults
 }
 
-export interface AgentInstance {
+/** 一个网关：自定义网关或内核的官方链路，是 API 密钥的唯一来源。 */
+export interface Gateway {
   id: string
   name: string
-  type_id: string
-  description?: string | null
-  gateway_url?: string | null
-  model?: string | null
-  options: Record<string, unknown>
+  /** official = 内核官方链路（播种生成、不可删）；custom = 用户自建 */
+  kind: 'official' | 'custom'
+  /** 官方链路对应的内核 id；自定义网关为 null */
+  type_id?: string | null
+  /** openai / anthropic / gemini */
+  protocol: string
+  /** bearer / x-api-key / query / none */
+  auth_style: string
+  base_url: string
+  /** 模型白名单（智能体只能从这里面选模型） */
+  selected_models: string[]
+  /** 最近一次「获取模型」探测到的完整清单 */
+  model_catalog: string[]
+  extra_headers: Record<string, unknown>
   enabled: boolean
   created_at: string
   updated_at: string
+  last_probed_at?: string | null
   type_name?: string | null
-  runtime?: 'cli' | 'api' | null
   api_key_set: boolean
   api_key_preview?: string | null
-  availability?: Availability | null
+  /** 有多少个未删除的智能体在用这个网关 */
+  used_by_profiles: number
 }
 
-export interface RoleSkillBrief {
+/** 「获取模型」的探测结果（不落库）。 */
+export interface GatewayProbeResult {
+  ok: boolean
+  message: string
+  models: string[]
+}
+
+/** 下拉选项（协议 / 鉴权方式的候选值）。 */
+export interface GatewayOption {
+  value: string
+  label: string
+}
+
+/** `GET /api/gateways` 的返回：网关列表 + 协议 / 鉴权的候选值。 */
+export interface GatewayList {
+  items: Gateway[]
+  protocols: GatewayOption[]
+  auth_styles: GatewayOption[]
+}
+
+export interface AgentSkillBrief {
   id: string
   name: string
   type_id: string
@@ -160,22 +197,71 @@ export interface RoleSkillBrief {
   available: boolean
 }
 
-export interface Role {
+/** 智能体：人格 + 内核 + 网关 + 模型（原「角色」与「智能体实例」合并而来）。 */
+/** 凭据库里的凭据：全局一份，智能体按引用使用。值永不回传，只有掩码。 */
+export interface Credential {
+  id: string
+  /** 同时就是要注入的环境变量名 */
+  name: string
+  description?: string | null
+  has_value: boolean
+  masked?: string | null
+  /** 有多少个智能体在引用它 */
+  used_by_agents: number
+  created_at: string
+  updated_at: string
+}
+
+/** 智能体引用到的凭据摘要（卡片 / 弹窗上展示）。 */
+export interface AgentCredentialBrief {
+  id: string
+  name: string
+  description?: string | null
+  has_value: boolean
+  masked?: string | null
+}
+
+/**
+ * 提交给后端的一条凭据引用。
+ * `id` 有值＝挑凭据库里已有的那条；没有 `id` 时按 `name` 找同名凭据，
+ * 再找不到就用 `value` 新建一条（于是「直接挑」和「顺手新建」都是一次保存搞定）。
+ */
+export interface AgentCredentialInput {
+  id?: string | null
+  name: string
+  description?: string | null
+  value?: string | null
+}
+
+export interface AgentProfile {
   id: string
   name: string
   avatar: string
   tagline?: string | null
+  description?: string | null
   system_prompt: string
-  agent_id: string
-  workspace_dir?: string | null
-  parameters: Record<string, unknown>
+  type_id: string
+  gateway_id?: string | null
+  /** 新对话默认使用的模型（具体对话可以在对话里改） */
+  model?: string | null
+  options: Record<string, unknown>
+  enabled: boolean
+  /** 默认智能体：新建对话不再先问选谁，直接用这颗星标着的那个（全局唯一） */
+  is_default: boolean
   created_at: string
   updated_at: string
-  agent_name?: string | null
-  agent_type_id?: string | null
-  /** 该角色分配到的技能（技能只能通过分配获得） */
+  type_name?: string | null
+  runtime?: 'cli' | 'api' | null
+  availability?: Availability | null
+  gateway_name?: string | null
+  gateway_base_url?: string | null
+  gateway_kind?: string | null
+  gateway_api_key_set: boolean
+  /** 智能体引用到的凭据（本地加密保存，运行时按环境变量注入；值绝不回传） */
+  credentials: AgentCredentialBrief[]
+  /** 该智能体分配到的技能（技能只能通过分配获得） */
   skill_ids: string[]
-  skills: RoleSkillBrief[]
+  skills: AgentSkillBrief[]
 }
 
 export interface Skill {
@@ -194,7 +280,7 @@ export interface Skill {
   total_bytes: number
   file_count: number
   note?: string | null
-  used_by_roles: number
+  used_by_agents: number
 }
 
 export interface SkillDetail extends Skill {
@@ -205,7 +291,8 @@ export interface SkillDetail extends Skill {
   meta: Record<string, unknown>
   body: string
   body_truncated: boolean
-  roles: { id: string; name: string; avatar: string }[]
+  /** 引用了这个技能的智能体 */
+  agents: { id: string; name: string; avatar: string }[]
 }
 
 export interface SkillRescanResult {
@@ -225,16 +312,15 @@ export interface ConversationDetail {
 export interface Conversation {
   id: string
   title: string
-  role_id: string
-  agent_id: string
+  agent_profile_id: string
   session_id?: string | null
   workspace_dir?: string | null
   archived: boolean
   created_at: string
   updated_at: string
-  role_name?: string | null
-  role_avatar?: string | null
   agent_name?: string | null
+  agent_avatar?: string | null
+  agent_type_id?: string | null
   message_count: number
 }
 
@@ -323,7 +409,7 @@ export interface TestResult {
 }
 
 /* ============================================================
-   协作域（多角色工单协作）—— 与后端 app/collab/schemas.py 一一对应
+   协作域（多智能体工单协作）—— 与后端 app/collab/schemas.py 一一对应
    ============================================================ */
 
 /** 节点在协作里的岗位 */
@@ -347,7 +433,7 @@ export interface CollabChoice {
 
 export interface CollabNode {
   key: string
-  role_id: string
+  agent_profile_id: string
   label: string
   duty: CollabDuty
   instructions: string
@@ -454,8 +540,8 @@ export interface CollabTicket {
   run_id: string
   /** 非空表示这是拆解出来的子工单 */
   parent_ticket_id?: string | null
-  from_role_id?: string | null
-  to_role_id: string
+  from_agent_profile_id?: string | null
+  to_agent_profile_id: string
   /** 谁拆的谁汇总（子工单完成后回到这里） */
   owner_key: string
   /** 现在谁握着 */
@@ -481,9 +567,9 @@ export interface CollabStep {
   id: string
   run_id: string
   ticket_id?: string | null
-  role_id?: string | null
-  agent_id?: string | null
-  role_name?: string | null
+  /** 用户自己的发言没有智能体 */
+  agent_profile_id?: string | null
+  profile_name?: string | null
   /** 节点 key；用户自己的发言是 "user" */
   role_key: string
   duty: string
@@ -503,15 +589,14 @@ export interface CollabStep {
   finished_at?: string | null
 }
 
-/** 入口角色聊天的一条消息（对应后端 `collab_messages`）。 */
+/** 入口智能体聊天的一条消息（对应后端 `collab_messages`）。 */
 export interface CollabChatMessage {
   id: string
   run_id: string
-  /** user = 你；leader = 入口角色 */
+  /** user = 你；leader = 入口智能体 */
   sender: 'user' | 'leader'
   role_key: string
-  role_id?: string | null
-  agent_id?: string | null
+  agent_profile_id?: string | null
   sequence: number
   status: string
   content: string
@@ -577,7 +662,6 @@ export interface CollabEvent {
   node_key?: string
   role_key?: string
   duty?: string
-  role_name?: string
   agent_name?: string
   /** collab.step.event 里内嵌的原始智能体事件 */
   event?: AgentEvent

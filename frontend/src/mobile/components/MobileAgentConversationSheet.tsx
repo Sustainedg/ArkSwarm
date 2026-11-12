@@ -1,15 +1,15 @@
-/** 移动端岗位内部实时会话：全屏底部弹层，线程复用共享的 `CollabRoleThread`。 */
+/** 移动端岗位内部实时会话：全屏底部弹层，线程复用共享的 `CollabAgentThread`。 */
 import { useMemo } from 'react'
-import { CollabRoleThread } from '../../components/CollabRoleThread'
+import { CollabAgentThread } from '../../components/CollabAgentThread'
 import { DUTIES } from '../../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../../lib/collabStream'
-import type { CollabRoleProgress } from '../../lib/collabProgress'
+import type { CollabAgentProgress } from '../../lib/collabProgress'
 import type { CollabStep, CollabTicket } from '../../lib/types'
 import { MobileSheet } from './MobileSheet'
 
 interface Props {
-  node: CollabRoleProgress
-  roster: CollabRoleProgress[]
+  node: CollabAgentProgress
+  roster: CollabAgentProgress[]
   steps: CollabStep[]
   tickets: CollabTicket[]
   live: LiveStep | null
@@ -17,18 +17,18 @@ interface Props {
   onClose: () => void
 }
 
-export function MobileRoleConversationSheet({ node, roster, steps, tickets, live, streamed, onClose }: Props) {
+export function MobileAgentConversationSheet({ node, roster, steps, tickets, live, streamed, onClose }: Props) {
   const dutyLabel = useMemo(
     () => DUTIES.find((item) => item.value === node.duty)?.label ?? node.duty,
     [node.duty],
   )
 
   return (
-    <MobileSheet title={`${node.label} · 实时对话`} onClose={onClose} full bodyClassName="m-collab-role-body">
-      <div className="m-collab-role-meta">
+    <MobileSheet title={`${node.label} · 实时对话`} onClose={onClose} full bodyClassName="m-collab-agent-body">
+      <div className="m-collab-agent-meta">
         <span className="avatar">{node.avatar}</span>
         <div>
-          <div className="m-collab-role-name">{node.label}</div>
+          <div className="m-collab-agent-name">{node.label}</div>
           <div className="dim small">
             {dutyLabel} · {node.stepCount} 步 · {node.stateLabel}
             {node.isEntry ? ' · 入口领导者' : ' · 只读内部对话'}
@@ -44,14 +44,14 @@ export function MobileRoleConversationSheet({ node, roster, steps, tickets, live
           ))}
         </div>
       )}
-      <CollabRoleThread
+      <CollabAgentThread
         node={node}
         roster={roster}
         steps={steps}
         tickets={tickets}
         live={live}
         streamed={streamed}
-        className="m-collab-role-thread"
+        className="m-collab-agent-thread"
         empty={(
           <div className="m-empty">
             <div className="m-empty-icon">{node.avatar}</div>

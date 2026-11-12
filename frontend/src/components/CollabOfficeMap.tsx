@@ -21,7 +21,7 @@ import {
   type OfficeView, type OfficeViewport,
 } from '../lib/collabOffice'
 import {
-  buildFlowRows, roleProgressPercent, type CollabFlowEdge, type CollabRoleProgress,
+  buildFlowRows, agentProgressPercent, type CollabFlowEdge, type CollabAgentProgress,
 } from '../lib/collabProgress'
 import { CollabWorker } from './CollabWorker'
 import { OfficeClock } from './OfficeClock'
@@ -40,10 +40,10 @@ const POPOVER_W = 306
 const POPOVER_H = 250
 
 interface Props {
-  nodes: CollabRoleProgress[]
+  nodes: CollabAgentProgress[]
   edges: CollabFlowEdge[]
   /** 点信息卡上的「查看实时对话」时回调；不传就不显示这个入口。 */
-  onOpenRole?: (key: string) => void
+  onOpenNode?: (key: string) => void
   /** 打开时对准哪儿：`whole` 整间办公室（桌面默认），`desks` 只对准工位那一块（窄屏默认）。 */
   initialView?: 'whole' | 'desks'
 }
@@ -57,7 +57,7 @@ function pointerSpread(points: { x: number; y: number }[]): number {
   return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
 }
 
-export function CollabOfficeMap({ nodes, edges, onOpenRole, initialView = 'whole' }: Props) {
+export function CollabOfficeMap({ nodes, edges, onOpenNode, initialView = 'whole' }: Props) {
   const { theme } = useThemeMode()
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const pointersRef = useRef(new Map<number, { x: number; y: number }>())
@@ -249,7 +249,7 @@ export function CollabOfficeMap({ nodes, edges, onOpenRole, initialView = 'whole
 
       {focused && (() => {
         const tone = OFFICE_STATUS_TONE[focused.node.state]
-        const percent = roleProgressPercent(focused.node)
+        const percent = agentProgressPercent(focused.node)
         const anchor = officeToViewport(view, officeChairPoint(focused.desk))
         const wantRight = anchor.x + 26 + POPOVER_W <= viewport.width
         const badgeTop = anchor.y - (PERSON_HEAD * view.zoom + BADGE_GAP)
@@ -305,12 +305,12 @@ export function CollabOfficeMap({ nodes, edges, onOpenRole, initialView = 'whole
               )}
             </div>
 
-            {onOpenRole && (
+            {onOpenNode && (
               <button
                 type="button"
                 className="btn ghost sm office-popover-more"
                 onClick={() => {
-                  onOpenRole(focused.node.key)
+                  onOpenNode(focused.node.key)
                   setFocusedKey(null)
                 }}
               >

@@ -1,4 +1,4 @@
-"""技能：解析、统一编目、角色分配与运行时物化。
+"""技能：解析、统一编目、智能体分配与运行时物化。
 
 技能的相关约定见 AGENTS.md §3（契约）与 §4（扩展手册）。
 """
@@ -22,6 +22,7 @@ from app.agents.skills import (
 from app.db import SessionLocal
 from app.models import Conversation
 from app.settings import get_settings
+from helpers import make_gateway, make_profile
 
 SKILL_MD = """---
 name: {name}
@@ -300,20 +301,26 @@ def test_codex_uses_isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 async def make_agent(client: httpx.AsyncClient, type_id: str = "custom-cli") -> dict:
-    body: dict = {"name": f"{type_id} 实例", "type_id": type_id}
-    if type_id == "custom-cli":
-        body["options"] = {"command": "echo"}
-    response = await client.post("/api/agents", json=body)
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-async def make_role(client: httpx.AsyncClient, agent_id: str) -> dict:
-    response = await client.post(
-        "/api/roles", json={"name": "审查员", "agent_id": agent_id, "system_prompt": "你是审查员"}
+    gateway = await make_gateway(client)
+    return await make_profile(
+        client,
+        name=f"{type_id} 智能体",
+        type_id=type_id,
+        gateway_id=gateway["id"],
+        model=None,
+        options={"command": "echo"} if type_id == "custom-cli" else {},
     )
-    assert response.status_code == 201, response.text
-    return response.json()
+
+
+async def make_role(client: httpx.AsyncClient, agent: dict) -> dict:
+    return await make_profile(
+        client,
+        name="审查员",
+        type_id=agent["type_id"],
+        gateway_id=agent["gateway_id"],
+        system_prompt="你是审查员",
+        options={"command": "echo"} if agent["type_id"] == "custom-cli" else {},
+    )
 
 
 async def read_sse(response: httpx.Response) -> list[dict]:
@@ -349,7 +356,7 @@ async def test_skills_api_lists_rescans_and_shows_detail(client: httpx.AsyncClie
     assert [item["slug"] for item in items] == ["alpha", "beta"]
     assert items[0]["source_label"] == "个人技能"
     assert items[0]["file_count"] == 3
-    assert items[0]["used_by_roles"] == 0
+    assert items[0]["used_by_agents"] == 0
 
     filtered = (await client.get("/api/skills", params={"q": "beta"})).json()["items"]
     assert [item["slug"] for item in filtered] == ["beta"]
@@ -360,94 +367,93 @@ async def test_skills_api_lists_rescans_and_shows_detail(client: httpx.AsyncClie
     assert {item["path"] for item in detail["files"]} == {
         "SKILL.md", "scripts/run.sh", "references/note.md",
     }
-    assert detail["roles"] == []
+    assert detail["agents"] == []
 
     assert (await client.get("/api/skills/nope")).status_code == 404
 
-    # 目录消失后只标记失效，不删记录（角色分配不会断链）。
+    # 目录消失后只标记失效，不删记录（智能体分配不会断链）。
     skill_service.shutil.rmtree(catalog / "alpha")
     assert (await client.post("/api/skills/rescan")).json()["missing"] == 1
     items = (await client.get("/api/skills")).json()["items"]
     assert next(item for item in items if item["slug"] == "alpha")["available"] is False
 
 
-async def test_role_skills_come_only_from_assignment(client: httpx.AsyncClient, catalog: Path):
+async def test_agent_skills_come_only_from_assignment(client: httpx.AsyncClient, catalog: Path):
     await client.post("/api/skills/rescan")
     agent = await make_agent(client)
-    role = await make_role(client, agent["id"])
+    role = await make_role(client, agent)
     assert role["skill_ids"] == []
 
     response = await client.put(
-        f"/api/roles/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]}
+        f"/api/agents/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]}
     )
     assert response.status_code == 200, response.text
     assert response.json()["skill_ids"] == ["custom-cli:alpha"]
     assert [brief["name"] for brief in response.json()["skills"]] == ["alpha"]
 
-    roles = (await client.get("/api/roles")).json()["items"]
+    roles = (await client.get("/api/agents")).json()["items"]
     listed = next(item for item in roles if item["id"] == role["id"])
     assert listed["skill_ids"] == ["custom-cli:alpha"]
 
     detail = (await client.get("/api/skills/custom-cli:alpha")).json()
-    assert [entry["name"] for entry in detail["roles"]] == ["审查员"]
+    assert [entry["name"] for entry in detail["agents"]] == ["审查员"]
 
     # 类型不匹配 / 不存在的技能都要被服务端挡住（界面同样禁止选择）。
     codex_agent = await make_agent(client, "codex")
-    codex_role = await make_role(client, codex_agent["id"])
+    codex_role = await make_role(client, codex_agent)
     mismatch = await client.put(
-        f"/api/roles/{codex_role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]}
+        f"/api/agents/{codex_role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]}
     )
     assert mismatch.status_code == 422
     assert "不匹配" in mismatch.json()["detail"]
 
     unknown = await client.put(
-        f"/api/roles/{role['id']}/skills", json={"skill_ids": ["custom-cli:不存在"]}
+        f"/api/agents/{role['id']}/skills", json={"skill_ids": ["custom-cli:不存在"]}
     )
     assert unknown.status_code == 422
     assert "不存在" in unknown.json()["detail"]
 
     # 整表替换：清空分配
-    cleared = await client.put(f"/api/roles/{role['id']}/skills", json={"skill_ids": []})
+    cleared = await client.put(f"/api/agents/{role['id']}/skills", json={"skill_ids": []})
     assert cleared.json()["skill_ids"] == []
 
 
-async def test_deleted_role_stops_counting_as_a_skill_user(client: httpx.AsyncClient, catalog: Path):
-    """软删除的角色不再算技能的"使用中"角色，但分配关系保留，历史对话仍能复现技能。"""
+async def test_deleted_agent_stops_counting_as_a_skill_user(client: httpx.AsyncClient, catalog: Path):
+    """软删除的智能体不再算技能的"使用中"智能体，但分配关系保留，历史对话仍能复现技能。"""
     await client.post("/api/skills/rescan")
     agent = await make_agent(client)
-    role = await make_role(client, agent["id"])
-    await client.put(f"/api/roles/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]})
-    assert (await client.get("/api/skills/custom-cli:alpha")).json()["used_by_roles"] == 1
+    role = await make_role(client, agent)
+    await client.put(f"/api/agents/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]})
+    assert (await client.get("/api/skills/custom-cli:alpha")).json()["used_by_agents"] == 1
 
-    assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 204
+    assert (await client.delete(f"/api/agents/{role['id']}")).status_code == 204
 
     detail = (await client.get("/api/skills/custom-cli:alpha")).json()
-    assert detail["roles"] == []
-    assert detail["used_by_roles"] == 0
+    assert detail["agents"] == []
+    assert detail["used_by_agents"] == 0
     async with SessionLocal() as session:
-        assert await skill_service.role_skill_ids(session, role["id"]) == ["custom-cli:alpha"]
+        assert await skill_service.agent_skill_ids(session, role["id"]) == ["custom-cli:alpha"]
 
 
-async def test_role_copies_skills_on_duplicate_and_drops_mismatch_on_rebind(
+async def test_agent_copies_skills_on_duplicate_and_drops_mismatch_on_retype(
     client: httpx.AsyncClient, catalog: Path
 ):
     await client.post("/api/skills/rescan")
     agent = await make_agent(client)
     other = await make_agent(client)
-    role = await make_role(client, agent["id"])
-    await client.put(f"/api/roles/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]})
+    role = await make_role(client, agent)
+    await client.put(f"/api/agents/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]})
 
-    clone = (await client.post(f"/api/roles/{role['id']}/duplicate")).json()
+    clone = (await client.post(f"/api/agents/{role['id']}/duplicate")).json()
     assert clone["skill_ids"] == ["custom-cli:alpha"]
 
-    # 改绑到同类型智能体时保留；改绑到不同类型时丢弃不匹配的技能。
-    same = (await client.patch(f"/api/roles/{role['id']}", json={"agent_id": other["id"]})).json()
+    # 换网关（内核不变）时保留；换内核时丢弃不匹配的技能。
+    same = (
+        await client.patch(f"/api/agents/{role['id']}", json={"gateway_id": other["gateway_id"]})
+    ).json()
     assert same["skill_ids"] == ["custom-cli:alpha"]
 
-    codex_agent = await make_agent(client, "codex")
-    rebound = (
-        await client.patch(f"/api/roles/{role['id']}", json={"agent_id": codex_agent["id"]})
-    ).json()
+    rebound = (await client.patch(f"/api/agents/{role['id']}", json={"type_id": "codex"})).json()
     assert rebound["skill_ids"] == []
 
 
@@ -468,10 +474,10 @@ async def test_run_materializes_assigned_skills_into_isolated_home(
     await client.post("/api/skills/rescan")
 
     agent = await make_agent(client, "codex")
-    role = await make_role(client, agent["id"])
-    await client.put(f"/api/roles/{role['id']}/skills", json={"skill_ids": ["codex:user-skill"]})
+    role = await make_role(client, agent)
+    await client.put(f"/api/agents/{role['id']}/skills", json={"skill_ids": ["codex:user-skill"]})
     conversation = (
-        await client.post("/api/conversations", json={"role_id": role["id"], "title": "技能验证"})
+        await client.post("/api/conversations", json={"agent_profile_id": role["id"], "title": "技能验证"})
     ).json()
 
     # 模拟「隔离之前就存在的旧会话」：隔离目录里没有它的记录，必须改成新会话，否则续接必然失败。
@@ -492,7 +498,7 @@ async def test_run_materializes_assigned_skills_into_isolated_home(
     assert (home / "skills" / "user-skill" / "SKILL.md").is_file()
     names = {path.name for path in (home / "skills").iterdir()}
     # 装了 Codex CLI 的机器上，内核启动时会自己预置 ``skills/.system`` 系统技能目录，
-    # 那不是角色分配带进去的，所以允许它存在；除此之外必须只有分配到的那个技能。
+    # 那不是智能体分配带进去的，所以允许它存在；除此之外必须只有分配到的那个技能。
     assert "user-skill" in names, names
     assert names - {"user-skill", ".system"} == set(), names
     # 源目录里故意放在 ``.system`` 下的未分配技能，绝不能连目录一起被带进来

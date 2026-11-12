@@ -155,6 +155,8 @@ class OpenAIHarnessBase(AgentDefinition):
             root=ctx.workspace_dir or ".",
             allow_shell=bool(ctx.option("allow_shell", True)),
             timeout=int(ctx.option("shell_timeout", 120) or 120),
+            # 智能体凭据只在子 shell 里可见；模型只知道变量名（见 app.credentials）。
+            env=ctx.credentials,
         )
         max_steps = int(ctx.option("max_steps", DEFAULT_MAX_STEPS) or DEFAULT_MAX_STEPS)
         totals: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -316,4 +318,7 @@ class OpenAICompatibleHarness(OpenAIHarnessBase):
     base_url_env = "OPENAI_BASE_URL"
     default_gateway = "https://api.openai.com/v1"
     default_model = "gpt-4o-mini"
+    protocol = "openai"
+    default_auth_style = "bearer"
+    default_models = ["gpt-4o-mini"]
     logo = "/icons/kernels/openai.svg"

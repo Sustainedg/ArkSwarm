@@ -70,6 +70,9 @@ class CodexAgent(AgentDefinition):
     base_url_env = "OPENAI_BASE_URL"
     default_gateway = "https://api.openai.com/v1"
     default_model = "gpt-5-codex"
+    protocol = "openai"
+    default_auth_style = "bearer"
+    default_models = ["gpt-5-codex"]
     docs_url = "https://developers.openai.com/codex/cli/"
     logo = "/icons/kernels/openai.svg"
     capabilities = Capabilities(
@@ -146,9 +149,8 @@ class CodexAgent(AgentDefinition):
             ],
             advanced=True,
         ),
-        ConfigField("add_dirs", "额外工作目录", FieldType.STRING_LIST, advanced=True),
         ConfigField("extra_args", "额外命令行参数", FieldType.STRING_LIST, advanced=True),
-        ConfigField("env", "额外环境变量", FieldType.KEYVALUE, advanced=True),
+        ConfigField("env", "环境变量", FieldType.KEYVALUE, advanced=True),
     )
 
     def discover_skills(self) -> list[SkillSpec]:
@@ -159,7 +161,7 @@ class CodexAgent(AgentDefinition):
         return specs
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
-        """严格仅分配：把运行环境指向只含「角色分配到的技能」的隔离 ``CODEX_HOME``。
+        """严格仅分配：把运行环境指向只含「智能体分配到的技能」的隔离 ``CODEX_HOME``。
 
         ``config.toml`` 与登录态（``auth.json``）会被带过去，避免丢登录或丢自定义供应商。
         """

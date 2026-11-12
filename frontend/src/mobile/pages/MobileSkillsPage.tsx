@@ -13,7 +13,7 @@ const SOURCE_OPTIONS = [
   { value: 'system', label: '内核系统技能' },
 ]
 
-/** 技能：各内核自带技能的统一编目视图；技能只有被角色分配后才生效。 */
+/** 技能：各内核自带技能的统一编目视图；技能只有被智能体分配后才生效。 */
 export function MobileSkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
@@ -77,7 +77,7 @@ export function MobileSkillsPage() {
     <div className="m-page">
       <MobileTopBar
         title="技能"
-        subtitle="统一编目 · 通过角色分配生效"
+        subtitle="统一编目 · 通过智能体分配生效"
         actions={
           <button className="m-icon-btn" onClick={() => void rescan()} disabled={scanning} aria-label="重新扫描">
             {scanning ? '◌' : '↻'}
@@ -163,14 +163,14 @@ export function MobileSkillsPage() {
           )}
 
           <div className="field">
-            <span className="field-label">被哪些角色使用</span>
-            {selected.roles.length === 0 ? (
-              <p className="dim small">还没有角色分配这个技能。</p>
+            <span className="field-label">被哪些智能体使用</span>
+            {selected.agents.length === 0 ? (
+              <p className="dim small">还没有智能体分配这个技能。</p>
             ) : (
               <div className="row wrap" style={{ gap: 6 }}>
-                {selected.roles.map((role) => (
-                  <span className="pill" key={role.id}>
-                    {role.avatar} {role.name}
+                {selected.agents.map((agent) => (
+                  <span className="pill" key={agent.id}>
+                    {agent.avatar} {agent.name}
                   </span>
                 ))}
               </div>

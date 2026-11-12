@@ -11,6 +11,7 @@ from typing import AsyncIterator
 
 from ..agents import AgentContext, AgentDefinition, AgentRun, Runtime
 from ..agents.events import AgentEvent, error, log, run_finished, run_started
+from ..credentials import scrub_event
 from ..settings import get_settings
 from .manager import ActiveRun
 
@@ -22,6 +23,18 @@ _STREAM_CHUNK_SIZE = 1 << 16
 #: 远超 :class:`asyncio.StreamReader` 默认的 64 KiB，因此这里自己拆行并把水位放宽到 64 MiB；
 #: 真越界时丢弃该行剩余内容而不是让整轮运行崩掉（铁律 10：长任务不能因一处噪声中断）。
 _MAX_LINE_BYTES = 64 << 20
+
+
+def _run_secrets(ctx: AgentContext) -> list[str]:
+    """本次运行要从事件文本里擦掉的敏感值：智能体的凭据 + 网关 API 密钥。
+
+    两者都可能被子进程回显（stderr、工具输出），因此都要过 :func:`scrub_event`，
+    否则会经 log / error 事件进 SSE 与数据库（铁律 6：明文密钥禁止进日志 / SSE payload）。
+    """
+    secrets = list(ctx.credentials.values()) if ctx.credentials else []
+    if ctx.api_key:
+        secrets.append(ctx.api_key)
+    return secrets
 
 
 class _StreamLines:
@@ -92,7 +105,7 @@ async def stream_run(
                 timed_out = True
                 yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
                 break
-            yield event
+            yield scrub_event(event, _run_secrets(ctx))
         if timed_out:
             yield run_finished("error")
         else:
@@ -124,13 +137,15 @@ async def stream_cli_run(
     cwd = invocation.cwd or ctx.workspace_dir or os.getcwd()
     Path(cwd).mkdir(parents=True, exist_ok=True)
 
-    env = {**os.environ, **invocation.env}
+    # 凭据按环境变量注入（值绝不进日志/事件）；适配器/网关给的同名变量优先级更高，
+    # 网关始终是模型密钥的唯一来源。
+    env = {**os.environ, **ctx.credentials, **invocation.env}
     env = {k: v.replace("{{RUN_DIR}}", str(run_dir)) for k, v in env.items()}
 
     executable = shutil.which(invocation.argv[0]) if invocation.argv else None
     if executable is None:
         yield log(f"正在启动 {invocation.argv[0]}", "info")
-    preview = " ".join(_redact(invocation.argv, env, ctx.api_key))
+    preview = " ".join(_redact(invocation.argv, env, *_run_secrets(ctx)))
     if len(preview) > 400:
         preview = preview[:400] + " …"
     yield log(preview, "command")
@@ -204,10 +219,10 @@ async def stream_cli_run(
             if line is None:
                 break
             for event in agent_run.feed(line.decode("utf-8", "replace").rstrip("\n")):
-                yield event
+                yield scrub_event(event, _run_secrets(ctx))
 
         for event in agent_run.finish():
-            yield event
+            yield scrub_event(event, _run_secrets(ctx))
         await process.wait()
     finally:
         if process.returncode is None:
@@ -220,7 +235,7 @@ async def stream_cli_run(
         shutil.rmtree(run_dir, ignore_errors=True)
 
     if stderr_text and process.returncode not in (0, None):
-        yield log(stderr_text[-4000:], "stderr")
+        yield scrub_event(log(stderr_text[-4000:], "stderr"), _run_secrets(ctx))
 
     if cancelled or run.cancel_event.is_set():
         yield run_finished("cancelled", exit_code=process.returncode)
@@ -228,11 +243,14 @@ async def stream_cli_run(
         yield run_finished("ok", exit_code=0)
     else:
         if stderr_text and not agent_run.emitted_text:
-            yield error(stderr_text[-800:])
-        yield run_finished(
-            "error",
-            exit_code=process.returncode,
-            detail=stderr_text[-800:] if stderr_text else None,
+            yield scrub_event(error(stderr_text[-800:]), _run_secrets(ctx))
+        yield scrub_event(
+            run_finished(
+                "error",
+                exit_code=process.returncode,
+                detail=stderr_text[-800:] if stderr_text else None,
+            ),
+            _run_secrets(ctx),
         )
 
 

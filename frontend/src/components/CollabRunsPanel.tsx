@@ -1,6 +1,6 @@
 /**
  * 「协作运行」页签：左栏是运行列表，主区是时间线（复用 `MessageView`）与工单状态摘要，
- * 底部输入框直接和入口角色说话（走协作 SSE）。
+ * 底部输入框直接和入口智能体说话（走协作 SSE）。
  *
  * 工单的细节（列表、流转时间线、规则与越权审计）在点击后打开的全屏 `TicketBoard`（三栏看板）里。
  */
@@ -24,7 +24,7 @@ import { buildCollabProgress } from '../lib/collabProgress'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
 import { summarizeUsage } from '../lib/usage'
 import type {
-  CollabChoice, CollabEvent, CollabRun, CollabRunDetail, CollabTeam, Role, StreamClosedEvent,
+  CollabChoice, CollabEvent, CollabRun, CollabRunDetail, CollabTeam, AgentProfile, StreamClosedEvent,
 } from '../lib/types'
 
 /** 一次订阅可能收到协作信封，也可能收到传输层的 ``stream.closed`` 收尾标记。 */
@@ -45,11 +45,11 @@ const RUN_STATUS: Record<string, { label: string; pill: string }> = {
 interface Props {
   runId?: string
   teams: CollabTeam[]
-  roles: Role[]
+  agents: AgentProfile[]
   onOpenRun: (runId: string | null) => void
 }
 
-export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
+export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const [runs, setRuns] = useState<CollabRun[]>([])
   const [detail, setDetail] = useState<CollabRunDetail | null>(null)
   const [turn, setTurn] = useState<CollabTurnState | null>(null)
@@ -280,7 +280,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     }
   }
 
-  /** 把一句话发给入口角色：主流程在跑时走独立聊天通道，否则走正常推进。 */
+  /** 把一句话发给入口智能体：主流程在跑时走独立聊天通道，否则走正常推进。 */
   const sendMessage = async (text: string) => {
     if (!detail || !text.trim()) return
     if (status === 'running' || busy || chatActive) {
@@ -357,12 +357,12 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
   }
 
-  const roleAvatar = (roleId?: string | null, nodeKey?: string) => {
+  const agentAvatar = (agentId?: string | null, nodeKey?: string) => {
     const node = team?.graph.nodes.find((item) => item.key === nodeKey)
-    const role = roles.find((item) => item.id === (roleId ?? node?.role_id))
-    return role?.avatar ?? '🤖'
+    const agent = agents.find((item) => item.id === (agentId ?? node?.agent_profile_id))
+    return agent?.avatar ?? '🤖'
   }
-  const roleLabel = (nodeKey: string, fallback?: string | null) =>
+  const labelOf = (nodeKey: string, fallback?: string | null) =>
     team?.graph.nodes.find((item) => item.key === nodeKey)?.label || fallback || nodeKey
 
   const persistedIds = useMemo(() => new Set(visibleSteps.map((step) => step.id)), [visibleSteps])
@@ -447,23 +447,23 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
     ...timeline.map((message) => ({
       id: message.id,
       message,
-      avatar: message.role === 'user' ? undefined : roleAvatar(undefined, leaderKey),
-      label: message.role === 'user' ? undefined : roleLabel(leaderKey, detail?.entry_key),
+      avatar: message.role === 'user' ? undefined : agentAvatar(undefined, leaderKey),
+      label: message.role === 'user' ? undefined : labelOf(leaderKey, detail?.entry_key),
     })),
     ...(liveMessage && leaderLive
       ? [{
           id: liveMessage.id,
           message: liveMessage,
-          avatar: roleAvatar(undefined, leaderLive.nodeKey),
-          label: roleLabel(leaderLive.nodeKey, leaderLive.roleName),
+          avatar: agentAvatar(undefined, leaderLive.nodeKey),
+          label: labelOf(leaderLive.nodeKey, leaderLive.agentName),
         }]
       : []),
     ...(chatLiveMessage && chatTurn.live
       ? [{
           id: chatLiveMessage.id,
           message: chatLiveMessage,
-          avatar: roleAvatar(undefined, chatTurn.live.roleKey || leaderKey),
-          label: roleLabel(chatTurn.live.roleKey || leaderKey, chatTurn.live.roleName),
+          avatar: agentAvatar(undefined, chatTurn.live.roleKey || leaderKey),
+          label: labelOf(chatTurn.live.roleKey || leaderKey, chatTurn.live.agentName),
         }]
       : []),
   ]
@@ -476,12 +476,12 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
         entryKey: leaderKey,
         steps: detail?.steps ?? [],
         tickets: detail?.tickets ?? [],
-        roles,
+        agents,
         live: turn?.live ?? null,
         streamed: turn?.completed ?? [],
         runStatus: status,
       }),
-    [team?.graph, leaderKey, detail?.steps, detail?.tickets, roles, turn?.live, turn?.completed, status],
+    [team?.graph, leaderKey, detail?.steps, detail?.tickets, agents, turn?.live, turn?.completed, status],
   )
   const progressDone = progress.nodes.filter((node) => node.state === 'done').length
   const progressLive = progress.nodes.some((node) => node.isLive)
@@ -649,7 +649,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
             {besideLeader && (
               <div style={{ padding: '8px 22px 0' }}>
                 <div className="banner info">
-                  协作正在由「{besideLeader.roleName}」处理，可在「协作进度」按钮里点开查看实时输出。
+                  协作正在由「{besideLeader.agentName}」处理，可在「协作进度」按钮里点开查看实时输出。
                 </div>
               </div>
             )}
@@ -663,7 +663,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                     <div className="empty-icon">🤝</div>
                     <p>这次协作还没有开始</p>
                     <p className="dim small" style={{ marginTop: 6 }}>
-                      在下面告诉入口角色「{detail.entry_key}」你想做什么
+                      在下面告诉入口智能体「{detail.entry_key}」你想做什么
                     </p>
                   </div>
                 ) : undefined}
@@ -676,7 +676,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                   <div key={ask.ticketId} className="collab-ask-card">
                     <div className="collab-ask-head">
                       <span className="pill warn">需要你决定</span>
-                      <span className="dim small">入口角色在等你的答复</span>
+                      <span className="dim small">入口智能体在等你的答复</span>
                     </div>
                     <div className="collab-ask-question">{ask.question}</div>
                     <div className="collab-ask-options">
@@ -798,7 +798,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                             ? 'CEO 在线：任务在跑也能随时问进度、补要求；内部输出在「协作进度」里查看'
                             : detail.goal
                               ? '推进模式：发送后会继续跑工单；想纯聊天点上面的按钮'
-                              : '主会话只展示你和领导者；内部角色输出在「协作进度」里查看'}
+                              : '主会话只展示你和领导者；内部智能体输出在「协作进度」里查看'}
                     </span>
                   </span>
                   <span>工作目录：{detail.workspace_dir ?? '默认'}</span>
@@ -822,8 +822,8 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
           tickets={detail.tickets}
           steps={detail.steps}
           graph={team?.graph ?? null}
-          roles={roles}
-          nodeLabel={(key) => roleLabel(key, team?.graph.nodes.find((item) => item.key === key)?.label)}
+          agents={agents}
+          nodeLabel={(key) => labelOf(key, team?.graph.nodes.find((item) => item.key === key)?.label)}
           runTitle={detail.title}
           onClose={() => setBoardOpen(false)}
         />
@@ -900,7 +900,7 @@ export function CollabRunsPanel({ runId, teams, roles, onOpenRun }: Props) {
                 <span className="field-help">
                   {teams.find((item) => item.id === startTeamId)?.workspace_dir
                     ? `留空则使用团队默认路径：${teams.find((item) => item.id === startTeamId)?.workspace_dir}`
-                    : '留空则使用每次运行自动分配的默认路径。填写后所有角色只能在该路径内读写。'}
+                    : '留空则使用每次运行自动分配的默认路径。填写后所有智能体只能在该路径内读写。'}
                 </span>
               </label>
             </div>

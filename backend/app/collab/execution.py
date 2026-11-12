@@ -2,7 +2,7 @@
 
 它做四件事，其余一律不管（编排决策在 ``engine.py``）：
 
-1. 把「节点绑定的角色 → 智能体实例 → 适配器定义」解析出来（读库，只读）；
+1. 把「节点绑定的智能体 → 适配器定义」解析出来（读库，只读）；
 2. 组装 :class:`AgentContext` —— 这里是「不共享记忆」的执行侧落地：
    ``history=[]``、``session_id=None``，每次步骤都是全新会话；
 3. 调用 :func:`runtime.runner.stream_run` 拿规范化事件流（取消、超时、命令脱敏全部复用）；
@@ -22,10 +22,12 @@ from sqlmodel import func, select
 
 from ..agents import AgentContext, AgentDefinition, get_agent
 from ..agents.events import AgentEvent
-from ..models import AgentInstance, Role, RoleSkill, new_id
+from ..credentials import with_notice
+from ..models import AgentProfile, AgentSkill, Gateway, new_id
+from ..runtime.credentials import decrypt_for_profile
+from ..runtime.gateway import bind_gateway
 from ..runtime.manager import ActiveRun
 from ..runtime.runner import stream_run
-from ..security import decrypt
 from ..settings import get_settings
 from .graph import effective_workspace_scope
 from .schemas import NodeSpec, WorkspaceScope
@@ -42,8 +44,7 @@ class StepError(Exception):
 
 @dataclass(slots=True)
 class PreparedStep:
-    role: Role
-    agent: AgentInstance
+    profile: AgentProfile
     definition: AgentDefinition
     ctx: AgentContext
     workspace: str
@@ -115,7 +116,7 @@ class StepRegistry:
 
 #: 工单步骤的句柄表：主流程串行推进，同一时刻最多一个。
 registry = StepRegistry()
-#: 入口角色聊天的句柄表：与主流程完全分开，聊天不会挡住工单推进，反之亦然。
+#: 入口智能体聊天的句柄表：与主流程完全分开，聊天不会挡住工单推进，反之亦然。
 chat_registry = StepRegistry()
 
 
@@ -143,7 +144,7 @@ def ensure_workspace(run: CollabRun) -> Path:
 def _step_cwd(run: CollabRun, node: NodeSpec) -> tuple[str, WorkspaceScope]:
     """所有岗位都以团队工作路径为 cwd；读写范围由 ``workspace_scope`` 约束。
 
-    路径统一后，角色之间不会各自落到不同的临时目录；``none`` / ``read`` 仍按原语义
+    路径统一后，智能体之间不会各自落到不同的临时目录；``none`` / ``read`` 仍按原语义
     通过提示词约束并对共享目录做越权审计，违反时不会静默放过。
     """
     scope = effective_workspace_scope(node)
@@ -200,71 +201,71 @@ def audit_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
 # --- 步骤准备与执行 ---------------------------------------------------------
 
 
-async def _role_skill_count(session: AsyncSession, role_id: str) -> int:
-    query = select(func.count()).select_from(RoleSkill).where(RoleSkill.role_id == role_id)
+async def _profile_skill_count(session: AsyncSession, profile_id: str) -> int:
+    query = select(func.count()).select_from(AgentSkill).where(AgentSkill.agent_profile_id == profile_id)
     return int((await session.execute(query)).scalar() or 0)
 
 
 @dataclass(slots=True)
-class ResolvedAgent:
-    """一个岗位解析出来的角色 / 智能体 / 运行参数（工单步骤与聊天共用）。"""
+class ResolvedProfile:
+    """一个岗位解析出来的智能体与运行参数（工单步骤与聊天共用）。"""
 
-    role: Role
-    agent: AgentInstance
+    profile: AgentProfile
     definition: AgentDefinition
     options: dict[str, Any]
     model: str | None
     gateway: str | None
+    api_key: str | None
+    auth_style: str | None
+    #: 智能体凭据（解密后的「环境变量名 → 明文」）
+    credentials: dict[str, str]
     cwd: str
     scope: WorkspaceScope
     #: 需要以 notice 暴露给用户的说明（例如「技能这次没注入」）
     warnings: list[str] = field(default_factory=list)
 
 
-async def _resolve_agent(
+async def _resolve_profile(
     session: AsyncSession, *, run: CollabRun, node: NodeSpec
-) -> ResolvedAgent:
-    """把节点上的角色、智能体与运行参数解析出来（步骤与聊天共用）。"""
-    role = await session.get(Role, node.role_id)
-    if role is None:
-        raise StepError(f"节点「{node.label or node.key}」绑定的角色已不存在")
-    agent = await session.get(AgentInstance, role.agent_id)
-    if agent is None:
-        raise StepError(f"角色「{role.name}」绑定的智能体已不存在")
-    if not agent.enabled:
-        raise StepError(f"智能体「{agent.name}」已停用")
+) -> ResolvedProfile:
+    """把节点上的智能体与运行参数解析出来（步骤与聊天共用）。"""
+    profile = await session.get(AgentProfile, node.agent_profile_id)
+    if profile is None or profile.deleted_at is not None:
+        raise StepError(f"节点「{node.label or node.key}」绑定的智能体已不存在")
+    if not profile.enabled:
+        raise StepError(f"智能体「{profile.name}」已停用")
 
     try:
-        definition = get_agent(agent.type_id)
+        definition = get_agent(profile.type_id)
     except KeyError as exc:
         raise StepError(str(exc)) from None
 
-    # 角色参数优先于智能体实例默认值，节点级覆盖优先级最高
-    options = definition.coerce_options(agent.options or {})
-    options = {**options, **(role.parameters or {})}
+    gateway_row = await session.get(Gateway, profile.gateway_id) if profile.gateway_id else None
+    binding = bind_gateway(definition, gateway_row)
+
+    options = definition.coerce_options(profile.options or {})
     if node.options_override:
         options = {**options, **definition.coerce_options({**options, **node.options_override})}
 
-    model = (role.parameters or {}).get("model") or definition.resolve_model(agent.model)
-    gateway = (role.parameters or {}).get("gateway_url") or definition.resolve_gateway(
-        agent.gateway_url
-    )
+    model = profile.model or definition.resolve_model(None)
     cwd, scope = _step_cwd(run, node)
 
     warnings: list[str] = []
-    skill_count = await _role_skill_count(session, role.id)
+    skill_count = await _profile_skill_count(session, profile.id)
     if skill_count:
         warnings.append(
-            f"角色「{role.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
+            f"智能体「{profile.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
             "（技能物化安排在 M5，见 docs/collaboration-design.md §11）"
         )
-    return ResolvedAgent(
-        role=role,
-        agent=agent,
+    return ResolvedProfile(
+        profile=profile,
         definition=definition,
         options=options,
         model=model,
-        gateway=gateway,
+        gateway=binding.url,
+        api_key=binding.api_key,
+        auth_style=binding.auth_style,
+        credentials=await decrypt_for_profile(session, profile.id),
         cwd=cwd,
         scope=scope,
         warnings=warnings,
@@ -273,32 +274,36 @@ async def _resolve_agent(
 
 def _build_context(
     *,
-    role: Role,
-    agent: AgentInstance,
+    profile: AgentProfile,
     definition: AgentDefinition,
     options: dict[str, Any],
     model: str | None,
     gateway: str | None,
+    api_key: str | None,
+    auth_style: str | None,
+    credentials: dict[str, str],
     cwd: str,
     prompt: str,
     history: list[dict[str, str]] | None = None,
 ) -> AgentContext:
     text = prompt
-    system_prompt = role.system_prompt or None
+    # 凭据只以环境变量注入（值不进提示词），人格里只加一段「可用凭据」的名字清单。
+    system_prompt = with_notice(profile.system_prompt or None, credentials)
     if system_prompt and not definition.capabilities.native_system_prompt:
         # 适配器不接受独立人格参数时，把人格折进这一轮的输入（同对话链路的做法）
         text = f"[system]\n{system_prompt}\n\n{prompt}"
         system_prompt = None
 
     return AgentContext(
-        agent_id=agent.id,
-        agent_name=agent.name,
+        agent_id=profile.id,
+        agent_name=profile.name,
         options=options,
         gateway_url=gateway,
-        api_key=decrypt(agent.api_key_encrypted),
+        api_key=api_key,
+        auth_style=auth_style,
         model=model,
-        role_name=role.name,
         system_prompt=system_prompt,
+        credentials=credentials,
         workspace_dir=cwd,
         # 「不共享记忆」：每次步骤都是全新会话，历史只走工单载荷
         session_id=None,
@@ -315,22 +320,23 @@ async def prepare_step(
     step_id: str,
     prompt: str,
 ) -> PreparedStep:
-    """解析角色与智能体、组装一次工单步骤的上下文。"""
-    resolved = await _resolve_agent(session, run=run, node=node)
+    """解析智能体与智能体、组装一次工单步骤的上下文。"""
+    resolved = await _resolve_profile(session, run=run, node=node)
     ctx = _build_context(
-        role=resolved.role,
-        agent=resolved.agent,
+        profile=resolved.profile,
         definition=resolved.definition,
         options=resolved.options,
         model=resolved.model,
         gateway=resolved.gateway,
+        api_key=resolved.api_key,
+        auth_style=resolved.auth_style,
+        credentials=resolved.credentials,
         cwd=resolved.cwd,
         prompt=prompt,
     )
 
     prepared = PreparedStep(
-        role=resolved.role,
-        agent=resolved.agent,
+        profile=resolved.profile,
         definition=resolved.definition,
         ctx=ctx,
         workspace=resolved.cwd,
@@ -350,26 +356,27 @@ async def prepare_chat(
     node: NodeSpec,
     prompt: str,
 ) -> PreparedStep:
-    """组装入口角色的一次聊天上下文。
+    """组装入口智能体的一次聊天上下文。
 
-    与工单步骤共用角色/智能体解析与适配器能力，但**不做越权审计、不注入技能警告之外的
+    与工单步骤共用智能体/智能体解析与适配器能力，但**不做越权审计、不注入技能警告之外的
     工单记忆**。聊天历史已经由 ``prompt.build_chat_prompt`` 折进这一轮正文；这里仍保持
     ``session_id=None``，避免不同设备/重试时悄悄续接到旧服务端会话。
     """
-    resolved = await _resolve_agent(session, run=run, node=node)
+    resolved = await _resolve_profile(session, run=run, node=node)
     ctx = _build_context(
-        role=resolved.role,
-        agent=resolved.agent,
+        profile=resolved.profile,
         definition=resolved.definition,
         options=resolved.options,
         model=resolved.model,
         gateway=resolved.gateway,
+        api_key=resolved.api_key,
+        auth_style=resolved.auth_style,
+        credentials=resolved.credentials,
         cwd=resolved.cwd,
         prompt=prompt,
     )
     return PreparedStep(
-        role=resolved.role,
-        agent=resolved.agent,
+        profile=resolved.profile,
         definition=resolved.definition,
         ctx=ctx,
         workspace=resolved.cwd,

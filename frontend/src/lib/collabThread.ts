@@ -1,17 +1,17 @@
 /**
  * 把一个岗位在协作里的「对话上下文」拼出来。
  *
- * 协作是串行的交接链：上游角色派工时的发言 + 这张工单的要点，就是下游角色**收到的话**。
+ * 协作是串行的交接链：上游智能体派工时的发言 + 这张工单的要点，就是下游智能体**收到的话**。
  * 岗位抽屉据此按时间顺序展示「谁对我说了什么 → 我做了什么」，而不是只列我自己的步骤；
  * 入口领导者还额外接收用户的开场消息。本模块不碰 DOM、不发请求，桌面端与移动端共用。
  */
 import type { CollabStep, CollabTicket } from './types'
 
-export type RoleThreadKind = 'user' | 'handoff' | 'work'
+export type AgentThreadKind = 'user' | 'handoff' | 'work'
 
-export interface RoleThreadEntry {
+export interface AgentThreadEntry {
   id: string
-  kind: RoleThreadKind
+  kind: AgentThreadKind
   sequence: number
   /** user / handoff：来源节点 key 与显示名（用户没有 key） */
   fromKey?: string
@@ -25,7 +25,7 @@ export interface RoleThreadEntry {
   step?: CollabStep
 }
 
-export interface RoleThreadInput {
+export interface AgentThreadInput {
   nodeKey: string
   isEntry: boolean
   steps: CollabStep[]
@@ -34,20 +34,20 @@ export interface RoleThreadInput {
   avatarOf: (key: string) => string
 }
 
-/** 去掉交接正文里可能残留的围栏代码块，只留角色说的人话。 */
+/** 去掉交接正文里可能残留的围栏代码块，只留智能体说的人话。 */
 function readableMessage(text: string | null | undefined): string {
   const cleaned = (text ?? '').replace(/```[a-zA-Z_]*[\s\S]*?```/g, '').trim()
   return cleaned
 }
 
-export function buildRoleThread({
+export function buildAgentThread({
   nodeKey,
   isEntry,
   steps,
   tickets,
   labelOf,
   avatarOf,
-}: RoleThreadInput): RoleThreadEntry[] {
+}: AgentThreadInput): AgentThreadEntry[] {
   const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]))
   const childrenByParent = new Map<string, CollabTicket[]>()
   for (const ticket of tickets) {
@@ -57,7 +57,7 @@ export function buildRoleThread({
     childrenByParent.set(ticket.parent_ticket_id, list)
   }
 
-  const entries: RoleThreadEntry[] = []
+  const entries: AgentThreadEntry[] = []
 
   for (const step of steps) {
     if (step.role_key === nodeKey) {

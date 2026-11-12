@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = 3600
     #: 安装/更新/卸载智能体运行时（CLI 内核）的单次上限；比一次对话更宽松。
     provision_timeout_seconds: int = 900
-    default_agent_type: str = "claude-code"
 
     @property
     def sqlalchemy_url(self) -> str:

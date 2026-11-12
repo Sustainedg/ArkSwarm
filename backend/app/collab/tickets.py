@@ -1,6 +1,6 @@
-"""工单协议：解析角色的输出、校验语义、渲染下游交付载荷（纯函数）。
+"""工单协议：解析智能体的输出、校验语义、渲染下游交付载荷（纯函数）。
 
-角色之间**不共享记忆**，唯一的交接物就是一个 ``work_order`` 代码块。因此这里的容错
+智能体之间**不共享记忆**，唯一的交接物就是一个 ``work_order`` 代码块。因此这里的容错
 设计是整条链路最关键的地方：
 
 1. 严格 JSON。模型老实输出时走这条，最快也最可靠。
@@ -24,7 +24,7 @@ from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, Tick
 
 #: 工单块的围栏标记
 FENCE = "work_order"
-#: 入口角色聊天里可选的「需求细化」围栏标记
+#: 入口智能体聊天里可选的「需求细化」围栏标记
 CHAT_FENCE = "chat_update"
 
 #: 允许的 JSON 对象扫描体积上限（避免畸形输出把解析拖死）
@@ -370,7 +370,7 @@ def ensure_ask_options(order: WorkOrder) -> bool:
                 AskOption(
                     label=label,
                     value=label,
-                    description="让入口角色按它建议的方案继续推进。",
+                    description="让入口智能体按它建议的方案继续推进。",
                 )
             )
             labels.add(label.lower())
@@ -1035,7 +1035,7 @@ def render_protocol_guide(
         rules.append(
             "escalate 是**往上上报**：你自己解决不了的阻塞（缺权限、需求不清、依赖外部资源）用它，"
             "必须给 reason（写清卡在哪、需要什么）。工单会交回发起人；发起人也解决不了就继续往上报，"
-            "一直到入口角色向用户确认。不要用 delegate 把同一件事换个说法再往下派，那只是把问题原地推一圈。"
+            "一直到入口智能体向用户确认。不要用 delegate 把同一件事换个说法再往下派，那只是把问题原地推一圈。"
         )
     if TicketAction.ASK_USER not in actions and TicketAction.DONE in actions:
         if TicketAction.ESCALATE in actions:
@@ -1051,7 +1051,7 @@ def render_protocol_guide(
     if TicketAction.ASK_USER in actions:
         rules.append(
             "需要用户拍板时用 ask_user：question 写清要决定什么；options 给 2-6 条可点选项，"
-            "每条形如 {\"label\":\"选项标题\",\"value\":\"点选后回传给角色的完整答复\","
+            "每条形如 {\"label\":\"选项标题\",\"value\":\"点选后回传给智能体的完整答复\","
             "\"description\":\"可选的一句说明\"}；需要用户自由填写时再加一条 "
             "{\"label\":\"我来补充\",\"value\":\"\",\"freeform\":true}。不要把选项只写在正文里。"
         )

@@ -1,7 +1,7 @@
 /**
  * 工单看板（全屏三栏）：左边工单列表、中间流转时间线、右边静态规则。
  *
- * 工单是角色之间**唯一**的交接物，所以这张看板要在一屏里回答三件事：
+ * 工单是智能体之间**唯一**的交接物，所以这张看板要在一屏里回答三件事：
  * 有哪些工单（左上→下）、这一张上谁把什么交给了谁（中）、派发时定下的规则是什么（右）。
  * 时间线上只有动作徽章是彩色；token、耗时、工作目录指纹都压成卡片底部的小字，
  * 唯一例外是「只读节点却动了工作目录」——它翻红，并列出被点名的文件。
@@ -9,7 +9,7 @@
  * 视图模型在 `lib/ticketBoard.ts`（与移动端共用），这里只管布局与交互。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { CollabGraph, CollabStep, CollabTicket, Role } from '../lib/types'
+import type { CollabGraph, CollabStep, CollabTicket, AgentProfile } from '../lib/types'
 import type { BoardFilter, BoardTicket } from '../lib/ticketBoard'
 import { buildBoardModel, filterTickets, formatTokens } from '../lib/ticketBoard'
 import {
@@ -27,8 +27,8 @@ interface Props {
   steps: CollabStep[]
   /** 本次运行的协作图，用来取节点的岗位与工作目录作用域 */
   graph?: CollabGraph | null
-  roles: Role[]
-  /** 把节点 key 翻成人看的角色名 */
+  agents: AgentProfile[]
+  /** 把节点 key 翻成人看的智能体名 */
   nodeLabel: (key: string) => string
   /** 运行标题，放在顶栏说明这是哪次协作 */
   runTitle?: string
@@ -41,14 +41,14 @@ const FILTERS: { key: BoardFilter; label: string }[] = [
   { key: 'done', label: '已完成' },
 ]
 
-export function TicketBoard({ tickets, steps, graph, roles, nodeLabel, runTitle, onClose }: Props) {
+export function TicketBoard({ tickets, steps, graph, agents, nodeLabel, runTitle, onClose }: Props) {
   const [keyword, setKeyword] = useState('')
   const [filter, setFilter] = useState<BoardFilter>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const model = useMemo(
-    () => buildBoardModel({ tickets, steps, graph, roles, nodeLabel }),
-    [tickets, steps, graph, roles, nodeLabel],
+    () => buildBoardModel({ tickets, steps, graph, agents, nodeLabel }),
+    [tickets, steps, graph, agents, nodeLabel],
   )
   const visible = useMemo(
     () => filterTickets(model.tickets, filter, keyword),
@@ -89,7 +89,7 @@ export function TicketBoard({ tickets, steps, graph, roles, nodeLabel, runTitle,
           <div className="empty" style={{ margin: 'auto' }}>
             <div className="empty-icon">📋</div>
             <p>这次协作还没有工单</p>
-            <p className="dim small" style={{ marginTop: 6 }}>入口角色把活派出去之后，工单会出现在这里。</p>
+            <p className="dim small" style={{ marginTop: 6 }}>入口智能体把活派出去之后，工单会出现在这里。</p>
           </div>
         ) : (
           <div className="board-shell">
@@ -186,7 +186,7 @@ export function TicketBoard({ tickets, steps, graph, roles, nodeLabel, runTitle,
                       </div>
                     )}
                     {active.entries.length === 0 ? (
-                      <p className="dim small">还没有角色处理过它。</p>
+                      <p className="dim small">还没有智能体处理过它。</p>
                     ) : (
                       <div className="board-timeline">
                         <span className="board-timeline-rail" aria-hidden />

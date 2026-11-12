@@ -38,7 +38,7 @@ def test_spa_deep_links_split_between_desktop_and_mobile(tmp_path: Path):
 
     assert resolve_spa_target(tmp_path, "") == desktop
     assert resolve_spa_target(tmp_path, "chat/abc") == desktop
-    assert resolve_spa_target(tmp_path, "roles") == desktop
+    assert resolve_spa_target(tmp_path, "agent_profiles") == desktop
 
     assert resolve_spa_target(tmp_path, "m") == mobile
     assert resolve_spa_target(tmp_path, "m/") == mobile
@@ -456,8 +456,8 @@ def test_collab_run_is_the_office_with_the_chat_hidden_behind_a_tap():
     # 时间线只在对话弹层里出现：主页面是办公室，不是聊天界面。
     assert 'className="m-thread m-run-chat-thread"' in page, "时间线应当只在对话弹层里"
     assert "m-run-stage" in page, "主页面留一块专门放办公室画布的区域"
-    # 点人物 = 打开对话；入口角色的对话就是「你 ↔ 领导者」那条线。
-    assert "openRole" in page and "setChatOpen(true)" in page, "点动画里的人物要能打开对话界面"
+    # 点人物 = 打开对话；入口智能体的对话就是「你 ↔ 领导者」那条线。
+    assert "openNode" in page and "setChatOpen(true)" in page, "点动画里的人物要能打开对话界面"
     assert 'aria-label="与领导者对话"' not in page, "顶栏不要再塞一个对话按钮（点人物才是入口）"
 
     # 协作聊天也能带附件（后端与对话走同一套 app.attachments）。
@@ -499,25 +499,30 @@ def test_collab_composer_lets_the_user_pick_chat_or_advance():
 
 
 @needs_frontend
-def test_agent_settings_live_inside_the_runtimes_page():
-    """智能体设置并入「运行时」：一个内核 = 一份安装 + N 份配置，别再拆成两个页面。"""
+def test_agents_own_the_configuration_and_runtimes_own_the_install():
+    """网关升格为唯一密钥来源后：配置在「智能体」页，安装 / 更新在「运行时」页，两者不再混在一起。"""
     pages = {path.name for path in (MOBILE_SRC / "pages").glob("*.tsx")}
-    assert "MobileAgentsPage.tsx" not in pages, "移动端不该再有独立的智能体配置页"
+    assert "MobileAgentsPage.tsx" in pages, "移动端要有独立的智能体配置页（原「角色」页改名而来）"
+    assert "MobileRolesPage.tsx" not in pages, "「角色」这个词应当已经彻底换成「智能体」"
+    assert "MobileGatewaysPage.tsx" in pages, "自定义网关要有自己的管理页"
+
+    components = {path.name for path in (MOBILE_SRC / "components").glob("*.tsx")}
+    assert "MobileAgentSettings.tsx" not in components, "内核的「实例配置」面板已经取消（密钥归网关）"
 
     app = (MOBILE_SRC / "MobileApp.tsx").read_text(encoding="utf-8")
-    assert "/agents" not in app, "移动端路由里不该再挂 /agents"
-
-    panel = MOBILE_SRC / "components" / "MobileAgentSettings.tsx"
-    assert panel.is_file(), "该内核的智能体设置应当是一个可复用面板"
-    panel_text = panel.read_text(encoding="utf-8")
-    assert "DynamicForm" in panel_text, "适配器选项仍由 DynamicForm 渲染（前端不硬编码字段）"
+    assert "/agents" in app, "移动端要挂上 /agents"
+    assert "/gateways" in app, "移动端要挂上 /gateways"
 
     runtimes = (MOBILE_SRC / "pages" / "MobileRuntimesPage.tsx").read_text(encoding="utf-8")
-    assert "MobileAgentSettings" in runtimes and "setSettingsFor" in runtimes, "运行时页每个内核要有「设置」入口"
+    assert "MobileAgentSettings" not in runtimes, "运行时页不再内嵌智能体配置"
+
+    agents = (MOBILE_SRC / "pages" / "MobileAgentsPage.tsx").read_text(encoding="utf-8")
+    assert "DynamicForm" in agents, "适配器选项仍由 DynamicForm 渲染（前端不硬编码字段）"
+    assert "listGateways" in agents, "网关下拉要读 /api/gateways"
 
     settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
-    assert "/agents" not in settings, "设置页不该再指向智能体配置页"
     assert "运行时" in settings and "技能" in settings
+    assert "网关" in settings, "设置页要有自定义网关入口"
     # 运行概览 / 版本记录这些信息不再占小屏（只认小节标题，注释里提到不算）。
     for label in ("运行概览", "版本记录"):
         assert f'card-section-title">{label}' not in settings, f"设置页不该再有「{label}」小节"

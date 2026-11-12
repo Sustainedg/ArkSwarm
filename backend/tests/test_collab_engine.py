@@ -2,7 +2,7 @@
 
 这些用例同时守住两件最要紧的承诺：
 
-* 角色之间**只传工单**（下游的 prompt 里不会出现任何角色的对话原文）；
+* 智能体之间**只传工单**（下游的 prompt 里不会出现任何智能体的对话原文）；
 * 任何异常/不符合协议都**显式挂起**（``waiting_user``），并且能重试续跑。
 """
 from __future__ import annotations
@@ -26,11 +26,11 @@ from app.collab import graph as graph_service
 from app.collab.store import recover_interrupted
 from app.collab.tables import CollabRun, CollabStep, CollabTicket
 from app.db import SessionLocal
-from app.models import AgentInstance, Role, utcnow
+from app.models import AgentProfile, Gateway, utcnow
+from helpers import collab_options
 
-FAKE_AGENT = str(Path(__file__).parent / "fakes" / "fake_collab_agent.py")
 
-#: 每个角色都会说的一句口头禅；它出现在别人的输入里就说明「共享了对话记忆」
+#: 每个智能体都会说的一句口头禅；它出现在别人的输入里就说明「共享了对话记忆」
 CHITCHAT = "我来处理"
 
 HANDOFF = {
@@ -46,7 +46,7 @@ HANDOFF = {
     },
 }
 
-#: 收尾汇报：根工单完成后交回入口角色（CEO），它只汇报结论并 done 关闭工单。
+#: 收尾汇报：根工单完成后交回入口智能体（CEO），它只汇报结论并 done 关闭工单。
 CLOSING = {"action": "done", "remark": "已交付：暗色主题已上线，改动集中在 frontend/src/theme.ts"}
 
 FULL_SCRIPT = {
@@ -94,38 +94,29 @@ async def read_sse(response: httpx.Response) -> list[dict]:
 
 
 async def make_scenario(script: dict, tmp_path: Path) -> dict:
-    """造好「一个假智能体 + 四个角色 + 剧本文件」。"""
+    """造好「一个假智能体 + 四个智能体 + 剧本文件」。"""
     script_path = tmp_path / "script.json"
     script_path.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     async with SessionLocal() as session:
-        agent = AgentInstance(
-            name="假协作智能体",
-            type_id="custom-cli",
-            options={
-                "command": sys.executable,
-                "args": [FAKE_AGENT, str(script_path), str(state_dir)],
-                "prompt_mode": "stdin",
-                "output_format": "jsonl",
-                "text_path": "delta",
-                "delta_mode": True,
-                "session_path": "session_id",
-                "usage_path": "usage",
-            },
+        gateway = Gateway(
+            name="协作测试网关", kind="custom", base_url="https://gw.example/v1", selected_models=[]
         )
-        session.add(agent)
+        session.add(gateway)
         await session.commit()
-        await session.refresh(agent)
+        await session.refresh(gateway)
 
         roles = {}
         for key, name in (("ceo", "CEO"), ("cto", "CTO"), ("se", "SE"), ("qa", "审查员")):
-            role = Role(
+            role = AgentProfile(
                 name=name,
                 avatar="🧑",
                 system_prompt=f"你是 {name}。",
-                agent_id=agent.id,
+                type_id="custom-cli",
+                gateway_id=gateway.id,
+                options=collab_options(script_path, state_dir),
             )
             session.add(role)
             await session.commit()
@@ -133,8 +124,7 @@ async def make_scenario(script: dict, tmp_path: Path) -> dict:
             roles[key] = role.id
 
     return {
-        "agent_id": agent.id,
-        "roles": roles,
+        "agent_profiles": roles,
         "state_dir": state_dir,
         "script_path": script_path,
     }
@@ -144,13 +134,13 @@ def team_body(roles: dict[str, str], workspace_dir: str | None = None) -> dict:
     """CEO → CTO → SE，SE 提交给审查员，审查员可直接打回 SE（也可交回 CTO）。"""
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR,
+            NodeSpec(key="ceo", agent_profile_id=roles["ceo"], label="CEO", duty=Duty.COORDINATOR,
                      instructions="只负责理解需求与派活，不写代码",
                      capability_scope="不得写代码、不得访问工作目录"),
-            NodeSpec(key="cto", role_id=roles["cto"], label="CTO", duty=Duty.COORDINATOR,
+            NodeSpec(key="cto", agent_profile_id=roles["cto"], label="CTO", duty=Duty.COORDINATOR,
                      instructions="负责拆解任务与汇总"),
-            NodeSpec(key="se", role_id=roles["se"], label="SE", duty=Duty.ENGINEER),
-            NodeSpec(key="qa", role_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
+            NodeSpec(key="se", agent_profile_id=roles["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="qa", agent_profile_id=roles["qa"], label="审查员", duty=Duty.REVIEWER),
         ],
         edges=[
             EdgeSpec(from_key="ceo", to_key="cto", kind=EdgeKind.ASSIGN),
@@ -221,7 +211,7 @@ async def full(client: httpx.AsyncClient, tmp_path: Path) -> dict:
 
 
 async def test_full_chain_with_one_rework_round(client: httpx.AsyncClient, full):
-    run_id, events = await start_run(client, full["roles"], "把登录页改成暗色主题")
+    run_id, events = await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
 
     kinds = [event["type"] for event in events]
     # 串行推进：每一步都有 started / finished，最后给出运行状态
@@ -242,7 +232,7 @@ async def test_full_chain_with_one_rework_round(client: httpx.AsyncClient, full)
     child = next(t for t in detail["tickets"] if t["parent_ticket_id"])
     assert child["state"] == "done" and child["round"] == 1 and child["verdict"] == "pass"
 
-    # 时间线：用户 1 条 + 角色 8 条，且顺序与岗位一致；最后一条是入口角色的收尾汇报
+    # 时间线：用户 1 条 + 智能体 8 条，且顺序与岗位一致；最后一条是入口智能体的收尾汇报
     assert [s["role_key"] for s in detail["steps"]] == [
         "user", "ceo", "cto", "se", "qa", "se", "qa", "cto", "ceo",
     ]
@@ -253,11 +243,11 @@ async def test_full_chain_with_one_rework_round(client: httpx.AsyncClient, full)
 
 
 async def test_root_ticket_closure_reports_back_to_entry(client: httpx.AsyncClient, full):
-    """根工单收尾后必须交回入口角色：由它把结论汇报给用户。
+    """根工单收尾后必须交回入口智能体：由它把结论汇报给用户。
 
     否则工单在链路里转一圈就结束了，用户那边（主会话）永远等不到一句回话。
     """
-    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "done"
@@ -274,7 +264,7 @@ async def test_root_ticket_closure_reports_back_to_entry(client: httpx.AsyncClie
     assert "允许的动作：done、ask_user" in report
     assert "（你没有派发对象）" in report
     assert "本轮要求：所有工单都已收尾" in report
-    # 子工单的结论也在汇总里：入口角色据此汇报，不必回头问下游
+    # 子工单的结论也在汇总里：入口智能体据此汇报，不必回头问下游
     assert "《实现主题开关与持久化》" in report
     assert "已按审查意见补上对比度" in report
 
@@ -295,10 +285,10 @@ async def test_root_ticket_closure_reports_back_to_entry(client: httpx.AsyncClie
 
 
 async def test_entry_closing_the_ticket_itself_does_not_report_twice(client: httpx.AsyncClient, tmp_path: Path):
-    """入口角色自己收尾时（它那一步就是给用户的答复）不再补一轮汇报。"""
+    """入口智能体自己收尾时（它那一步就是给用户的答复）不再补一轮汇报。"""
     script = {"ceo": [{"action": "done", "remark": "已答复用户：这次不用改代码"}]}
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "解释一下这个报错")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "解释一下这个报错")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "done"
@@ -310,7 +300,7 @@ async def test_user_follow_up_opens_a_new_report_round(client: httpx.AsyncClient
     """用户追问 → 重新干活 → 再汇报一轮：汇报标记在重新开启根工单时清零。"""
     script = {"ceo": [HANDOFF, CLOSING, HANDOFF, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
 
     first = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert first["status"] == "done"
@@ -372,10 +362,10 @@ async def test_single_rework_to_cto_does_not_need_rework_to(client: httpx.AsyncC
     scenario = await make_scenario(script, tmp_path)
     spec = GraphSpec(
         nodes=[
-            NodeSpec(key="ceo", role_id=scenario["roles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
-            NodeSpec(key="cto", role_id=scenario["roles"]["cto"], label="CTO", duty=Duty.COORDINATOR),
-            NodeSpec(key="se", role_id=scenario["roles"]["se"], label="SE", duty=Duty.ENGINEER),
-            NodeSpec(key="qa", role_id=scenario["roles"]["qa"], label="审查员", duty=Duty.REVIEWER),
+            NodeSpec(key="ceo", agent_profile_id=scenario["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="cto", agent_profile_id=scenario["agent_profiles"]["cto"], label="CTO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=scenario["agent_profiles"]["se"], label="SE", duty=Duty.ENGINEER),
+            NodeSpec(key="qa", agent_profile_id=scenario["agent_profiles"]["qa"], label="审查员", duty=Duty.REVIEWER),
         ],
         edges=[
             EdgeSpec(from_key="ceo", to_key="cto", kind=EdgeKind.ASSIGN),
@@ -410,14 +400,14 @@ async def test_single_rework_to_cto_does_not_need_rework_to(client: httpx.AsyncC
 
 
 async def test_downstream_only_sees_the_ticket_never_the_conversation(client: httpx.AsyncClient, full):
-    """C5：下游只拿到工单字段与摘要，拿不到任何角色的对话原文。"""
-    await start_run(client, full["roles"], "把登录页改成暗色主题")
+    """C5：下游只拿到工单字段与摘要，拿不到任何智能体的对话原文。"""
+    await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
     all_prompts = prompts(full["state_dir"])
     assert len(all_prompts) == 8
 
     for text in all_prompts:
-        # 每个角色都会说「（<key>）我来处理。」；它出现在别人的输入里就等于泄露了对话
-        assert CHITCHAT not in text, "下游 prompt 里出现了上游角色的对话原文"
+        # 每个智能体都会说「（<key>）我来处理。」；它出现在别人的输入里就等于泄露了对话
+        assert CHITCHAT not in text, "下游 prompt 里出现了上游智能体的对话原文"
         assert "—— 工单 T-" in text  # 交接物一定是工单
 
     se_prompts = prompts_of(all_prompts, "se")
@@ -439,7 +429,7 @@ async def test_downstream_only_sees_the_ticket_never_the_conversation(client: ht
     assert "没有该路径的读写权限" in dispatch_prompt
     assert "不得写代码" in dispatch_prompt
 
-    # 收尾汇报只看「结构化结果」，仍然看不到任何角色的对话原文
+    # 收尾汇报只看「结构化结果」，仍然看不到任何智能体的对话原文
     assert "全流程结果" in report_prompt
     assert "已按审查意见补上对比度" in report_prompt
 
@@ -449,7 +439,7 @@ async def test_run_workspace_path_is_passed_to_every_role(client: httpx.AsyncCli
     shared = (tmp_path / "shared-project").resolve()
     shared.mkdir()
 
-    run_id, _ = await start_run(client, full["roles"], "统一工作路径", run_workspace_dir=str(shared))
+    run_id, _ = await start_run(client, full["agent_profiles"], "统一工作路径", run_workspace_dir=str(shared))
     all_prompts = prompts(full["state_dir"])
     assert len(all_prompts) == 8
 
@@ -467,7 +457,7 @@ async def test_protocol_violation_hangs_then_recovers_by_retry(client: httpx.Asy
         "cto": [{"action": "done", "remark": "完成"}],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, events = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    run_id, events = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "waiting_user"
@@ -500,7 +490,7 @@ async def test_round_with_two_work_order_blocks_uses_the_last_one(client: httpx.
     final = "\n想清楚了，最终决定如下：\n\n```work_order\n" + json.dumps(HANDOFF, ensure_ascii=False) + "\n```\n"
     script = {"ceo": [draft + final, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
     scenario = await make_scenario(script, tmp_path)
-    run_id, events = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    run_id, events = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "done"
@@ -530,7 +520,7 @@ async def test_entry_can_ask_the_user_and_then_continue(client: httpx.AsyncClien
         "cto": [{"action": "done", "remark": "完成"}],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, events = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    run_id, events = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "waiting_user"
@@ -547,7 +537,7 @@ async def test_entry_can_ask_the_user_and_then_continue(client: httpx.AsyncClien
         "freeform": False,
     }
 
-    # 用户回答 → 工单回到入口角色手里，继续推进到完成
+    # 用户回答 → 工单回到入口智能体手里，继续推进到完成
     response = await client.post(f"/api/collab/runs/{run_id}/messages", json={"content": "要，跟随系统"})
     assert response.status_code == 200
     await read_sse(response)
@@ -590,7 +580,7 @@ async def test_non_entry_ask_user_is_explained_and_never_ends_in_silence(
         ],
     }
     scenario = await make_scenario(script, tmp_path)
-    body = team_body(scenario["roles"])
+    body = team_body(scenario["agent_profiles"])
     for item in body["graph"]["nodes"]:
         if item["key"] == "cto":
             item["output_contract"] = ["done", "ask_user"]
@@ -628,7 +618,7 @@ async def test_ask_user_without_options_is_salvaged_into_card(client: httpx.Asyn
     """模型漏给 options 时仍应给出可点卡片，而不是只报协议错误。"""
     script = {"ceo": [{"action": "ask_user", "question": "暗色还是亮色？"}]}
     scenario = await make_scenario(script, tmp_path)
-    run_id, events = await start_run(client, scenario["roles"], "把登录页换一套配色")
+    run_id, events = await start_run(client, scenario["agent_profiles"], "把登录页换一套配色")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "waiting_user"
@@ -662,7 +652,7 @@ async def test_resume_after_created_at_exceeds_timeout(client: httpx.AsyncClient
     }
     script = {"ceo": [ask_once, ask_twice, HANDOFF, CLOSING], "cto": [{"action": "done", "remark": "完成"}]}
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "推进首期版本")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "推进首期版本")
 
     # 模拟隔了两小时才回来：创建时间已远超标称时限，但最近一次进展仍发生在刚才。
     async with SessionLocal() as session:
@@ -691,13 +681,13 @@ async def test_resume_after_created_at_exceeds_timeout(client: httpx.AsyncClient
 
 
 async def test_done_run_can_be_reopened_by_user_follow_up(client: httpx.AsyncClient, tmp_path: Path):
-    """运行完成后，用户继续找入口角色时应重新打开根工单，而不是只落一条无人响应的消息。"""
+    """运行完成后，用户继续找入口智能体时应重新打开根工单，而不是只落一条无人响应的消息。"""
     script = {
         "ceo": [HANDOFF, {"action": "done", "remark": "已按补充需求确认"}],
         "cto": [{"action": "done", "remark": "完成"}],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "先把登录页改成暗色主题")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "先把登录页改成暗色主题")
 
     first = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert first["status"] == "done" and first["tickets"][0]["state"] == "done"
@@ -717,7 +707,7 @@ async def test_done_run_can_be_reopened_by_user_follow_up(client: httpx.AsyncCli
 
 
 async def test_cannot_start_twice_and_resume_needs_something_to_do(client: httpx.AsyncClient, full):
-    created = await client.post("/api/collab/teams", json=team_body(full["roles"]))
+    created = await client.post("/api/collab/teams", json=team_body(full["agent_profiles"]))
     team_id = created.json()["id"]
     run = await client.post("/api/collab/runs", json={"team_id": team_id})
     run_id = run.json()["id"]
@@ -725,10 +715,10 @@ async def test_cannot_start_twice_and_resume_needs_something_to_do(client: httpx
     # 还没有目标就继续 → 明确拒绝
     blocked = await client.post(f"/api/collab/runs/{run_id}/resume")
     assert blocked.status_code == 409
-    assert "请先告诉入口角色" in blocked.json()["detail"]
+    assert "请先告诉入口智能体" in blocked.json()["detail"]
 
     # 图不合法时不允许开跑
-    broken = team_body(full["roles"])
+    broken = team_body(full["agent_profiles"])
     broken["entry_key"] = "se"
     await client.put(f"/api/collab/teams/{team_id}", json={"entry_key": "se"})
     response = await client.post(f"/api/collab/runs/{run_id}/messages", json={"content": "开始"})
@@ -742,7 +732,7 @@ async def test_recover_interrupted_also_settles_streaming_steps(client: httpx.As
 
     否则界面会一直显示「处理中」，点开该岗位却看不到任何输出（它永远不会再产出）。
     """
-    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
 
     async with SessionLocal() as session:
         run = await session.get(CollabRun, run_id)
@@ -774,7 +764,7 @@ async def test_client_disconnect_does_not_stop_the_run(client: httpx.AsyncClient
     旧实现把推进绑在 HTTP 请求上：连接一断，正在跑的那一步就被取消、运行停在 ``running``，
     界面显示「处理中」却再也不动。现在推进跑在独立的后台任务里，断开只退订。
     """
-    created = await client.post("/api/collab/teams", json=team_body(full["roles"]))
+    created = await client.post("/api/collab/teams", json=team_body(full["agent_profiles"]))
     assert created.status_code == 201, created.text
     run_id = (await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})).json()["id"]
 
@@ -837,7 +827,7 @@ async def _start_until_gate(
     """在后台启动协作，并等某个岗位真的进入执行（剧本已写入 prompt、卡在闸门）。"""
     gate = scenario["state_dir"] / f"gate-{gate_key}"
     gate.write_text("wait", encoding="utf-8")
-    created = await client.post("/api/collab/teams", json=team_body(scenario["roles"]))
+    created = await client.post("/api/collab/teams", json=team_body(scenario["agent_profiles"]))
     assert created.status_code == 201, created.text
     run_id = (await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})).json()["id"]
 
@@ -865,7 +855,7 @@ async def test_stream_endpoint_replays_buffered_events_after_disconnect(client: 
     gate = full["state_dir"] / "gate-ceo"
     gate.write_text("wait", encoding="utf-8")
 
-    created = await client.post("/api/collab/teams", json=team_body(full["roles"]))
+    created = await client.post("/api/collab/teams", json=team_body(full["agent_profiles"]))
     assert created.status_code == 201, created.text
     run_id = (await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})).json()["id"]
 
@@ -926,7 +916,7 @@ async def test_stream_endpoint_replays_buffered_events_after_disconnect(client: 
 async def test_entry_chat_stays_available_while_the_workflow_is_running(
     client: httpx.AsyncClient, tmp_path: Path
 ):
-    """工单推进期间仍能随时找入口角色：不返回 409，也不会打断主流程。"""
+    """工单推进期间仍能随时找入口智能体：不返回 409，也不会打断主流程。"""
     script = {
         **FULL_SCRIPT,
         "ceo:chat": ["现在是审查阶段：子工单已经提交，审查员正在看。可以继续补充要求。"],
@@ -951,7 +941,7 @@ async def test_entry_chat_stays_available_while_the_workflow_is_running(
         # 主流程没有被聊天顶掉，仍然稳稳停在审查步骤。
         assert (await client.get(f"/api/collab/runs/{run_id}")).json()["status"] == "running"
 
-        # 聊天历史单独落库，并且只给入口角色回放结构化进度。
+        # 聊天历史单独落库，并且只给入口智能体回放结构化进度。
         detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
         chat_rows = detail["chat_messages"]
         assert [row["sender"] for row in chat_rows] == ["user", "leader"]
@@ -969,7 +959,7 @@ async def test_entry_chat_stays_available_while_the_workflow_is_running(
         assert "状态：review" in chat_prompt
         assert "最近结论：已完成主题开关与持久化" in chat_prompt
         assert "frontend/src/theme.ts" in chat_prompt
-        # 聊天能看进度，但看不到其他角色的对话原文（C5 只对入口聊天开一个口子）。
+        # 聊天能看进度，但看不到其他智能体的对话原文（C5 只对入口聊天开一个口子）。
         assert f"（se）{CHITCHAT}。" not in chat_prompt
     finally:
         gate.unlink(missing_ok=True)
@@ -1017,7 +1007,7 @@ async def test_chat_can_refine_requirements_and_next_step_sees_them(
         gate.unlink(missing_ok=True)
         await asyncio.wait_for(drive_task, timeout=20)
 
-    # 聊天原文不会传给任何工单角色；细化后的字段会。
+    # 聊天原文不会传给任何工单智能体；细化后的字段会。
     all_prompts = prompts(scenario["state_dir"])
     work_prompts = [text for text in all_prompts if "[协作对话]" not in text]
     assert all("闲聊暗号" not in text for text in work_prompts)
@@ -1030,13 +1020,13 @@ async def test_chat_can_refine_requirements_and_next_step_sees_them(
 async def test_chat_stays_available_after_the_run_is_done(
     client: httpx.AsyncClient, tmp_path: Path
 ):
-    """一轮收尾后仍可只找入口角色聊天：不重开工单、不增加步数。"""
+    """一轮收尾后仍可只找入口智能体聊天：不重开工单、不增加步数。"""
     script = {
         **FULL_SCRIPT,
         "ceo:chat": ["这轮已经收尾了。想闲聊或问结论都可以，我不会重新派活。"],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
     before = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert before["status"] == "done"
 
@@ -1062,12 +1052,12 @@ async def test_chat_stays_available_after_the_run_is_done(
 async def test_chat_attachment_lands_in_workspace_and_reaches_the_prompt(
     client: httpx.AsyncClient, tmp_path: Path
 ):
-    """协作聊天也能带附件：文件落到工作目录，提示词里点名让入口角色去读。"""
+    """协作聊天也能带附件：文件落到工作目录，提示词里点名让入口智能体去读。"""
     script = {**FULL_SCRIPT, "ceo:chat": ["我看到了，按附件里的要求办。"]}
     scenario = await make_scenario(script, tmp_path)
     workspace = tmp_path / "ws"
     run_id, _ = await start_run(
-        client, scenario["roles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
+        client, scenario["agent_profiles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
     )
 
     raw = "补充要求：登录页要支持扫码".encode()
@@ -1091,7 +1081,7 @@ async def test_chat_attachment_lands_in_workspace_and_reaches_the_prompt(
     assert any(event["type"] == "collab.chat.finished" for event in events)
 
     chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
-    assert chat_prompts, "入口角色的聊天 prompt 应当被记录下来"
+    assert chat_prompts, "入口智能体的聊天 prompt 应当被记录下来"
     assert "📎 附件" in chat_prompts[-1]
     assert info["rel_path"] in chat_prompts[-1]
 
@@ -1107,7 +1097,7 @@ async def test_chat_attachment_guards(client: httpx.AsyncClient, tmp_path: Path)
     scenario = await make_scenario(script, tmp_path)
     workspace = tmp_path / "ws"
     run_id, _ = await start_run(
-        client, scenario["roles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
+        client, scenario["agent_profiles"], "把登录页改成暗色主题", run_workspace_dir=str(workspace)
     )
 
     empty = await client.post(f"/api/collab/runs/{run_id}/chat", json={"content": "   "})
@@ -1149,7 +1139,7 @@ async def test_delegate_step_records_target_for_handoff_chain(client: httpx.Asyn
 
     岗位会话靠这个字段还原交接链（CTO 把活交给码农，码农的抽屉里就能看到 CTO 的那句话）。
     """
-    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
     for _ in range(400):
         detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
         if detail["status"] != "running":
@@ -1193,7 +1183,7 @@ async def test_child_conclusion_is_carried_back_to_the_upstream_ticket(
         "cto": [{"action": "done", "remark": "目录为空，没有任何文件（已用 ls -la 与 find 双重确认）"}],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "看看工作目录下有哪些文件")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "看看工作目录下有哪些文件")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "done"
@@ -1218,7 +1208,7 @@ async def test_rollback_prompt_shows_downstream_delivery_in_full_flow(
     client: httpx.AsyncClient, full
 ):
     """完整链路（拆子工单 → 实施 → 审查 → 返工 → 通过）里，汇总方同样拿得到下游交付摘要。"""
-    run_id, _ = await start_run(client, full["roles"], "把登录页改成暗色主题")
+    run_id, _ = await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
 
     cto_prompts = prompts_of(prompts(full["state_dir"]), "cto")
     assert len(cto_prompts) == 2
@@ -1251,7 +1241,7 @@ def allowed_actions_line(prompt: str) -> str:
 async def test_escalation_walks_up_to_entry_then_asks_user_and_resumes(
     client: httpx.AsyncClient, tmp_path: Path
 ):
-    """卡住了要能逐级上报：se → cto → ceo，最后由入口角色 ask_user 交给用户。
+    """卡住了要能逐级上报：se → cto → ceo，最后由入口智能体 ask_user 交给用户。
 
     真实事故：UI 卡在「环境禁止执行」后只能把失败写进 done；CTO 手里没有上报动作，
     只好把同一件事改写成「静态核对」又派给码农 —— 阻塞原地转了一圈，用户什么都没收到。
@@ -1290,7 +1280,7 @@ async def test_escalation_walks_up_to_entry_then_asks_user_and_resumes(
         "se": [ESCALATION_BLOCKER],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, events = await start_run(client, scenario["roles"], "做一个记账系统")
+    run_id, events = await start_run(client, scenario["agent_profiles"], "做一个记账系统")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "waiting_user"
@@ -1307,7 +1297,7 @@ async def test_escalation_walks_up_to_entry_then_asks_user_and_resumes(
         for event in events
     )
 
-    # 提示词一路收窄：CTO 那一步不许再往下派，到入口角色则只剩「转给用户」
+    # 提示词一路收窄：CTO 那一步不许再往下派，到入口智能体则只剩「转给用户」
     cto_prompts = prompts_of(prompts(scenario["state_dir"]), "cto")
     assert "delegate" not in allowed_actions_line(cto_prompts[-1])
     assert "escalate" in allowed_actions_line(cto_prompts[-1])
@@ -1325,7 +1315,7 @@ async def test_escalation_walks_up_to_entry_then_asks_user_and_resumes(
     after = (await client.get(f"/api/collab/runs/{run_id}")).json()
     answered = {ticket["title"]: ticket for ticket in after["tickets"]}[BLOCKED_TITLE]
     assert answered["state"] != "blocked"
-    # 用户的话与工单一起交回入口角色：认的是这张工单的 prompt，不是根工单那条
+    # 用户的话与工单一起交回入口智能体：认的是这张工单的 prompt，不是根工单那条
     resumed = [
         text for text in prompts_of(prompts(scenario["state_dir"]), "ceo") if BLOCKED_TITLE in text
     ][-1]
@@ -1362,7 +1352,7 @@ async def test_escalated_ticket_cannot_be_delegated_back_down(
         "se": [ESCALATION_BLOCKER],
     }
     scenario = await make_scenario(script, tmp_path)
-    run_id, _ = await start_run(client, scenario["roles"], "做一个记账系统")
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "做一个记账系统")
 
     detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
     assert detail["status"] == "waiting_user"

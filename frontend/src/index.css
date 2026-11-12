@@ -26,6 +26,8 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --danger: #f87171;
+  /* 默认智能体那颗五角星：深色底上要亮，浅色底上要压深一点才看得清 */
+  --star: #f2b41c;
 
   /* 协作办公室那张等距插画：深色底图配深色的工牌 / 图例 / 工具按钮。
      浅色外壳下换成浅色底图（public/office/iso-office-light.svg）与浅色卡片，见下面浅色块。 */
@@ -45,6 +47,16 @@
   --office-chip: rgba(11, 10, 18, 0.5);
   --office-inset: rgba(255, 255, 255, 0.04);
   --office-map-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+
+  /* 协作编排画布：深色是默认（浅色在下面 [data-theme='light'] 的变量块里逐支覆盖） */
+  --canvas-bg: #0d0c16;
+  --canvas-dot: rgba(255, 255, 255, 0.055);
+  --canvas-hud-bg: rgba(13, 12, 22, 0.82);
+  --canvas-hud-edge: rgba(59, 55, 96, 0.8);
+  --canvas-link: #8b86b8;
+  --canvas-link-review: #6ee7d1;
+  --canvas-link-rework: #fbbf24;
+  --canvas-node-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -92,6 +104,7 @@
   --ok: #16a34a;
   --warn: #b45309;
   --danger: #dc2626;
+  --star: #d99400;
 
   /* 协作办公室：浅色外壳用浅色底图，工牌 / 图例 / 工具按钮也换成浅色卡片 */
   --office-canvas: #eef1f8;
@@ -111,6 +124,16 @@
   --office-inset: rgba(255, 255, 255, 0.7);
   --office-map-shadow: 0 18px 44px rgba(58, 48, 96, 0.16);
 
+  /* 协作编排画布：浅色外壳下是浅底 + 深一点的网格点，连线也要压深一档才看得清 */
+  --canvas-bg: #f6f5fc;
+  --canvas-dot: rgba(35, 32, 58, 0.14);
+  --canvas-hud-bg: rgba(255, 255, 255, 0.86);
+  --canvas-hud-edge: rgba(120, 114, 165, 0.45);
+  --canvas-link: #6a6592;
+  --canvas-link-review: #0e9c85;
+  --canvas-link-rework: #b45309;
+  --canvas-node-shadow: 0 10px 24px rgba(46, 39, 88, 0.14);
+
   --shadow: 0 18px 48px rgba(37, 31, 68, 0.16);
 }
 
@@ -129,7 +152,7 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(243, 241, 252, 0.72));
 }
 [data-theme='light'] .collab-progress-board-head { background: rgba(255, 255, 255, 0.78); }
-[data-theme='light'] .collab-role-panel-head { background: rgba(255, 255, 255, 0.72); }
+[data-theme='light'] .collab-agent-panel-head { background: rgba(255, 255, 255, 0.72); }
 [data-theme='light'] .collab-inspector { background: rgba(255, 255, 255, 0.5); }
 [data-theme='light'] .collab-progress-trigger-count { background: rgba(35, 32, 58, 0.06); }
 [data-theme='light'] .modal-backdrop { background: rgba(37, 31, 68, 0.42); }
@@ -278,6 +301,26 @@ code, pre, .mono { font-family: var(--mono); }
 
 .sidebar-footer { margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
 
+/* 折叠按钮：点一下在「图标 + 文字」与「只有图标」之间切换（宽度跟着侧边栏走，状态记在本机） */
+.sidebar-toggle {
+  margin-left: auto; flex: none; width: 26px; height: 26px; display: grid; place-items: center;
+  border: 1px solid transparent; border-radius: 8px; background: none;
+  color: var(--text-dim); font-size: 15px; line-height: 1; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-toggle:hover { background: var(--bg-hover); color: var(--text); }
+
+/* 折叠态：只剩一列图标。与窄屏（≤980px）那份布局同构，只是由用户手动触发。 */
+.app-shell.collapsed { grid-template-columns: 68px 1fr; }
+.app-shell.collapsed .brand { flex-direction: column; gap: 8px; padding: 4px 0 14px; }
+.app-shell.collapsed .sidebar-toggle { margin-left: 0; }
+.app-shell.collapsed .brand-text,
+.app-shell.collapsed .nav-link .nav-label,
+.app-shell.collapsed .nav-chevron,
+.app-shell.collapsed .sidebar-conversations,
+.app-shell.collapsed .sidebar-footer { display: none; }
+.app-shell.collapsed .nav-link { justify-content: center; padding: 10px 8px; }
+
 .main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 
 .page-header {
@@ -292,7 +335,7 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---------- 对话 ---------- */
 .chat-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
-/* ---------- 对话行（左侧栏列表 / 选角色新建对话共用） ----------
+/* ---------- 对话行（左侧栏列表 / 选智能体新建对话共用） ----------
    鼠标移上去时右上角浮出「⋯ 会话操作 / ✎ 重命名 / 🗑 删除」三个小图标（见 ConversationList）。 */
 .chat-item {
   position: relative; display: block; width: 100%; text-align: left; color: inherit;
@@ -309,7 +352,7 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .chat-item-title { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
-/* 角色名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
+/* 智能体名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
 .chat-item-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item-time { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
 /* 行内动作：平时不占地方，鼠标移上去（或键盘走进去）才浮出来 */
@@ -329,7 +372,8 @@ code, pre, .mono { font-family: var(--mono); }
   background: var(--bg-input); color: var(--text); font: inherit; font-size: 13px; outline: none;
 }
 
-.chat-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* 撑满外层高度：消息区自己滚，输入区因此永远贴在窗口底部（否则短对话里输入框浮在半空）。 */
+.chat-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .chat-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
 .chat-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
 /* ---------- 对话：全局唯一一份气泡布局 ----------
@@ -445,6 +489,33 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .md-code-block code { color: #d8d4e8; font-size: 12.5px; white-space: pre; }
 
+/* 凭据编辑器：一行 = 名字（点开就是凭据库）+ 值 / 引用说明 + 删除 */
+.credential-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.credential-name { position: relative; }
+.credential-menu {
+  position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0;
+  max-height: 230px; overflow: auto; padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-panel); box-shadow: var(--shadow);
+}
+.credential-menu-item {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start; text-align: left;
+  padding: 7px 9px; border: none; border-radius: 8px; background: none; color: inherit;
+  font: inherit; cursor: pointer;
+}
+.credential-menu-item:hover { background: var(--bg-hover); }
+.credential-menu-empty { padding: 9px; color: var(--text-dim); font-size: 11.5px; }
+.credential-value-note {
+  display: flex; align-items: center; min-height: 34px; padding: 0 10px;
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  color: var(--text-dim); font-size: 11.5px;
+}
+
 /* ================= 输入区：一个框 + 框里的线条图标（两端共用这一份）================= */
 /* 框里依次是：附件 / 语音、输入框、发送（运行中变成停止）；框上方可以插一条说明
    （token 用量、协作状态…）。图标是内联 SVG（见 components/Icons.tsx）：各系统 emoji
@@ -494,6 +565,19 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-attach-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-attach-chip button { flex: none; padding: 0 2px; border: none; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+/* 输入框上面那排快捷开关（对话页的「工作目录 / 智能体」）：贴着框，但不进框里 */
+.composer-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.composer-scope-btn {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 48%;
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: none; color: var(--text-muted); font: inherit; font-size: 11.5px; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.composer-scope-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.composer-scope-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 输入框下面那一条（用量统计等）：贴着框的下沿 */
+.composer-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
+.composer-foot .usage-bar { margin-top: 0; }
 
 /* ---------- 桌面端：输入区寄在会话栏底部 ---------- */
 .chat-composer { border-top: 1px solid var(--border); padding: 14px 26px 18px; }
@@ -503,6 +587,14 @@ code, pre, .mono { font-family: var(--mono); }
 .composer-box { gap: 8px; padding: 8px 10px; border-radius: var(--radius-lg); }
 .composer textarea { padding: 6px 4px; font-size: 14px; line-height: 1.6; max-height: 220px; }
 .composer-tool { width: 36px; height: 36px; }
+
+/* 对话页的输入区：宽屏 + 鼠标，所以文字单独占上面一行，附件 / 语音在左下、发送 / 停止在右下，
+   框也加高一档（移动端那套「图标和文字挤在一行」见共享段；协作运行页的输入框没有附件 /
+   语音，用的是「一行 + 右侧按钮」，别被这里的换行规则带跑）。 */
+.chat-composer .composer-box { flex-wrap: wrap; align-items: center; }
+.chat-composer .composer textarea { order: -1; flex: 0 0 100%; min-height: 68px; }
+.chat-composer .composer-tool.send,
+.chat-composer .composer-tool.stop { margin-left: auto; }
 
 .usage-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
@@ -572,6 +664,8 @@ code, pre, .mono { font-family: var(--mono); }
 .kv { display: grid; grid-template-columns: 116px 1fr; gap: 4px 10px; font-size: 12.5px; }
 .kv dt { color: var(--text-dim); }
 .kv dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 紧凑版：标签只占自身宽度，值紧贴左边（智能体卡片上的「网关 / 模型」用） */
+.kv.tight { grid-template-columns: max-content 1fr; }
 
 /* ---------- 基础原语 ---------- */
 .btn {
@@ -685,7 +779,8 @@ code, pre, .mono { font-family: var(--mono); }
 
 .form-grid { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
 .form-grid .span-2 { grid-column: span 2; }
-.advanced-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 6px 0; border-top: 1px dashed var(--border); margin-top: 4px; }
+.advanced-toggle { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 2px 0; background: none; border: none; margin-top: 2px; }
+.advanced-toggle:hover { color: var(--text); }
 
 .agent-type-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
 .agent-type-row:hover { background: var(--bg-hover); }
@@ -695,6 +790,35 @@ code, pre, .mono { font-family: var(--mono); }
 .agent-type-desc { font-size: 11.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 可点击的小胶囊（例如「工作目录」面板里最近用过的路径） */
+.chip-btn {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: none; color: var(--text-muted); font: inherit; font-size: 11.5px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip-btn:hover { border-color: var(--brand); color: var(--text); }
+
+/* 默认智能体：卡片右上角的五角星，点亮后是黄的（全局只有一颗） */
+.star-btn {
+  flex: none; margin-left: auto; display: grid; place-items: center; width: 30px; height: 30px;
+  padding: 0; border: 1px solid transparent; border-radius: 9px; background: none;
+  color: var(--text-dim); cursor: pointer; transition: color 0.15s, background 0.15s;
+}
+.star-btn:hover { background: var(--bg-hover); color: var(--star); }
+.star-btn.on { color: var(--star); }
+
+/* 「换智能体」面板里的一行：头像 + 名字 / 内核 + 当前标记 */
+.agent-pick {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-input); color: inherit; font: inherit; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.agent-pick:hover:not(:disabled) { border-color: var(--brand); background: var(--bg-hover); }
+.agent-pick.active { border-color: var(--brand); background: var(--brand-soft); }
+.agent-pick:disabled { opacity: 0.55; cursor: not-allowed; }
+.agent-pick-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-pick-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
 .secret-row { display: flex; gap: 8px; align-items: center; }
 .stack { display: flex; flex-direction: column; gap: 14px; }
 .row { display: flex; align-items: center; gap: 10px; }
@@ -1134,67 +1258,67 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-progress-flow.kind-rework b { color: var(--warn); }
 
 /* ---------- 协作：岗位内部实时会话 ---------- */
-.collab-role-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.collab-role-panel-head {
+.collab-agent-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.collab-agent-panel-head {
   flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 18px;
   border-bottom: 1px solid var(--border); background: rgba(23, 22, 42, 0.72);
 }
-.collab-role-panel-title { min-width: 0; flex: 1; }
-.collab-role-panel-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.collab-role-panel-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
-.collab-role-live-pill { flex: none; }
-.collab-role-panel-close { flex: none; }
-.collab-role-tickets {
+.collab-agent-panel-title { min-width: 0; flex: 1; }
+.collab-agent-panel-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-agent-panel-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.collab-agent-live-pill { flex: none; }
+.collab-agent-panel-close { flex: none; }
+.collab-agent-tickets {
   display: flex; gap: 6px; flex-wrap: wrap; padding: 9px 20px;
   border-bottom: 1px solid var(--border); background: rgba(123, 92, 255, 0.04);
 }
 /* 岗位面板只负责自己的容器外观（铺满 + 滚动 + 渐变底），气泡与间距统一由 `.conversation-*` 提供。 */
-.collab-role-thread {
+.collab-agent-thread {
   flex: 1; min-height: 0; overflow: auto; padding: 22px 22px 34px;
   background:
     radial-gradient(480px 260px at 100% 0%, rgba(110, 231, 209, 0.045), transparent 70%),
     radial-gradient(520px 300px at 0% 100%, rgba(217, 79, 208, 0.055), transparent 68%),
     rgba(8, 8, 14, 0.38);
 }
-.collab-role-thread .tool-card { max-width: 100%; }
-.collab-role-placeholder {
+.collab-agent-thread .tool-card { max-width: 100%; }
+.collab-agent-placeholder {
   border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
   padding: 10px 12px; font-size: 12.5px; color: var(--text-muted); background: var(--bg-input);
 }
-.collab-role-placeholder.live { border-style: solid; border-color: rgba(217, 79, 208, 0.4); color: var(--text-muted); }
-.collab-role-placeholder.live::before {
+.collab-agent-placeholder.live { border-style: solid; border-color: rgba(217, 79, 208, 0.4); color: var(--text-muted); }
+.collab-agent-placeholder.live::before {
   content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%;
   background: var(--brand); vertical-align: middle; animation: collab-live-glow 1.4s ease-in-out infinite;
 }
-.collab-role-empty {
+.collab-agent-empty {
   margin: auto; max-width: 420px; display: flex; flex-direction: column; align-items: center;
   gap: 7px; padding: 34px 20px; text-align: center; color: var(--text-muted);
 }
-.collab-role-empty-icon {
+.collab-agent-empty-icon {
   width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 5px;
   border-radius: 18px; font-size: 30px; background: var(--bg-input); border: 1px solid var(--border);
 }
 
 /* ---------- 协作：岗位收到的交接卡（上游把这个岗位的活交过来时说的话） ---------- */
-.collab-role-handoff {
+.collab-agent-handoff {
   border: 1px solid rgba(123, 92, 255, 0.35); border-radius: var(--radius);
   background: linear-gradient(135deg, rgba(123, 92, 255, 0.1), rgba(123, 92, 255, 0.03));
   padding: 11px 13px; display: flex; flex-direction: column; gap: 8px;
 }
-.collab-role-thread .collab-role-handoff-row .collab-role-handoff {
+.collab-agent-thread .collab-agent-handoff-row .collab-agent-handoff {
   border-color: rgba(217, 79, 208, 0.38); border-radius: 15px 4px 15px 15px;
   background: linear-gradient(135deg, rgba(217, 79, 208, 0.24), rgba(123, 92, 255, 0.15));
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
-.collab-role-thread .collab-role-handoff-row .collab-role-handoff-ticket {
+.collab-agent-thread .collab-agent-handoff-row .collab-agent-handoff-ticket {
   border-top-color: rgba(255, 255, 255, 0.14);
 }
-.collab-role-thread .collab-role-handoff-row .collab-role-handoff-title { color: var(--text); }
-.collab-role-handoff-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.collab-role-handoff-ticket {
+.collab-agent-thread .collab-agent-handoff-row .collab-agent-handoff-title { color: var(--text); }
+.collab-agent-handoff-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.collab-agent-handoff-ticket {
   border-top: 1px dashed var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 3px;
 }
-.collab-role-handoff-title { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+.collab-agent-handoff-title { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
 
 /* ---------- 协作：等待用户决定的选项卡片 ---------- */
 .collab-ask-stack { padding: 6px 22px 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -1218,7 +1342,7 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-ask-option-label { font-size: 12.5px; font-weight: 550; }
 .collab-ask-option-desc { font-size: 11px; color: var(--text-dim); }
 
-/* ---------- 协作：工单看板（全屏）与角色抽屉 ---------- */
+/* ---------- 协作：工单看板（全屏）与智能体抽屉 ---------- */
 .collab-drawer-backdrop {
   position: fixed; inset: 0; background: rgba(5, 4, 10, 0.55); z-index: 50;
   display: flex; justify-content: flex-end;
@@ -1277,39 +1401,71 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---------- 协作：编排编辑器 ---------- */
 .collab-editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .collab-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.collab-role-palette { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.collab-role-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
-.collab-role-chip {
+.collab-agent-palette { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.collab-agent-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.collab-agent-chip {
   display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px; cursor: grab;
   border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); color: var(--text);
 }
-.collab-role-chip:hover { border-color: var(--brand); background: var(--bg-hover); }
-.collab-role-chip:active { cursor: grabbing; }
+.collab-agent-chip:hover { border-color: var(--brand); background: var(--bg-hover); }
+.collab-agent-chip:active { cursor: grabbing; }
 
 .collab-workbench { display: grid; grid-template-columns: minmax(0, 1fr) 330px; flex: 1; min-height: 0; }
 .collab-canvas {
   position: relative; overflow: auto; min-height: 0;
-  background-color: #0d0c16;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-color: var(--canvas-bg);
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-size: 22px 22px;
 }
+/* 画布左上角的一行悬浮层：左边是图例，右边是缩放按钮。整层吃掉浮层高度，
+   下面的画布内容因此从同样的位置起步，滚到哪都贴在可视区内。 */
+.collab-canvas-hud {
+  position: sticky; left: 12px; top: 12px; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  width: calc(100% - 24px); margin: 12px 12px -44px; pointer-events: none;
+}
 .collab-canvas-legend {
-  position: sticky; left: 12px; top: 12px; z-index: 3; width: max-content; max-width: calc(100% - 24px);
-  display: flex; align-items: center; gap: 13px; padding: 7px 11px; margin: 12px 0 -39px 12px;
-  border: 1px solid rgba(59, 55, 96, 0.8); border-radius: 999px;
-  background: rgba(13, 12, 22, 0.82); backdrop-filter: blur(10px);
-  pointer-events: none; font-size: 10.5px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 13px; padding: 7px 11px;
+  border: 1px solid var(--canvas-hud-edge); border-radius: 999px;
+  background: var(--canvas-hud-bg); backdrop-filter: blur(10px);
+  font-size: 10.5px; color: var(--text-muted);
 }
 .collab-canvas-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .collab-canvas-legend i { width: 7px; height: 7px; border-radius: 50%; }
 .collab-canvas-legend i.in { background: var(--accent); box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.12); }
 .collab-canvas-legend i.out { background: var(--brand); box-shadow: 0 0 0 2px rgba(217, 79, 208, 0.12); }
-.collab-canvas-inner { position: relative; }
+
+.collab-canvas-tools {
+  pointer-events: auto; display: flex; align-items: center; gap: 2px; padding: 3px;
+  border: 1px solid var(--canvas-hud-edge); border-radius: 999px;
+  background: var(--canvas-hud-bg); backdrop-filter: blur(10px);
+}
+.collab-zoom-btn {
+  width: 26px; height: 24px; display: grid; place-items: center; padding: 0;
+  border: none; border-radius: 999px; background: none; color: var(--text-muted);
+  font-size: 14px; line-height: 1; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.collab-zoom-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.collab-zoom-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.collab-zoom-value {
+  min-width: 46px; height: 24px; padding: 0 6px; border: none; border-radius: 999px;
+  background: none; color: var(--text-muted); font-size: 11px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.collab-zoom-value:hover { background: var(--bg-hover); color: var(--text); }
+
+.collab-canvas-sizer { position: relative; }
+.collab-canvas-inner { position: relative; transform-origin: 0 0; }
 
 .collab-links { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
-.collab-link { fill: none; stroke-width: 2; opacity: 0.9; stroke-linecap: round; stroke-linejoin: round; }
+.collab-link { fill: none; stroke: var(--canvas-link); stroke-width: 2; opacity: 0.9; stroke-linecap: round; stroke-linejoin: round; }
+.collab-link.kind-review { stroke: var(--canvas-link-review); }
+.collab-link.kind-rework { stroke: var(--canvas-link-rework); }
 .collab-link.active { stroke-width: 3; opacity: 1; }
 .collab-link.err { stroke: var(--danger); }
+.collab-arrow { fill: var(--canvas-link); }
+.collab-arrow.kind-review { fill: var(--canvas-link-review); }
+.collab-arrow.kind-rework { fill: var(--canvas-link-rework); }
 .collab-link.preview { stroke: var(--brand); stroke-dasharray: 5 5; opacity: 0.8; }
 .collab-link-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
 .collab-link-label { font-size: 11px; fill: var(--text-dim); text-anchor: middle; }
@@ -1317,7 +1473,7 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-node {
   position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-panel);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); cursor: grab; user-select: none; overflow: visible;
+  box-shadow: var(--canvas-node-shadow); cursor: grab; user-select: none; overflow: visible;
 }
 .collab-node:hover { border-color: var(--brand); }
 .collab-node.active { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
@@ -1365,6 +1521,8 @@ code, pre, .mono { font-family: var(--mono); }
   .app-shell { grid-template-columns: 68px 1fr; }
   .brand-text, .nav-link .nav-label, .nav-chevron, .sidebar-footer { display: none; }
   .nav-link { justify-content: center; padding: 10px 8px; }
+  /* 这么窄的窗口本来就只剩图标，折叠按钮没有意义 */
+  .sidebar-toggle { display: none; }
   .chat-shell { grid-template-columns: 1fr; }
   .skill-shell { grid-template-columns: 1fr; }
   .collab-shell, .collab-settings { grid-template-columns: 1fr; }
@@ -1384,8 +1542,8 @@ code, pre, .mono { font-family: var(--mono); }
   .collab-flow { padding: 16px 10px 22px; }
   .collab-flow-row { gap: 12px; }
   .collab-station { width: min(236px, 100%); }
-  .collab-role-panel-head { flex-wrap: wrap; }
-  .collab-role-panel-close { margin-left: auto; }
+  .collab-agent-panel-head { flex-wrap: wrap; }
+  .collab-agent-panel-close { margin-left: auto; }
   .collab-inspector { border-left: none; border-top: 1px solid var(--border); }
   .chat-list { display: none; }
   .form-grid { grid-template-columns: 1fr; }
@@ -1593,6 +1751,7 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .board-accordion.open .board-accordion-list { padding-top: 11px; border-top-color: var(--border); }
 
+
 /* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
 .office-map {
   position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
@@ -1763,3 +1922,4 @@ code, pre, .mono { font-family: var(--mono); }
   z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
   border: 1px solid var(--border); background: var(--office-glass); pointer-events: none;
 }
+
