@@ -431,6 +431,8 @@ class ConversationRead(BaseModel):
     agent_avatar: str | None = None
     agent_type_id: str | None = None
     message_count: int = 0
+    #: 最后一条是**已完成**的助手回复、且晚于用户最后一次打开这条对话的时间
+    unread: bool = False
 
 
 class MessageRead(BaseModel):

@@ -32,6 +32,8 @@ interface Props {
   nodeLabel: (key: string) => string
   /** 运行标题，放在顶栏说明这是哪次协作 */
   runTitle?: string
+  /** 从对话里的工单卡点进来时，直接选中这张工单 */
+  initialTicketId?: string | null
   onClose: () => void
 }
 
@@ -41,10 +43,15 @@ const FILTERS: { key: BoardFilter; label: string }[] = [
   { key: 'done', label: '已完成' },
 ]
 
-export function TicketBoard({ tickets, steps, graph, agents, nodeLabel, runTitle, onClose }: Props) {
+export function TicketBoard({ tickets, steps, graph, agents, nodeLabel, runTitle, initialTicketId, onClose }: Props) {
   const [keyword, setKeyword] = useState('')
   const [filter, setFilter] = useState<BoardFilter>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialTicketId ?? null)
+
+  // 从对话里的另一张工单卡再次点进来时，看板仍挂载着：跟着切到那张工单。
+  useEffect(() => {
+    if (initialTicketId) setSelectedId(initialTicketId)
+  }, [initialTicketId])
 
   const model = useMemo(
     () => buildBoardModel({ tickets, steps, graph, agents, nodeLabel }),

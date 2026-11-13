@@ -4,10 +4,10 @@
  * 装配成统一的 `ConversationThread` 条目，气泡外观与单聊、协作主对话完全一致。
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { ACTIONS } from '../lib/collabDraft'
+import { ACTIONS, ticketStateMeta } from '../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../lib/collabStream'
 import { stepHasOutput, stepStatusHint, type CollabAgentProgress } from '../lib/collabProgress'
-import { buildAgentThread, ticketHighlights } from '../lib/collabThread'
+import { buildAgentThread, ticketBriefSummary } from '../lib/collabThread'
 import type { CollabStep, CollabTicket } from '../lib/types'
 import { ConversationThread, type ConversationThreadItem } from './ConversationThread'
 import type { RenderMessage } from './MessageView'
@@ -22,6 +22,8 @@ interface Props {
   /** 容器类名：桌面端用 `collab-agent-thread`，移动端用 `m-collab-agent-thread` */
   className?: string
   empty?: ReactNode
+  /** 点工单卡片 / 工单标签时打开完整工单（不传就只展示摘要） */
+  onOpenTicket?: (ticketId: string) => void
 }
 
 const ACTION_LABELS = Object.fromEntries(ACTIONS.map((item) => [item.value, item.label]))
@@ -33,31 +35,93 @@ const STEP_STATUS_LABELS: Record<string, string> = {
   cancelled: '已取消',
 }
 
+/** 压缩成一行，卡片上只留摘要；完整内容点开看。 */
+function oneLine(text: string | null | undefined, limit = 56): string {
+  const line = (text ?? '').replace(/\s+/g, ' ').trim()
+  return line.length > limit ? `${line.slice(0, limit)}…` : line
+}
+
+/** 对话里的工单卡：标题 + 状态 + 处理人 + 要点条数；点开才是完整工单。 */
+function TicketCard({
+  ticket, holderLabel, onOpen,
+}: {
+  ticket: CollabTicket
+  holderLabel: string
+  onOpen?: (ticketId: string) => void
+}) {
+  const state = ticketStateMeta(ticket.state)
+  const goal = oneLine(ticket.brief?.goal)
+  const summary = ticketBriefSummary(ticket)
+  const body = (
+    <>
+      <span className="collab-ticket-card-head">
+        <span className="collab-ticket-card-icon" aria-hidden>📋</span>
+        <span className="collab-ticket-card-title">{ticket.title}</span>
+        <span className={`pill ${state.pill}`}>{state.label}</span>
+      </span>
+      <span className="collab-ticket-card-meta">
+        <span>处理人：{holderLabel}</span>
+        <span>返工 {ticket.round}/{ticket.max_rounds}</span>
+        {goal && <span className="collab-ticket-card-goal">{goal}</span>}
+        {summary && <span>{summary}</span>}
+      </span>
+      {onOpen && <span className="collab-ticket-card-more">查看完整工单 →</span>}
+    </>
+  )
+  if (!onOpen) return <div className="collab-ticket-card static">{body}</div>
+  return (
+    <button type="button" className="collab-ticket-card" onClick={() => onOpen(ticket.id)}>
+      {body}
+    </button>
+  )
+}
+
+/** 气泡上方的工单标签：可点时打开完整工单，不可点时保持原来的纯文本。 */
+function TicketChip({
+  ticket, onOpen,
+}: {
+  ticket: CollabTicket
+  onOpen?: (ticketId: string) => void
+}) {
+  if (!onOpen) return <span>工单：{ticket.title}</span>
+  return (
+    <button type="button" className="collab-ticket-chip" title={`查看工单：${ticket.title}`} onClick={() => onOpen(ticket.id)}>
+      📋 {ticket.title}
+    </button>
+  )
+}
+
 export function CollabAgentThread({
-  node, roster, steps, tickets, live, streamed, className, empty,
+  node, roster, steps, tickets, live, streamed, className, empty, onOpenTicket,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  // 正在流式输出的那一步可能同时出现在落库详情里（跨设备刷新时），按 stepId 去重避免重复。
-  const ownSteps = useMemo(
-    () => steps.filter((step) => step.role_key === node.key && step.id !== live?.stepId),
-    [steps, node.key, live?.stepId],
+  // 同一步骤可能同时出现在落库详情与流式结果里（跨设备刷新、刚跑完还没落库）：
+  // 流式结果才是完整的，落库那行这时往往还是「streaming + 空内容」。
+  // 按 stepId 让流式结果顶掉落库行，避免线程里只剩「正在处理中……跑完后显示」。
+  const streamedIds = useMemo(() => new Set(streamed.map((step) => step.stepId)), [streamed])
+  const superseded = (stepId: string) => stepId === live?.stepId || streamedIds.has(stepId)
+  const ownStreamed = useMemo(
+    () => streamed.filter((step) => step.nodeKey === node.key),
+    [streamed, node.key],
   )
-  const ownStreamed = useMemo(() => {
-    const persisted = new Set(ownSteps.map((step) => step.id))
-    return streamed.filter((step) => step.nodeKey === node.key && !persisted.has(step.stepId))
-  }, [ownSteps, node.key, streamed])
   const liveHere = live?.nodeKey === node.key ? live : null
-  const ticketTitle = useMemo(
-    () => Object.fromEntries(tickets.map((ticket) => [ticket.id, ticket.title])),
+  const ticketById = useMemo(
+    () => Object.fromEntries(tickets.map((ticket) => [ticket.id, ticket])),
     [tickets],
   )
   const labelOf = (key: string) => roster.find((item) => item.key === key)?.label ?? key
   const avatarOf = (key: string) => roster.find((item) => item.key === key)?.avatar ?? '🤖'
+  // 本岗位被流式结果顶替的步骤不再进线程模型，否则历史里会多一个空的占位气泡。
+  const threadSteps = useMemo(
+    () => steps.filter((step) => step.role_key !== node.key || !superseded(step.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [steps, node.key, live?.stepId, streamedIds],
+  )
   const thread = useMemo(
-    () => buildAgentThread({ nodeKey: node.key, isEntry: node.isEntry, steps, tickets, labelOf, avatarOf }),
+    () => buildAgentThread({ nodeKey: node.key, isEntry: node.isEntry, steps: threadSteps, tickets, labelOf, avatarOf }),
     // labelOf/avatarOf 只是 roster 的查询，依赖 roster 即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [node.key, node.isEntry, steps, tickets, roster],
+    [node.key, node.isEntry, threadSteps, tickets, roster],
   )
 
   const liveMessage: RenderMessage | null = liveHere
@@ -85,7 +149,6 @@ export function CollabAgentThread({
     }
 
     if (entry.kind === 'handoff') {
-      const highlights = ticketHighlights(entry.ticket)
       threadItems.push({
         id: entry.id,
         custom: (
@@ -100,12 +163,11 @@ export function CollabAgentThread({
               <div className="collab-agent-handoff">
                 {entry.text && <div className="collab-agent-handoff-text">{entry.text}</div>}
                 {entry.ticket && (
-                  <div className="collab-agent-handoff-ticket">
-                    <div className="collab-agent-handoff-title">📋 {entry.ticket.title}</div>
-                    {highlights.map((line) => (
-                      <div className="dim small" key={line}>{line}</div>
-                    ))}
-                  </div>
+                  <TicketCard
+                    ticket={entry.ticket}
+                    holderLabel={labelOf(entry.ticket.holder_key)}
+                    onOpen={onOpenTicket}
+                  />
                 )}
               </div>
             </div>
@@ -117,6 +179,7 @@ export function CollabAgentThread({
 
     const step = entry.step!
     const hint = stepStatusHint(step.status, stepHasOutput(step))
+    const ticket = step.ticket_id ? ticketById[step.ticket_id] : undefined
     threadItems.push({
       id: entry.id,
       className: step.status === 'streaming' ? 'live' : undefined,
@@ -124,7 +187,7 @@ export function CollabAgentThread({
         <>
           <span>#{step.sequence}</span>
           {step.action && <span className="pill">{ACTION_LABELS[step.action] ?? step.action}</span>}
-          {step.ticket_id && ticketTitle[step.ticket_id] && <span>工单：{ticketTitle[step.ticket_id]}</span>}
+          {ticket && <TicketChip ticket={ticket} onOpen={onOpenTicket} />}
           {step.status !== 'complete' && (
             <span className={`pill ${step.status === 'error' || step.status === 'interrupted' ? 'err' : ''}`}>
               {STEP_STATUS_LABELS[step.status] ?? step.status}
@@ -150,13 +213,14 @@ export function CollabAgentThread({
   }
 
   for (const step of ownStreamed) {
+    const ticket = step.ticketId ? ticketById[step.ticketId] : undefined
     threadItems.push({
       id: step.stepId,
       className: step.status === 'streaming' ? 'live' : undefined,
       meta: (
         <>
           {step.action && <span className="pill">{ACTION_LABELS[step.action] ?? step.action}</span>}
-          {step.ticketId && ticketTitle[step.ticketId] && <span>工单：{ticketTitle[step.ticketId]}</span>}
+          {ticket && <TicketChip ticket={ticket} onOpen={onOpenTicket} />}
           {step.status !== 'complete' && <span className="pill">{step.status}</span>}
         </>
       ),
@@ -196,6 +260,7 @@ export function CollabAgentThread({
 
   return (
     <ConversationThread
+      centered
       className={className}
       threadRef={scrollRef}
       items={threadItems}

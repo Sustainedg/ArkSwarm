@@ -497,6 +497,8 @@ def new_conversation(profile: AgentProfile, title: str | None, workspace_dir: st
         title=(title or DEFAULT_TITLE).strip() or DEFAULT_TITLE,
         agent_profile_id=profile.id,
         workspace_dir=workspace_dir,
+        # 新建即视为已读：之后只有智能体真回复了，才可能变成未读。
+        last_read_at=datetime.now(timezone.utc),
     )
 
 

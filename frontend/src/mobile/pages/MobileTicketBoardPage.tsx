@@ -8,7 +8,7 @@
  * 本页属于移动端（`/m/`）：不引用桌面端的页面与 `index.css`，只复用 `lib/*` 与纯展示件。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../../lib/api'
 import { buildBoardModel, formatTokens } from '../../lib/ticketBoard'
 import type { CollabRunDetail, CollabTeam, AgentProfile } from '../../lib/types'
@@ -28,13 +28,20 @@ type Tab = 'flow' | 'rule'
 export function MobileTicketBoardPage() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
+  // 从岗位实时对话里的工单卡点进来：?ticket=<id> 直接选中这张工单。
+  const [searchParams] = useSearchParams()
+  const requestedTicketId = searchParams.get('ticket')
 
   const [detail, setDetail] = useState<CollabRunDetail | null>(null)
   const [teams, setTeams] = useState<CollabTeam[]>([])
   const [agents, setAgents] = useState<AgentProfile[]>([])
   const [tab, setTab] = useState<Tab>('flow')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(requestedTicketId)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (requestedTicketId) setSelectedId(requestedTicketId)
+  }, [requestedTicketId])
 
   const load = useCallback(async (id: string) => {
     try {

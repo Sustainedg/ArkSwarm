@@ -123,6 +123,47 @@ export function makeCollabTurn(
   }
 }
 
+/**
+ * 用运行详情对齐视图，但**保住本端还在收的流式状态**。
+ *
+ * 运行详情每 3~4 秒轮询一次。如果每次都把 `live` / `completed` 清空，正在流式输出的
+ * 那一步会瞬间退化成落库时「status=streaming、内容还是空的」那一行 —— 岗位抽屉里就只剩
+ * 「正在处理中……这一步的输出会在跑完后显示」，明明本端已经收到了逐字内容。
+ *
+ * 因此这里按步骤 id 对齐：
+ * - 详情里仍标 `streaming`（或详情快照还没包含它）的当前步骤，保留 `live`；
+ * - 已结束但落库行还没写完的步骤，保留在 `completed`（线程会优先显示流式内容）；
+ * - 真正落库完成的步骤交给 `steps`，避免与 `completed` 重复。
+ */
+export function syncTurnWithRun(
+  prev: CollabTurnState | null,
+  run: CollabRun,
+  tickets: CollabTicket[] = [],
+  steps: CollabStep[] = [],
+  dismissed: ReadonlySet<string> = new Set(),
+): CollabTurnState {
+  const base = prev ?? makeCollabTurn(run, tickets, steps, dismissed)
+  const rows = new Map(steps.map((step) => [step.id, step]))
+  /** 运行已不在推进时，任何残留的 streaming 行都不再算「本端正在收」。 */
+  const stillLive = (stepId: string) => {
+    if (run.status !== 'running') return false
+    const row = rows.get(stepId)
+    // 详情快照还没包含这一步（刚创建）时，以运行状态为准。
+    return row ? row.status === 'streaming' : true
+  }
+  return {
+    ...base,
+    status: run.status,
+    reason: run.error ?? null,
+    live: base.live && stillLive(base.live.stepId) ? base.live : null,
+    completed: base.completed.filter((step) => {
+      const row = rows.get(step.stepId)
+      return !row || row.status === 'streaming'
+    }),
+    tickets: Object.fromEntries(tickets.map((ticket) => [ticket.id, ticket])),
+  }
+}
+
 /** 用户点了提醒上的「×」：这条等它下次真的又出现再说。 */
 export function dismissCollabNotice(state: CollabTurnState, key: string): CollabTurnState {
   return { ...state, notices: state.notices.filter((notice) => notice.key !== key) }
@@ -173,9 +214,10 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
     case 'collab.step.finished': {
       const failed = event.status === 'error'
       const nodeKey = state.live?.nodeKey ?? null
+      // 断线重订阅会重放本轮事件：同一个 stepId 只保留最新一份，避免抽屉里出现重复气泡。
       const completed = state.live
         ? [
-            ...state.completed,
+            ...state.completed.filter((step) => step.stepId !== state.live!.stepId),
             {
               ...state.live,
               status: event.status ?? 'complete',

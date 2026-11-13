@@ -103,15 +103,13 @@ export function buildAgentThread({
   return entries.sort((left, right) => left.sequence - right.sequence)
 }
 
-/** 工单要点折成几行清单，供交接卡片展示（没有就不显示）。 */
-export function ticketHighlights(ticket?: CollabTicket): string[] {
-  if (!ticket) return []
-  const brief = ticket.brief ?? {}
-  const lines: string[] = []
-  if (brief.goal) lines.push(`目标：${brief.goal}`)
-  for (const item of brief.requirements ?? []) lines.push(`要求：${item}`)
-  for (const item of brief.deliverables ?? []) lines.push(`交付：${item}`)
-  for (const item of brief.acceptance ?? []) lines.push(`验收：${item}`)
-  for (const item of brief.constraints ?? []) lines.push(`约束：${item}`)
-  return lines
+/** 工单要点的条数摘要：对话里的卡片只留这一行，细节点开看完整工单。 */
+export function ticketBriefSummary(ticket?: CollabTicket): string {
+  const brief = ticket?.brief ?? {}
+  const parts: string[] = []
+  if (brief.requirements?.length) parts.push(`${brief.requirements.length} 项要求`)
+  if (brief.deliverables?.length) parts.push(`${brief.deliverables.length} 个交付`)
+  if (brief.acceptance?.length) parts.push(`${brief.acceptance.length} 条验收`)
+  if (brief.constraints?.length) parts.push(`${brief.constraints.length} 条约束`)
+  return parts.join(' · ')
 }

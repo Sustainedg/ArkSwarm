@@ -378,7 +378,9 @@ class AcmeHarness(OpenAIHarnessBase):
   发送都由页面给），两端的对话页与协作运行页共用；不要再各写一个输入框。
   `src/components/Icons.tsx` 同理：线条图标两端共用一份。样式是**组件一份、样式表各一份**
   （共享段逐字一致，守卫见 `tests/test_mobile_web.py::test_composer_styles_are_identical_on_both_ends`；
-  两端的尺寸微调写在共享段之后）。
+  两端的尺寸微调写在共享段之后）。**回复期间继续输入**用 `queueWhenBusy`：两端对话页都开着它，
+  框里有内容时右侧按钮是「排队发送」（点一下交给页面入队），空着时才是「停止」；队列与
+  「本轮结束自动发出」的逻辑属于页面（`ChatPage` / `MobileChatPage`），组件只提供开关。
 - **图片 / 插画类的多主题资源在构建期换算，不要在手机上跑实时滤镜**：协作办公室底图就是这么做的
   —— `scripts/gen_office_bg.py` 从同一份几何产出深 / 浅两张 SVG，前端按主题选（见
   `frontend/public/office/`、`components/CollabOfficeMap.tsx`）。

@@ -149,6 +149,40 @@
     color: var(--ink-soft);
   }
   footer .wrap { max-width: 980px; margin: 0 auto; }
+
+  /* —— 状态机图 —— */
+  .sm { margin: 18px 0; overflow-x: auto; }
+  .sm table { font-size: 14px; min-width: 520px; }
+  .sm th { white-space: nowrap; }
+  .sm .st { font-weight: 600; white-space: nowrap; }
+  /* —— 分支流转 —— */
+  .branches { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 18px 0; }
+  .branch { background: var(--card); border: 1.5px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .branch h4 { margin: 0 0 10px; font-size: 16px; display: flex; align-items: center; gap: 6px; }
+  .branch .steps { list-style: none; padding: 0; margin: 0; }
+  .branch .steps li { padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14.5px; line-height: 1.6; }
+  .branch .steps li:last-child { border-bottom: none; }
+  .branch .steps li b { font-size: 14px; }
+  .branch.b-split { border-color: #b8c6f0; }
+  .branch.b-rework { border-color: #f0d8a8; }
+  .branch.b-esc { border-color: #f0b8b8; }
+  .branch.b-happy { border-color: #b8e0c8; }
+  /* —— prompt 解剖 —— */
+  .anatomy { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin: 14px 0; overflow: hidden; }
+  .anatomy .layer { padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .anatomy .layer:last-child { border-bottom: none; }
+  .anatomy .layer b { display: inline-block; min-width: 130px; color: var(--brand); }
+  .anatomy .layer .desc { color: var(--ink-soft); font-size: 13.5px; }
+  .anatomy .layer.faded { opacity: 0.55; }
+  /* —— 中断时序 —— */
+  .timeline { margin: 18px 0; }
+  .timeline .t-row { display: grid; grid-template-columns: 90px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .timeline .t-row:last-child { border-bottom: none; }
+  .timeline .t-tag { font-weight: 600; color: var(--brand); white-space: nowrap; }
+  .timeline .t-tag.bad { color: var(--bad); }
+  .timeline .t-tag.ok { color: var(--ok); }
+  .timeline .t-tag.warn { color: var(--warn); }
+
   @media (max-width: 560px) {
     header.top h1 { font-size: 23px; }
     main { padding: 20px 16px 60px; }
@@ -169,10 +203,14 @@
     <a href="#idea">一句话理解</a>
     <a href="#words">三个词</a>
     <a href="#flow">一次任务怎么走</a>
+    <a href="#branch">分支与回路</a>
+    <a href="#sm">状态机</a>
     <a href="#perm">谁能干什么</a>
     <a href="#life">工单的一生</a>
     <a href="#payload">工单里装了什么</a>
+    <a href="#anatomy">成员看到什么</a>
     <a href="#handover">交接规则</a>
+    <a href="#interrupt">中断与续接</a>
     <a href="#chat">随时找 CEO</a>
     <a href="#guard">防死循环</a>
     <a href="#fix">这次修了什么</a>
@@ -238,7 +276,7 @@
     <b>同一时刻只有一个人在干活。</b>这是刻意的：串行推进才能说得清「谁在等谁」，
     取消、重试、排查也才有确定答案。
   </div>
-  <p>滚动的动作只有六种，看懂这六个词就够用了：</p>
+  <p>这条主链路上会用到六种动作，看懂这六个词就够用了：</p>
   <table>
     <thead><tr><th>动作</th><th>大白话</th><th>谁能用</th></tr></thead>
     <tbody>
@@ -250,10 +288,155 @@
       <tr><td><code>ask_user</code></td><td>「这事得你拍板」，弹出可点选项</td><td>只有入口智能体</td></tr>
     </tbody>
   </table>
+  <p>出问题时还有两种：<code>escalate</code>（我搞不定，往上交）和 <code>reject</code>（这条路走不通，终止）。
+  连同转交、拆子工单、打回返工，下一节一起讲。</p>
+</section>
+
+<section id="branch">
+  <h2>3. 分支与回路：工单不止一条直路</h2>
+  <p>上面那条主链路只是一条最顺的路。真实干活时还会分叉、回头、卡住、甚至整条走不通 ——
+  这六种走法就是全部，认全了就不会再被「怎么又退回来了」搞懵。</p>
+  <div class="branches">
+    <div class="branch b-happy">
+      <h4>➡️ 转交 <span class="pill p-info">handoff</span></h4>
+      <ul class="steps">
+        <li><b>同一张工单</b>换个人接着干，不新建工单</li>
+        <li>新填的字段与原来的<b>合并</b>，不是推倒重来</li>
+        <li>典型：CEO → CTO，同一件事往下传</li>
+        <li>交出去的人不是撒手不管，它还在等这张工单的结果</li>
+      </ul>
+    </div>
+    <div class="branch b-split">
+      <h4>🌿 拆子工单 <span class="pill p-info">split</span></h4>
+      <ul class="steps">
+        <li>「这活太大，我拆成两张」：<b>新建子工单</b>，父工单原地等</li>
+        <li>父工单变「等子工单」，子工单全通过后自动回到<b>拆解者</b>手里汇总</li>
+        <li>典型：CTO 把「改登录页」拆成「改样式」+「接接口」</li>
+        <li>最多拆 5 层；同一父工单下同名或近似同名的子工单最多 2 张</li>
+      </ul>
+    </div>
+    <div class="branch b-rework">
+      <h4>↩️ 打回返工 <span class="pill p-warn">rework</span></h4>
+      <ul class="steps">
+        <li>审查者判「不过」→ 工单变<b>返工</b>，附上具体审查意见</li>
+        <li>默认退回<b>最近提交的人</b>；审查者也能指定退给谁（比如退回 CTO 重新拆解）</li>
+        <li>改完重新提交，再走一轮审查</li>
+        <li>返工轮次有上限（节点、边、运行预算三者取最小），超了就挂起喊你</li>
+      </ul>
+    </div>
+    <div class="branch b-esc">
+      <h4>⬆️ 上报 <span class="pill p-warn">escalate</span></h4>
+      <ul class="steps">
+        <li>「我搞不定」→ 工单变<b>已上报</b>，交回<b>派活的那个人</b></li>
+        <li>必须写清「卡在哪、需要什么」，然后一级一级往上报</li>
+        <li><b>不许原样往下派</b>：上抛件只能自己解决、继续往上、或交给用户</li>
+        <li>到顶后变成一张问你「选哪个」的卡片；你答完，原工单接着跑</li>
+      </ul>
+    </div>
+    <div class="branch b-esc">
+      <h4>⛔ 否决 <span class="pill p-bad">reject</span></h4>
+      <ul class="steps">
+        <li>协调者 / 审查者判定这条路根本走不通 → 工单<b>否决</b></li>
+        <li>这条分支直接终止，错误往上抛给父工单的发起者</li>
+        <li>它不是「返工」（改改还能救），而是「别再走这条了」</li>
+      </ul>
+    </div>
+    <div class="branch b-happy">
+      <h4>✅ 收尾 <span class="pill p-ok">done</span></h4>
+      <ul class="steps">
+        <li>确认完成，并写一句<b>结论</b>（空结论等于没交付）</li>
+        <li>子工单收尾后父工单回到拆解者，由它决定继续还是收尾</li>
+        <li>根工单收尾后交回入口智能体，由它向你汇报</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">
+    整套机制里唯一的「回路」是<b>审查 ⇄ 返工</b>：有审查边就必须有退路，有退路就必须有来路。
+    普通「派发」边<b>不许成环</b> —— 想循环，只能走这条显式的闭环，否则图校验直接不让你保存。
+  </div>
+</section>
+
+<section id="sm">
+  <h2>4. 状态机：一张工单怎么变</h2>
+  <p>不用背，用的时候回来看这张表。左边是工单现在的状态，中间是谁在拿着它、能做什么，
+  右边是做完之后变成什么。<b>表里没写的箭头就是不允许的</b> —— 引擎会直接拒绝，不会「试试看」。</p>
+  <div class="sm">
+    <table>
+      <thead><tr><th>状态</th><th>谁持有</th><th>能做的事</th><th>做完变成</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="st"><span class="pill p-info">open</span> 待领取</span></td>
+          <td>在就绪队列里排队，马上就会有人接手</td>
+          <td>派发 / 拆子工单 / 提交 / 收尾 / 上报 / 否决</td>
+          <td>被别人接手 → <code>working</code>；拆了子工单 → <code>waiting_children</code></td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-info">working</span> 处理中</span></td>
+          <td>当前岗位正在干</td>
+          <td>派发 / 拆子工单 / 提交 / 收尾 / 上报 / 否决</td>
+          <td>交给审查 → <code>review</code>；没有审查者 → 直接 <code>done</code></td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-info">waiting_children</span> 等子工单</span></td>
+          <td>拆解者暂时放手，等下面的活</td>
+          <td>什么都不做（由子工单推进）</td>
+          <td>子工单全部通过 → 自动回到拆解者手里（<code>open</code>），由它汇总</td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-info">review</span> 待审查</span></td>
+          <td>审查者</td>
+          <td>审查 / 上报 / 否决</td>
+          <td>通过 → <code>done</code>；不通过 → <code>rework</code></td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-info">rework</span> 返工中</span></td>
+          <td>退回的那个岗位（默认是最近提交的人）</td>
+          <td>提交 / 收尾 / 派发 / 上报 / 否决</td>
+          <td>改完重新提交 → <code>review</code>；轮次超上限 → <code>blocked</code></td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-warn">escalated</span> 已上报</span></td>
+          <td>这张工单的发起人（逐级往上，到顶是入口智能体）</td>
+          <td>自己解决 / 继续上报 / 交给用户（<b>不能往下派</b>）</td>
+          <td>解决 → <code>done</code>；继续往上还是 <code>escalated</code>；入口发问 → <code>blocked</code></td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-warn">blocked</span> 卡住</span></td>
+          <td>在等你：回答了提问，或修掉了护栏 / 解析问题</td>
+          <td>你回答、点「重试」、改配置</td>
+          <td>你答完 / 修好 → 那张工单回到 <code>open</code>，进队列接着跑</td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-ok">done</span> 完成</span></td>
+          <td>—（终态）</td>
+          <td>不动作；你在主会话里追问会重开根工单</td>
+          <td>只负责把结论和产出文件留给上游</td>
+        </tr>
+        <tr>
+          <td><span class="st"><span class="pill p-bad">rejected</span> 否决</span></td>
+          <td>—（终态）</td>
+          <td>不动作</td>
+          <td>这条分支终止，错误抛给父工单的发起者</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>整个协作运行也有自己的状态，和工单状态是两回事：</p>
+  <table>
+    <thead><tr><th>运行状态</th><th>大白话</th></tr></thead>
+    <tbody>
+      <tr><td><code>running</code></td><td>还在推进（可能中间有工单在等子工单）</td></tr>
+      <tr><td><code>waiting_user</code></td><td>停下来了，在等你拍板或修东西</td></tr>
+      <tr><td><code>done</code></td><td>所有工单收尾，入口智能体也已经向你汇报完</td></tr>
+      <tr><td><code>error</code></td><td>某一步出了真错误，现场保留，可重试</td></tr>
+      <tr><td><code>cancelled</code></td><td>你点了停止</td></tr>
+      <tr><td><code>interrupted</code></td><td>服务重启 / 被停，页面上的「继续」就是为它准备的</td></tr>
+    </tbody>
+  </table>
 </section>
 
 <section id="perm">
-  <h2>3. 谁能干什么（权限）</h2>
+  <h2>5. 谁能干什么（权限）</h2>
   <p>权限分两层：<b>岗位能发起的动作</b>，和<b>能不能碰工作目录里的文件</b>。</p>
   <table>
     <thead><tr><th>岗位</th><th>默认能做的动作</th><th>工作目录权限</th><th>说明</th></tr></thead>
@@ -280,7 +463,7 @@
   </table>
   <h3>那「协调者不能读文件」不会误事吗？</h3>
   <p>不会，它也不需要：它靠工单里的<b>结论</b>和<b>产出文件清单</b>来判断，而不是自己去翻目录。
-  这也正是下面第 6 节要讲的「交接规则」。</p>
+  这也正是下面第 9 节要讲的「交接规则」。</p>
   <div class="note">
     共享工作目录是<b>整个协作组共用的同一个文件夹</b>。所有智能体拿到的是同一个绝对路径，
     「只读」「不许越界」靠提示词约束 + 运行前后的越权审计兜底（实现者改了不该改的目录会被当场发现）。
@@ -288,7 +471,7 @@
 </section>
 
 <section id="life">
-  <h2>4. 工单的一生（状态）</h2>
+  <h2>6. 工单的一生（状态）</h2>
   <table>
     <thead><tr><th>状态</th><th>大白话</th></tr></thead>
     <tbody>
@@ -309,7 +492,7 @@
 </section>
 
 <section id="payload">
-  <h2>5. 工单里装了什么</h2>
+  <h2>7. 工单里装了什么</h2>
   <div class="grid">
     <div class="card">
       <h3>派活时填的（brief）</h3>
@@ -338,8 +521,39 @@
   </div>
 </section>
 
+<section id="anatomy">
+  <h2>8. 成员看到什么：一次输入的解剖</h2>
+  <p>这是整套机制里最反直觉的一条：<b>智能体之间不共享对话</b>。每个岗位每次动手，拿到的都是一份
+  <b>现场拼出来的工单说明</b>，而不是前面那几个人的聊天记录。把它拆开，就是下面这几层：</p>
+  <div class="anatomy">
+    <div class="layer"><b>① 岗位</b>协作组、岗位名、职责、能力边界<span class="desc"> —— 「你是谁、在这个组里干什么」</span></div>
+    <div class="layer"><b>② 工作路径</b>唯一允许访问的目录 + 权限（无 / 只读 / 可读写）<span class="desc"> —— 所有岗位拿到同一个绝对路径</span></div>
+    <div class="layer"><b>③ 输出协议</b>本轮允许的动作、能派给谁、审查者是谁、退回给谁、工单块模板<span class="desc"> —— 只能做协议里写的事，越权会被运行时拦下</span></div>
+    <div class="layer"><b>④ 工单字段</b>标题 / 目标 / 需求 / 验收标准 / 约束 / 交付物<span class="desc"> —— 派活时填的那张单子，原样给到</span></div>
+    <div class="layer"><b>⑤ 上游交付摘要</b>上一手的一句话结论 + 变更文件清单<span class="desc"> —— 摘要，不是聊天原文</span></div>
+    <div class="layer"><b>⑥ 下游交付</b>我派出去的直接子工单：状态、最后经手人、结论、产出<span class="desc"> —— 「我派的活交回了什么」</span></div>
+    <div class="layer"><b>⑦ 本工单历史</b>这一张工单上的最近几轮：谁提交、谁打回、意见是什么<span class="desc"> —— 只有这一张工单</span></div>
+    <div class="layer"><b>⑧ 本轮要求</b>引擎按岗位和当前状态写的一句话：这轮该提交、该审查，还是该汇总<span class="desc"> —— 和协议永远一致，不会自相矛盾</span></div>
+  </div>
+  <p>收尾汇报那一轮会多一块「<b>全流程结果</b>」：把整次协作的工单压成「标题 · 状态 · 结论 · 产出文件」，
+  让入口智能体有东西可讲。</p>
+  <h3>刻意不进来的东西</h3>
+  <div class="anatomy">
+    <div class="layer faded"><b>别人的对话原文</b><span class="desc"> —— 一个字的通路都没有（不是靠自觉，是数据里根本没存）</span></div>
+    <div class="layer faded"><b>别的工单正文</b><span class="desc"> —— 只拿得到自己这一张；子树的细节逐级向上压缩成结论</span></div>
+    <div class="layer faded"><b>别的分支</b><span class="desc"> —— 兄弟工单干到哪了，这边看不见</span></div>
+    <div class="layer faded"><b>上一次的内核会话</b><span class="desc"> —— 每一步都是全新会话，不续接、不带记忆</span></div>
+  </div>
+  <div class="note">
+    所以「交接」靠的只有四样东西：<b>工单字段、一句话摘要、产出文件路径、本工单历史</b>。
+    这也是为什么结论写空会要命 —— 那就是下游能拿到的全部信息。
+    另外还有一层不属于工单：智能体的<b>人格</b>（「你是谁」的设定）配在智能体页，走的是系统提示词，
+    协作流程只负责往这份人格上叠岗位与工单。
+  </div>
+</section>
+
 <section id="handover">
-  <h2>6. 交接规则：谁看得到什么</h2>
+  <h2>9. 交接规则：谁看得到什么</h2>
   <p>这是整套机制里最容易被忽略、也最关键的一条：<b>智能体之间不共享记忆</b>。</p>
   <ul>
     <li>每个智能体干活时都是<b>全新会话</b>，看不到别人聊过什么；</li>
@@ -353,12 +567,37 @@
   <div class="note">
     「下游交付」这一条就是这次修的核心：以前上游只看得见自己几次「我派出去了」的记录，
     看不到下游交回了什么，于是把「已经干完」误判成「还没回报」——
-    接下来第 9 节会讲这个真实事故。
+    接下来第 13 节会讲这个真实事故。
+  </div>
+</section>
+
+<section id="interrupt">
+  <h2>10. 中断与续接：停了以后从哪接着跑</h2>
+  <p>协作会跑很久，谁都可能锁屏、关页面、撞上服务重启。原则只有一条：
+  <b>中断的是「这一次推进」，不是整件事</b>。工单和已经产出的东西都留着，恢复后只跑没干完的。</p>
+  <div class="timeline">
+    <div class="t-row"><span class="t-tag ok">点「停止」</span><span>当前这一步立即取消（子进程被杀），运行标为已停止；已经收尾的工单、写好的文件和结论全部保留，未完成的那一步可以重试。</span></div>
+    <div class="t-row"><span class="t-tag ok">锁屏 / 关页面 / 断网</span><span><b>不会打断运行</b>：推进跑在后台，页面只是订阅它。重新打开页面、换台设备，都能接着看同一份实时进度，正在跑的步骤不会重来。</span></div>
+    <div class="t-row"><span class="t-tag warn">服务重启 / 崩溃</span><span>启动时把残留的「进行中」运行标成<b>已中断</b>，把还挂着「处理中」的步骤一并收尾（否则界面会永远转圈）。工单原状态不动，点「继续」从就绪队列接着跑。</span></div>
+    <div class="t-row"><span class="t-tag warn">模型输出不合协议</span><span>不猜、不抛异常：这一步标失败、工单标<b>卡住</b>、运行停下来等你。修好模型或剧本后点「重试」，那张工单重新进队列，再「继续」。</span></div>
+    <div class="t-row"><span class="t-tag bad">返工太多 / 拆得太深 / 预算用尽</span><span>撞护栏，同样挂起 + 红字说明原因。调大上限或换条路，再从挂起的地方继续 —— 不会悄悄空转烧钱。</span></div>
+    <div class="t-row"><span class="t-tag ok">心跳</span><span>页面每 15 秒收到一行「还在」的注释，只为防止代理把长连接掐掉。<b>它不会打断正在等模型回答的那一步</b>：安静很久之后才出结果，也是正常的。</span></div>
+  </div>
+  <h3>「继续」到底继续了什么</h3>
+  <ul>
+    <li>从<b>就绪队列</b>接着跑：只有还没收尾的工单（待领取 / 返工）会被重新推进，已完成的不会重做；</li>
+    <li>续的是<b>工单</b>，不是记忆：每一步仍是全新会话，靠工单字段、摘要和产出文件接手；</li>
+    <li>等你拍板期间<b>不算超时</b>：空闲时限按「距上次进展」算，隔一天回来继续，仍有一个新的推进窗口；</li>
+    <li>拿不准从哪继续，先在主会话里问入口智能体「现在做到哪了」，它会照着工单快照回答。</li>
+  </ul>
+  <div class="warn">
+    如果「继续」之后还是立刻停住，先看红字：多半是同一处没修好（密钥没填、目录权限不对、输出一直不合协议）。
+    <b>同一个原因会一直停在同一张工单上</b>，不会自己好。
   </div>
 </section>
 
 <section id="chat">
-  <h2>7. 任务跑着，也能随时找 CEO</h2>
+  <h2>11. 任务跑着，也能随时找 CEO</h2>
   <p>入口智能体（CEO / 小组长）在大多数时候是<b>空闲的</b>：真正动手的是下游岗位。
   所以任务开始推进后，你仍然可以在输入框里继续和它说话，不需要等整条流程结束。</p>
   <p>流程暂时空闲、出错或已经收尾时，输入框<b>默认就是聊天模式</b>：发送的消息只进入你和
@@ -388,7 +627,7 @@
 </section>
 
 <section id="guard">
-  <h2>8. 防死循环的护栏</h2>
+  <h2>12. 防死循环的护栏</h2>
   <p>协作会花钱花时间，所以系统不会「让它一直转」。撞上任一条护栏，都会<b>挂起等人处理</b>，
   并且明说原因，绝不悄悄空转。</p>
   <table>
@@ -406,7 +645,7 @@
 </section>
 
 <section id="fix">
-  <h2>9. 这次修的是什么（真实事故复盘）</h2>
+  <h2>13. 这次修的是什么（真实事故复盘）</h2>
   <p>一次「你好，你看看现在的路径有哪些文件」的协作，跑了 <b>23 步、11 张工单</b>，
   直到你手动点「停止」才停。下面是它和修复后的对比。</p>
   <div class="before-after">
@@ -469,7 +708,7 @@
 </section>
 
 <section id="you">
-  <h2>10. 卡住了，你能做什么</h2>
+  <h2>14. 卡住了，你能做什么</h2>
   <table>
     <thead><tr><th>界面上的东西</th><th>它的意思 / 你该做什么</th></tr></thead>
     <tbody>

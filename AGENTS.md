@@ -311,6 +311,9 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   附件与语音的提示通过 `onNotice` 回给页面，输入框不自己弹东西。页面自己的
   语义（协作的模式切换按钮、状态条）走 `header` 插槽传进去；要允许空发送就开
   `allowEmptySend`（别为这类差异复制一份输入区，也别把页面语义塞进组件）。
+  **回复期间继续输入**：开 `queueWhenBusy`，框里有内容时右侧按钮从「停止」变成「排队发送」，
+  发送只是交给页面入队（队列状态与「本轮结束自动发出」的 effect 在页面里，组件不持有队列），
+  两个按钮不并存 —— 别为此再写一套输入框。
 - **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，
   时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口智能体工牌**才出来
   （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。输入区上方有一个**模式按钮**（不是两档

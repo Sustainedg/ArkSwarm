@@ -15,9 +15,13 @@ interface Props {
   live: LiveStep | null
   streamed: FinishedStep[]
   onClose: () => void
+  /** 点工单卡片 / 标签时打开完整工单 */
+  onOpenTicket?: (ticketId: string) => void
 }
 
-export function MobileAgentConversationSheet({ node, roster, steps, tickets, live, streamed, onClose }: Props) {
+export function MobileAgentConversationSheet({
+  node, roster, steps, tickets, live, streamed, onClose, onOpenTicket,
+}: Props) {
   const dutyLabel = useMemo(
     () => DUTIES.find((item) => item.value === node.duty)?.label ?? node.duty,
     [node.duty],
@@ -38,9 +42,20 @@ export function MobileAgentConversationSheet({ node, roster, steps, tickets, liv
       {node.activeTickets.length > 0 && (
         <div className="row wrap" style={{ gap: 6 }}>
           {node.activeTickets.map((ticket) => (
-            <span className="pill" key={ticket.id}>
-              当前工单：{ticket.title}
-            </span>
+            onOpenTicket ? (
+              <button
+                type="button"
+                className="collab-agent-ticket-chip"
+                key={ticket.id}
+                onClick={() => onOpenTicket(ticket.id)}
+              >
+                <span className="pill">{ticket.title}</span>
+              </button>
+            ) : (
+              <span className="pill" key={ticket.id}>
+                当前工单：{ticket.title}
+              </span>
+            )
           ))}
         </div>
       )}
@@ -51,7 +66,8 @@ export function MobileAgentConversationSheet({ node, roster, steps, tickets, liv
         tickets={tickets}
         live={live}
         streamed={streamed}
-        className="m-collab-agent-thread"
+        onOpenTicket={onOpenTicket}
+        className="m-thread m-collab-agent-thread"
         empty={(
           <div className="m-empty">
             <div className="m-empty-icon">{node.avatar}</div>

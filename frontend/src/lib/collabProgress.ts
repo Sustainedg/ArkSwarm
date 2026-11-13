@@ -269,11 +269,11 @@ export function buildCollabProgress({
 
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const nodes = orderedCollabNodes(graph, entryKey).map((node): CollabAgentProgress => {
-    const ownSteps = steps.filter((step) => step.role_key === node.key)
-    const persistedIds = new Set(ownSteps.map((step) => step.id))
-    const ownStreamed = streamed.filter(
-      (step) => step.nodeKey === node.key && !persistedIds.has(step.stepId),
-    )
+    // 同一步骤可能先在 SSE 里跑完（`streamed`），落库详情却还是空空的 streaming 行。
+    // 以流式结果为准：剔除被它顶替的落库行，否则岗位会一直显示「正在处理中」。
+    const streamedIds = new Set(streamed.map((step) => step.stepId))
+    const ownSteps = steps.filter((step) => step.role_key === node.key && !streamedIds.has(step.id))
+    const ownStreamed = streamed.filter((step) => step.nodeKey === node.key)
     const last = latestStep(ownSteps)
     const lastStreamed = ownStreamed.length > 0 ? ownStreamed[ownStreamed.length - 1] : undefined
     const stepCount = ownSteps.length + ownStreamed.length

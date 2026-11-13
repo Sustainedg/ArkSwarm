@@ -191,6 +191,35 @@ def test_composer_styles_are_identical_on_both_ends():
 
 
 @needs_frontend
+def test_replying_keeps_input_usable_and_queues_messages():
+    """AI 回复期间仍能打字：右侧按钮按「框里有没有内容」在停止 / 排队发送之间切换，消息入队后本轮结束自动发出。
+
+    实现在两端共用组件 + 各自的页面里：`Composer` 只提供 `queueWhenBusy` 开关（不锁输入、按内容切按钮），
+    「待发送队列」与「本轮结束自动发出」的 effect 在 `ChatPage`（桌面）与 `MobileChatPage`（移动端）。
+    """
+    composer = (FRONTEND / "src" / "components" / "Composer.tsx").read_text(encoding="utf-8")
+    assert "queueWhenBusy" in composer, "输入区要能声明「回复期间继续输入」"
+    # 运行中只有「有空内容 → 排队发送」「空着 → 停止」两种形态，两个按钮不并存。
+    assert "disabled || (busy && !queueWhenBusy)" in composer, "开了排队就不该再锁输入框"
+    assert "busy && (!queueWhenBusy || !canSend)" in composer, "空输入时才显示停止"
+    assert "(queueWhenBusy && canSend)" in composer, "有内容时显示排队发送"
+
+    for page, chip in (
+        (FRONTEND / "src" / "pages" / "ChatPage.tsx", "chat-queued-row"),
+        (MOBILE_SRC / "pages" / "MobileChatPage.tsx", "m-queued-row"),
+    ):
+        text = page.read_text(encoding="utf-8")
+        assert "queueWhenBusy" in text, f"{page.name} 应当开启排队输入"
+        assert "interface QueuedMessage" in text, f"{page.name} 缺少待发送消息类型"
+        # 自动发出的 effect 盯着「队列 + 运行状态 + 当前对话」；只写 queue 会漏掉运行结束的时机。
+        assert re.search(r"\}, \[queue, runActive, active\?\.id\]\)", text), (
+            f"{page.name} 的自动发送 effect 依赖不对"
+        )
+        assert "setQueue([])" in text, f"{page.name} 换对话时要清空队列"
+        assert chip in text, f"{page.name} 缺少待发送提示条（{chip}）"
+
+
+@needs_frontend
 def test_ticket_board_is_shared_between_ends():
     """工单看板：视图模型与卡片零件只有一份，两端只是外壳与交互不同。"""
     kit = (FRONTEND / "src" / "components" / "TicketBoardKit.tsx").read_text(encoding="utf-8")
@@ -369,6 +398,18 @@ async def test_unknown_api_path_returns_json_instead_of_the_spa_shell(client):
     spa = await client.get("/collab/runs/example")
     assert spa.status_code == 200
     assert spa.headers["content-type"].startswith("text/html")
+
+
+@needs_dist
+async def test_spa_shell_is_revalidated_instead_of_cached(client):
+    """入口 HTML 与 `sw.js` 必须每次回源校验：独立应用不会手动刷新，缓存住就永远换不到新版本。
+
+    带哈希的 `/assets/*` 是另一回事（不可变、可长缓存），不在这个断言的范围内。
+    """
+    for path in ("/", "/m/", "/m/sw.js"):
+        response = await client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers.get("cache-control") == "no-cache", f"{path} 的外壳不该被缓存"
 
 
 @needs_frontend

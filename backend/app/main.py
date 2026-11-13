@@ -122,4 +122,10 @@ if FRONTEND_DIST.exists():
         """
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail=f"接口不存在：/{full_path}")
-        return FileResponse(resolve_spa_target(FRONTEND_DIST, full_path))
+        # 外壳（入口 HTML / sw.js / manifest）每次都回源校验：PWA 装到主屏后不会手动刷新，
+        # 让浏览器或中间代理直接命中旧外壳，新构建就永远「看起来没生效」。
+        # 带哈希的构建产物走 /assets 的静态挂载，不在这里，可以继续长缓存。
+        return FileResponse(
+            resolve_spa_target(FRONTEND_DIST, full_path),
+            headers={"Cache-Control": "no-cache"},
+        )

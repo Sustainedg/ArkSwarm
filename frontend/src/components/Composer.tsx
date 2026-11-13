@@ -49,6 +49,13 @@ interface Props {
   header?: ReactNode
   /** 框下方的一条说明（用量统计之类）：贴着输入框下沿，也不进框里 */
   footer?: ReactNode
+  /** 额外的类名：页面按自己的版式微调输入区（例如移动端对话页把文字放到图标上面） */
+  className?: string
+  /**
+   * 运行中也允许继续输入 / 发送：发送交给页面排队，本轮回复结束后由页面自动发出。
+   * 不开时沿用旧行为（运行中输入框置灰，右侧只有停止）。
+   */
+  queueWhenBusy?: boolean
 }
 
 /** 读成 base64（去掉 data URL 前缀），交给上传接口。 */
@@ -82,6 +89,8 @@ export function Composer({
   inputRef,
   header,
   footer,
+  className,
+  queueWhenBusy = false,
 }: Props) {
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -92,7 +101,7 @@ export function Composer({
    * `webkitSpeechRecognition`，藏起来用户只会以为功能没了；点一下给中文说明更好懂。
    */
   const voiceSupported = useMemo(() => Boolean(speechRecognitionCtor()), [])
-  const locked = disabled || busy
+  const locked = disabled || (busy && !queueWhenBusy)
 
   // 卸载（离开页面 / 关掉弹层）时收起麦克风，别让识别在后台空转。
   useEffect(() => () => voiceRef.current?.abort(), [])
@@ -170,7 +179,7 @@ export function Composer({
   }
 
   return (
-    <div className="composer">
+    <div className={className ? `composer ${className}` : 'composer'}>
       {header && <div className="composer-head">{header}</div>}
 
       {attachments.length > 0 && (
@@ -248,17 +257,20 @@ export function Composer({
             submit()
           }}
         />
-        {busy ? (
+        {/* 运行中只留一个按钮：框里写了东西就是「排队发送」，空着就是「停止」。
+            这样手指永远落在同一个位置，也不会出现「想停止却点到发送」。 */}
+        {busy && (!queueWhenBusy || !canSend) && (
           <button className="composer-tool stop" onClick={() => onStop?.()} aria-label="停止" title="停止这次运行">
             <StopIcon size={15} />
           </button>
-        ) : (
+        )}
+        {(!busy || (queueWhenBusy && canSend)) && (
           <button
             className="composer-tool send"
             onClick={submit}
             disabled={disabled || !canSend}
-            aria-label="发送"
-            title="发送"
+            aria-label={busy ? '排队发送' : '发送'}
+            title={busy ? '排队发送：本轮回复结束后自动发出' : '发送'}
           >
             <SendIcon size={18} />
           </button>

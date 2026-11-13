@@ -476,6 +476,15 @@ export interface Conversation {
   agent_avatar?: string | null
   agent_type_id?: string | null
   message_count: number
+  /** 最后一条是已完成的 AI 回复、且晚于用户最后一次打开它的时间（列表接口算出来） */
+  unread?: boolean
+}
+
+/** `GET /conversations` 的返回：对话列表 + 当前正在跑的那些运行。 */
+export interface ConversationListSnapshot {
+  items: Conversation[]
+  /** 有运行在进行中的对话：列表据此显示「正在回复」的动画 */
+  active_runs: ActiveRunInfo[]
 }
 
 /**

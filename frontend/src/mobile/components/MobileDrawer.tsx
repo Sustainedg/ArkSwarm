@@ -34,12 +34,13 @@ interface Props {
  * 对话行只留文字（标题 + 智能体/条数 + 时间）与那个「⋯」：一行一行的头像在这里只是噪音，
  * 去掉之后列表更紧凑，字号也比其它列表小一档（见 mobile.css 的 `.m-conv-row`）。
  */
-export function MobileDrawer({ open, onClose, version }: Props) {
-  const navigate = useNavigate()
+export function MobileDrawer({ open, onClose, version }: Props) {  const navigate = useNavigate()
   const { pathname } = useLocation()
 
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [agents, setAgents] = useState<AgentProfile[]>([])
+  /** 正在跑着的对话 id：这些行显示「正在回复」的旋转小环 */
+  const [runningIds, setRunningIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -55,8 +56,12 @@ export function MobileDrawer({ open, onClose, version }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [list, agentList] = await Promise.all([api.listConversations(), api.listAgents()])
-      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
+      const [snapshot, agentList] = await Promise.all([api.listConversations(), api.listAgents()])
+      setConversations((prev) =>
+        sameConversationList(prev, snapshot.items) ? prev : snapshot.items,
+      )
+      const running = new Set(snapshot.active_runs.map((run) => run.conversation_id))
+      setRunningIds((prev) => (sameIdSet(prev, running) ? prev : running))
       setAgents(agentList)
       setError(null)
     } catch (e) {
@@ -208,42 +213,65 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                   </p>
                 ) : (
                   <div className="m-list">
-                    {conversations.map((conversation) => (
-                      // 一行里两个按钮（打开对话 / 会话操作），button 不能嵌套，所以拆成两段。
-                      <div
-                        key={conversation.id}
-                        className={`m-item m-conv-row${conversation.id === activeId ? ' active' : ''}`}
-                      >
-                        <button
-                          className="m-conv-main"
-                          onClick={() => {
-                            onClose()
-                            navigate(`/chat/${conversation.id}`)
-                          }}
+                    {conversations.map((conversation) => {
+                      const running = runningIds.has(conversation.id)
+                      // 当前打开的那条正在看，不亮未读；正在回复时以动画优先。
+                      const unread =
+                        Boolean(conversation.unread) && !running && conversation.id !== activeId
+                      return (
+                        // 一行里两个按钮（打开对话 / 会话操作），button 不能嵌套，所以拆成两段。
+                        <div
+                          key={conversation.id}
+                          className={`m-item m-conv-row${conversation.id === activeId ? ' active' : ''}`}
                         >
-                          <span className="m-item-main">
-                            <span className="m-item-title">{conversation.title}</span>
-                            <span className="m-item-sub m-item-sub-row">
-                              <span className="m-item-meta">
-                                {conversation.agent_name} · {conversation.message_count} 条
+                          <button
+                            className="m-conv-main"
+                            onClick={() => {
+                              onClose()
+                              navigate(`/chat/${conversation.id}`)
+                            }}
+                          >
+                            <span className="m-item-main">
+                              <span className="m-item-head">
+                                {running ? (
+                                  <span
+                                    className="m-item-state running"
+                                    role="img"
+                                    aria-label="智能体正在回复"
+                                    title="智能体正在回复…"
+                                  />
+                                ) : unread ? (
+                                  <span
+                                    className="m-item-state unread"
+                                    role="img"
+                                    aria-label="有未读回复"
+                                    title="有未读回复"
+                                  />
+                                ) : null}
+                                <span className="m-item-title">{conversation.title}</span>
                               </span>
-                              <span className="m-item-time">{formatListTime(conversation.updated_at)}</span>
+                              <span className="m-item-sub m-item-sub-row">
+                                <span className="m-item-meta">
+                                  {conversation.agent_name} · {conversation.message_count} 条
+                                </span>
+                                <span className="m-item-time">{formatListTime(conversation.updated_at)}</span>
+                              </span>
                             </span>
-                          </span>
-                        </button>
-                        <button
-                          className="m-conv-more"
-                          aria-label={`对话「${conversation.title}」的操作`}
-                          title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
-                          onClick={() => {
-                            onClose()
-                            navigate(`/chat/${conversation.id}`, { state: { openActions: true } })
-                          }}
-                        >
-                          ⋯
-                        </button>
-                      </div>
-                    ))}
+                          </button>
+                          <button
+                            className="m-conv-more"
+                            aria-label={`对话「${conversation.title}」的操作`}
+                            title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
+                            onClick={() => {
+                              onClose()
+                              navigate(`/chat/${conversation.id}`, { state: { openActions: true } })
+                            }}
+                          >
+                            ⋯
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -253,4 +281,11 @@ export function MobileDrawer({ open, onClose, version }: Props) {
       </aside>
     </div>
   )
+}
+
+/** 两个 id 集合是否一样（轮询回来没变化就不触发重渲染）。 */
+function sameIdSet(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false
+  for (const id of left) if (!right.has(id)) return false
+  return true
 }

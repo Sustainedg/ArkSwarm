@@ -76,7 +76,8 @@ export function sameConversationList(left: Conversation[], right: Conversation[]
       conversation.id === next.id &&
       conversation.updated_at === next.updated_at &&
       conversation.message_count === next.message_count &&
-      conversation.title === next.title
+      conversation.title === next.title &&
+      Boolean(conversation.unread) === Boolean(next.unread)
     )
   })
 }

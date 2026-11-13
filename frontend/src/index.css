@@ -155,13 +155,12 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(243, 241, 252, 0.72));
 }
 [data-theme='light'] .collab-progress-board-head { background: rgba(255, 255, 255, 0.78); }
-[data-theme='light'] .collab-agent-panel-head { background: rgba(255, 255, 255, 0.72); }
 [data-theme='light'] .collab-inspector { background: rgba(255, 255, 255, 0.5); }
 [data-theme='light'] .collab-progress-trigger-count { background: rgba(35, 32, 58, 0.06); }
 [data-theme='light'] .modal-backdrop { background: rgba(37, 31, 68, 0.42); }
 [data-theme='light'] .collab-progress-board-backdrop { background: rgba(37, 31, 68, 0.55); }
 [data-theme='light'] .collab-progress-conversation {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 246, 251, 0.98));
+  background: var(--bg);
 }
 [data-theme='light'] .banner-close:hover { background: rgba(35, 32, 58, 0.06); }
 
@@ -359,8 +358,29 @@ code, pre, .mono { font-family: var(--mono); }
 .chat-item-main {
   display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; text-align: left;
   padding: 0; border: none; background: none; color: inherit; font: inherit; cursor: pointer;
+  transition: padding-right 0.15s;
 }
+/* 动作条浮在右上角时，正文得让开这 84px（三个 24px 图标 + 间距 + 右边距）：
+   选中行的底色是半透明的品牌色，动作条 `background: inherit` 也半透明，
+   不让开的话标题和时间会直接透到图标底下。 */
+.chat-item:hover .chat-item-main,
+.chat-item:focus-within .chat-item-main { padding-right: 84px; }
 .chat-item-title { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 标题前的小状态点：正在回复（转圈）优先于未读（实心点）。
+   放在标题左侧而不是右上角 —— 右上角悬停时会被「⋯ ✎ 🗑」盖住。 */
+.chat-item-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.chat-item-head > .chat-item-title { flex: 1; min-width: 0; }
+.chat-item-state { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.chat-item-state.unread { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.chat-item-state.running {
+  width: 9px; height: 9px; background: transparent;
+  border: 1.6px solid var(--brand-soft); border-top-color: var(--brand);
+  animation: chat-item-spin 0.8s linear infinite;
+}
+@keyframes chat-item-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-item-state.running { animation: none; border-color: var(--brand); }
+}
 .chat-item-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
 /* 智能体名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
 .chat-item-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -599,12 +619,29 @@ code, pre, .mono { font-family: var(--mono); }
 .composer-tool { width: 36px; height: 36px; }
 
 /* 对话页的输入区：宽屏 + 鼠标，所以文字单独占上面一行，附件 / 语音在左下、发送 / 停止在右下，
-   框也加高一档（移动端那套「图标和文字挤在一行」见共享段；协作运行页的输入框没有附件 /
-   语音，用的是「一行 + 右侧按钮」，别被这里的换行规则带跑）。 */
+   框也加高一档（移动端对话页同样把文字放到图标上面，见 mobile.css 的微调段；协作运行页的输入框
+   没有附件 / 语音，用的是「一行 + 右侧按钮」，别被这里的换行规则带跑）。 */
 .chat-composer .composer-box { flex-wrap: wrap; align-items: center; }
 .chat-composer .composer textarea { order: -1; flex: 0 0 100%; min-height: 68px; }
 .chat-composer .composer-tool.send,
 .chat-composer .composer-tool.stop { margin-left: auto; }
+
+/* AI 回复期间排队的那条消息：贴在输入框上方，本轮结束自动发出，✕ 取消整段队列 */
+.chat-queued-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-input); font-size: 12px; color: var(--text-muted);
+}
+.chat-queued-tag {
+  flex: none; padding: 1px 8px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand); font-weight: 600;
+}
+.chat-queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-queued-count { flex: none; color: var(--text-dim); }
+.chat-queued-cancel {
+  flex: none; padding: 0 2px; border: none; background: none;
+  color: var(--text-dim); font-size: 12px; cursor: pointer;
+}
 
 .usage-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
@@ -936,9 +973,10 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .collab-progress-conversation {
   min-width: 0; min-height: 0; display: flex; overflow: hidden;
-  border: 1px solid rgba(123, 92, 255, 0.38); border-radius: 20px;
-  background: linear-gradient(180deg, rgba(27, 25, 45, 0.98), rgba(14, 13, 24, 0.98));
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  /* 与普通对话页一致：用页面底色，不再套一层紫色渐变卡片。 */
+  background: var(--bg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 .collab-progress-section { display: flex; flex-direction: column; gap: 14px; }
 .collab-progress-section-head { display: flex; align-items: flex-end; gap: 14px; }
@@ -1269,26 +1307,29 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- 协作：岗位内部实时会话 ---------- */
 .collab-agent-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.collab-agent-panel-head {
-  flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 18px;
-  border-bottom: 1px solid var(--border); background: rgba(23, 22, 42, 0.72);
-}
+/* 顶栏直接复用 `.chat-topbar`；这里只补「面板里不能收缩」这一条。 */
+.collab-agent-panel-head { flex: none; }
 .collab-agent-panel-title { min-width: 0; flex: 1; }
-.collab-agent-panel-name { font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.collab-agent-panel-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.collab-agent-panel-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-agent-panel-meta { margin-top: 2px; font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
 .collab-agent-live-pill { flex: none; }
 .collab-agent-panel-close { flex: none; }
 .collab-agent-tickets {
   display: flex; gap: 6px; flex-wrap: wrap; padding: 9px 20px;
-  border-bottom: 1px solid var(--border); background: rgba(123, 92, 255, 0.04);
+  border-bottom: 1px solid var(--border); background: var(--bg-elevated);
 }
-/* 岗位面板只负责自己的容器外观（铺满 + 滚动 + 渐变底），气泡与间距统一由 `.conversation-*` 提供。 */
+.collab-agent-ticket-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  background: var(--bg-input); color: var(--text-muted); font: inherit; font-size: 11.5px;
+  cursor: pointer; transition: border-color 0.15s, color 0.15s;
+}
+.collab-agent-ticket-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.collab-agent-ticket-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 岗位面板只负责自己的容器外观（铺满 + 滚动），气泡与间距统一由 `.conversation-*` 提供。
+   滚动区尺寸与 `.chat-scroll` 对齐：同一个对话组件在哪儿看都一样。 */
 .collab-agent-thread {
-  flex: 1; min-height: 0; overflow: auto; padding: 22px 22px 34px;
-  background:
-    radial-gradient(480px 260px at 100% 0%, rgba(110, 231, 209, 0.045), transparent 70%),
-    radial-gradient(520px 300px at 0% 100%, rgba(217, 79, 208, 0.055), transparent 68%),
-    rgba(8, 8, 14, 0.38);
+  flex: 1; min-height: 0; overflow: auto; padding: 22px 26px 8px;
 }
 .collab-agent-thread .tool-card { max-width: 100%; }
 .collab-agent-placeholder {
@@ -1320,15 +1361,33 @@ code, pre, .mono { font-family: var(--mono); }
   background: linear-gradient(135deg, rgba(217, 79, 208, 0.24), rgba(123, 92, 255, 0.15));
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
-.collab-agent-thread .collab-agent-handoff-row .collab-agent-handoff-ticket {
-  border-top-color: rgba(255, 255, 255, 0.14);
-}
-.collab-agent-thread .collab-agent-handoff-row .collab-agent-handoff-title { color: var(--text); }
 .collab-agent-handoff-text { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.collab-agent-handoff-ticket {
-  border-top: 1px dashed var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 3px;
+
+/* ---------- 协作：对话里的工单卡（摘要，点开看完整工单） ---------- */
+.collab-ticket-card {
+  display: flex; flex-direction: column; gap: 7px; width: 100%; min-width: 0;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text); font: inherit; text-align: left;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
 }
-.collab-agent-handoff-title { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+.collab-ticket-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.collab-ticket-card.static { cursor: default; }
+.collab-ticket-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.collab-ticket-card-icon { flex: none; }
+.collab-ticket-card-title {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.collab-ticket-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px; color: var(--text-dim); }
+.collab-ticket-card-goal { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-ticket-card-more { font-size: 11.5px; color: var(--brand); }
+.collab-ticket-chip {
+  max-width: 100%; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-input); color: var(--text-muted); font: inherit; font-size: 10.5px;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.collab-ticket-chip:hover { border-color: var(--border-strong); color: var(--text); }
 
 /* ---------- 协作：等待用户决定的选项卡片 ---------- */
 .collab-ask-stack { padding: 6px 22px 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -1361,7 +1420,8 @@ code, pre, .mono { font-family: var(--mono); }
   width: min(760px, 94vw); height: 100%; display: flex; flex-direction: column;
   background: var(--bg-panel); border-left: 1px solid var(--border-strong); box-shadow: var(--shadow);
 }
-.collab-ticket-board-backdrop { background: var(--bg); justify-content: stretch; align-items: stretch; }
+/* 工单看板可能从「协作进度」里的工单卡叠着打开：始终压在进度页上面。 */
+.collab-ticket-board-backdrop { background: var(--bg); justify-content: stretch; align-items: stretch; z-index: 60; }
 .collab-ticket-board {
   width: 100%; height: 100%; max-width: none; border-left: none; border-radius: 0; box-shadow: none;
   background: var(--bg-panel);

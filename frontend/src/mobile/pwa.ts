@@ -9,6 +9,9 @@ import { useCallback, useEffect, useState } from 'react'
 /** 离线缓存的前缀（与 `public/m/sw.js` 里的缓存名保持一致）。 */
 const CACHE_PREFIX = 'magenta-m-'
 
+/** 正在走「更新到最新版本」：它自己会清缓存再重载，别让 controllerchange 抢跑成白载。 */
+let selfRefresh = false
+
 /** Chromium 专有的安装事件（TS 标准库里没有）。 */
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -18,10 +21,35 @@ interface InstallPromptEvent extends Event {
 /** 注册 /m/ 的 Service Worker（同源、幂等；重复注册由浏览器自行合并）。 */
 export function registerServiceWorker(): void {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
+
+  /**
+   * 新外壳接管页面后自动重载一次：装在主屏里的应用长期不关，只等「下次打开」换新版，
+   * 用户会以为改动没生效。第一次安装时本来就没有旧外壳，不重载（避免白闪一下）。
+   */
+  const hadController = Boolean(navigator.serviceWorker.controller)
+  let reloading = false
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading || selfRefresh) return
+    reloading = true
+    window.location.reload()
+  })
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/m/sw.js', { scope: '/m/' }).catch((error: unknown) => {
-      console.warn('移动端 Service Worker 注册失败：', error)
-    })
+    navigator.serviceWorker
+      // updateViaCache: 'none'：sw.js 本身也走网络校验，别让浏览器 HTTP 缓存挡住新版。
+      .register('/m/sw.js', { scope: '/m/', updateViaCache: 'none' })
+      .catch((error: unknown) => {
+        console.warn('移动端 Service Worker 注册失败：', error)
+      })
+  })
+
+  // 从后台切回前台时顺手查一次更新：主屏应用可能几天都不重新加载页面。
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return
+    navigator.serviceWorker
+      .getRegistration('/m/')
+      .then((registration) => registration?.update())
+      .catch(() => undefined)
   })
 }
 
@@ -32,6 +60,7 @@ export function registerServiceWorker(): void {
  * 清完重载后入口脚本会重新注册 SW 并预缓存当前版本。
  */
 export async function refreshShell(): Promise<void> {
+  selfRefresh = true
   try {
     if ('serviceWorker' in navigator) {
       const registrations = await navigator.serviceWorker.getRegistrations()

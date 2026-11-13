@@ -26,14 +26,20 @@ interface Props {
   statusLabel: string
   statusPill: string
   onClose: () => void
+  /** 点岗位对话里的工单卡片时打开完整工单 */
+  onOpenTicket?: (ticketId: string) => void
+  /** 上面还压着工单看板时，Esc 交给看板处理，别把进度页一起关掉 */
+  escapeDisabled?: boolean
 }
 
 export function CollabProgressBoard({
   nodes, edges, steps, tickets, live, streamed, runTitle, teamName, statusLabel, statusPill, onClose,
+  onOpenTicket, escapeDisabled = false,
 }: Props) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
   useEffect(() => {
+    if (escapeDisabled) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (selectedKey) setSelectedKey(null)
@@ -41,7 +47,7 @@ export function CollabProgressBoard({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, selectedKey])
+  }, [onClose, selectedKey, escapeDisabled])
 
   if (nodes.length === 0) return null
 
@@ -117,6 +123,7 @@ export function CollabProgressBoard({
                 tickets={tickets}
                 live={live}
                 streamed={streamed}
+                onOpenTicket={onOpenTicket}
                 onClose={() => setSelectedKey(null)}
                 closeLabel="← 返回概览"
                 variant="embedded"

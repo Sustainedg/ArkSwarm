@@ -15,7 +15,7 @@ import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
 import {
-  applyCollabEvent, dismissCollabNotice, makeCollabTurn, type CollabNotice, type CollabTurnState,
+  applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
 } from '../lib/collabStream'
 import {
   forgetDismissedNotices, loadDismissedNotices, rememberDismissedNotice,
@@ -67,6 +67,8 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const [startTitle, setStartTitle] = useState('')
   const [startWorkspace, setStartWorkspace] = useState('')
   const [boardOpen, setBoardOpen] = useState(false)
+  //: 从岗位对话里的工单卡点进来时，看板直接定位到这张工单
+  const [boardTicketId, setBoardTicketId] = useState<string | null>(null)
   const [progressOpen, setProgressOpen] = useState(false)
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -80,9 +82,19 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
 
   const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
   const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
+  // 同一步骤既有落库行（可能还停在 streaming、内容为空）又有流式结果时，以流式结果为准。
+  const streamedStepIds = useMemo(
+    () => new Set([
+      ...(turn?.completed ?? []).map((step) => step.stepId),
+      ...(turn?.live ? [turn.live.stepId] : []),
+    ]),
+    [turn?.completed, turn?.live],
+  )
   const visibleSteps = useMemo(
-    () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
-    [detail?.steps, leaderKey],
+    () => (detail?.steps ?? []).filter(
+      (step) => (step.role_key === 'user' || step.role_key === leaderKey) && !streamedStepIds.has(step.id),
+    ),
+    [detail?.steps, leaderKey, streamedStepIds],
   )
   const chatMessages = detail?.chat_messages ?? []
   const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
@@ -99,17 +111,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     try {
       const next = await api.getCollabRun(id)
       setDetail(next)
-      setTurn((prev) => {
-        const base = prev ?? makeCollabTurn(next, next.tickets, next.steps, dismissedNotices)
-        return {
-          ...base,
-          status: next.status,
-          reason: next.error ?? null,
-          live: null,
-          completed: [],
-          tickets: Object.fromEntries(next.tickets.map((ticket) => [ticket.id, ticket])),
-        }
-      })
+      setTurn((prev) => syncTurnWithRun(prev, next, next.tickets, next.steps, dismissedNotices))
       return next
     } catch (e) {
       setError(describe(e))
@@ -160,26 +162,43 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
-      let closed = false
       const onEvent = (event: RunEvent) => {
-        if (event.type === 'stream.closed') {
-          closed = true
-          return
-        }
+        if (event.type === 'stream.closed') return
         setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev))
       }
       try {
-        if (kickoff) await kickoff(onEvent, controller.signal)
+        if (kickoff) {
+          try {
+            await kickoff(onEvent, controller.signal)
+          } catch (e) {
+            // 发起这一轮的响应断了不代表运行停了：先看落库状态，还在跑就继续订阅围观。
+            if ((e as Error)?.name === 'AbortError') throw e
+            setError(describe(e))
+          }
+          if (controller.signal.aborted) return
+          const latest = await loadDetail(runId)
+          if (!latest || latest.status !== 'running') return
+        }
         let attempt = 0
-        while (!closed && !controller.signal.aborted && attempt < 5) {
+        while (!controller.signal.aborted && attempt < 30) {
           // 第一次订阅（刚打开页面就围观在跑的运行）不算「断线」；只有重连才提示并退避。
-          if (attempt > 0 || kickoff) {
+          if (attempt > 0) {
             setReconnecting(true)
             await delay(Math.min(800 * attempt, 3000))
             if (controller.signal.aborted) break
           }
           attempt += 1
-          await streamGet<RunEvent>(`/api/collab/runs/${runId}/stream`, onEvent, controller.signal)
+          try {
+            await streamGet<RunEvent>(`/api/collab/runs/${runId}/stream`, onEvent, controller.signal)
+          } catch (e) {
+            // 网络层断开（锁屏、隧道抖动）不是运行结束：退避后重订阅，总线会补发本轮事件。
+            if ((e as Error)?.name === 'AbortError') throw e
+            setError(describe(e))
+          }
+          if (controller.signal.aborted) break
+          // 以落库状态为准：运行真的收尾了才停，否则继续订阅。
+          const latest = await loadDetail(runId)
+          if (!latest || latest.status !== 'running') break
         }
       } catch (e) {
         if ((e as Error)?.name !== 'AbortError') setError(describe(e))
@@ -469,6 +488,15 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   ]
 
   const status = turn?.status ?? detail?.status ?? 'waiting_user'
+  // 详情轮询发现运行又推进起来了（例如另一台设备点了继续），而本页已经退订：
+  // 自动补一次订阅，让「协作进度 / 岗位实时对话」重新有逐字输出可看。
+  useEffect(() => {
+    if (!runId || status !== 'running' || busyRef.current) return
+    const timer = window.setTimeout(() => {
+      if (!busyRef.current) void subscribe(runId)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [runId, status, subscribe])
   const progress = useMemo(
     () =>
       buildCollabProgress({
@@ -579,7 +607,13 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                   <span className="collab-progress-trigger-count">{progressDone}/{progress.nodes.length}</span>
                   {progressLive && <span className="collab-progress-trigger-dot" aria-label="有岗位正在实时输出" />}
                 </button>
-                <button className="btn sm" onClick={() => setBoardOpen(true)}>
+                <button
+                  className="btn sm"
+                  onClick={() => {
+                    setBoardTicketId(null)
+                    setBoardOpen(true)
+                  }}
+                >
                   📋 工单看板 {detail.tickets.length}
                 </button>
                 {busy || remoteRunning ? (
@@ -825,7 +859,11 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
           agents={agents}
           nodeLabel={(key) => labelOf(key, team?.graph.nodes.find((item) => item.key === key)?.label)}
           runTitle={detail.title}
-          onClose={() => setBoardOpen(false)}
+          initialTicketId={boardTicketId}
+          onClose={() => {
+            setBoardOpen(false)
+            setBoardTicketId(null)
+          }}
         />
       )}
 
@@ -842,6 +880,11 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
           statusLabel={RUN_STATUS[status]?.label ?? status}
           statusPill={RUN_STATUS[status]?.pill ?? ''}
           onClose={() => setProgressOpen(false)}
+          onOpenTicket={(ticketId) => {
+            setBoardTicketId(ticketId)
+            setBoardOpen(true)
+          }}
+          escapeDisabled={boardOpen}
         />
       )}
 

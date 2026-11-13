@@ -410,7 +410,8 @@ agent_profiles(id, name, avatar, tagline, description, system_prompt, type_id,
                gateway_id→gateways, model, options JSON, enabled, deleted_at)
 credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at)
 agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
-conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived)
+conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived,
+              last_read_at)   # last_read_at 为空 = 升级前的旧对话，一律当已读
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,

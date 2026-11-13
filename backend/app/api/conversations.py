@@ -53,6 +53,7 @@ def _conversation_read(
     conversation: Conversation,
     profile: AgentProfile | None,
     count: int = 0,
+    unread: bool = False,
 ) -> ConversationRead:
     return ConversationRead(
         id=conversation.id,
@@ -68,7 +69,26 @@ def _conversation_read(
         agent_avatar=profile.avatar if profile else None,
         agent_type_id=profile.type_id if profile else None,
         message_count=count,
+        unread=unread,
     )
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite 不存时区：比大小前先统一成 UTC，别拿 aware 和 naive 直接比。"""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _is_unread(conversation: Conversation, last: Message | None) -> bool:
+    """「AI 回复完了、但用户还没看」= 最后一条是已完成的助手消息，且晚于最后已读时间。
+
+    生成中的 ``streaming`` 占位不算 —— 那时列表行显示的是「正在回复」的动画。
+    升级前的旧对话没有 ``last_read_at``，一律当已读。
+    """
+    if last is None or last.role != "assistant" or last.status == "streaming":
+        return False
+    if conversation.last_read_at is None:
+        return False
+    return _as_utc(last.created_at) > _as_utc(conversation.last_read_at)
 
 
 @router.get("")
@@ -83,6 +103,26 @@ async def list_conversations(
     counts = dict(
         (await session.execute(select(Message.conversation_id, func.count(Message.id)).group_by(Message.conversation_id))).all()
     )
+    # 每条对话的最后一条消息：一次批量取回，别为未读判断逐条查（N+1）。
+    # 先按对话求 max(created_at)，再把时间相等的那几行取出来。
+    latest = {}
+    if rows:
+        latest_at = (
+            select(Message.conversation_id, func.max(Message.created_at).label("latest_at"))
+            .where(Message.conversation_id.in_([c.id for c in rows]))
+            .group_by(Message.conversation_id)
+            .subquery()
+        )
+        latest_rows = (
+            await session.execute(
+                select(Message).join(
+                    latest_at,
+                    (Message.conversation_id == latest_at.c.conversation_id)
+                    & (Message.created_at == latest_at.c.latest_at),
+                )
+            )
+        ).scalars().all()
+        latest = {message.conversation_id: message for message in latest_rows}
     # 智能体批量取一次：逐个 session.get 会让一次列表请求打出 N 条查询。
     profile_ids = {c.agent_profile_id for c in rows}
     profiles = {
@@ -92,10 +132,32 @@ async def list_conversations(
         ).scalars()
     }
     items = [
-        _conversation_read(c, profiles.get(c.agent_profile_id), counts.get(c.id, 0)).model_dump()
+        _conversation_read(
+            c,
+            profiles.get(c.agent_profile_id),
+            counts.get(c.id, 0),
+            _is_unread(c, latest.get(c.id)),
+        ).model_dump()
         for c in rows
     ]
     return {"items": items, "active_runs": registry.list()}
+
+
+@router.post("/{conversation_id}/read", status_code=204)
+async def mark_conversation_read(
+    conversation_id: str, session: AsyncSession = Depends(get_session)
+) -> Response:
+    """把这条对话标记为已读（打开 / 正在看时由前端调用）。
+
+    只改 ``last_read_at``，**不动** ``updated_at``：标已读不该让对话跳到列表最前面。
+    """
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation.last_read_at = datetime.now(timezone.utc)
+    session.add(conversation)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.post("", status_code=201)

@@ -461,6 +461,9 @@ async def test_run_materializes_assigned_skills_into_isolated_home(
     client: httpx.AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    # 本用例只验证「启动子进程之前已经物化」，不需要真实内核跑完一轮；
+    # 给它一个很短的运行上限，免得本机装了 codex 时把测试拖到默认的一小时上限。
+    monkeypatch.setattr(get_settings(), "run_timeout_seconds", 5)
     root = tmp_path / "codex"
     write_skill(root / "skills", "user-skill")
     write_skill(root / "skills" / ".system", "sys-skill")

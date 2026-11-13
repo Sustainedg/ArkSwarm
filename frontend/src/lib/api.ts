@@ -2,7 +2,7 @@ import type {
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
-  ConversationDetail, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
+  ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
   McpServerDetail, Overview, ProvisionEvent, RuntimeLatest, Skill,
   ProvisionJobInfo,
   MarketInstallInput,
@@ -236,7 +236,11 @@ export const api = {
       body: JSON.stringify({ skill_id: skillId }),
     }),
 
-  listConversations: () => request<{ items: Conversation[] }>('/api/conversations').then((r) => r.items),
+  /** 列表 + 正在跑的运行：后者让左侧栏知道哪些对话正在回复。 */
+  listConversations: () => request<ConversationListSnapshot>('/api/conversations'),
+  /** 打开 / 正在看某条对话时标为已读（只改 last_read_at，不影响列表排序）。 */
+  markConversationRead: (id: string) =>
+    request<void>(`/api/conversations/${id}/read`, { method: 'POST' }),
   createConversation: (body: unknown) =>
     request<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify(body) }),
   getConversation: (id: string) => request<ConversationDetail>(`/api/conversations/${id}`),

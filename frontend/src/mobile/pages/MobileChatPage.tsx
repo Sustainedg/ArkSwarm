@@ -5,6 +5,7 @@ import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../
 import { api, ApiError, streamGet, streamPost } from '../../lib/api'
 import { formatListTime } from '../../lib/datetime'
 import { shortPath } from '../../lib/paths'
+import { useMarkConversationRead } from '../../lib/readReceipts'
 import { shareConversationImage } from '../../lib/shareImage'
 import { useThemeMode } from '../../lib/theme'
 import { useSpeechOutput } from '../../lib/tts'
@@ -31,6 +32,13 @@ interface LiveTurn extends AgentStreamState {
   userText: string
 }
 
+/** 待发送消息：AI 回复期间先攒着，本轮结束后按顺序自动发出。 */
+interface QueuedMessage {
+  content: string
+  attachments: AttachmentRef[]
+  conversationId: string
+}
+
 /**
  * 对话页：移动端打开就是它 —— 直接显示聊天，左上角 logo 打开左侧抽屉（导航 + 对话列表）。
  *
@@ -49,6 +57,8 @@ export function MobileChatPage() {
   const openMenu = useMobileMenu()
   const speech = useSpeechOutput()
   const { theme } = useThemeMode()
+  /** 打开 / 轮询到已完成的回复时，把这条对话标为已读（抽屉里的未读点据此消失） */
+  const markRead = useMarkConversationRead()
 
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -69,6 +79,8 @@ export function MobileChatPage() {
 
   /** 已上传、等待随消息发出的附件（输入区共享组件持有 UI，状态由本页持有） */
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
+  /** AI 回复期间按下的消息：本轮结束后自动发出（只针对当前这条对话） */
+  const [queue, setQueue] = useState<QueuedMessage[]>([])
   /** 正在生成长图（生成要几百毫秒，期间按钮置灰，避免连点出两张） */
   const [sharing, setSharing] = useState(false)
   /** 输入框上方那几个小图标打开的面板：工作目录 / 智能体 / 模型 */
@@ -93,6 +105,17 @@ export function MobileChatPage() {
   const attachRef = useRef<AbortController | null>(null)
   const attachedRunIdRef = useRef<string | null>(null)
   const attachedLiveRef = useRef(false)
+  /**
+   * 本端正在读的那条流属于哪条对话。
+   *
+   * `busy` 是它的派生状态：切换对话时如果旧流还挂在另一条对话上，要中止**读取**
+   * （后端那一轮运行与连接解耦，不受影响）并把 busy 交还，订阅 effect 才能接管
+   * 当前对话的 `active_run`，从缓冲重放后继续实时输出。
+   */
+  const localStreamConversationRef = useRef<string | null>(null)
+  /** 当前路由指向的对话 id：`send()` 收尾时据此判断该不该把详情写回画面 */
+  const openedConversationRef = useRef<string | null>(conversationId ?? null)
+  openedConversationRef.current = conversationId ?? null
   /** 消息列表是否贴着底部：手指往上翻看历史时，流式输出不能把人拽回底部 */
   const stickRef = useRef(true)
   const stickConversationRef = useRef<string | null>(null)
@@ -102,6 +125,14 @@ export function MobileChatPage() {
     setActive(detail.conversation)
     if (resetLive) {
       // 主动重开 / 刷新这条对话：旧的实时卡片先撤掉，若仍在运行则让订阅 effect 重新连一次。
+      // 本端正在读的那条流（切换对话时可能还挂着上一条）也停掉：停的只是这里的读取，
+      // 后端那一轮运行会继续跑完；若它属于当前这条对话，订阅 effect 会从缓冲接着放。
+      if (localStreamConversationRef.current !== null) {
+        localStreamConversationRef.current = null
+        abortRef.current?.abort()
+        abortRef.current = null
+        setBusy(false)
+      }
       setLive(null)
       attachRef.current?.abort()
       attachedRunIdRef.current = null
@@ -110,16 +141,21 @@ export function MobileChatPage() {
     }
     setActiveRun(detail.active_run ?? null)
     setRemoteRunning(Boolean(detail.active_run))
-  }, [])
+    // 最后一条是已完成的助手回复 = 用户正看着它，顺手标已读（桌面端的未读点据此消失）。
+    markRead(detail)
+  }, [markRead])
 
   const open = useCallback(
     async (id: string) => {
       try {
         const detail = await api.getConversation(id)
+        // 连续切换时旧请求可能后到：只把结果写给当前路由指向的那条对话。
+        if (openedConversationRef.current !== id) return null
         applyDetail(detail, true)
         return detail
       } catch (e) {
-        setError(describeError(e))
+        // 过期请求的失败也不该在当前这条对话上报错。
+        if (openedConversationRef.current === id) setError(describeError(e))
         return null
       }
     },
@@ -162,7 +198,7 @@ export function MobileChatPage() {
       }
       // 默认直接显示聊天界面：对话列表在左侧抽屉里，这里先进入最近一次对话。
       try {
-        const list = await api.listConversations()
+        const list = (await api.listConversations()).items
         if (list.length > 0) navigate(`/chat/${list[0].id}`, { replace: true })
         else {
           setActive(null)
@@ -295,11 +331,16 @@ export function MobileChatPage() {
     }
   }, [conversationId, activeRun?.id, busy, syncConversation, attachNonce])
 
-  const send = async (content: string, regenerate = false) => {
-    if (!active) return
-    if (remoteRunning) return
-    const pending = regenerate ? [] : attachments
-    if (!regenerate && !content.trim() && pending.length === 0) return
+  const send = async (
+    content: string,
+    regenerate = false,
+    /** 待发送队列里的附件：不传就用输入区当前挂着的附件 */
+    queuedAttachments?: AttachmentRef[],
+  ): Promise<boolean> => {
+    if (!active) return false
+    if (remoteRunning) return false
+    const pending = regenerate ? [] : (queuedAttachments ?? attachments)
+    if (!regenerate && !content.trim() && pending.length === 0) return false
 
     setError(null)
     setBusy(true)
@@ -310,11 +351,11 @@ export function MobileChatPage() {
     attachedLiveRef.current = false
     stickRef.current = true
     setLive({ ...emptyAgentStream(), userText: regenerate ? '' : content })
-    if (!regenerate) setDraft('')
 
     const controller = new AbortController()
     abortRef.current = controller
     const conversationId = active.id
+    localStreamConversationRef.current = conversationId
 
     try {
       await streamPost(
@@ -325,20 +366,82 @@ export function MobileChatPage() {
         (event) => setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev)),
         controller.signal,
       )
-      // 消息已经落到服务端，附件随之清空；失败时保留，方便用户重发。
-      if (pending.length > 0) setAttachments([])
+      // 消息已经落到服务端：只清掉这一批附件，等待期间新加的附件保留。
+      if (pending.length > 0) {
+        const sent = new Set(pending.map((item) => item.rel_path))
+        setAttachments((prev) => prev.filter((item) => !sent.has(item.rel_path)))
+      }
+      return true
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
+      return false
     } finally {
-      abortRef.current = null
-      setBusy(false)
-      try {
-        await open(conversationId)
-      } catch {
-        /* 刷新失败时保留流式渲染出来的内容 */
+      if (abortRef.current === controller) abortRef.current = null
+      // 只收尾「本端当前这条」流：切走时 applyDetail 已经中止它并交还了 busy，
+      // 用户也可能已经在别的对话里开了新的一轮 —— 旧流不能把 busy / 详情盖回去。
+      if (localStreamConversationRef.current === conversationId) {
+        localStreamConversationRef.current = null
+        // 先刷新详情、再交还 busy：待发送队列是盯着 busy 的，先置 false 会让下一条消息
+        // 在 open() 还悬着的时候抢先开跑，随后 applyDetail 又把它当成旧流中止掉。
+        if (openedConversationRef.current === conversationId) {
+          try {
+            await open(conversationId)
+          } catch {
+            /* 刷新失败时保留流式渲染出来的内容 */
+          }
+        }
+        setBusy(false)
       }
     }
   }
+
+  /** 这条对话是否正在出一轮回复（本端读流 / 另一台设备在跑 / 服务端还有 active_run）。 */
+  const runActive = busy || remoteRunning || Boolean(activeRun)
+
+  /**
+   * 输入区「发送」：
+   * - 空闲：直接发，草稿立刻清空（附件在发送成功后由 `send` 清掉）；
+   * - AI 正在回复：消息进入待发送队列，输入区马上可以继续写；本轮结束后按顺序自动发出。
+   */
+  const submitDraft = () => {
+    if (!active) return
+    if (!draft.trim() && attachments.length === 0) return
+    if (runActive) {
+      setQueue((prev) => [...prev, { content: draft, attachments, conversationId: active.id }])
+      setDraft('')
+      setAttachments([])
+      return
+    }
+    const content = draft
+    setDraft('')
+    void send(content)
+  }
+
+  // 换到别的对话时清空队列：上一段对话的消息不能发进新对话。
+  useEffect(() => {
+    setQueue([])
+  }, [conversationId])
+
+  // 待发送队列：本轮回复结束后按顺序自动发出。
+  useEffect(() => {
+    if (queue.length === 0 || !active || runActive) return
+    const next = queue[0]
+    if (next.conversationId !== active.id) return
+    setQueue((prev) => prev.slice(1))
+    void send(next.content, false, next.attachments).then((ok) => {
+      if (ok) return
+      // 发送失败：内容还给输入区，别让队列自动重试成死循环。
+      setDraft((prev) => (prev ? prev : next.content))
+      if (next.attachments.length > 0) {
+        setAttachments((prev) => {
+          const seen = new Set(prev.map((item) => item.rel_path))
+          return [...prev, ...next.attachments.filter((item) => !seen.has(item.rel_path))]
+        })
+      }
+    })
+    // send / runActive 每次渲染都是新的，这里只盯队列与运行状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, runActive, active?.id])
 
   /** 输入区共享组件把读好的 base64 交回来，这里只负责调接口。 */
   const uploadAttachment = async (name: string, contentBase64: string): Promise<AttachmentRef> => {
@@ -434,11 +537,11 @@ export function MobileChatPage() {
     setScopePanel('workspace')
     void api
       .listConversations()
-      .then((list) =>
+      .then(({ items }) =>
         setScopeRecent(
           [
             ...new Set(
-              list.map((item) => item.workspace_dir).filter((item): item is string => Boolean(item)),
+              items.map((item) => item.workspace_dir).filter((item): item is string => Boolean(item)),
             ),
           ].slice(0, 5),
         ),
@@ -661,48 +764,71 @@ export function MobileChatPage() {
       )}
 
       <Composer
+        className="m-chat-composer"
         value={draft}
         onChange={setDraft}
-        onSend={() => void send(draft)}
+        onSend={submitDraft}
         attachments={attachments}
         onAttachmentsChange={setAttachments}
         onUpload={uploadAttachment}
         onStop={() => void stop()}
-        busy={busy}
-        disabled={!active || remoteRunning}
+        // 本端读流 / 另一台设备在跑都算「正在回复」：发送会排队，右侧给停止。
+        busy={runActive}
+        disabled={!active}
+        queueWhenBusy
         onNotice={setError}
         // 输入框上方：工作目录 + 智能体两个小图标（新建对话时不用先选，这里随时改）。
         header={
           active ? (
-            <div className="composer-scope">
-              <button
-                type="button"
-                className="composer-scope-btn"
-                onClick={openWorkspacePanel}
-                title={`工作目录：${active.workspace_dir ?? '按对话自动分配'}（点一下改）`}
-              >
-                <FolderIcon size={15} />
-                <span>{shortPath(active.workspace_dir)}</span>
-              </button>
-              <button
-                type="button"
-                className="composer-scope-btn"
-                onClick={openAgentPanel}
-                title={`智能体：${active.agent_name ?? '未知'}（点一下换）`}
-              >
-                <AgentIcon size={15} />
-                <span>{active.agent_name}</span>
-              </button>
-              <button
-                type="button"
-                className="composer-scope-btn"
-                onClick={openModelPanel}
-                title={`模型：${active.model ?? '跟随智能体默认'}（点一下换）`}
-              >
-                <ModelIcon size={15} />
-                <span>{active.model ?? '默认模型'}</span>
-              </button>
-            </div>
+            <>
+              <div className="composer-scope">
+                <button
+                  type="button"
+                  className="composer-scope-btn"
+                  onClick={openWorkspacePanel}
+                  title={`工作目录：${active.workspace_dir ?? '按对话自动分配'}（点一下改）`}
+                >
+                  <FolderIcon size={15} />
+                  <span>{shortPath(active.workspace_dir)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="composer-scope-btn"
+                  onClick={openAgentPanel}
+                  title={`智能体：${active.agent_name ?? '未知'}（点一下换）`}
+                >
+                  <AgentIcon size={15} />
+                  <span>{active.agent_name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="composer-scope-btn"
+                  onClick={openModelPanel}
+                  title={`模型：${active.model ?? '跟随智能体默认'}（点一下换）`}
+                >
+                  <ModelIcon size={15} />
+                  <span>{active.model ?? '默认模型'}</span>
+                </button>
+              </div>
+              {queue.length > 0 && (
+                <div className="m-queued-row" title="本轮回复结束后自动发出">
+                  <span className="m-queued-tag">待发送</span>
+                  <span className="m-queued-text">
+                    {queue[0].content.trim() || `附件 ${queue[0].attachments.length} 个`}
+                  </span>
+                  {queue.length > 1 && <span className="m-queued-count">+{queue.length - 1}</span>}
+                  <button
+                    type="button"
+                    className="m-queued-cancel"
+                    onClick={() => setQueue([])}
+                    aria-label="取消全部待发送消息"
+                    title="取消全部待发送消息"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </>
           ) : null
         }
         // 用量统计挪到输入框「下面」：贴底的是输入框。

@@ -35,7 +35,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
     # 「这条对话单独指定的模型」是后加的；为空表示跟随智能体的默认模型。
     # 老行留空即可，不需要回填。
-    "conversations": {"model": "VARCHAR(160)"},
+    # 「最后已读时间」是后加的；为空表示升级前的旧对话，一律当已读（否则升级后满屏未读）。
+    "conversations": {"model": "VARCHAR(160)", "last_read_at": "DATETIME"},
 }
 
 
@@ -312,6 +313,9 @@ class Conversation(SQLModel, table=True):
     archived: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 用户最后一次看这条对话的时间；列表据此判断「AI 回复完了但还没读」。
+    #: 为空表示升级前的旧对话 —— 一律当已读，避免升级后所有历史对话都亮未读。
+    last_read_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
 
 class Message(SQLModel, table=True):

@@ -16,7 +16,12 @@ import { MoreIcon, PencilIcon, TrashIcon } from './Icons'
  * - 「✎」就地重命名（回车提交，Esc 取消）；
  * - 「🗑」直接删除（删掉的正是当前打开的那条时，自动落到剩下的最近一条）。
  *
- * 列表自己拉数据（8 秒一轮 + 聊天页改动后的广播），不跟聊天页共用一个状态 ——
+ * 标题左侧还有两种状态点（不占悬停图标的位置）：
+ * - 正在回复：旋转的小环，数据来自列表接口的 `active_runs`；
+ * - 有未读回复：实心点，数据来自列表接口的 `unread`（最后一条已完成的助手回复晚于已读时间）。
+ * 两者同时成立时只显示「正在回复」。
+ *
+ * 列表自己拉数据（4 秒一轮 + 聊天页改动后的广播），不跟聊天页共用一个状态 ——
  * 与移动端抽屉一样的做法，两边谁都不必等对方。
  */
 export function ConversationList() {
@@ -25,6 +30,8 @@ export function ConversationList() {
 
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [agents, setAgents] = useState<AgentProfile[]>([])
+  /** 正在跑着的对话 id：这些行显示「正在回复」的旋转小环 */
+  const [runningIds, setRunningIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   /**
@@ -45,10 +52,12 @@ export function ConversationList() {
 
   const load = useCallback(async () => {
     try {
-      const list = await api.listConversations()
-      setConversations((prev) => (sameConversationList(prev, list) ? prev : list))
+      const snapshot = await api.listConversations()
+      setConversations((prev) => (sameConversationList(prev, snapshot.items) ? prev : snapshot.items))
+      const running = new Set(snapshot.active_runs.map((run) => run.conversation_id))
+      setRunningIds((prev) => (sameIdSet(prev, running) ? prev : running))
       setError(null)
-      return list
+      return snapshot.items
     } catch (e) {
       setError(describe(e))
       return []
@@ -62,7 +71,8 @@ export function ConversationList() {
   }, [load])
 
   // 跨设备同步：另一台设备发的消息会让标题、条数与时间自己变。
-  useAutoRefresh(load, { intervalMs: 8000 })
+  // 4 秒一轮（聊天页本身是 3 秒）：正在回复的动画要在几秒内出现，8 秒太迟了。
+  useAutoRefresh(load, { intervalMs: 4000 })
   // 本端在聊天页里发消息 / 删对话之后，列表立刻对齐，不用等下一次轮询。
   useConversationsChanged(() => void load())
 
@@ -194,71 +204,99 @@ export function ConversationList() {
             还没有对话：点上面的「＋ 新建」直接用默认智能体开始，进去后还能在输入框上方换智能体与工作目录。
           </p>
         ) : (
-          conversations.map((conversation) => (
-            <div
-              key={conversation.id}
-              className={`chat-item${conversation.id === activeId ? ' active' : ''}`}
-            >
-              {renamingId === conversation.id ? (
-                <input
-                  className="chat-item-rename"
-                  autoFocus
-                  value={renameDraft}
-                  onChange={(event) => setRenameDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') void commitRename(conversation)
-                    else if (event.key === 'Escape') {
-                      cancelRenameRef.current = true
-                      setRenamingId(null)
-                    }
-                  }}
-                  onBlur={() => void commitRename(conversation)}
-                  aria-label={`重命名对话「${conversation.title}」`}
-                />
-              ) : (
-                <button className="chat-item-main" onClick={() => navigate(`/chat/${conversation.id}`)}>
-                  <span className="chat-item-title">{conversation.title}</span>
-                  <span className="chat-item-meta">
-                    <span>{conversation.agent_name}</span>
-                    <span>·</span>
-                    <span>{conversation.message_count} 条</span>
-                    <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
-                  </span>
-                </button>
-              )}
+          conversations.map((conversation) => {
+            const running = runningIds.has(conversation.id)
+            // 当前打开的那条正在看，不亮未读；正在回复时以动画优先。
+            const unread = Boolean(conversation.unread) && !running && conversation.id !== activeId
+            return (
+              <div
+                key={conversation.id}
+                className={`chat-item${conversation.id === activeId ? ' active' : ''}`}
+              >
+                {renamingId === conversation.id ? (
+                  <input
+                    className="chat-item-rename"
+                    autoFocus
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void commitRename(conversation)
+                      else if (event.key === 'Escape') {
+                        cancelRenameRef.current = true
+                        setRenamingId(null)
+                      }
+                    }}
+                    onBlur={() => void commitRename(conversation)}
+                    aria-label={`重命名对话「${conversation.title}」`}
+                  />
+                ) : (
+                  <button className="chat-item-main" onClick={() => navigate(`/chat/${conversation.id}`)}>
+                    <span className="chat-item-head">
+                      {running ? (
+                        <span
+                          className="chat-item-state running"
+                          role="img"
+                          aria-label="智能体正在回复"
+                          title="智能体正在回复…"
+                        />
+                      ) : unread ? (
+                        <span
+                          className="chat-item-state unread"
+                          role="img"
+                          aria-label="有未读回复"
+                          title="有未读回复"
+                        />
+                      ) : null}
+                      <span className="chat-item-title">{conversation.title}</span>
+                    </span>
+                    <span className="chat-item-meta">
+                      <span>{conversation.agent_name}</span>
+                      <span>·</span>
+                      <span>{conversation.message_count} 条</span>
+                      <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
+                    </span>
+                  </button>
+                )}
 
-              <div className="chat-item-actions">
-                <button
-                  className="chat-item-act"
-                  onClick={() => navigate(`/chat/${conversation.id}`, { state: { openActions: true } })}
-                  aria-label={`对话「${conversation.title}」的会话操作`}
-                  title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
-                >
-                  <MoreIcon size={14} />
-                </button>
-                <button
-                  className="chat-item-act"
-                  onClick={() => startRename(conversation)}
-                  aria-label={`重命名对话「${conversation.title}」`}
-                  title="重命名"
-                >
-                  <PencilIcon size={14} />
-                </button>
-                <button
-                  className="chat-item-act danger"
-                  onClick={() => void remove(conversation)}
-                  aria-label={`删除对话「${conversation.title}」`}
-                  title="删除"
-                >
-                  <TrashIcon size={14} />
-                </button>
+                <div className="chat-item-actions">
+                  <button
+                    className="chat-item-act"
+                    onClick={() => navigate(`/chat/${conversation.id}`, { state: { openActions: true } })}
+                    aria-label={`对话「${conversation.title}」的会话操作`}
+                    title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
+                  >
+                    <MoreIcon size={14} />
+                  </button>
+                  <button
+                    className="chat-item-act"
+                    onClick={() => startRename(conversation)}
+                    aria-label={`重命名对话「${conversation.title}」`}
+                    title="重命名"
+                  >
+                    <PencilIcon size={14} />
+                  </button>
+                  <button
+                    className="chat-item-act danger"
+                    onClick={() => void remove(conversation)}
+                    aria-label={`删除对话「${conversation.title}」`}
+                    title="删除"
+                  >
+                    <TrashIcon size={14} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </div>
   )
+}
+
+function sameIdSet(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false
+  for (const id of left) if (!right.has(id)) return false
+  return true
 }
 
 function describe(error: unknown): string {

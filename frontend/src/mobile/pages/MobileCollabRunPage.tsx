@@ -5,7 +5,7 @@ import { api, streamGet, streamPost } from '../../lib/api'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
 import {
-  applyCollabEvent, dismissCollabNotice, makeCollabTurn, type CollabNotice, type CollabTurnState,
+  applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
 } from '../../lib/collabStream'
 import {
   forgetDismissedNotices, loadDismissedNotices, rememberDismissedNotice,
@@ -90,9 +90,19 @@ export function MobileCollabRunPage() {
   const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
   const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
   const leaderLabel = team?.graph.nodes.find((node) => node.key === leaderKey)?.label || leaderKey || '领导者'
+  // 同一步骤既有落库行（可能还停在 streaming、内容为空）又有流式结果时，以流式结果为准。
+  const streamedStepIds = useMemo(
+    () => new Set([
+      ...(turn?.completed ?? []).map((step) => step.stepId),
+      ...(turn?.live ? [turn.live.stepId] : []),
+    ]),
+    [turn?.completed, turn?.live],
+  )
   const visibleSteps = useMemo(
-    () => (detail?.steps ?? []).filter((step) => step.role_key === 'user' || step.role_key === leaderKey),
-    [detail?.steps, leaderKey],
+    () => (detail?.steps ?? []).filter(
+      (step) => (step.role_key === 'user' || step.role_key === leaderKey) && !streamedStepIds.has(step.id),
+    ),
+    [detail?.steps, leaderKey, streamedStepIds],
   )
   const chatMessages = detail?.chat_messages ?? []
   const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
@@ -101,17 +111,7 @@ export function MobileCollabRunPage() {
     try {
       const next = await api.getCollabRun(id)
       setDetail(next)
-      setTurn((prev) => {
-        const base = prev ?? makeCollabTurn(next, next.tickets, next.steps, dismissedNotices)
-        return {
-          ...base,
-          status: next.status,
-          reason: next.error ?? null,
-          live: null,
-          completed: [],
-          tickets: Object.fromEntries(next.tickets.map((ticket) => [ticket.id, ticket])),
-        }
-      })
+      setTurn((prev) => syncTurnWithRun(prev, next, next.tickets, next.steps, dismissedNotices))
       return next
     } catch (e) {
       setError(describeError(e))
@@ -166,23 +166,42 @@ export function MobileCollabRunPage() {
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
-      let closed = false
       const onEvent = (event: RunEvent) => {
-        if (event.type === 'stream.closed') {
-          closed = true
-          return
-        }
+        if (event.type === 'stream.closed') return
         setTurn((prev) => (prev ? applyCollabEvent(prev, event) : prev))
       }
       try {
-        if (kickoff) await kickoff(onEvent, controller.signal)
+        if (kickoff) {
+          try {
+            await kickoff(onEvent, controller.signal)
+          } catch (e) {
+            // 发起这一轮的响应断了不代表运行停了：先看落库状态，还在跑就继续订阅围观。
+            if ((e as Error)?.name === 'AbortError') throw e
+            setError(describeError(e))
+          }
+          if (controller.signal.aborted) return
+          const latest = await load(target)
+          if (!latest || latest.status !== 'running') return
+        }
         let attempt = 0
-        while (!closed && !controller.signal.aborted && attempt < 5) {
+        while (!controller.signal.aborted && attempt < 30) {
+          if (attempt > 0) {
+            setReconnecting(true)
+            await delay(Math.min(800 * attempt, 3000))
+            if (controller.signal.aborted) break
+          }
           attempt += 1
-          setReconnecting(true)
-          await delay(Math.min(800 * attempt, 3000))
+          try {
+            await streamGet<RunEvent>(`/api/collab/runs/${target}/stream`, onEvent, controller.signal)
+          } catch (e) {
+            // 网络层断开不是运行结束：退避后重订阅，总线会补发本轮事件。
+            if ((e as Error)?.name === 'AbortError') throw e
+            setError(describeError(e))
+          }
           if (controller.signal.aborted) break
-          await streamGet<RunEvent>(`/api/collab/runs/${target}/stream`, onEvent, controller.signal)
+          // 以落库状态为准：运行真的收尾了才停，否则继续订阅。
+          const latest = await load(target)
+          if (!latest || latest.status !== 'running') break
         }
       } catch (e) {
         if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
@@ -527,6 +546,15 @@ export function MobileCollabRunPage() {
     : null
 
   const status = turn?.status ?? detail?.status ?? 'running'
+  // 详情轮询发现运行又推进起来了（另一台设备点了继续 / 本页此前掉线），而这里已经退订：
+  // 自动补一次订阅，办公室里的岗位实时对话才能继续拿到逐字输出。
+  useEffect(() => {
+    if (!runId || status !== 'running' || busyRef.current) return
+    const timer = window.setTimeout(() => {
+      if (!busyRef.current) void subscribe(runId)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [runId, status, subscribe])
   const remoteRunning = status === 'running' && !busy
   const progress = useMemo(
     () =>
@@ -832,6 +860,7 @@ export function MobileCollabRunPage() {
           tickets={detail.tickets}
           live={turn?.live ?? null}
           streamed={turn?.completed ?? []}
+          onOpenTicket={(ticketId) => navigate(`/collab/runs/${detail.id}/tickets?ticket=${ticketId}`)}
           onClose={() => setSelectedNodeKey(null)}
         />
       )}

@@ -178,6 +178,59 @@ async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncCl
     assert detail["conversation"]["session_id"] == "sess-42"
 
 
+async def test_unread_flag_lifecycle(client: httpx.AsyncClient):
+    """列表的 unread：新对话已读 → AI 回完未读 → 标已读后消失，且标已读不改排序依据。"""
+    agent = await make_agent(client)
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})).json()
+
+    listed = (await client.get("/api/conversations")).json()["items"][0]
+    assert listed["unread"] is False
+
+    async with client.stream(
+        "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "hello"}
+    ) as response:
+        await read_sse(response)
+
+    before = (await client.get("/api/conversations")).json()["items"][0]
+    assert before["unread"] is True
+
+    marked = await client.post(f"/api/conversations/{conversation['id']}/read")
+    assert marked.status_code == 204
+
+    after = (await client.get("/api/conversations")).json()["items"][0]
+    assert after["unread"] is False
+    # 标已读只动 last_read_at：updated_at 不变，列表排序不会把它顶到最前面。
+    assert after["updated_at"] == before["updated_at"]
+
+    # 旧对话（升级前没有 last_read_at）一律当已读，避免升级后满屏未读。
+    async with SessionLocal() as session:
+        row = await session.get(Conversation, conversation["id"])
+        row.last_read_at = None
+        session.add(row)
+        await session.commit()
+    assert (await client.get("/api/conversations")).json()["items"][0]["unread"] is False
+
+
+async def test_streaming_assistant_message_is_not_unread(client: httpx.AsyncClient):
+    """生成中的 assistant 占位不算未读 —— 那一行显示的是「正在回复」的动画。"""
+    agent = await make_agent(client)
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})).json()
+
+    async with SessionLocal() as session:
+        session.add(
+            Message(
+                conversation_id=conversation["id"],
+                role="assistant",
+                content="",
+                status="streaming",
+            )
+        )
+        await session.commit()
+
+    listed = (await client.get("/api/conversations")).json()["items"][0]
+    assert listed["unread"] is False
+
+
 async def test_run_continues_after_the_client_disconnects(client: httpx.AsyncClient):
     """断开 SSE 订阅只是「不看了」，后台那一轮运行必须继续跑完并落库。"""
     agent = await make_agent(client, options={**cli_options("sess-42", "0.12")})
