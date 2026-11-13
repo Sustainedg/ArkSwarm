@@ -20,7 +20,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator, Mapping, Sequence
 
-from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, TicketAction
+from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, Duty, TicketAction
 
 #: 工单块的围栏标记
 FENCE = "work_order"
@@ -862,9 +862,12 @@ def merge_chat_update(brief: dict[str, Any], update: ChatUpdate) -> tuple[dict[s
 def resolve_order_targets(order: WorkOrder, aliases: Mapping[str, str]) -> None:
     """把岗位显示名归一成节点 key。
 
-    模型经常把 ``assignee`` 写成「CTO」而不是图上的 ``dev``；提示词里虽然同时给了两者，
+    模型经常把 ``assignee`` 写成「CTO」而不是图上的节点 key；提示词里虽然同时给了两者，
     但校验与派发都只认 key。这里只做**唯一匹配**的归一（同名节点不猜），
     避免为了一个显示名把整轮工单打回。
+
+    注意：这里只认**当前图上的显示名**。旧 key（用户在编辑器里改过 id 之后）不在映射里，
+    也无从推断，所以提示词里绝不能出现任何写死的示例 key（见 ``render_protocol_guide``）。
     """
     normalized: dict[str, str] = {}
     for alias, key in aliases.items():
@@ -982,6 +985,7 @@ def render_protocol_guide(
     assignees: Sequence[str],
     reviewer: str | None = None,
     rework_targets: Sequence[str] = (),
+    duty: Duty | None = None,
 ) -> str:
     """渲染写进 prompt 的输出协议说明。
 
@@ -1006,7 +1010,8 @@ def render_protocol_guide(
     ]
     if TicketAction.DELEGATE in actions:
         rules.append(
-            "delegate 必须给 assignee（填括号里的节点 key，例如 dev）；mode 决定语义——"
+            "delegate 必须给 assignee：填「允许派发的对象」里括号内的那段节点 key"
+            "（不要写岗位显示名，也不要自己编一个）；mode 决定语义——"
             "handoff（转交：同一件活换人做，我继续等结果，ticket 可省略）；"
             "split（拆子工单：我是子工单的发起人，等它完成后我来汇总，必须给 ticket.title）。"
         )
@@ -1056,7 +1061,7 @@ def render_protocol_guide(
             "{\"label\":\"我来补充\",\"value\":\"\",\"freeform\":true}。不要把选项只写在正文里。"
         )
 
-    examples = [_example_for(actions, assignees)]
+    examples = [_example_for(actions, assignees, duty=duty)]
     if TicketAction.ASK_USER in actions and examples[0].get("action") != TicketAction.ASK_USER.value:
         examples.append(_ask_example())
     lines = [f"{index}. {rule}" for index, rule in enumerate(rules, start=1)]
@@ -1093,8 +1098,17 @@ def _ask_example() -> dict[str, Any]:
     }
 
 
-def _example_for(actions: Sequence[TicketAction], assignees: Sequence[str]) -> dict[str, Any]:
-    """挑一个该岗位真会用到的动作作为示例。"""
+def _example_for(
+    actions: Sequence[TicketAction], assignees: Sequence[str], *, duty: Duty | None = None
+) -> dict[str, Any]:
+    """挑一个该岗位真会用到的动作作为示例。
+
+    协调者的主场是派发：即使它的契约里同时带着 ``submit``，也先给一份 **delegate 示例** ——
+    否则「assignee 该填什么」只能照规则文字猜（真实事故：规则里写死的那句「例如 dev」
+    就是这么被抄进 ``assignee`` 的）。
+    """
+    if duty is Duty.COORDINATOR and TicketAction.DELEGATE in actions:
+        return _delegate_example(assignees)
     if TicketAction.REVIEW in actions:
         return {
             "action": "review",
@@ -1113,6 +1127,11 @@ def _example_for(actions: Sequence[TicketAction], assignees: Sequence[str]) -> d
             "action": "done",
             "remark": "已按验收标准交付：改动集中在 src/theme.ts，无遗留问题",
         }
+    return _delegate_example(assignees)
+
+
+def _delegate_example(assignees: Sequence[str]) -> dict[str, Any]:
+    """delegate 示例：``assignee`` 取**本次运行真实**的派发对象，不让模型照抄写死的字样。"""
     return {
         "action": "delegate",
         "mode": "split",

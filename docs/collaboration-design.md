@@ -485,7 +485,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 | `GET` | `/api/collab/teams` | 协作组列表（含节点数/是否可运行） |
 | `POST` | `/api/collab/teams` | 新建（可先空图） |
 | `GET` | `/api/collab/teams/{id}` | 详情：元信息 + 完整图 + 上次校验结果 |
-| `PUT` | `/api/collab/teams/{id}` | **整图保存**（元信息 + nodes + edges），返回校验结果 |
+| `PUT` | `/api/collab/teams/{id}` | **整图保存**（元信息 + nodes + edges），返回校验结果；删改仍被历史运行引用的节点 key → 409 |
 | `POST` | `/api/collab/teams/{id}/validate` | 只校验不保存（编辑器实时校验用） |
 | `POST` | `/api/collab/teams/{id}/duplicate` | 复制 |
 | `DELETE` | `/api/collab/teams/{id}` | 删除（有运行记录 → 409） |
@@ -502,6 +502,13 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 校验错误用 **422** + 结构化 `detail`（含 `errors[]`，编辑器逐条高亮节点/边）；
 智能体的删除是**软删除**（见 `docs/architecture.md` §6）：协作历史里引用的智能体
 不会因为删除而消失，仍被**未删除**的智能体引用的网关删除时返回 **409**。
+
+**节点 key 是引用键，不是显示名**：工单（`owner_key` / `holder_key` / `submitter_key` / `escalation`）、
+步骤（`role_key` / `target_key`）、运行（`entry_key`）与入口对话（`role_key`）里存的都是**当时的 key**，
+改名不会自动迁移。因此保存时若发现某个 key 消失、而它还被历史运行引用着，直接返回 **409** 并列出引用处 ——
+改名与「删掉旧节点、新建一个」在图里无从区分，只能拦住；要改名请先删除相关运行，或复制协作组在副本里改。
+同理，提示词里**不得出现任何写死的示例 key**：节点 key 由用户在画布上起名，写死的示例（曾经是 `dev`）
+会被模型当成答案抄进 `assignee`，改名后每一轮派发都必错。
 
 ---
 
@@ -781,9 +788,9 @@ curl -s http://127.0.0.1:8010/api/health
 | `backend/app/collab/store.py` | 协作组持久化、运行计数、启动恢复 |
 | `backend/app/collab/api.py` | `/api/collab/teams` 的 CRUD + `validate` + `duplicate` |
 | `backend/app/transport/sse.py` | 由 `api/sse.py` 平移而来的通用 SSE 设施 |
-| `backend/tests/test_collab_tickets.py` | 11 项：解析容错、语义校验、协议说明 |
+| `backend/tests/test_collab_tickets.py` | 29 项：解析容错、语义校验、协议说明（含「协议说明里不得写死示例 key」） |
 | `backend/tests/test_collab_graph.py` | 14 项：主链通过、缺失入口、孤立节点、审查闭环、assign 成环、岗位边不相容、智能体被删… |
-| `backend/tests/test_collab_api.py` | 6 项：CRUD、草稿可存但报错、`validate`、404、422、有运行记录删除返回 409 |
+| `backend/tests/test_collab_api.py` | 7 项：CRUD、草稿可存但报错、`validate`、404、422、有运行记录删除返回 409、改掉仍在被引用的节点 key 返回 409（未被引用的照旧可改） |
 | `backend/tests/test_collab_architecture.py` | 7 条分层守卫（§2.5） |
 
 验证（M0 当时的基线）：`bash scripts/test.sh` → **115 passed, 2 skipped** +

@@ -558,6 +558,75 @@ export interface VersionRecord {
   highlights: string[]
 }
 
+/* ---------- 用量页（后端 app/api/usage.py）---------- */
+
+/** 一组归一化后的 token 计数（不同适配器的字段名在后端已统一）。 */
+export interface UsageTokens {
+  input: number
+  output: number
+  total: number
+  cache_read: number
+  cache_creation: number
+  /** 缓存命中率（0~1）；没有可用的分母时为 null */
+  cache_ratio: number | null
+  /** 参与统计的消息条数 */
+  messages: number
+}
+
+export interface UsageAgentRow {
+  id: string
+  name: string
+  avatar: string
+  type_id?: string | null
+  type_name?: string | null
+  tokens: UsageTokens
+}
+
+export interface UsageConversationRow {
+  id: string
+  title: string
+  agent_name?: string | null
+  agent_avatar?: string | null
+  updated_at?: string | null
+  tokens: UsageTokens
+}
+
+export interface UsageDayRow {
+  date: string
+  input: number
+  output: number
+  total: number
+}
+
+export interface UsageSkillRow {
+  id: string
+  name: string
+  type_id: string
+  type_name?: string | null
+  source_label: string
+  /** 所选时间范围内这个技能被调用的次数 */
+  calls: number
+}
+
+export interface UsageSkills {
+  /** 所选范围内的技能调用总次数 */
+  calls: number
+  /** 所选范围内被调用过的技能数 */
+  skills_used: number
+  /** 被调用最多的技能（只含所选范围内调用过至少一次的） */
+  top: UsageSkillRow[]
+}
+
+export interface UsageOverview {
+  tokens: UsageTokens
+  /** 产生过 token 消耗的对话数 */
+  conversations: number
+  by_agent: UsageAgentRow[]
+  by_conversation: UsageConversationRow[]
+  daily: UsageDayRow[]
+  skills: UsageSkills
+}
+
 export interface ArchitectureDoc {
   /** 后端由 docs/architecture.md 实时渲染出的完整 HTML 页面 */
   html: string

@@ -191,6 +191,7 @@ def build_step_prompt(
             assignees=[] if closing_report else [named(key) for key in assignees],
             reviewer=named(reviewer) if reviewer else None,
             rework_targets=[named(key) for key in rework_targets],
+            duty=node.duty,
         ),
     ]
 

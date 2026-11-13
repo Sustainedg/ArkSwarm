@@ -15,6 +15,7 @@ import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
 import { MobileMcpPage } from './pages/MobileMcpPage'
 import { MobileSkillsPage } from './pages/MobileSkillsPage'
+import { MobileUsagePage } from './pages/MobileUsagePage'
 
 /**
  * 移动端应用：`/m/` 这条链接的独立入口。
@@ -54,6 +55,7 @@ export function MobileApp() {
         <Route path="/credentials" element={<MobileCredentialsPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
         <Route path="/mcp" element={<MobileMcpPage />} />
+        <Route path="/usage" element={<MobileUsagePage />} />
         <Route path="/runtimes" element={<MobileRuntimesPage />} />
         <Route path="/collab" element={<MobileCollabPage />} />
         <Route path="/collab/teams/:teamId" element={<MobileCollabTeamPage />} />

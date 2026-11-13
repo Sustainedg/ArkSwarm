@@ -399,6 +399,55 @@ def test_protocol_guide_tells_done_to_write_a_remark():
     assert "交付摘要" in guide
 
 
+def test_protocol_guide_never_bakes_in_a_node_key():
+    """协议说明里不能出现写死的示例 key（真实故障：图上的节点被改名后必错）。
+
+    节点 key 是用户在画布上自己起的；曾经写成「例如 dev」，模型照着抄，
+    于是「把 id 从 dev 改成别的」之后每一轮派发都被判「不能把工单交给 dev」。
+    示例只能来自本次运行的真实白名单（``_example_for``），规则文字里一律不给具体 key。
+    """
+    guide = render_protocol_guide(
+        duty_label="协调者",
+        actions=(TicketAction.DELEGATE,),
+        assignees=["Leo-SDE（SDE）"],
+    )
+    assert "dev" not in guide
+    # 该指哪儿：活的白名单（上一行渲染出来的那一串）
+    assert "允许派发的对象" in guide
+    assert "Leo-SDE（SDE）" in guide
+
+
+def test_coordinator_example_demonstrates_delegation():
+    """协调者的示例必须演示 delegate：它契约里也带 submit，但主场是派活。
+
+    真实故障里 CTO 的动作是 delegate/done/submit/reject，示例挑中了 submit 那份，
+    于是「assignee 填什么」只剩规则文字里那句写死的「例如 dev」可抄。
+    """
+    from app.collab.schemas import Duty
+
+    guide = render_protocol_guide(
+        duty_label="协调者",
+        actions=(
+            TicketAction.DELEGATE,
+            TicketAction.DONE,
+            TicketAction.SUBMIT,
+            TicketAction.REJECT,
+        ),
+        assignees=["Leo-SDE（SDE）"],
+        duty=Duty.COORDINATOR,
+    )
+    assert '"action": "delegate"' in guide
+    assert '"assignee": "Leo-SDE（SDE）"' in guide
+
+    # 没有 duty 时维持原样（工程师仍然看到 submit 示例），改动不外溢
+    engineer_guide = render_protocol_guide(
+        duty_label="工程师",
+        actions=(TicketAction.SUBMIT, TicketAction.DELEGATE),
+        assignees=["se"],
+    )
+    assert '"action": "submit"' in engineer_guide
+
+
 # --- 字符串里的裸引号（线上真实故障） ----------------------------------------------
 
 #: 模型在 JSON 字符串里直接写 ASCII 双引号：第一个引号会提前结束字符串，整块判死。

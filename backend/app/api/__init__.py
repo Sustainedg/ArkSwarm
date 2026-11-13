@@ -13,6 +13,7 @@ from . import (
     skillhub,
     skills,
     system,
+    usage,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -27,6 +28,7 @@ api_router.include_router(skillhub.router)
 api_router.include_router(runtimes.router)
 api_router.include_router(conversations.router)
 api_router.include_router(runs.router)
+api_router.include_router(usage.router)
 api_router.include_router(collab_router)
 
 __all__ = ["api_router"]

@@ -9,6 +9,7 @@ import { McpPage } from './pages/McpPage'
 import { RuntimesPage } from './pages/RuntimesPage'
 import { SkillsPage } from './pages/SkillsPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { UsagePage } from './pages/UsagePage'
 
 //: 与移动端抽屉的主导航**同一份菜单**（顺序、命名、图标都一样）：
 //: 「智能体配置」「运行时」不在菜单里，从「设置」页的配置入口进（移动端就是这么放的）。
@@ -18,6 +19,7 @@ const NAV = [
   { to: '/collab', icon: '🤝', label: '协作组' },
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/mcp', icon: '🔌', label: 'MCP' },
+  { to: '/usage', icon: '📊', label: '用量' },
   { to: '/settings', icon: '⚙️', label: '设置' },
 ]
 
@@ -122,6 +124,7 @@ export default function App() {
           <Route path="/mcp" element={<McpPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/runtimes" element={<RuntimesPage />} />
+          <Route path="/usage" element={<UsagePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>

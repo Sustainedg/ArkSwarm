@@ -11,6 +11,7 @@ import type {
   MarketSkillList,
   SkillDetail,
   SkillRescanResult, TestResult,
+  UsageOverview,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -82,6 +83,15 @@ export const api = {
   /** 最轻的探活接口：只回状态与版本号（首屏拿版本号用它，不必汇总系统信息）。 */
   health: () => request<{ status: string; version: string }>('/api/health'),
   overview: () => request<Overview>('/api/system/overview'),
+  /** 用量页：token 消耗与技能调用汇总；可传时间范围（见 `lib/usage.ts:usageRangeQuery`）。 */
+  usageOverview: (params?: { start?: string; end?: string; tz_offset?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.start) search.set('start', params.start)
+    if (params?.end) search.set('end', params.end)
+    if (params?.tz_offset !== undefined) search.set('tz_offset', String(params.tz_offset))
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<UsageOverview>(`/api/usage/overview${suffix}`)
+  },
   architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
   getProxy: () => request<{ proxy_url: string | null }>('/api/system/proxy'),
   setProxy: (proxyUrl: string | null) =>

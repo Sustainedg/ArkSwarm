@@ -287,6 +287,13 @@ class ClaudeCodeAgent(AgentDefinition):
             notes=notes,
         )
 
+    def skill_invocation(self, tool_name: str, tool_input: dict[str, Any]) -> str | None:
+        """Claude Code 通过内置的 ``Skill`` 工具调用技能，参数 ``skill`` 是技能目录名。"""
+        if tool_name != "Skill":
+            return None
+        name = tool_input.get("skill") or tool_input.get("command") or tool_input.get("name")
+        return str(name).strip() or None
+
     def discover_mcp_servers(self) -> list[McpServerSpec]:
         """扫描用户级配置 ``~/.claude.json`` 里的 ``mcpServers``（只读、尽力而为）。"""
         try:

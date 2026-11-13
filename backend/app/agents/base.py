@@ -455,6 +455,15 @@ class AgentDefinition(ABC):
         """
         return None
 
+    def skill_invocation(self, tool_name: str, tool_input: dict[str, Any]) -> str | None:
+        """把一次工具调用识别成「技能调用」时返回技能目录名（slug），否则返回 ``None``。
+
+        技能在各内核里怎么被调用是**适配器**的知识：Claude Code 走内置的 ``Skill`` 工具，
+        别家可能压根没有可识别的形式。框架在统计技能用量时只问这一句，命中才算一次调用 ——
+        默认不识别，未声明该能力的内核不会被计入技能调用。
+        """
+        return None
+
     # -- MCP 服务器 ----------------------------------------------------------
 
     def discover_mcp_servers(self) -> list[McpServerSpec]:

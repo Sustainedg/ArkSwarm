@@ -11,13 +11,26 @@
  * - `onUpload`：把读好的 base64 交给页面调接口（不传就不显示回形针）；
  * - `onSend`：正文与附件都空时不触发（除非页面开了 `allowEmptySend`），页面从自己的状态里取附件。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+  type Ref,
+} from 'react'
 import type { AttachmentRef } from '../lib/types'
 import { describeSpeechError, finalTranscript, speechRecognitionCtor, type SpeechRecognizer } from '../lib/speech'
 import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from './Icons'
 
 /** 单个附件的上限，与服务端 `MAX_ATTACHMENT_BYTES` 保持一致（前端先拦一道，省一次往返）。 */
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+/** 输入框长高的上限（px）。与样式表里 `.composer textarea` 的 `max-height` 是同一个数。 */
+const MAX_INPUT_HEIGHT = 160
 
 interface Props {
   /** 草稿文字 */
@@ -95,6 +108,7 @@ export function Composer({
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const areaRef = useRef<HTMLTextAreaElement | null>(null)
   const voiceRef = useRef<SpeechRecognizer | null>(null)
   /**
    * 语音识别是否可用。**按钮一直显示**：独立应用（加到主屏）里 iOS 常常没有
@@ -105,6 +119,37 @@ export function Composer({
 
   // 卸载（离开页面 / 关掉弹层）时收起麦克风，别让识别在后台空转。
   useEffect(() => () => voiceRef.current?.abort(), [])
+
+  /**
+   * 输入框随内容长高，最多 `MAX_INPUT_HEIGHT`。
+   *
+   * **必须盯着 `value` 量，而不是只在键盘 `onChange` 里量**：草稿由页面持有，发送 / 换对话 /
+   * 预填都是页面把它清掉或改掉，不会经过输入框的 `onChange` —— 只在 `onChange` 里量的话，
+   * 写满一屏再发出去，框还是原来那么高，收不回来。
+   *
+   * 用 `useLayoutEffect` 在绘制前量：先归零再读 `scrollHeight`（`height: auto` 那一步），
+   * 否则读到的永远是当前高度、只会越量越高。
+   */
+  useLayoutEffect(() => {
+    const node = areaRef.current
+    if (!node) return
+    node.style.height = 'auto'
+    node.style.height = `${Math.min(node.scrollHeight, MAX_INPUT_HEIGHT)}px`
+  }, [value])
+
+  /**
+   * 输入框同时挂两个 ref：页面传进来的（要主动聚焦 / 取节点）与本组件内部量高度用的。
+   * 一个元素只接受一个 `ref`，所以在这里合并转发。
+   */
+  const setAreaRef = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      areaRef.current = node
+      if (!inputRef) return
+      if (typeof inputRef === 'function') inputRef(node)
+      else (inputRef as MutableRefObject<HTMLTextAreaElement | null>).current = node
+    },
+    [inputRef],
+  )
 
   const notify = useCallback(
     (text: string) => {
@@ -239,17 +284,13 @@ export function Composer({
           <MicIcon size={17} />
         </button>
         <textarea
-          ref={inputRef}
+          ref={setAreaRef}
           rows={1}
           value={value}
           aria-label={inputLabel}
           disabled={locked}
-          onChange={(event) => {
-            onChange(event.target.value)
-            const node = event.target
-            node.style.height = 'auto'
-            node.style.height = `${Math.min(node.scrollHeight, 160)}px`
-          }}
+          // 高度不在这里量：草稿可能由页面清空（发送 / 换对话），只有盯着 `value` 的 effect 才收得回来。
+          onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (!submitOnEnter) return
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return

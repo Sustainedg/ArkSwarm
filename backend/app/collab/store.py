@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +43,15 @@ class RunNotFound(Exception):
 
 class TeamInUse(Exception):
     """协作组下还有运行记录，不能删除（沿用既有 409 语义）。"""
+
+
+class TeamKeyInUse(Exception):
+    """要删改的节点 key 还被历史运行引用，改名会让这些运行找不到岗位（沿用既有 409 语义）。
+
+    运行、工单与步骤里存的是**当时的 key**（``entry_key`` / ``holder_key`` / ``target_key``…），
+    改名不会自动迁移：引擎下一步按 key 找节点，找不到就直接报「持有者/派发目标不在图里」。
+    改名的意图与「删掉旧节点、新建一个」在图里长得一模一样，无从推断，所以只能在保存时拦下来。
+    """
 
 
 def to_read(team: CollabTeam, known_agent_profile_ids: set[str] | None = None) -> TeamRead:
@@ -120,6 +129,97 @@ async def _copy_team(source: CollabTeam, name: str) -> CollabTeam:
     )
 
 
+#: 每个 key 最多列几条引用（够用户定位是哪次运行/哪张工单即可，不必把看板全抄进错误里）
+_MAX_KEY_REFERENCES = 3
+
+
+def _removed_node_keys(old_graph: Any, new_graph: dict[str, Any]) -> set[str]:
+    """这次保存「删掉/改掉」了哪些节点 key。
+
+    改名与删除在图里是同一种变化（旧 key 消失），这里不做也无法做区分。
+    旧图本身解析不了时不拦（让用户先把图存成能看的样子，别把两件事叠在一起报错）。
+    """
+    try:
+        old = graph_service.from_storable(old_graph)
+    except (ValueError, ValidationError):
+        return set()
+    old_keys = {node.key for node in old.nodes if node.key}
+    new_keys = {str(node.get("key") or "") for node in (new_graph.get("nodes") or [])}
+    return {key for key in old_keys - new_keys if key}
+
+
+async def _stale_key_references(
+    session: AsyncSession, team_id: str, removed: set[str]
+) -> dict[str, list[str]]:
+    """这些 key 还被这次协作组下的运行/工单/步骤/对话引用着多少处。"""
+    run_ids = list(
+        (await session.execute(select(CollabRun.id).where(CollabRun.team_id == team_id))).scalars()
+    )
+    if not run_ids:
+        return {}
+    refs: dict[str, list[str]] = {}
+
+    def note(key: str | None, text: str) -> None:
+        if key and key in removed and len(refs.get(key, [])) < _MAX_KEY_REFERENCES:
+            refs.setdefault(key, []).append(text)
+
+    for run_id, entry_key, title in (
+        await session.execute(
+            select(CollabRun.id, CollabRun.entry_key, CollabRun.title).where(
+                CollabRun.team_id == team_id
+            )
+        )
+    ).all():
+        note(entry_key, f"运行「{title}」（{run_id[:8]}）的入口节点")
+    for ticket_id, title, owner_key, holder_key, submitter_key, escalation in (
+        await session.execute(
+            select(
+                CollabTicket.id,
+                CollabTicket.title,
+                CollabTicket.owner_key,
+                CollabTicket.holder_key,
+                CollabTicket.submitter_key,
+                CollabTicket.escalation,
+            ).where(CollabTicket.run_id.in_(run_ids))
+        )
+    ).all():
+        note(owner_key, f"工单 {ticket_id[:8]}「{title}」的发起人")
+        note(holder_key, f"工单 {ticket_id[:8]}「{title}」的承担者")
+        note(submitter_key, f"工单 {ticket_id[:8]}「{title}」的提交人")
+        escalation = escalation or {}
+        note(str(escalation.get("from") or ""), f"工单 {ticket_id[:8]} 的上报人")
+        for hop in escalation.get("hops") or []:
+            note(str(hop), f"工单 {ticket_id[:8]} 的上报路径")
+    for role_key, target_key in (
+        await session.execute(
+            select(CollabStep.role_key, CollabStep.target_key).where(
+                CollabStep.run_id.in_(run_ids)
+            )
+        )
+    ).all():
+        note(role_key, "某一步骤的岗位")
+        note(target_key, "某一步骤的派发目标")
+    for role_key in (
+        await session.execute(
+            select(CollabMessage.role_key).where(CollabMessage.run_id.in_(run_ids))
+        )
+    ).all():
+        note(role_key, "入口智能体对话的岗位")
+    return refs
+
+
+def _stale_key_message(team_name: str, refs: dict[str, list[str]]) -> str:
+    """把「哪些 key 被谁引用着」写成一句能做决定的错误。"""
+    detail = "；".join(
+        f"「{key}」还被{'、'.join(items)}引用" for key, items in sorted(refs.items())
+    )
+    return (
+        f"协作组「{team_name}」的节点 key 不能这样改：{detail}。"
+        "运行与工单里记的是当时的 key，改掉之后它们会找不到对应岗位（直接报「持有者不在图里」）。"
+        "请先删除这些运行记录，或把协作组复制一份在副本里改名。"
+    )
+
+
 async def save_team(session: AsyncSession, team_id: str, payload: TeamUpdate) -> CollabTeam:
     """整图保存。语义错误不拦截（允许存草稿），但结构性错误已被 Pydantic 挡在路由层。"""
     team = await get_team(session, team_id)
@@ -133,7 +233,14 @@ async def save_team(session: AsyncSession, team_id: str, payload: TeamUpdate) ->
     if "workspace_dir" in data:
         team.workspace_dir = data["workspace_dir"]
     if payload.graph is not None:
-        team.graph = graph_service.to_storable(payload.graph)
+        new_graph = graph_service.to_storable(payload.graph)
+        # 「存的草稿」不拦语义问题，但**删改已在运行的 key** 不是语义问题：它会打断运行，
+        # 且事后无从修复（改名与删除不可区分），所以必须在保存这一层拦住。
+        removed = _removed_node_keys(team.graph, new_graph)
+        stale = await _stale_key_references(session, team_id, removed) if removed else {}
+        if stale:
+            raise TeamKeyInUse(_stale_key_message(team.name, stale))
+        team.graph = new_graph
     if payload.budget is not None:
         team.budget = graph_service.budget_to_storable(payload.budget)
     team.updated_at = utcnow()

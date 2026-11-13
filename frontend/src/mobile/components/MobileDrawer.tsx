@@ -13,6 +13,7 @@ const NAV = [
   { to: '/collab', icon: '🤝', label: '协作组' },
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/mcp', icon: '🔌', label: 'MCP' },
+  { to: '/usage', icon: '📊', label: '用量' },
   { to: '/settings', icon: '⚙️', label: '设置' },
 ]
 

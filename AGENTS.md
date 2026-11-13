@@ -211,7 +211,9 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   `patch` 配置文件补丁、`notes` 用户提示）。框架只按这份声明执行，不认识具体内核。
 - 适配器钩子：`skill_roots()`（声明本内核的技能根：路径 + 来源 + 是否可安装；框架据此
   统一扫描与安装技能）、`discover_skills()`（只读扫描，尽力而为、不得抛错；常见实现是
-  `scan_skill_roots(self.skill_roots(), ...)`）与 `skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）。
+  `scan_skill_roots(self.skill_roots(), ...)`）、`skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）
+  与 `skill_invocation(tool_name, tool_input)`（把一次工具调用识别成技能调用时返回技能 slug，
+  供「用量」页统计调用次数；默认不识别——「技能调用长什么样」是适配器的知识）。
   技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
   但落盘路径仍由适配器声明、框架不硬编码。
 - `AgentContext.skills` / `AgentContext.home_dir`：框架注入的「本次运行生效的技能」与

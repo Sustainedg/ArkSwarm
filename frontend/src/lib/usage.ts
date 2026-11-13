@@ -71,3 +71,66 @@ export function summarizeUsage(usages: (Record<string, unknown> | null | undefin
   summary.cacheRatio = cacheBase > 0 ? summary.cacheRead / cacheBase : null
   return summary
 }
+
+/* ---------- 用量页的时间范围（两端共用这一份口径）---------- */
+
+/** 用量页可选的预设范围；`custom` 用用户填的起止日期。 */
+export type UsageRangeKind = 'today' | 'week' | 'month' | 'custom' | 'all'
+
+export interface UsageRangeQuery {
+  /** 起始时刻（ISO 8601，含）*/
+  start?: string
+  /** 结束时刻（ISO 8601，不含）*/
+  end?: string
+  /** 本地时区相对 UTC 的分钟偏移（东为正）；只用于「按天」分桶 */
+  tz_offset: number
+}
+
+/** 一个本地自然日 00:00（按本机时区，而不是 UTC 零点）。 */
+function localMidnight(base: Date, dayOffset: number): Date {
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset)
+}
+
+/** 把 `YYYY-MM-DD` 解析成当地那天的 00:00；格式不对返回 null。 */
+function parseDay(value: string | undefined): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? '')
+  if (!match) return null
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+}
+
+/**
+ * 把预设范围换算成接口参数。区间一律按**本机时区**的整天取（`end` 是次日的 00:00，开区间），
+ * 这样「今日 / 一周」的边界与用户看到的日期一致；`all` 不带上限。
+ */
+export function usageRangeQuery(
+  kind: UsageRangeKind,
+  customStart?: string,
+  customEnd?: string,
+): UsageRangeQuery {
+  const tzOffset = -new Date().getTimezoneOffset()
+  if (kind === 'all') return { tz_offset: tzOffset }
+
+  const now = new Date()
+  const today = localMidnight(now, 0)
+  let start = today
+  let end = localMidnight(now, 1)
+
+  if (kind === 'week') {
+    start = localMidnight(now, -6)
+  } else if (kind === 'month') {
+    start = localMidnight(now, -29)
+  } else if (kind === 'custom') {
+    start = parseDay(customStart) ?? today
+    // 结束日含当天：取那天的次日 00:00 作为开区间上界。
+    end = localMidnight(parseDay(customEnd) ?? now, 1)
+  }
+
+  return { start: start.toISOString(), end: end.toISOString(), tz_offset: tzOffset }
+}
+
+/** 把日期格式化成 `<input type="date">` 需要的 `YYYY-MM-DD`（按本机时区）。 */
+export function dayInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+

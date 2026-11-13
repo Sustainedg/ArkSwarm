@@ -245,6 +245,7 @@ class AcmeAgent(AgentDefinition):
 | POST | `/api/conversations/{id}/cancel` | 中断正在运行的智能体 |
 | POST | `/api/conversations/{id}/session/reset` | 丢弃智能体侧会话记忆 |
 | GET | `/api/system/overview` · `/api/runs` | 运行状态与实时任务 |
+| GET | `/api/usage/overview` | 用量汇总：token 消耗（按日期 / 智能体 / 对话）与技能分配情况 |
 
 交互式文档：`http://127.0.0.1:8000/docs`
 
@@ -277,7 +278,7 @@ backend/
   app/models.py db.py    数据模型与引擎
   tests/                 适配器解析、API 契约、harness 工具循环、架构守卫
 frontend/
-  src/pages/             Chat · Agents · Runtimes · Skills · MCP · Settings
+  src/pages/             Chat · Agents · Runtimes · Skills · MCP · Usage · Settings
   src/components/        DynamicForm（由 schema 生成表单）· MessageView · Modal
 AGENTS.md                ★ 工程约定（AI/人都要遵守的硬约束）
 docs/architecture.md     深挖：一次运行的完整时序、事件协议、扩展点

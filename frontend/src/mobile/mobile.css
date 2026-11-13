@@ -29,6 +29,8 @@
   --brand: #d94fd0;
   --brand-soft: rgba(217, 79, 208, 0.14);
   --brand-strong: #b93ab0;
+  /* 品牌色柔光：思考动画那三点外面那圈光晕 */
+  --brand-glow: rgba(217, 79, 208, 0.45);
   --accent: #6ee7d1;
   --accent-soft: rgba(110, 231, 209, 0.13);
 
@@ -101,6 +103,7 @@
   --brand: #b63ba9;
   --brand-soft: rgba(182, 59, 169, 0.1);
   --brand-strong: #932a88;
+  --brand-glow: rgba(182, 59, 169, 0.32);
   --accent: #0e9c85;
   --accent-soft: rgba(14, 156, 133, 0.1);
 
@@ -943,8 +946,35 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 10px 12px; font-size: 14.5px; line-height: 1.62; overflow-wrap: anywhere;
 }
 .bubble-row.user .bubble-body { background: linear-gradient(135deg, rgba(217, 79, 208, 0.18), rgba(123, 92, 255, 0.12)); border-color: rgba(217, 79, 208, 0.32); }
-.bubble-body.streaming::after { content: '▍'; color: var(--brand); animation: blink 1s steps(2) infinite; margin-left: 2px; }
-@keyframes blink { 50% { opacity: 0; } }
+/* 正文正在流式输出时的尾光标：一条品牌色渐变竖条在缓缓呼吸，替掉原来硬闪的「▍」。
+   （AI 还没出正文、只在思考 / 调工具时走的是 `.thinking-bubble` 那三点动画。） */
+.bubble-body.streaming::after {
+  content: ''; display: inline-block; width: 2.5px; height: 1em; margin-left: 3px;
+  border-radius: 2px; background: linear-gradient(180deg, var(--brand), var(--accent));
+  vertical-align: -0.15em; animation: caret-breathe 1.1s ease-in-out infinite;
+}
+@keyframes caret-breathe {
+  0%, 100% { opacity: 0.28; transform: scaleY(0.75); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
+/* 思考 / 调工具时的等待气泡：三个小点依次升起再落下，颜色走品牌渐变并带一圈柔光。 */
+.thinking-bubble { display: inline-flex; align-items: center; gap: 5px; padding: 12px 14px; }
+.thinking-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  box-shadow: 0 0 8px var(--brand-glow);
+  animation: thinking-wave 1.25s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.32s; }
+@keyframes thinking-wave {
+  0%, 60%, 100% { transform: translateY(0) scale(1); opacity: 0.4; }
+  30% { transform: translateY(-5px) scale(1.08); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dot { animation: none; opacity: 0.7; }
+  .bubble-body.streaming::after { animation: none; opacity: 0.85; }
+}
 
 .tool-card { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); margin-top: 8px; overflow: hidden; }
 .tool-card summary { cursor: pointer; padding: 8px 11px; font-size: 12.5px; display: flex; gap: 8px; align-items: center; list-style: none; }
@@ -1593,3 +1623,17 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* 技能市场卡片：描述限高，避免长文案把卡片撑得很高 */
 .skills-market-cards .card > p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ================= 用量页：token 消耗与技能分配 ================= */
+.m-usage-stats { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); }
+.m-stat.highlight { border-color: rgba(217, 79, 208, 0.4); background: var(--brand-soft); }
+.m-stat-unit { font-size: 11px; color: var(--text-dim); margin-left: 4px; font-weight: 500; }
+.m-usage-num {
+  flex: none; align-self: center; text-align: right; white-space: nowrap;
+  font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 650;
+}
+.m-usage-bars { display: flex; flex-direction: column; gap: 6px; }
+.m-usage-bar-row { display: grid; grid-template-columns: 44px 1fr 52px; align-items: center; gap: 8px; }
+.m-usage-bar-track { height: 8px; border-radius: 6px; background: var(--bg-hover); overflow: hidden; }
+.m-usage-bar-fill { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); }
+.m-usage-bar-value { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-muted); }

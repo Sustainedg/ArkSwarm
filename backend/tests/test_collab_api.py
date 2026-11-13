@@ -6,7 +6,7 @@ import pytest_asyncio
 
 from app.collab import graph as g
 from app.collab.schemas import Duty, EdgeKind, EdgeSpec, GraphSpec, NodeSpec
-from app.collab.tables import CollabRun
+from app.collab.tables import CollabRun, CollabTicket
 from app.db import SessionLocal
 from app.models import AgentProfile, Gateway
 
@@ -121,6 +121,62 @@ async def test_team_with_runs_cannot_be_deleted(client: httpx.AsyncClient, roles
     response = await client.delete(f"/api/collab/teams/{team_id}")
     assert response.status_code == 409
     assert "运行记录" in response.json()["detail"]
+
+
+async def test_renaming_a_key_referenced_by_a_run_is_409(client: httpx.AsyncClient, roles):
+    """改节点 key 会打断已经在跑的协作：历史工单里记的是旧 key。
+
+    真实事故：画布上把 `dev` 改名成 `SDE` 之后，持有旧 key 的工单再也找不到岗位。
+    改名与「删掉旧节点、新建一个」在图里无从区分，只能在这里拦下来。
+    """
+    created = await client.post(
+        "/api/collab/teams",
+        json={"name": "会改名的组", "entry_key": "ceo", "graph": graph_body(roles)},
+    )
+    team_id = created.json()["id"]
+    async with SessionLocal() as session:
+        run = CollabRun(team_id=team_id, title="跑过一次", goal="目标")
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+        session.add(
+            CollabTicket(
+                run_id=run.id,
+                to_agent_profile_id=roles["se"],
+                owner_key="ceo",
+                holder_key="se",
+                title="干活",
+            )
+        )
+        await session.commit()
+
+    renamed = graph_body(roles)
+    renamed["nodes"][1]["key"] = "sde"  # se → sde
+    response = await client.put(f"/api/collab/teams/{team_id}", json={"graph": renamed})
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "se" in detail and "承担者" in detail and "删除这些运行记录" in detail
+
+    stored = await client.get(f"/api/collab/teams/{team_id}")
+    assert {node["key"] for node in stored.json()["graph"]["nodes"]} == {"ceo", "se", "qa"}
+
+
+async def test_renaming_an_unreferenced_key_is_saved(client: httpx.AsyncClient, roles):
+    """只拦真正被引用到的 key：运行里没出现过的节点，改名照旧能存。"""
+    created = await client.post(
+        "/api/collab/teams",
+        json={"name": "能改名的组", "entry_key": "ceo", "graph": graph_body(roles)},
+    )
+    team_id = created.json()["id"]
+    async with SessionLocal() as session:
+        session.add(CollabRun(team_id=team_id, title="跑过一次", goal="目标"))
+        await session.commit()
+
+    renamed = graph_body(roles)
+    renamed["nodes"][1]["key"] = "sde"
+    response = await client.put(f"/api/collab/teams/{team_id}", json={"graph": renamed})
+    assert response.status_code == 200, response.text
+    assert "sde" in {node["key"] for node in response.json()["graph"]["nodes"]}
 
 
 async def test_deleted_role_is_reported_as_validation_error(client: httpx.AsyncClient, roles):

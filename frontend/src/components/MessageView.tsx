@@ -31,7 +31,9 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
       ]
 
   const lastIndex = timeline.length - 1
-  const showTrailingCursor =
+  // 还在跑、但最后一段不是正文（正在思考 / 调工具）：气泡里没有可挂光标的文字，
+  // 就在末尾补一个等待气泡。最后一段是正文时，光标由 `.bubble-body.streaming::after` 那条竖条负责。
+  const showThinking =
     Boolean(message.streaming) && (timeline.length === 0 || timeline[lastIndex].kind !== 'text')
 
   // 连续的「思考 / 工具调用 / 工具结果」收成一个可展开的「过程」块：
@@ -64,7 +66,7 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
           ),
         )}
 
-        {showTrailingCursor && <div className="bubble-body streaming" />}
+        {showThinking && <ThinkingBubble />}
 
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
@@ -169,6 +171,21 @@ function ToolCard({ part }: { part: MessagePart }) {
       </summary>
       <pre>{payload || '(空)'}</pre>
     </details>
+  )
+}
+
+/**
+ * AI 还没吐出正文（在思考 / 调工具）时的等待气泡：三个品牌色小点依次升起再落下。
+ * 以前这里是一个一闪一闪的「▍」输入光标，硬闪像坏的输入框；换成这个柔和得多。
+ * 正文一旦开始流出，光标由 `.bubble-body.streaming::after` 那条渐变竖条接手。
+ */
+function ThinkingBubble() {
+  return (
+    <div className="bubble-body thinking-bubble" role="status" aria-label="正在生成回复">
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+    </div>
   )
 }
 
