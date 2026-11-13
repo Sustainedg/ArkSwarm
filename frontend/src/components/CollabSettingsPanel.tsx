@@ -21,18 +21,17 @@ import {
   toTeamDraft,
   type TeamDraft,
 } from '../lib/collabDraft'
-import type { AgentType, CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile } from '../lib/types'
+import type { CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile } from '../lib/types'
 
 interface Props {
   teamId?: string
   teams: CollabTeam[]
   agents: AgentProfile[]
-  agentTypes: AgentType[]
   onOpenTeam: (teamId: string | null) => void
   onTeamsChanged: () => void | Promise<void>
 }
 
-export function CollabSettingsPanel({ teamId, teams, agents, agentTypes, onOpenTeam, onTeamsChanged }: Props) {
+export function CollabSettingsPanel({ teamId, teams, agents, onOpenTeam, onTeamsChanged }: Props) {
   const [draft, setDraft] = useState<TeamDraft | null>(null)
   const [selection, setSelection] = useState<CollabSelection | null>(null)
   const [issues, setIssues] = useState<CollabIssue[]>([])
@@ -250,7 +249,6 @@ export function CollabSettingsPanel({ teamId, teams, agents, agentTypes, onOpenT
               draft={draft}
               selection={selection}
               agents={agents}
-              agentTypes={agentTypes}
               issues={issues}
               onPatchTeam={patchTeam}
               onPatchNode={patchNode}

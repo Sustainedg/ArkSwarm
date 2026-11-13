@@ -1,15 +1,14 @@
 /**
  * 编排编辑器的右侧属性面板：节点 / 边 / 团队三种上下文共用一个面板。
  *
- * 节点上的「参数覆盖」直接复用 `DynamicForm`（读该智能体类型的 `config_fields`），
- * 因此新增一个可配置项不需要动协作页（与 AGENTS.md §4.4 一致）。
+ * 节点只回答「他在这个协作里干什么」（职责、能力边界、动作、连给谁）；用什么参数跑，
+ * 完全由它绑定的智能体决定 —— 这里不提供任何节点级参数覆盖。
  */
 import type { ReactNode } from 'react'
-import { DynamicForm } from './DynamicForm'
 import type { CollabSelection } from './CollabCanvas'
 import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, isWarningIssue, type TeamDraft } from '../lib/collabDraft'
 import type {
-  AgentType, CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
+  CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
   CollabWorkspaceScope, CollabDuty as Duty, AgentProfile,
 } from '../lib/types'
 
@@ -17,7 +16,6 @@ interface Props {
   draft: TeamDraft
   selection: CollabSelection | null
   agents: AgentProfile[]
-  agentTypes: AgentType[]
   issues: CollabIssue[]
   onPatchTeam: (patch: Partial<TeamDraft>) => void
   onPatchNode: (key: string, patch: Partial<CollabNode>) => void
@@ -28,7 +26,7 @@ interface Props {
 }
 
 export function NodeInspector({
-  draft, selection, agents, agentTypes, issues,
+  draft, selection, agents, issues,
   onPatchTeam, onPatchNode, onPatchEdge, onRenameNode, onDeleteNode, onDeleteEdge,
 }: Props) {
   const node = selection?.kind === 'node' ? draft.nodes.find((item) => item.key === selection.id) : undefined
@@ -42,7 +40,6 @@ export function NodeInspector({
           nodes={draft.nodes}
           entryKey={draft.entry_key}
           agents={agents}
-          agentTypes={agentTypes}
           issues={issues}
           onPatch={(patch) => onPatchNode(node.key, patch)}
           onRename={(next) => onRenameNode(node.key, next)}
@@ -73,13 +70,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function NodePanel({
-  node, nodes, entryKey, agents, agentTypes, issues, onPatch, onRename, onDelete, onSetEntry,
+  node, nodes, entryKey, agents, issues, onPatch, onRename, onDelete, onSetEntry,
 }: {
   node: CollabNode
   nodes: CollabNode[]
   entryKey: string | null
   agents: AgentProfile[]
-  agentTypes: AgentType[]
   issues: CollabIssue[]
   onPatch: (patch: Partial<CollabNode>) => void
   onRename: (next: string) => void
@@ -87,7 +83,6 @@ function NodePanel({
   onSetEntry: () => void
 }) {
   const agent = agents.find((item) => item.id === node.agent_profile_id)
-  const type = agentTypes.find((item) => item.id === agent?.type_id)
   const nodeIssues = issues.filter((issue) => issue.node_key === node.key)
   const isEntry = entryKey === node.key
   // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
@@ -249,16 +244,6 @@ function NodePanel({
           {entryKey === node.key ? '★ 已是入口节点' : '设为入口节点（与用户对话）'}
         </button>
       </Section>
-
-      {type && type.config_fields.length > 0 && (
-        <Section title="参数覆盖（只对本次协作生效）">
-          <DynamicForm
-            fields={type.config_fields}
-            value={node.options_override}
-            onChange={(next) => onPatch({ options_override: next })}
-          />
-        </Section>
-      )}
 
       <div className="collab-inspector-foot">
         <button className="btn sm danger" onClick={onDelete}>

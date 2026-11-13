@@ -247,11 +247,8 @@ async def _resolve_profile(
     gateway_row = await session.get(Gateway, profile.gateway_id) if profile.gateway_id else None
     binding = bind_gateway(definition, gateway_row)
 
-    # 节点级参数覆盖：已弃用（见 docs/collaboration-design.md §4.3），本版仍兼容读取，
-    # 下一版移除；新图不要再依赖它。
+    # 节点不再覆盖适配器参数：一个岗位用什么参数，完全由它绑定的智能体决定（与对话一致）。
     options = definition.coerce_options(profile.options or {})
-    if node.options_override:
-        options = {**options, **definition.coerce_options({**options, **node.options_override})}
 
     model = profile.model or definition.resolve_model(None)
     cwd, scope = _step_cwd(run, node)

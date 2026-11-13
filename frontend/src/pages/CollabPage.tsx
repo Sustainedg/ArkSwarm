@@ -9,7 +9,7 @@ import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { CollabRunsPanel } from '../components/CollabRunsPanel'
 import { CollabSettingsPanel } from '../components/CollabSettingsPanel'
 import { api, ApiError } from '../lib/api'
-import type { AgentType, CollabTeam, AgentProfile } from '../lib/types'
+import type { CollabTeam, AgentProfile } from '../lib/types'
 
 export function CollabPage() {
   const location = useLocation()
@@ -19,19 +19,16 @@ export function CollabPage() {
 
   const [teams, setTeams] = useState<CollabTeam[]>([])
   const [agents, setAgents] = useState<AgentProfile[]>([])
-  const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
-      const [teamList, agentList, typeList] = await Promise.all([
+      const [teamList, agentList] = await Promise.all([
         api.listCollabTeams(),
         api.listAgents(),
-        api.agentTypes(),
       ])
       setTeams(teamList)
       setAgents(agentList)
-      setAgentTypes(typeList)
       setError(null)
     } catch (e) {
       setError(describe(e))
@@ -73,7 +70,6 @@ export function CollabPage() {
           teamId={teamId}
           teams={teams}
           agents={agents}
-          agentTypes={agentTypes}
           onOpenTeam={(id) => navigate(id ? `/collab/settings/${id}` : '/collab/settings')}
           onTeamsChanged={reload}
         />

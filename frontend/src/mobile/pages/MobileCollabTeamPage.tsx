@@ -15,7 +15,6 @@ import {
   type TeamDraft,
 } from '../../lib/collabDraft'
 import type {
-  AgentType,
   CollabDuty,
   CollabEdge,
   CollabEdgeKind,
@@ -47,7 +46,6 @@ export function MobileCollabTeamPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [agents, setAgents] = useState<AgentProfile[]>([])
-  const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
   const [nodeKey, setNodeKey] = useState<string | null>(null)
   const [edgeId, setEdgeId] = useState<string | null>(null)
   const [agentPickerOpen, setAgentPickerOpen] = useState(false)
@@ -76,9 +74,7 @@ export function MobileCollabTeamPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [agentList, typeList] = await Promise.all([api.listAgents(), api.agentTypes()])
-        setAgents(agentList)
-        setAgentTypes(typeList)
+        setAgents(await api.listAgents())
       } catch (e) {
         setError(describeError(e))
       }
@@ -496,7 +492,6 @@ export function MobileCollabTeamPage() {
           <CollabNodeForm
             node={node}
             agents={agents}
-            agentTypes={agentTypes}
             isEntry={node.key === draft?.entry_key}
             onSave={(next) => saveNode(node.key, next)}
             onDelete={() => deleteNode(node.key)}

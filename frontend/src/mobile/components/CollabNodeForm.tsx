@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { DynamicForm } from '../../components/DynamicForm'
 import { ACTIONS, DUTIES, SCOPES, sanitizeKey } from '../../lib/collabDraft'
 import type {
-  AgentType, CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope, AgentProfile,
+  CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope, AgentProfile,
 } from '../../lib/types'
 
 
@@ -10,12 +9,11 @@ import type {
  * 协作「岗位」表单（移动端）：底部弹层里的内容，本地编辑、点「保存岗位」才写回草稿。
  *
  * 只编辑这一个节点；改名会同步连线，所以 key 输入框每次按键都按后端规则规整（`sanitizeKey`）。
- * 「参数覆盖」直接复用 `DynamicForm`（按该智能体类型的 `config_fields` 渲染）。
+ * 节点只回答「他在这个协作里干什么」；用什么参数跑，完全由它绑定的智能体决定。
  */
 export function CollabNodeForm({
   node,
   agents,
-  agentTypes,
   isEntry,
   onSave,
   onDelete,
@@ -23,7 +21,6 @@ export function CollabNodeForm({
 }: {
   node: CollabNode
   agents: AgentProfile[]
-  agentTypes: AgentType[]
   isEntry: boolean
   onSave: (next: CollabNode) => void
   onDelete: () => void
@@ -32,7 +29,6 @@ export function CollabNodeForm({
   const [form, setForm] = useState<CollabNode>(node)
   const [keyInput, setKeyInput] = useState(node.key)
   const agent = agents.find((item) => item.id === form.agent_profile_id)
-  const type = agentTypes.find((item) => item.id === agent?.type_id)
 
   const set = (next: Partial<CollabNode>) => setForm((prev) => ({ ...prev, ...next }))
   // 历史数据可能给非入口节点勾过 ask_user、给入口节点勾过 escalate；这里统一规整，
@@ -179,17 +175,6 @@ export function CollabNodeForm({
           一个都不选 = 按岗位取默认动作集合。ask_user 只有入口节点可用；escalate 是保底动作，始终可用。
         </span>
       </div>
-
-      {type && type.config_fields.length > 0 && (
-        <div className="field">
-          <label className="field-label">参数覆盖（只对本次协作生效）</label>
-          <DynamicForm
-            fields={type.config_fields}
-            value={form.options_override}
-            onChange={(next) => set({ options_override: next })}
-          />
-        </div>
-      )}
 
       <button className="btn sm" onClick={onSetEntry} disabled={isEntry}>
         {isEntry ? '★ 已是入口节点' : '设为入口节点（与用户对话）'}

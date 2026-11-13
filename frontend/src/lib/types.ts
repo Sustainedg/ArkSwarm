@@ -674,8 +674,6 @@ export interface CollabNode {
   workspace_scope: CollabWorkspaceScope | null
   /** 空数组表示按 duty 取默认动作集合 */
   output_contract: CollabTicketAction[]
-  /** 节点级适配器参数覆盖（键来自该智能体类型的 config_fields） */
-  options_override: Record<string, unknown>
   max_rounds: number
   x: number
   y: number

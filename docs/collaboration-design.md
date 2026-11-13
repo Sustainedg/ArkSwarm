@@ -42,11 +42,11 @@ SSE、前端 Markdown 渲染全部直接复用，**不新增事件类型、不�
 | # | 需求 | 设计落点 |
 | --- | --- | --- |
 | C1 | 左侧菜单新增「协作」，与「对话」同级 | §7.1 导航 + `/collab` 路由 |
-| C2 | 可视化自定义智能体设定 | §7.3 画布节点属性面板（复用 `DynamicForm`、智能体下拉） |
+| C2 | 可视化自定义智能体设定 | §7.3 画布节点属性面板（智能体下拉 + 协作语义字段；参数由智能体自己决定） |
 | C3 | 可视化连线串接智能体 | §7.3 拖拽连线 + 有向边 + 边类型 |
 | C4 | 智能体之间用「工单」分配任务 | §4 工单协议（结构化交接载荷） |
 | C5 | **不共享记忆**，只把任务内容传给下一个智能体 | §4.2 交付载荷；强制 `ctx.history=[]`、`ctx.session_id=None` |
-| C6 | 智能体能力范围受限（如 CEO 不能写代码） | §4.3 四层约束 + 越权审计 |
+| C6 | 智能体能力范围受限（如 CEO 不能写代码） | §4.3 三层约束 + 越权审计 |
 | C7 | 审查不过 → 带意见退回 → 返工 → 再审，直到完成 | §3.3 工单状态机（`rework` 回边） |
 | C8 | 功能独立，不污染现有代码 | §2 物理分层 + §2.4 宿主改造点清单（后端共 4 处、每条 1~2 行） |
 
@@ -84,7 +84,7 @@ frontend/src/
   components/CollabSettingsPanel.tsx 协作设置页签：协作组列表 + 画布 + 属性面板（M2 ✅）
   components/CollabCanvas.tsx      画布：节点拖动 + 四向端口 + 正交避障连线 + 拖放添加节点（M2 ✅）
   lib/collabRouting.ts            连线端口推断与正交避障路由（纯函数）
-  components/NodeInspector.tsx     节点 / 边 / 团队属性面板（复用 DynamicForm）（M2 ✅）
+  components/NodeInspector.tsx     节点 / 边 / 团队属性面板（M2 ✅）
   lib/agentStream.ts               从 ChatPage 抽出的智能体事件纯归约器（两页共用，M2 ✅）
   lib/collabStream.ts              协作信封事件归约（时间线 + 工单，M2 ✅）
   components/TicketBoard.tsx       工单看板抽屉：左工单列表 / 中流转时间线 / 右静态规则（M4 → M14 三栏）
@@ -189,7 +189,6 @@ Node {
   capability_scope,       # 能力边界文字（"不得写代码、不得访问工作目录"）
   workspace_scope,        # none | read | write → 权限声明与越权审计（cwd 统一为本次运行的工作路径）
   output_contract,        # 该节点必须产出的动作集合（delegate/review/…）
-  options_override,       # 节点级适配器参数覆盖（复用 DynamicForm 渲染）
   x, y,                   # 画布坐标
   max_rounds              # 该节点同一工单的最大返工轮次
 }
@@ -392,22 +391,25 @@ Edge {
 - 这一步的摘要取自引擎派生的 `collab_steps.gist`（只由结构化字段拼成），拼 prompt 时**只读
   `gist`、不读 `content`** —— 下游看不到对话原文不是靠自律，而是没有那条通路。
 
-### 4.3 能力范围（C6）：分四层，写在方案里而不是指望提示词
+### 4.3 能力范围（C6）：分三层，写在方案里而不是指望提示词
 
 | 层 | 机制 | 覆盖面 | 说明 |
 | --- | --- | --- | --- |
 | L1 提示词 | `capability_scope` + 输出契约注入 | 所有内核 | 只是约束，不是保证 |
 | L2 工作目录 | 协作组在新建时可填「工作路径」；留空则按运行 ID 分配默认目录。所有岗位都拿到同一个绝对路径并作为 cwd，prompt 明确它是唯一允许访问的目录 | 所有内核 | 路径不再因智能体而异；`none` / `read` 仍由提示词约束 + 越权审计兜底 |
-| L3 参数覆盖 | 节点级 `options_override`（复用 `DynamicForm` 按该智能体类型的 `config_fields` 渲染），如只读/计划模式、关闭工具。**已弃用（V0.27）**：本版仍兼容读取旧图里的值，下一版移除 —— 一个岗位用什么参数跑，应由它绑定的智能体决定（技能 / MCP 同理），协作层不该再有一套只在这里生效的设置 | 支持相应能力的内核 | 框架**不写任何内核分支**，纯透传 |
-| L4 越权审计 | 运行前后对共享工作目录做指纹快照（文件路径 + 大小 + mtime + 内容哈希，带文件数/体积上限）；`read`/`none` 节点被检出改动 → `error` 事件 + 卡片标红 + 工单打回 | 所有内核 | 通用、无需内核知识 |
+| L3 越权审计 | 运行前后对共享工作目录做指纹快照（文件路径 + 大小 + mtime + 内容哈希，带文件数/体积上限）；`read`/`none` 节点被检出改动 → `error` 事件 + 卡片标红 + 工单打回 | 所有内核 | 通用、无需内核知识 |
 
-诚实声明（写进文档"已知限制"）：L3 的效果取决于内核自身能力；L4 是**事后发现**而非事前阻止；
+原设计里一度设过的「L3 参数覆盖」（节点级 `options_override`）已按弃用流程下线：V0.27 先在
+本节标注并保留一个版本的兼容读取，V0.28 移除。**一个岗位用什么参数跑，完全由它绑定的智能体决定**，
+与对话链路一致 —— 协作不该再有一套只在这里生效的适配器参数。
+
+诚实声明（写进文档"已知限制"）：L3 是**事后发现**而非事前阻止；
 真正的强隔离需要容器/沙箱，属于后续独立议题。
 
 ### 4.4 「能力范围」与「智能体设定」的分工（C2）
 
 - **智能体（AgentProfile）**回答"他是谁"：内核 + 网关 + 模型 + 人格 + 技能 —— 沿用现有「智能体」页，不重复造。
-- **节点（Node）**回答"他在这个协作里干什么"：职责、能力边界、可发起的动作、可派发给谁、参数覆盖。
+- **节点（Node）**回答"他在这个协作里干什么"：职责、能力边界、可发起的动作、可派发给谁。
 - 两者通过节点上的 `agent_profile_id` 下拉绑定；同一个智能体可以出现在多个协作组里、担任不同 duty。
 
 ---
@@ -590,9 +592,9 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 │ 👩💻 SE        │   │协调者 ⭐│             │实施者   │            ││ 职责说明      │
 │ 🔍 审查员      │   └────────┘             └───┬────┘            ││ 能力边界      │
 │ （拖到画布）   │         ▲  rework            │ assign          ││ 工作目录范围 ▾│
-│               │         │  （虚线回边）      ▼                 ││ 参数覆盖 ▾    │
-│               │   ┌─────┴────┐  review  ┌──────────┐           ││ 最大返工轮次  │
-│               │   │   审查员  │◀─────────│    SE    │           ││ 入口节点 ☑    │
+│               │         │  （虚线回边）      ▼                 ││ 最大返工轮次  │
+│               │   ┌─────┴────┐  review  ┌──────────┐           ││ 入口节点 ☑    │
+│               │   │   审查员  │◀─────────│    SE    │           ││              │
 │               │   └──────────┘          └──────────┘           ││              │
 └───────────────┘└────────────────────────────────────────────────┘└──────────────┘
 ```
@@ -614,8 +616,9 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 - 删除：选中节点/边后按 `Delete`、或点面板里的删除按钮；删节点会级联删掉它的边。
 - 校验：每次改动**防抖 500ms** 调一次 `POST /api/collab/teams/{id}/validate`（与运行时同一套规则），
   错误/提醒就地高亮节点、连线和面板，并把「人话提示」列在画布下方；前端不重复实现一遍规则。
-- 属性面板：智能体用现有 `listRoles()` 下拉；`options_override` 用 `DynamicForm`
-  按该智能体绑定智能体类型的 `config_fields` 渲染（C2 直接白得）。
+- 属性面板：智能体用现有 `listAgents()` 下拉；其余字段都是**协作语义**（职责、能力边界、
+  工作目录范围、动作集合、连给谁），**没有节点级参数覆盖** —— 用什么参数跑由它绑定的智能体决定，
+  与对话链路一致。
 - 校验实时提示（本地 + 服务端双保险）：
   - 必须**唯一入口节点**；非入口节点必须至少有一条入边；
   - 存在 `review` 边则必须有 `rework` 回边（否则无法返工），反之亦然；
@@ -769,6 +772,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `sse.py` | **平移到 `app/transport/sse.py`**，成为与业务无关的通用传输设施（已落地） | §2.3、§2.5；M0 已完成 |
 | JSON 容错 | 在第 1 级失败后先做**正则清理**（控制字符、智能引号、尾随逗号），再做截断补齐 | §4.1；M0 已实现 |
 | 画布实现 | 四向端口（左/上入、右/下出）+ 正交避障折线；不做自动布局；前端不重复实现校验规则，一律调服务端 `validate` | §7.3；✅ M2，端口/避障已升级 |
+| 节点参数 | **移除节点级参数覆盖**（V0.27 标注弃用并保留兼容读取 → V0.28 删除）：一个岗位用什么参数跑完全由它绑定的智能体决定（技能 / MCP 同理），协作层不再有只在这里生效的适配器设置；旧图里残留的 `options_override` 被忽略 | §4.3、§4.4；V0.28 |
 
 ---
 
@@ -803,7 +807,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 文件 | 内容 |
 | --- | --- |
 | `backend/app/collab/prompt.py` | `build_step_prompt()`：把「岗位说明 + 输出协议 + 工单字段 + 上游交付摘要 + 本工单历史 + 本轮要求」拼成一次输入（纯函数，**只读 `gist` 不读 `content`**） |
-| `backend/app/collab/execution.py` | 全域**唯一**接触 `runtime`/`agents` 的边界：`prepare_step`（`history=[]`、`session_id=None`、按 `workspace_scope` 决定工作目录、节点级 `options_override`）、`stream_step`、`snapshot_workspace/finish_audit`、`StepRegistry`（复用 `runtime.manager`） |
+| `backend/app/collab/execution.py` | 全域**唯一**接触 `runtime`/`agents` 的边界：`prepare_step`（`history=[]`、`session_id=None`、按 `workspace_scope` 决定工作目录、按分配物化技能与 MCP）、`stream_step`、`snapshot_workspace/finish_audit`、`StepRegistry`（复用 `runtime.manager`） |
 | `backend/app/collab/engine.py` | `prepare_turn`（校验图 → 落用户发言 → 建/唤醒根工单）+ `consume_turn`（预算检查 → 子工单汇聚 → 取就绪工单 → 跑一步 → 解析动作 → 落库），串行、`MAX_STEPS_PER_TURN=200` |
 | `backend/app/collab/api.py` | 运行相关接口：`GET/POST /runs`、`GET/DELETE /runs/{id}`、`POST /runs/{id}/messages`（SSE）、`/resume`（SSE）、`/cancel`、`POST /steps/{id}/retry` |
 | `backend/app/collab/tables.py` | 工单补 `owner_key/holder_key/submitter_key`，步骤补 `gist`（交付摘要的结构性落点） |
@@ -826,7 +830,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `frontend/src/lib/agentStream.ts` | 从 `ChatPage` 抽出的纯归约器（两页共用，行为不变） |
 | `frontend/src/lib/collabStream.ts` | 协作信封事件的归约：进行中的步骤、工单、运行状态、提示 |
 | `frontend/src/components/CollabCanvas.tsx` | 手写画布：拖节点、左/上输入与右/下输出端口、正交避障连线、拖放添加节点、Delete 删除 |
-| `frontend/src/components/NodeInspector.tsx` | 节点/边/团队三种上下文的属性面板；节点「参数覆盖」直接复用 `DynamicForm` |
+| `frontend/src/components/NodeInspector.tsx` | 节点/边/团队三种上下文的属性面板；节点只编辑协作语义字段（不含适配器参数） |
 | `frontend/src/components/CollabSettingsPanel.tsx` | 协作组列表 + 画布 + 面板；防抖实时校验、整图保存、放弃改动 |
 | `frontend/src/components/CollabRunsPanel.tsx` | 运行列表 + 时间线（复用 `MessageView`）+ 工单条 + 直接和入口智能体说话 |
 | `frontend/src/pages/CollabPage.tsx` | 页签骨架 + 4 条路由 + 共享数据加载 |

@@ -120,8 +120,6 @@ class NodeSpec(BaseModel):
     workspace_scope: WorkspaceScope | None = None
     #: 为空表示按 duty 取默认动作集合
     output_contract: list[TicketAction] = Field(default_factory=list)
-    #: 节点级适配器参数覆盖（键必须来自该智能体类型的 config_fields）
-    options_override: dict[str, Any] = Field(default_factory=dict)
     #: 同一工单在该节点上最多返工几轮；0 表示取团队默认
     max_rounds: int = Field(default=0, ge=0)
     x: float = 0

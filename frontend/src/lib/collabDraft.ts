@@ -181,7 +181,6 @@ export function addNodeToDraft(draft: TeamDraft, agent: AgentProfile, at?: { x: 
     capability_scope: '',
     workspace_scope: null,
     output_contract: [],
-    options_override: {},
     max_rounds: 0,
     x: at?.x ?? 40 + (index % 4) * 230,
     y: at?.y ?? 40 + Math.floor(index / 4) * 150,
