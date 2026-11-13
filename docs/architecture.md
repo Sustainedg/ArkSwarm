@@ -35,8 +35,9 @@
  │         └─ registry.register() 生成 run_id（供取消/追踪）
  │
  ├─ 返回 StreamingResponse(text/event-stream)
- │    └─ service.consume_run()
- │         └─ runner.stream_run()
+ │    └─ 后台任务 service._execute_prepared()（与 HTTP 连接解耦）
+ │         └─ service.consume_run()
+ │              └─ runner.stream_run()
  │              ├─ Runtime.CLI → create_subprocess_exec(argv, env, cwd, stdin)
  │              │     ├─ 逐行读取 stdout（自建行缓冲，不受 asyncio 64 KiB 上限约束）
  │              │     │     → definition.parse_line() → 规范化事件
@@ -46,13 +47,16 @@
  │              └─ Runtime.API → definition.stream(ctx)
  │                    └─ 流式 chat/completions + 工具循环（工具在工作目录内执行）
  │
- └─ 每个事件：既 yield 给 SSE，也在 consume_run 里被累积
+ └─ 每个事件：既 publish 给当前订阅者，也在 consume_run 里被累积
       （文本、推理、工具调用/结果、usage、session_id）
     finally 块无论成功/失败/取消都会写回 assistant message 并 commit
 ```
 
-客户端断开连接时，`StreamingResponse` 的生成器被关闭，`guarded()` 捕获
-`CancelledError` 并调用 `registry.cancel(run_id)`，子进程被 kill，消息落地为 `interrupted`。
+**执行与连接解耦**：`send_message` 在 `prepare_run` 之后用 `service.start_run()` 把这一轮丢进
+后台任务（`ActiveRun` 持有事件缓冲与订阅者队列），HTTP 的 SSE 只负责订阅。客户端刷新 /
+关页面只会让订阅者离开，**不会** kill 子进程或中断这一轮；重新打开对话时，详情里的
+`active_run` 会让前端改为订阅 `GET /api/conversations/{id}/stream`，先重放缓冲、再收实时增量
+（另一台设备同样如此）。真正取消只走 `POST /api/conversations/{id}/cancel`。
 
 CLI 的 stdout 由 `runner._StreamLines` 拆行：`asyncio.StreamReader.readline()` 在单行超过 64 KiB
 缓冲上限时会抛 `ValueError`（「Separator is found, but chunk is longer than limit」），而内核常常把整段代码
@@ -291,6 +295,12 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 回落到 `resolve_gateway(None)`。密钥**从不下发**：接口只回掩码（`api_key_set` /
 `api_key_preview`）。
 
+模型优先级：**这条对话单独指定的模型**（`Conversation.model`，聊天页输入框上方的芯片可改）→
+智能体默认模型（`AgentProfile.model`）→ 内核默认。对话级模型只影响下一轮，不清空会话记忆；
+换智能体时会自动清掉（旧模型可能属于另一个网关）。可选清单由
+`GET /api/conversations/{id}/models` 给出：自定义网关只返回白名单，官方默认链路返回空清单、
+由界面改为手填模型名。
+
 - **「获取模型」= 服务端探测**：`POST /api/gateways/probe` 按协议打对应端点
   （openai `/models`、anthropic `/v1/models`、gemini `/v1beta/models`），返回清单但不落库；
   `runtime/gateway_probe.py` 负责 URL 归一化与各协议的鉴权头。
@@ -400,7 +410,7 @@ agent_profiles(id, name, avatar, tagline, description, system_prompt, type_id,
                gateway_id→gateways, model, options JSON, enabled, deleted_at)
 credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at)
 agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
-conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, archived)
+conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived)
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,

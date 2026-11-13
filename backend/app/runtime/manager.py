@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +19,16 @@ class ActiveRun:
     process: Any = None
     finished: bool = False
     status: str = "running"
+    #: 后台执行任务（连接断开后仍继续，见 ``runtime.service.start_run``）
+    task: asyncio.Task | None = None
+    #: 本轮的用户消息 / 助手消息 id：重连的客户端据此知道哪条消息正在生成
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    #: 已产生的事件。新订阅者（刷新页面 / 另一台设备）先从这份缓冲重放，
+    #: 再接着收实时事件，因此晚到也能看到完整的一轮输出。
+    events: list[dict[str, Any]] = field(default_factory=list)
+    subscribers: set[asyncio.Queue] = field(default_factory=set)
+    ended: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -26,7 +37,50 @@ class ActiveRun:
             "agent_name": self.agent_name,
             "status": self.status,
             "elapsed_seconds": round(time.time() - self.started_at, 1),
+            "assistant_message_id": self.assistant_message_id,
+            "user_message_id": self.user_message_id,
         }
+
+    def publish(self, event: dict[str, Any]) -> None:
+        """把一条事件记进缓冲并广播给当前所有订阅者（没有订阅者也要记）。"""
+        if self.ended:
+            return
+        self.events.append(event)
+        for queue in list(self.subscribers):
+            queue.put_nowait(event)
+
+    def close(self) -> None:
+        """运行结束：唤醒所有订阅者，让它们的 SSE 流正常收尾。"""
+        if self.ended:
+            return
+        self.ended = True
+        for queue in list(self.subscribers):
+            queue.put_nowait(None)
+        self.subscribers.clear()
+
+    async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
+        """订阅这一轮的事件：先重放已有事件，再接收实时事件。
+
+        订阅登记与「快照长度」在同一个同步片段里完成（中间没有 ``await``），
+        所以不会漏掉登记期间产生的事件，也不会把同一条事件发两遍。
+        """
+        queue: asyncio.Queue = asyncio.Queue()
+        start = len(self.events)
+        live = not self.ended
+        if live:
+            self.subscribers.add(queue)
+        try:
+            for event in self.events[:start]:
+                yield event
+            if not live:
+                return
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                yield item
+        finally:
+            self.subscribers.discard(queue)
 
 
 class RunRegistry:

@@ -32,7 +32,7 @@
 ```
 frontend/src        pages · components · lib(api·types)        纯展示 + 交互（桌面端 /）
 frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 + 交互（移动端 /m/）
-        │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages
+        │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages · GET .../{id}/stream
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
 runtime/service.py  编排：对话→智能体→适配器（网关解密密钥与地址）、能力决策、历史回放、落库
@@ -81,19 +81,25 @@ POST /api/conversations/{id}/messages
          ├ build_context()                   ← 组装 AgentContext（合并 options、解密网关密钥、算最终 model/gateway）
          ├ supports_sessions() / transcript_prompt()  ← 能力决策：续接 or 回放
          └ registry.register()               ← 生成 run_id，供取消/追踪
-  StreamingResponse(sse_stream(event_source()))
-    └ runtime/service.consume_run()
-         └ runtime/runner.stream_run()
-              ├ Runtime.CLI → create_subprocess_exec() → AgentRun.feed(每行) → parse_line()
-              └ Runtime.API → definition.stream(ctx)
-    finally: 累积 text/thinking/tool/usage/session → 写回 assistant Message → commit
+  runtime/service.start_run()
+    ├ run.publish(turn.started)             ← 框架自有的传输层事件，先入缓冲
+    └ asyncio.create_task(_execute_prepared())  ← 运行与 HTTP 连接解耦
+         └ runtime/service.consume_run()
+              └ runtime/runner.stream_run()
+                   ├ Runtime.CLI → create_subprocess_exec() → AgentRun.feed(每行) → parse_line()
+                   └ Runtime.API → definition.stream(ctx)
+         finally: 累积 text/thinking/tool/usage/session → 写回 assistant Message → commit
+  StreamingResponse(sse_stream(run.subscribe()))   ← 只负责订阅事件，断开只退订
 ```
 
 要点：
 - **能力决策只在 `prepare_run` 里做一次**，不要在适配器里重复实现"要不要回放历史"。
-- **落库只在 `consume_run` 的 finally 里做一次**，保证成功/失败/取消都会写回消息（状态标记为
-  `complete` / `error` / `interrupted`）。
-- 客户端断连 → `api/conversations._stream_prepared.guarded()` 捕获 `CancelledError` → `registry.cancel()`。
+- **正常路径的落库只在 `consume_run` 的 finally 里做一次**，保证成功/失败/取消都会写回消息（状态标记为
+  `complete` / `error` / `interrupted`）。后台任务若在进入 `consume_run` 之前就失败，由
+  `_execute_prepared` 兜底把占位消息标成 `error`（只此一条异常路径）。
+- **执行与连接解耦**：客户端断连只让 SSE 订阅者离开，**不会**终止后台运行；刷新页面或另一台设备
+  通过 `GET /api/conversations/{id}/stream` 订阅同一条 `ActiveRun`，先重放缓冲再收实时增量。
+  真正的取消只来自显式 `POST /api/conversations/{id}/cancel`（或服务关闭）。
 
 ---
 
@@ -114,8 +120,8 @@ POST /api/conversations/{id}/messages
 | `error` | `text` | 可展示的错误 |
 | `run.finished` | `payload.status ∈ ok/error/cancelled` | 终态 |
 
-框架额外产出两个传输层事件：`turn.started`（`api/conversations.py`，携带 run_id 与消息 id）
-与 `stream.closed`（`transport/sse.py`，收尾）。**适配器不允许产出这两个。**
+框架额外产出两个传输层事件：`turn.started`（`runtime/service.start_run()` 在启动后台运行前同步发出，
+携带 run_id 与消息 id）与 `stream.closed`（`transport/sse.py`，收尾）。**适配器不允许产出这两个。**
 
 新增事件类型 = 改公共协议，必须同步四处：`events.py` → `service.consume_run` → 前端
 `types.ts` + `applyEvent` → `docs/architecture.md`；`test_architecture.py` 会拦住漏改。

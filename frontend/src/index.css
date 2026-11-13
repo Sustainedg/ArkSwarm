@@ -16,6 +16,8 @@
   --text: #ece9f6;
   --text-muted: #a49fc0;
   --text-dim: #746f96;
+  /* 代码块正文：深色底上用浅色，浅色主题在下面覆盖 */
+  --code-text: #d8d4e8;
 
   --brand: #d94fd0;
   --brand-soft: rgba(217, 79, 208, 0.14);
@@ -93,6 +95,7 @@
   --text: #23203a;
   --text-muted: #5f5a7c;
   --text-dim: #8d88a8;
+  --code-text: #2c2747;
 
   /* 品牌色在白底上要压深一档才有对比；浅色底（brand-soft）也跟着换成同一支色 */
   --brand: #b63ba9;
@@ -166,7 +169,7 @@
 [data-theme='light'] .md-code-block,
 [data-theme='light'] .tool-card pre,
 [data-theme='light'] .runtime-log { background: #f7f6fb; }
-[data-theme='light'] .md-code-head { background: rgba(35, 32, 58, 0.03); }
+[data-theme='light'] .md-code-head { background: rgba(35, 32, 58, 0.03); color: var(--text-muted); }
 [data-theme='light'] .markdown-body blockquote { background: rgba(35, 32, 58, 0.035); }
 [data-theme='light'] .markdown-body tr:nth-child(even) td { background: rgba(35, 32, 58, 0.025); }
 
@@ -494,7 +497,7 @@ code, pre, .mono { font-family: var(--mono); }
   margin: 0; padding: 11px 13px; overflow: auto; max-height: 520px;
   background: transparent; line-height: 1.55; tab-size: 2;
 }
-.md-code-block code { color: #d8d4e8; font-size: 12.5px; white-space: pre; }
+.md-code-block code { color: var(--code-text); font-size: 12.5px; white-space: pre; }
 
 /* 凭据编辑器：一行 = 名字（点开就是凭据库）+ 值 / 引用说明 + 删除 */
 .credential-row {

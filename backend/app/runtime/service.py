@@ -1,6 +1,8 @@
 """把一个 HTTP 请求变成一次真实的智能体运行，并把结果落库。"""
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ from ..agents import AgentContext, AgentDefinition, EventType, get_agent
 from ..agents.events import AgentEvent, error, log, run_finished
 from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
 from ..credentials import with_notice
+from ..db import SessionLocal
 from ..models import AgentProfile, Conversation, Gateway, Message
 from ..settings import get_settings
 from .credentials import decrypt_for_profile
@@ -26,6 +29,8 @@ from .skills import prepare_skill_home
 MAX_HISTORY_MESSAGES = 24
 MAX_HISTORY_CHARS = 40_000
 DEFAULT_TITLE = "新对话"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,14 +77,17 @@ def resolve_runtime(
     definition: AgentDefinition,
     profile: AgentProfile,
     gateway: Gateway | None,
+    model_override: str | None = None,
 ) -> tuple[str | None, str | None, str | None, str | None]:
     """解析一次运行要用的网关地址 / API 密钥 / 鉴权方式 / 默认模型。
 
     地址、密钥与鉴权方式由 ``bind_gateway`` 统一决定（只有自定义网关才注入，
     官方链路与「没选网关」同义、由内核按自己的配置处理）。
+
+    模型优先级：这条对话单独指定的模型 → 智能体的默认模型 → 内核默认模型。
     """
     binding = bind_gateway(definition, gateway)
-    model = profile.model or definition.resolve_model(None)
+    model = model_override or profile.model or definition.resolve_model(None)
     return binding.url, binding.api_key, binding.auth_style, model
 
 
@@ -93,7 +101,9 @@ async def build_context(
     history: list[dict[str, str]],
     workspace: str,
 ) -> AgentContext:
-    gateway_url, api_key, auth_style, model = resolve_runtime(definition, profile, gateway)
+    gateway_url, api_key, auth_style, model = resolve_runtime(
+        definition, profile, gateway, conversation.model
+    )
     options = definition.coerce_options(profile.options or {})
     if model:
         options.setdefault("model", model)
@@ -252,6 +262,8 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     await session.refresh(assistant_message)
 
     run = registry.register(conversation.id, profile.name)
+    run.user_message_id = user_message.id
+    run.assistant_message_id = assistant_message.id
     return PreparedRun(
         conversation=conversation,
         profile=profile,
@@ -276,6 +288,69 @@ def _merge_part(parts: list[dict[str, Any]], kind: str, text: str) -> None:
         parts[-1]["text"] = (parts[-1].get("text") or "") + text
     else:
         parts.append({"kind": kind, "text": text})
+
+
+async def _execute_prepared(prepared: PreparedRun) -> None:
+    """在后台把一轮运行跑完，与 HTTP 连接解耦。
+
+    浏览器刷新 / 关页面只会让 SSE 订阅者离开，**不能**终止这次运行：
+    事件仍写进 ``ActiveRun`` 的缓冲与数据库，重新打开对话（或另一台设备）再订阅
+    就能从缓冲重放，接着看实时输出。
+    """
+    run = prepared.run
+    try:
+        # 请求作用域的 session 在响应返回后就关闭了，后台运行必须自己开一个。
+        async with SessionLocal() as session:
+            conversation = await session.get(Conversation, prepared.conversation.id)
+            assistant = await session.get(Message, prepared.assistant_message.id)
+            if conversation is not None:
+                prepared.conversation = conversation
+            if assistant is not None:
+                prepared.assistant_message = assistant
+            async for event in consume_run(session, prepared):
+                run.publish(event.to_dict())
+    except asyncio.CancelledError:
+        # 服务关闭：consume_run 的 finally 已经落库并登记结束，这里只补齐事件流。
+        run.publish(error("运行已中断").to_dict())
+        run.publish(run_finished("cancelled").to_dict())
+        registry.finish(run, "cancelled")
+        raise
+    except Exception as exc:  # noqa: BLE001 - 后台任务绝不能静默消失
+        run.publish(error(str(exc)).to_dict())
+        run.publish(run_finished("error", detail=str(exc)).to_dict())
+        registry.finish(run, "error")
+        # 运行还没进入 consume_run 就失败时，占位消息会一直停在 streaming，补一次终态。
+        try:
+            async with SessionLocal() as session:
+                assistant = await session.get(Message, prepared.assistant_message.id)
+                if assistant is not None and assistant.status == "streaming":
+                    assistant.status = "error"
+                    assistant.error = str(exc)
+                    await session.commit()
+        except Exception:  # noqa: BLE001 - 收尾失败不能掩盖上面已经上报的错误
+            logger.warning("运行失败后补写助手消息终态失败", exc_info=True)
+    finally:
+        run.close()
+
+
+def start_run(prepared: PreparedRun) -> None:
+    """把已准备好的一轮运行交给后台任务执行（立即返回，SSE 只负责订阅）。
+
+    ``turn.started`` 是框架自有的传输层事件：在启动后台任务前**同步**写进缓冲，
+    保证任何订阅者（包括紧接着打开的另一台设备）都能先看到它。
+    """
+    run = prepared.run
+    run.publish(
+        {
+            "type": "turn.started",
+            "run_id": run.id,
+            "conversation_id": prepared.conversation.id,
+            "user_message_id": run.user_message_id,
+            "assistant_message_id": run.assistant_message_id,
+            "agent": prepared.profile.name,
+        }
+    )
+    run.task = asyncio.create_task(_execute_prepared(prepared))
 
 
 async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIterator[AgentEvent]:
@@ -334,7 +409,6 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
         yield error(str(exc))
         yield run_finished("error", detail=str(exc))
     finally:
-        registry.finish(prepared.run, status)
         message = prepared.assistant_message
         message.content = "".join(text_parts)
         message.parts = parts
@@ -348,6 +422,9 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
             await session.commit()
         except Exception:  # noqa: BLE001 - 落库失败也要保持客户端事件流不断
             await session.rollback()
+        # 先落库再登记结束：重连方看到 active_run 消失时，数据库里一定已经是最终消息，
+        # 不会出现「运行没了、消息还停在 streaming」的空窗。
+        registry.finish(prepared.run, status)
 
 
 async def regenerate_last(session: AsyncSession, conversation_id: str) -> PreparedRun:
@@ -399,6 +476,8 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     await session.refresh(assistant_message)
 
     run = registry.register(conversation.id, profile.name)
+    run.user_message_id = last_user.id
+    run.assistant_message_id = assistant_message.id
     return PreparedRun(
         conversation=conversation,
         profile=profile,

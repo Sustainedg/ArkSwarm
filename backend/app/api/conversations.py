@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,18 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from .. import attachments
-from ..db import SessionLocal, get_session
-from ..models import AgentProfile, Conversation, Message
+from ..agents import get_agent
+from ..db import get_session
+from ..models import AgentProfile, Conversation, Gateway, Message
 from ..runtime import registry
 from ..runtime import skills as skill_service
 from ..runtime.service import (
     ConfigurationError,
-    consume_run,
     new_conversation,
     pick_default_profile,
     prepare_run,
     regenerate_last,
     resolve_workspace,
+    start_run,
 )
 from ..schemas import (
     AttachmentUpload,
@@ -60,6 +60,7 @@ def _conversation_read(
         agent_profile_id=conversation.agent_profile_id,
         session_id=conversation.session_id,
         workspace_dir=conversation.workspace_dir,
+        model=conversation.model,
         archived=conversation.archived,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
@@ -154,21 +155,40 @@ async def update_conversation(
     # 换智能体 / 换工作目录都要让会话记忆重来：内核的 session 是绑在「智能体 + 工作目录」
     # 上的，留着上一个内核的会话 id 只会把新的一轮带偏（CLI 甚至直接报 resume 失败）。
     scope_changed = False
+    agent_changed = False
     if data.get("agent_profile_id") and data["agent_profile_id"] != conversation.agent_profile_id:
         profile = await session.get(AgentProfile, data.pop("agent_profile_id"))
         if profile is None or profile.deleted_at is not None:
             raise HTTPException(status_code=422, detail="指定的智能体不存在")
         conversation.agent_profile_id = profile.id
         scope_changed = True
+        agent_changed = True
     if "workspace_dir" in data:
         workspace = (data.pop("workspace_dir") or "").strip()
         if workspace != (conversation.workspace_dir or ""):
             scope_changed = True
         conversation.workspace_dir = workspace or None
+    if "model" in data:
+        # 换模型不清会话记忆（同一个内核会话可以换模型继续跑），只是下一轮用它。
+        # 自定义网关必须守着白名单这条服务端不变量；官方默认链路允许直接填模型名。
+        model = (data.pop("model") or "").strip()
+        if model:
+            profile = await session.get(AgentProfile, conversation.agent_profile_id)
+            gateway = (
+                await session.get(Gateway, profile.gateway_id)
+                if profile is not None and profile.gateway_id
+                else None
+            )
+            if gateway is not None and model not in (gateway.selected_models or []):
+                raise HTTPException(status_code=422, detail="模型不在该网关的白名单里")
+        conversation.model = model or None
     if scope_changed and registry.active_for(conversation_id):
         raise HTTPException(status_code=409, detail="这条对话正在运行，先停止或等它结束再改")
     if scope_changed:
         conversation.session_id = None
+    if agent_changed:
+        # 换智能体后模型要回到新智能体的默认（旧模型可能属于另一个网关的白名单）。
+        conversation.model = None
 
     for field, value in data.items():
         if value is not None:
@@ -234,39 +254,73 @@ async def upload_attachment(
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
-def _stream_prepared(prepared) -> StreamingResponse:
-    async def event_source() -> AsyncIterator[dict]:
-        async with SessionLocal() as session:
-            conversation = await session.get(Conversation, prepared.conversation.id)
-            assistant = await session.get(Message, prepared.assistant_message.id)
-            if conversation is not None:
-                prepared.conversation = conversation
-            if assistant is not None:
-                prepared.assistant_message = assistant
-            yield {
-                "type": "turn.started",
-                "run_id": prepared.run.id,
-                "conversation_id": prepared.conversation.id,
-                "user_message_id": prepared.user_message.id,
-                "assistant_message_id": prepared.assistant_message.id,
-                "agent": prepared.profile.name,
-            }
-            async for event in consume_run(session, prepared):
-                yield event.to_dict()
-
-    async def guarded() -> AsyncIterator[str]:
-        try:
-            async for chunk in sse_stream(event_source()):
-                yield chunk
-        except asyncio.CancelledError:
-            registry.cancel(prepared.run.id)
-            raise
-
+def _sse_response(source: AsyncIterator[dict]) -> StreamingResponse:
     return StreamingResponse(
-        guarded(),
+        sse_stream(source),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+def _stream_prepared(prepared) -> StreamingResponse:
+    """只负责订阅后台运行的事件。
+
+    运行的执行与 HTTP 连接解耦（``service.start_run``）：客户端刷新或关页面时
+    只是这个订阅者离开，运行继续跑完并落库；重新打开对话会走
+    ``GET /conversations/{id}/stream`` 从缓冲重放，再接着实时输出。
+    """
+
+    async def event_source() -> AsyncIterator[dict]:
+        async for event in prepared.run.subscribe():
+            yield event
+
+    return _sse_response(event_source())
+
+
+@router.get("/{conversation_id}/stream")
+async def stream_active_run(conversation_id: str) -> StreamingResponse:
+    """订阅一条对话当前正在运行的那一轮（刷新 / 另一台设备实时围观用）。"""
+    run = registry.active_for(conversation_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="这条对话当前没有正在运行的任务")
+
+    async def event_source() -> AsyncIterator[dict]:
+        async for event in run.subscribe():
+            yield event
+
+    return _sse_response(event_source())
+
+
+@router.get("/{conversation_id}/models")
+async def conversation_models(
+    conversation_id: str, session: AsyncSession = Depends(get_session)
+) -> dict:
+    """这条对话可选的模型清单。
+
+    有自定义网关时只能用网关白名单里的模型；官方默认时返回空清单，由前端
+    允许直接填写模型名（与「智能体」页的默认模型输入一致）。
+    """
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    profile = await session.get(AgentProfile, conversation.agent_profile_id)
+    gateway = (
+        await session.get(Gateway, profile.gateway_id)
+        if profile is not None and profile.gateway_id
+        else None
+    )
+    default_model = profile.model if profile is not None else None
+    if not default_model and profile is not None:
+        try:
+            default_model = get_agent(profile.type_id).resolve_model(None)
+        except KeyError:
+            default_model = None
+    return {
+        "current": conversation.model,
+        "default": default_model,
+        "gateway": gateway.name if gateway is not None else None,
+        "models": list(gateway.selected_models) if gateway is not None else [],
+    }
 
 
 @router.post("/{conversation_id}/messages")
@@ -277,6 +331,7 @@ async def send_message(
         prepared = await prepare_run(session, conversation_id, payload)
     except ConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    start_run(prepared)
     return _stream_prepared(prepared)
 
 
@@ -286,6 +341,7 @@ async def regenerate(conversation_id: str, session: AsyncSession = Depends(get_s
         prepared = await regenerate_last(session, conversation_id)
     except ConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    start_run(prepared)
     return _stream_prepared(prepared)
 
 

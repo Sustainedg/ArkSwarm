@@ -62,6 +62,18 @@ export function AgentIcon(props: IconProps) {
   )
 }
 
+/** 模型：一枚芯片（外框 + 内核 + 四边引脚），跟在智能体旁边选模型。 */
+export function ModelIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="6.2" y="6.2" width="11.6" height="11.6" rx="2.4" />
+      <rect x="9.6" y="9.6" width="4.8" height="4.8" rx="1" />
+      <path d="M9.2 3.2v3M14.8 3.2v3M9.2 17.8v3M14.8 17.8v3" />
+      <path d="M3.2 9.2h3M3.2 14.8h3M17.8 9.2h3M17.8 14.8h3" />
+    </Icon>
+  )
+}
+
 /** 五角星：实心 = 默认智能体（新建对话直接用它），空心 = 不是。 */
 export function StarIcon({ on = false, ...props }: IconProps & { on?: boolean }) {
   return (

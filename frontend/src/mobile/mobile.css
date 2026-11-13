@@ -23,6 +23,8 @@
   --text: #ece9f6;
   --text-muted: #a49fc0;
   --text-dim: #746f96;
+  /* 代码块正文：深色底上用浅色，浅色主题在下面覆盖 */
+  --code-text: #d8d4e8;
 
   --brand: #d94fd0;
   --brand-soft: rgba(217, 79, 208, 0.14);
@@ -93,6 +95,7 @@
   --text: #23203a;
   --text-muted: #5f5a7c;
   --text-dim: #8d88a8;
+  --code-text: #2c2747;
 
   /* 品牌色在白底上要压深一档才有对比；浅色底（brand-soft）也跟着换成同一支色 */
   --brand: #b63ba9;
@@ -142,9 +145,10 @@
 [data-theme='light'] .markdown-body strong { color: var(--text); }
 [data-theme='light'] .markdown-body a { color: var(--brand-strong); }
 
-/* 代码块：深色下是近黑的 #0e0d17 */
+/* 代码块：深色下是近黑的 #0e0d17；浅色下正文走 --code-text，不能沿用浅灰字 */
 [data-theme='light'] .md-code-block,
 [data-theme='light'] .tool-card pre { background: #f7f6fb; }
+[data-theme='light'] .md-code-head { color: var(--text-muted); }
 
 /* 报错 / 提示文字：深色下是浅红浅青，浅色底上要换成深色 */
 [data-theme='light'] .banner.err,
@@ -948,6 +952,7 @@ code, pre, .mono { font-family: var(--mono); }
 .md-code-lang { font-weight: 600; color: var(--text-muted); }
 .md-code-copy { margin-left: auto; background: none; border: none; color: var(--brand); font-size: 11.5px; cursor: pointer; padding: 2px 6px; }
 .md-code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 12px; line-height: 1.6; }
+.md-code-block code { color: var(--code-text); }
 
 /* 凭据编辑器（窄屏）：单列堆叠，删除按钮靠右；名字输入框点开就是凭据库 */
 .credential-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }

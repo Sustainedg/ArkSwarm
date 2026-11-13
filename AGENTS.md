@@ -70,7 +70,7 @@
  │  lib/ (api·types·agentStream·collabStream)                         │
  │  —— 只认「规范化事件」与 REST，不知道某个智能体长什么样            │
  └──────────────────────────────┬────────────────────────────────────┘
-                        REST /api/*   ·   SSE POST /messages
+                        REST /api/*   ·   SSE POST /messages · GET /stream
  ┌──────────────────────────────▼────────────────────────────────────┐
  │ api/            路由、请求校验(Pydantic)、SSE 封装、HTTP 状态码    │
  ├───────────────────────────────────────────────────────────────────┤
@@ -134,7 +134,8 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 
 ### 3.1 规范化事件协议（`agents/events.py`）
 `run.started · message.delta · thinking.delta · tool.call · tool.result · usage · session · log · error · run.finished`
-外加传输层自有的 `turn.started`（`api/conversations.py` 发出）与 `stream.closed`（`transport/sse.py` 收尾）。
+外加传输层自有的 `turn.started`（`runtime/service.start_run()` 在启动后台运行前同步发出，携带 run_id 与消息 id）
+与 `stream.closed`（`transport/sse.py` 收尾）。
 **适配器只能产出前 10 种**；`turn.started`/`stream.closed` 由框架产出，适配器不得越权。
 新增事件类型必须走铁律 5 的四步同步改动。
 框架自有的旁路信封**不属于**本协议：协作域是 `collab.*`（`collab/protocol.py`），

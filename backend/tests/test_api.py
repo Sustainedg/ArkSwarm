@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import sys
@@ -15,6 +16,8 @@ from app.db import SessionLocal, engine, init_db
 from app.main import app
 from app.models import AgentProfile, Conversation, Message, SQLModel
 from app.runtime.manager import registry
+from app.runtime.service import prepare_run, start_run
+from app.schemas import SendMessage
 from helpers import cli_options, make_gateway, make_profile
 
 
@@ -173,6 +176,107 @@ async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncCl
     # 标题自动取自首条用户消息（智能体记录不受影响）
     assert detail["conversation"]["title"] == "hello world"
     assert detail["conversation"]["session_id"] == "sess-42"
+
+
+async def test_run_continues_after_the_client_disconnects(client: httpx.AsyncClient):
+    """断开 SSE 订阅只是「不看了」，后台那一轮运行必须继续跑完并落库。"""
+    agent = await make_agent(client, options={**cli_options("sess-42", "0.12")})
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})).json()
+
+    async with SessionLocal() as session:
+        prepared = await prepare_run(session, conversation["id"], SendMessage(content="slow hello"))
+
+    start_run(prepared)
+    subscription = prepared.run.subscribe()
+    first = await subscription.__anext__()
+    assert first["type"] == "turn.started"
+    # 模拟浏览器刷新 / 关页面：只关掉订阅，不调用取消接口。
+    await subscription.aclose()
+
+    row = None
+    for _ in range(80):
+        await asyncio.sleep(0.15)
+        async with SessionLocal() as check:
+            row = await check.get(Message, prepared.assistant_message.id)
+            if row is not None and row.status != "streaming":
+                break
+    assert row is not None
+    assert row.status == "complete"
+    assert row.content == "Echo: slow hello... done"
+    assert registry.active_for(conversation["id"]) is None
+
+
+async def test_active_run_stream_replays_buffer_and_live_events(client: httpx.AsyncClient):
+    """另一台设备 / 刷新后订阅：先重放已有事件，再接着收实时事件。"""
+    agent = await make_agent(client)
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})).json()
+    run = registry.register(conversation["id"], agent["name"])
+    run.assistant_message_id = "assistant-1"
+    run.publish({"type": "turn.started", "run_id": run.id, "conversation_id": conversation["id"]})
+    run.publish({"type": "message.delta", "text": "hello", "payload": {}})
+
+    async def finish() -> None:
+        await asyncio.sleep(0.1)
+        run.publish({"type": "message.delta", "text": " world", "payload": {}})
+        run.publish({"type": "run.finished", "payload": {"status": "ok"}})
+        registry.finish(run, "ok")
+        run.close()
+
+    task = asyncio.create_task(finish())
+    try:
+        async with client.stream("GET", f"/api/conversations/{conversation['id']}/stream") as response:
+            assert response.status_code == 200
+            events = await read_sse(response)
+    finally:
+        await task
+
+    kinds = [event["type"] for event in events]
+    assert kinds[0] == "turn.started"
+    assert "run.finished" in kinds
+    deltas = "".join(event.get("text") or "" for event in events if event["type"] == "message.delta")
+    assert deltas == "hello world"
+
+    # 没有运行任务时，订阅接口明确返回 404，前端据此退回普通同步。
+    missing = await client.get(f"/api/conversations/{conversation['id']}/stream")
+    assert missing.status_code == 404
+
+
+async def test_conversation_can_override_the_model(client: httpx.AsyncClient):
+    """对话级模型：清单来自网关白名单，可设置、可清空回智能体默认。"""
+    agent = await make_agent(client)
+    conversation = (await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})).json()
+
+    options = (await client.get(f"/api/conversations/{conversation['id']}/models")).json()
+    assert options["models"] == ["fake-model", "other-model"]
+    assert options["default"] == "fake-model"
+    assert options["current"] is None
+
+    patched = await client.patch(
+        f"/api/conversations/{conversation['id']}", json={"model": "other-model"}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["model"] == "other-model"
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()
+    assert detail["conversation"]["model"] == "other-model"
+
+    # 下一轮运行真的用这条对话的模型（而不是智能体默认）。
+    async with SessionLocal() as session:
+        prepared = await prepare_run(session, conversation["id"], SendMessage(content="hi"))
+    try:
+        assert prepared.ctx.model == "other-model"
+    finally:
+        registry.finish(prepared.run, "ok")
+
+    # 自定义网关的模型白名单是服务端不变量，不能靠前端拦。
+    rejected = await client.patch(
+        f"/api/conversations/{conversation['id']}", json={"model": "not-in-whitelist"}
+    )
+    assert rejected.status_code == 422
+
+    cleared = await client.patch(
+        f"/api/conversations/{conversation['id']}", json={"model": None}
+    )
+    assert cleared.json()["model"] is None
 
 
 async def test_multi_turn_uses_the_remembered_session(client: httpx.AsyncClient):

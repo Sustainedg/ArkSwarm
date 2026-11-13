@@ -33,6 +33,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "gateways": {},
     # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）
     "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
+    # 「这条对话单独指定的模型」是后加的；为空表示跟随智能体的默认模型。
+    # 老行留空即可，不需要回填。
+    "conversations": {"model": "VARCHAR(160)"},
 }
 
 
@@ -304,6 +307,8 @@ class Conversation(SQLModel, table=True):
     )
     session_id: str | None = Field(default=None, sa_column=Column(String(160)))
     workspace_dir: str | None = Field(default=None, sa_column=Column(String(500)))
+    #: 这条对话单独指定的模型；为空表示跟随智能体的默认模型（换模型不影响会话记忆）
+    model: str | None = Field(default=None, sa_column=Column(String(160)))
     archived: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))

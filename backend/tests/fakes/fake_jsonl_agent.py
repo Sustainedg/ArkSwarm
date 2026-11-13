@@ -6,10 +6,12 @@ import time
 
 prompt = sys.stdin.read().strip()
 session_id = sys.argv[1] if len(sys.argv) > 1 else "fake-session-1"
+# 可选的逐条延迟（秒）：测试「断线后运行继续 / 另一台设备实时围观」时用。
+delay = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
 
 def emit(payload):
     print(json.dumps(payload), flush=True)
-    time.sleep(0.005)
+    time.sleep(0.005 + delay)
 
 emit({"type": "session", "session_id": session_id})
 # 正文 → 工具调用 → 工具结果 → 再正文：用于验证落库后的 parts 仍保持真实先后顺序。

@@ -409,6 +409,9 @@ class ConversationUpdate(BaseModel):
     #: 两者都会清空会话记忆，见 `api/conversations.update_conversation`
     agent_profile_id: str | None = None
     workspace_dir: str | None = None
+    #: 这条对话单独使用的模型；传 null / 空串表示回到智能体的默认模型。
+    #: 与换智能体不同，换模型不清空会话记忆。
+    model: str | None = Field(default=None, max_length=160)
 
 
 class ConversationRead(BaseModel):
@@ -419,6 +422,8 @@ class ConversationRead(BaseModel):
     agent_profile_id: str
     session_id: str | None = None
     workspace_dir: str | None = None
+    #: 这条对话单独指定的模型；为空表示跟随智能体默认
+    model: str | None = None
     archived: bool
     created_at: datetime
     updated_at: datetime

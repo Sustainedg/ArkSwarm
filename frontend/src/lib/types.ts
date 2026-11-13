@@ -430,11 +430,35 @@ export interface MarketInstallResult {
   warnings: string[]
 }
 
+/** 正在跑的那一次运行（`GET /conversations/{id}` 的 `active_run`）。 */
+export interface ActiveRunInfo {
+  id: string
+  conversation_id: string
+  agent_name: string
+  status: string
+  elapsed_seconds: number
+  /** 本轮助手消息 id：界面据此隐藏数据库里那条空占位，改用实时卡片渲染 */
+  assistant_message_id?: string | null
+  user_message_id?: string | null
+}
+
 /** 单条对话的完整读取结果：对话本身 + 全部消息 + 正在跑的那次运行（若有）。 */
 export interface ConversationDetail {
   conversation: Conversation
   messages: Message[]
-  active_run: unknown
+  active_run: ActiveRunInfo | null
+}
+
+/** 这条对话可选的模型（`GET /conversations/{id}/models`）。 */
+export interface ConversationModelOptions {
+  /** 当前对话单独指定的模型；为空表示跟随智能体默认 */
+  current?: string | null
+  /** 智能体的默认模型 / 内核默认 */
+  default?: string | null
+  /** 自定义网关名；为空表示官方默认链路 */
+  gateway?: string | null
+  /** 网关白名单里的模型；官方默认时为空，前端允许直接填写模型名 */
+  models: string[]
 }
 
 export interface Conversation {
@@ -443,6 +467,8 @@ export interface Conversation {
   agent_profile_id: string
   session_id?: string | null
   workspace_dir?: string | null
+  /** 这条对话单独指定的模型；为空表示跟随智能体默认 */
+  model?: string | null
   archived: boolean
   created_at: string
   updated_at: string

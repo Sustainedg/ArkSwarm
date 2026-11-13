@@ -2,7 +2,7 @@ import type {
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
-  ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
+  ConversationDetail, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
   McpServerDetail, Overview, ProvisionEvent, RuntimeLatest, Skill,
   ProvisionJobInfo,
   MarketInstallInput,
@@ -240,6 +240,9 @@ export const api = {
   createConversation: (body: unknown) =>
     request<Conversation>('/api/conversations', { method: 'POST', body: JSON.stringify(body) }),
   getConversation: (id: string) => request<ConversationDetail>(`/api/conversations/${id}`),
+  /** 这条对话可选的模型（自定义网关取白名单；官方默认时返回空清单，界面改为手填）。 */
+  getConversationModels: (id: string) =>
+    request<ConversationModelOptions>(`/api/conversations/${id}/models`),
   updateConversation: (id: string, body: unknown) =>
     request<Conversation>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteConversation: (id: string) => request<void>(`/api/conversations/${id}`, { method: 'DELETE' }),

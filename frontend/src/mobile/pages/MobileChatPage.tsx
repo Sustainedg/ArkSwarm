@@ -2,16 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
-import { api, ApiError, streamPost } from '../../lib/api'
+import { api, ApiError, streamGet, streamPost } from '../../lib/api'
 import { formatListTime } from '../../lib/datetime'
 import { shortPath } from '../../lib/paths'
 import { shareConversationImage } from '../../lib/shareImage'
 import { useThemeMode } from '../../lib/theme'
 import { useSpeechOutput } from '../../lib/tts'
-import type { AgentProfile, AttachmentRef, Conversation, ConversationDetail, Message } from '../../lib/types'
+import type {
+  ActiveRunInfo,
+  AgentEvent,
+  AgentProfile,
+  AttachmentRef,
+  Conversation,
+  ConversationDetail,
+  ConversationModelOptions,
+  Message,
+} from '../../lib/types'
 import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
-import { AgentIcon, FolderIcon, PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
+import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
 import { Composer } from '../../components/Composer'
 import { useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
@@ -50,6 +59,10 @@ export function MobileChatPage() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [remoteRunning, setRemoteRunning] = useState(false)
+  /** 这条对话当前正在跑的运行（另一台设备 / 刷新后重连时据此订阅实时输出） */
+  const [activeRun, setActiveRun] = useState<ActiveRunInfo | null>(null)
+  /** 强制重新订阅的计数器：同一轮运行被 open() 清掉实时卡片后要能重连 */
+  const [attachNonce, setAttachNonce] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
   /** `/chat` 的默认对话还没定下来（或一条对话都没有）时不给空状态，避免闪一下 */
   const [resolving, setResolving] = useState(true)
@@ -58,12 +71,14 @@ export function MobileChatPage() {
   const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   /** 正在生成长图（生成要几百毫秒，期间按钮置灰，避免连点出两张） */
   const [sharing, setSharing] = useState(false)
-  /** 输入框上方那两个小图标打开的面板：工作目录 / 智能体 */
-  const [scopePanel, setScopePanel] = useState<'workspace' | 'agent' | null>(null)
+  /** 输入框上方那几个小图标打开的面板：工作目录 / 智能体 / 模型 */
+  const [scopePanel, setScopePanel] = useState<'workspace' | 'agent' | 'model' | null>(null)
   const [scopeAgents, setScopeAgents] = useState<AgentProfile[]>([])
   const [scopeRecent, setScopeRecent] = useState<string[]>([])
   const [workspaceDraft, setWorkspaceDraft] = useState('')
   const [scopeSaving, setScopeSaving] = useState(false)
+  const [modelOptions, setModelOptions] = useState<ConversationModelOptions | null>(null)
+  const [modelDraft, setModelDraft] = useState('')
   /** 一次性的提示（分享图已下载之类），与错误分开显示 */
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -74,11 +89,26 @@ export function MobileChatPage() {
   const primedConversationRef = useRef<string | null>(null)
   /** 本端刚删掉的对话 id：它引出的 404 是预期行为，不该再当成「这条对话不见了」处理 */
   const selfDeletedRef = useRef<string | null>(null)
+  /** 正在订阅的另一台设备 / 后台运行 */
+  const attachRef = useRef<AbortController | null>(null)
+  const attachedRunIdRef = useRef<string | null>(null)
+  const attachedLiveRef = useRef(false)
+  /** 消息列表是否贴着底部：手指往上翻看历史时，流式输出不能把人拽回底部 */
+  const stickRef = useRef(true)
+  const stickConversationRef = useRef<string | null>(null)
 
   const applyDetail = useCallback((detail: ConversationDetail, resetLive: boolean) => {
     setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
     setActive(detail.conversation)
-    if (resetLive) setLive(null)
+    if (resetLive) {
+      // 主动重开 / 刷新这条对话：旧的实时卡片先撤掉，若仍在运行则让订阅 effect 重新连一次。
+      setLive(null)
+      attachRef.current?.abort()
+      attachedRunIdRef.current = null
+      attachedLiveRef.current = false
+      setAttachNonce((value) => value + 1)
+    }
+    setActiveRun(detail.active_run ?? null)
     setRemoteRunning(Boolean(detail.active_run))
   }, [])
 
@@ -188,14 +218,82 @@ export function MobileChatPage() {
     return () => window.clearTimeout(timer)
   }, [notice])
 
-  // 离开页面（返回或切换对话）时终止正在进行的流，避免后台空转。
+  // 离开页面（返回或切换对话）时终止本端正在读的流，避免后台空转。
+  // 后端已经和连接解耦：这里终止的是读取，不是那一轮运行本身。
   // （语音识别由输入区共享组件在自己卸载时收起。）
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => () => {
+    abortRef.current?.abort()
+    attachRef.current?.abort()
+  }, [])
 
   useEffect(() => {
     const node = scrollRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [messages, live?.text, live?.parts.length])
+    if (!node) return
+    if (stickConversationRef.current !== (conversationId ?? null)) {
+      stickConversationRef.current = conversationId ?? null
+      stickRef.current = true
+      node.scrollTop = node.scrollHeight
+      return
+    }
+    if (stickRef.current) node.scrollTop = node.scrollHeight
+  }, [messages, live?.text, live?.parts.length, conversationId])
+
+  const onThreadScroll = () => {
+    const node = scrollRef.current
+    if (!node) return
+    stickRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80
+  }
+
+  // 另一台设备 / 刷新后的实时重连：详情里带 active_run 就订阅那条事件流。
+  useEffect(() => {
+    if (!conversationId || busy || !activeRun) return
+    if (attachedRunIdRef.current === activeRun.id) return
+
+    const runId = activeRun.id
+    const controller = new AbortController()
+    attachRef.current = controller
+    attachedRunIdRef.current = runId
+    attachedLiveRef.current = true
+    setLive({
+      ...emptyAgentStream(),
+      // 用户消息已经在数据库里（详情会拉到），这里只渲染正在生成的助手回复。
+      userText: '',
+    })
+
+    let cancelled = false
+    void streamGet<AgentEvent>(
+      `/api/conversations/${conversationId}/stream`,
+      (event) => setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev)),
+      controller.signal,
+    )
+      .catch((e) => {
+        if (cancelled || (e as Error)?.name === 'AbortError') return
+        // 运行刚好结束（订阅接口 404）：退回普通同步，下一轮轮询给出最终消息。
+        if (e instanceof ApiError && e.status === 404) return
+        setSyncError(describeError(e))
+      })
+      .finally(() => {
+        if (cancelled) return
+        attachedLiveRef.current = false
+        attachRef.current = null
+        attachedRunIdRef.current = null
+        setLive(null)
+        setActiveRun(null)
+        setRemoteRunning(false)
+        if (conversationId) void syncConversation(conversationId)
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (attachRef.current === controller) attachRef.current = null
+      if (attachedRunIdRef.current === runId) attachedRunIdRef.current = null
+      if (attachedLiveRef.current) {
+        attachedLiveRef.current = false
+        setLive(null)
+      }
+    }
+  }, [conversationId, activeRun?.id, busy, syncConversation, attachNonce])
 
   const send = async (content: string, regenerate = false) => {
     if (!active) return
@@ -206,6 +304,11 @@ export function MobileChatPage() {
     setError(null)
     setBusy(true)
     setRemoteRunning(false)
+    setActiveRun(null)
+    attachRef.current?.abort()
+    attachedRunIdRef.current = null
+    attachedLiveRef.current = false
+    stickRef.current = true
     setLive({ ...emptyAgentStream(), userText: regenerate ? '' : content })
     if (!regenerate) setDraft('')
 
@@ -379,15 +482,60 @@ export function MobileChatPage() {
     }
   }
 
-  const chatMessages: RenderMessage[] = messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    parts: message.parts,
-    status: message.status,
-    error: message.error,
-    usage: message.usage,
-  }))
+  const openModelPanel = () => {
+    if (!active) return
+    setModelDraft(active.model ?? '')
+    setModelOptions(null)
+    setScopePanel('model')
+    void api
+      .getConversationModels(active.id)
+      .then((options) => {
+        setModelOptions(options)
+        setModelDraft(options.current ?? active.model ?? '')
+      })
+      .catch((e) => setError(describeError(e)))
+  }
+
+  const applyModel = async (value?: string) => {
+    if (!active) return
+    const next = (value ?? modelDraft).trim()
+    if (next === (active.model ?? '')) {
+      setScopePanel(null)
+      return
+    }
+    setScopeSaving(true)
+    setError(null)
+    try {
+      await api.updateConversation(active.id, { model: next || null })
+      setScopePanel(null)
+      await open(active.id)
+    } catch (e) {
+      setError(describeError(e))
+    } finally {
+      setScopeSaving(false)
+    }
+  }
+
+  // 重连时数据库里那条「正在生成」的空占位要藏起来：同一段内容由实时卡片渲染。
+  const livePlaceholderId = live ? activeRun?.assistant_message_id ?? null : null
+  const chatMessages: RenderMessage[] = messages
+    .filter(
+      (message) =>
+        !(
+          live &&
+          ((livePlaceholderId !== null && message.id === livePlaceholderId) ||
+            (livePlaceholderId === null && message.role === 'assistant' && message.status === 'streaming'))
+        ),
+    )
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      parts: message.parts,
+      status: message.status,
+      error: message.error,
+      usage: message.usage,
+    }))
 
   const liveMessage: RenderMessage | null = live
     ? {
@@ -454,7 +602,7 @@ export function MobileChatPage() {
         }
       />
 
-      <div className="m-thread" ref={scrollRef}>
+      <div className="m-thread" ref={scrollRef} onScroll={onThreadScroll}>
         {!active && !resolving && (
           <div className="m-empty">
             <div className="m-empty-icon">💬</div>
@@ -506,9 +654,9 @@ export function MobileChatPage() {
         </div>
       )}
 
-      {remoteRunning && !busy && (
+      {remoteRunning && !busy && !live && (
         <div style={{ padding: '0 12px 8px' }}>
-          <div className="banner info">另一台设备正在运行这个对话，完成后会自动同步。</div>
+          <div className="banner info">正在连接另一台设备的实时输出…</div>
         </div>
       )}
 
@@ -544,6 +692,15 @@ export function MobileChatPage() {
               >
                 <AgentIcon size={15} />
                 <span>{active.agent_name}</span>
+              </button>
+              <button
+                type="button"
+                className="composer-scope-btn"
+                onClick={openModelPanel}
+                title={`模型：${active.model ?? '跟随智能体默认'}（点一下换）`}
+              >
+                <ModelIcon size={15} />
+                <span>{active.model ?? '默认模型'}</span>
               </button>
             </div>
           ) : null
@@ -684,6 +841,74 @@ export function MobileChatPage() {
               )
             })}
           </div>
+        </MobileSheet>
+      )}
+
+      {scopePanel === 'model' && active && (
+        <MobileSheet
+          title="模型"
+          onClose={() => setScopePanel(null)}
+          footer={
+            <button className="btn block primary" disabled={scopeSaving} onClick={() => void applyModel()}>
+              {scopeSaving ? '保存中…' : '保存'}
+            </button>
+          }
+        >
+          <p className="field-help">只影响这条对话的下一轮运行；换模型不会重置会话记忆。</p>
+          {modelOptions === null ? (
+            <p className="dim small">正在加载可选模型…</p>
+          ) : modelOptions.models.length > 0 ? (
+            <div className="stack" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className={`agent-pick${modelDraft ? '' : ' active'}`}
+                onClick={() => setModelDraft('')}
+              >
+                <span className="agent-pick-main">
+                  <span className="agent-pick-name">跟随智能体默认</span>
+                  <span className="card-sub">{modelOptions.default ?? '由内核决定'}</span>
+                </span>
+                {!modelDraft && <span className="pill ok">当前</span>}
+              </button>
+              {modelOptions.models.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={`agent-pick${modelDraft === item ? ' active' : ''}`}
+                  onClick={() => setModelDraft(item)}
+                >
+                  <span className="agent-pick-main">
+                    <span className="agent-pick-name mono-sm">{item}</span>
+                  </span>
+                  {modelDraft === item && <span className="pill ok">当前</span>}
+                </button>
+              ))}
+              {modelDraft && !modelOptions.models.includes(modelDraft) && (
+                <button type="button" className="agent-pick active">
+                  <span className="agent-pick-main">
+                    <span className="agent-pick-name mono-sm">{modelDraft}</span>
+                    <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
+                  </span>
+                  <span className="pill ok">当前</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="field">
+              <label className="field-label">模型名</label>
+              <input
+                className="input mono"
+                value={modelDraft}
+                onChange={(event) => setModelDraft(event.target.value)}
+                placeholder={modelOptions.default ?? '例如 sonnet / gpt-5-codex'}
+              />
+              <span className="field-help">
+                {modelOptions.gateway
+                  ? `当前网关「${modelOptions.gateway}」没有勾选模型白名单，可直接填写模型名。`
+                  : '官方默认链路：可直接填写模型名，留空则使用内核默认模型。'}
+              </span>
+            </div>
+          )}
         </MobileSheet>
       )}
     </div>
