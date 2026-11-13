@@ -5,6 +5,7 @@ import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../../lib/theme'
 import type { ArchitectureDoc } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
+import { ProxySettings } from '../../components/ProxySettings'
 import { refreshShell, useInstallController } from '../pwa'
 import { describeError } from '../util'
 
@@ -111,6 +112,8 @@ export function MobileSettingsPage({ version }: { version: string }) {
               <span className="m-item-chevron">›</span>
             </button>
           </div>
+
+          <ProxySettings />
 
           <div className="stack" style={{ gap: 8 }}>
             <div className="card-section-title">更多</div>

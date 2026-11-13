@@ -341,3 +341,18 @@ class RuntimeStatus(SQLModel, table=True):
     detail: str | None = Field(default=None, sa_column=Column(Text))
     #: 本次检测的时间（UTC）。超过 ``runtime.availability.CHECK_INTERVAL`` 即视为过期。
     checked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class PlatformSetting(SQLModel, table=True):
+    """平台级设置的键值存储（代理地址等）。
+
+    与网关 / 凭据不同：这里存的是平台自身的行为参数，不绑定某个智能体。
+    代理地址要注入子进程环境变量，必须以明文取出，因此不加密——
+    代理地址不是 API 密钥，泄露风险低。
+    """
+
+    __tablename__ = "platform_settings"
+
+    key: str = Field(sa_column=Column(String(64), primary_key=True))
+    value: str | None = Field(default=None, sa_column=Column(Text))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))

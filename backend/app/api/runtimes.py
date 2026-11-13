@@ -74,7 +74,7 @@ async def refresh_runtime(type_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
-def _provision_stream(type_id: str, action: provisioning.Action) -> StreamingResponse:
+async def _provision_stream(type_id: str, action: provisioning.Action) -> StreamingResponse:
     try:
         definition = get_agent(type_id)
     except KeyError as exc:
@@ -84,8 +84,14 @@ def _provision_stream(type_id: str, action: provisioning.Action) -> StreamingRes
         raise HTTPException(status_code=409, detail=f"{definition.name} 不由平台管理，无法{label}")
     if not definition.provisioner.supports(action):
         raise HTTPException(status_code=409, detail=f"{definition.name} 未声明「{label}」命令")
+    #: 已有进行中的任务就直接订阅它，避免重复启动
+    existing = provisioning.job_registry.get(type_id)
+    if existing and existing.status == "running":
+        job = existing
+    else:
+        job = await provisioning.run_provision_background(definition, action)
     return StreamingResponse(
-        sse_stream(provisioning.stream_provision(definition, action)),
+        sse_stream(provisioning.stream_job(job)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
@@ -93,19 +99,19 @@ def _provision_stream(type_id: str, action: provisioning.Action) -> StreamingRes
 
 @router.post("/{type_id}/install")
 async def install_runtime(type_id: str) -> StreamingResponse:
-    return _provision_stream(type_id, "install")
+    return await _provision_stream(type_id, "install")
 
 
 @router.post("/{type_id}/update")
 async def update_runtime(type_id: str) -> StreamingResponse:
-    return _provision_stream(type_id, "update")
+    return await _provision_stream(type_id, "update")
 
 
 @router.post("/{type_id}/uninstall")
 async def uninstall_runtime(type_id: str, payload: RuntimeAction) -> StreamingResponse:
     if not payload.confirm:
         raise HTTPException(status_code=422, detail="卸载属于破坏性操作，需要显式确认（confirm=true）")
-    return _provision_stream(type_id, "uninstall")
+    return await _provision_stream(type_id, "uninstall")
 
 
 @router.post("/{type_id}/check")
@@ -116,3 +122,32 @@ async def check_runtime(type_id: str) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     return await provisioning.latest_version(definition)
+
+
+@router.get("/provision/jobs")
+async def list_provision_jobs() -> dict:
+    """列出所有进行中 / 刚完成的安装任务（给前端刷新后恢复状态用）。"""
+    return {"items": provisioning.job_registry.list()}
+
+
+@router.get("/{type_id}/provision/stream")
+async def stream_provision_job(type_id: str) -> StreamingResponse:
+    """重连到一个进行中任务的输出流（刷新页面后查看实时进度）。"""
+    job = provisioning.job_registry.get(type_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="没有进行中的任务")
+    return StreamingResponse(
+        sse_stream(provisioning.stream_job(job)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@router.delete("/{type_id}/provision")
+async def clear_provision_job(type_id: str) -> dict:
+    """清除一个已完成的任务记录（用户关掉结果弹窗时调用）。"""
+    job = provisioning.job_registry.get(type_id)
+    if job and job.status == "running":
+        raise HTTPException(status_code=409, detail="任务进行中，无法清除")
+    provisioning.job_registry.clear(type_id)
+    return {"ok": True}

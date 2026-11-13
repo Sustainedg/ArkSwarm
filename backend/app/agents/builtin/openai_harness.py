@@ -34,6 +34,8 @@ from ..events import (
 )
 from ..registry import register_agent
 from .harness_tools import ToolError, WorkspaceTools
+from ...credentials import scrub
+from ...egress import wrap_client
 
 DEFAULT_MAX_STEPS = 12
 
@@ -162,7 +164,7 @@ class OpenAIHarnessBase(AgentDefinition):
         totals: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         url = self.chat_completions_url(ctx)
 
-        async with self.create_client() as client:
+        async with wrap_client(self.create_client(), extra_hosts=[url]) as client:
             for step in range(max_steps + 1):
                 payload = self.request_payload(ctx, messages)
                 if step == max_steps:
@@ -197,7 +199,7 @@ class OpenAIHarnessBase(AgentDefinition):
                         ],
                     }
                 )
-                async for event in self._execute_tools(calls, workspace, messages):
+                async for event in self._execute_tools(calls, workspace, messages, ctx):
                     yield event
 
         if totals["prompt_tokens"] or totals["completion_tokens"]:
@@ -245,7 +247,13 @@ class OpenAIHarnessBase(AgentDefinition):
         calls: list[dict[str, Any]],
         workspace: WorkspaceTools,
         messages: list[dict[str, Any]],
+        ctx: AgentContext,
     ) -> AsyncIterator[AgentEvent]:
+        # 工具输出可能回显凭据值（如 printenv），回填给模型的 messages 前先擦掉，
+        # 否则模型在后续推理的上下文里能看到明文（事件流已有 scrub_event，这里补 messages 侧）。
+        secrets = list(ctx.credentials.values()) if ctx.credentials else []
+        if ctx.api_key:
+            secrets.append(ctx.api_key)
         for call in calls:
             name = call["name"] or "tool"
             try:
@@ -260,6 +268,8 @@ class OpenAIHarnessBase(AgentDefinition):
                 output, is_error = str(exc), True
             except TypeError as exc:
                 output, is_error = f"工具入参不合法：{exc}", True
+            if secrets:
+                output = scrub(output, secrets)
             yield tool_result(call["id"], output, is_error)
             messages.append(
                 {
@@ -274,7 +284,7 @@ class OpenAIHarnessBase(AgentDefinition):
         url = self.chat_completions_url(ctx)
         models_url = url[: -len("/chat/completions")] + "/models"
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with wrap_client(httpx.AsyncClient(timeout=15.0), extra_hosts=[models_url]) as client:
                 response = await client.get(models_url, headers=self.http_headers(ctx))
             if response.status_code < 400:
                 return True, f"网关可达（HTTP {response.status_code}）"

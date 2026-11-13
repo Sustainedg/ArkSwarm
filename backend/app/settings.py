@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = 3600
     #: 安装/更新/卸载智能体运行时（CLI 内核）的单次上限；比一次对话更宽松。
     provision_timeout_seconds: int = 900
+    #: 网络出口过滤模式：off（不限制）/ block（全部阻断）/ allowlist（只放行白名单）
+    egress_mode: str = "off"
+    #: 出口白名单（逗号分隔域名），allowlist 模式下生效；网关地址运行时自动加入
+    egress_allowed_hosts: str = ""
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -44,6 +48,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def egress_allowed_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.egress_allowed_hosts.split(",") if h.strip()]
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

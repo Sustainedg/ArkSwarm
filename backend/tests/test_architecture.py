@@ -53,6 +53,7 @@ BUILTIN_IDS = {
     "gemini-cli",
     "openai-harness",
     "custom-cli",
+    "hermes-agent",
 }
 
 CJK = re.compile(r"[\u4e00-\u9fff]")

@@ -241,6 +241,35 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 - **值会被擦除**：运行层对每条事件过一遍 `scrub_event()`，即使子进程把值回显出来，
   也进不了 SSE、落库内容与命令行回显（`runner._redact`）。
 
+### 4.2.1 凭据信任边界与网络出口过滤
+
+**信任边界声明**：有 shell 访问或网络访问的智能体（Claude Code、Codex、Gemini CLI、custom-cli、
+OpenAI 兼容内核）原则上能读到注入的凭据值。平台做了多层防护，但无法阻止一个有 shell + 网络的 AI
+把信息间接传出去——这是信任边界，不是 bug。
+
+**网络出口过滤**（新增）：
+
+- 设置项 `MAGENTA_EGRESS_MODE`（`off` / `block` / `allowlist`，默认 `off`）与
+  `MAGENTA_EGRESS_ALLOWED_HOSTS`（逗号分隔域名白名单）。
+- `off`：不限制（默认，保持向后兼容）。
+- `block`：禁止所有出站网络——子进程注入 blackhole 代理环境变量
+  `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 指向不可达端口；API 内核的 httpx 客户端用
+  `EgressTransport` 包装，拒绝非白名单连接。
+- `allowlist`：只允许白名单里的域名（网关地址自动加入白名单）。
+- 纯逻辑在 `app/egress.py`（叶子模块），CLI 注入在 `runner.py`，API 注入在 `openai_harness.py`。
+
+**API 内核工具结果擦除**（新增）：进程内 API 内核的工具输出（`run_shell` 等）在回填给模型的
+`messages` 列表前，先用 `credentials.scrub()` 擦掉凭据值。这样模型在后续推理的上下文里也看不到
+明文（之前只擦了事件流，没擦回填给模型的工具结果）。
+
+**纵深防御建议**：对高危服务（如 GitHub、数据库），可选用「凭据代理 MCP」模式——把凭据封装在一个
+MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远拿不到原始密钥。这是**可选项**，不是
+通用方案：要为每个服务单独封装，且无法覆盖用户自定义凭据。当前平台不内置这类 MCP，但支持用户自己建。
+
+**已有的保护链路**（简要回顾，不重复细节）：加密落库 → 只以环境变量注入 → 事件流 `scrub_event`
+擦除 → 命令回显 `_redact` 脱敏 → 接口只回掩码。新增的两层（网络出口 + 工具结果擦除）补上了之前
+缺失的两个环节。
+
 ### 4.3 网关与密钥（Gateway）
 
 **网关是 API 密钥的唯一来源**（`gateways` 表）：每个网关一条 `base_url` + 一份加密密钥，

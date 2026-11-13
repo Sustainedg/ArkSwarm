@@ -4,6 +4,7 @@ import type {
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
   ConversationDetail, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
   McpServerDetail, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  ProvisionJobInfo,
   MarketInstallInput,
   MarketInstallResult,
   MarketKernel,
@@ -82,6 +83,12 @@ export const api = {
   health: () => request<{ status: string; version: string }>('/api/health'),
   overview: () => request<Overview>('/api/system/overview'),
   architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
+  getProxy: () => request<{ proxy_url: string | null }>('/api/system/proxy'),
+  setProxy: (proxyUrl: string | null) =>
+    request<{ proxy_url: string | null }>('/api/system/proxy', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_url: proxyUrl }),
+    }),
   agentTypes: () => request<{ items: AgentType[] }>('/api/agent-types').then((r) => r.items),
 
   // --- 网关（API 密钥的唯一来源；官方链路 + 自定义网关）-----------------------
@@ -147,6 +154,15 @@ export const api = {
     streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/update`, {}, onEvent, signal),
   uninstallRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
     streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/uninstall`, { confirm: true }, onEvent, signal),
+  /** 列出所有进行中 / 刚完成的安装任务（刷新页面后恢复状态用）。 */
+  listProvisionJobs: () =>
+    request<{ items: ProvisionJobInfo[] }>('/api/runtimes/provision/jobs').then((r) => r.items),
+  /** 重连到一个进行中任务的输出流（刷新后查看实时进度）。 */
+  streamProvisionJob: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
+    streamGet<ProvisionEvent>(`/api/runtimes/${typeId}/provision/stream`, onEvent, signal),
+  /** 清除一个已完成的任务记录。 */
+  clearProvisionJob: (typeId: string) =>
+    request<{ ok: boolean }>(`/api/runtimes/${typeId}/provision`, { method: 'DELETE' }),
 
   listSkills: (params?: {
     type_id?: string

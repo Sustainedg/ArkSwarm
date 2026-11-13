@@ -106,6 +106,16 @@ export interface ProvisionEvent {
   error?: string | null
 }
 
+/** 后台安装 / 更新 / 卸载任务的摘要（刷新页面后恢复状态用）。 */
+export interface ProvisionJobInfo {
+  runtime_id: string
+  name: string
+  action: RuntimeAction
+  status: 'running' | 'ok' | 'error'
+  error?: string | null
+  started_at: number
+}
+
 export interface SystemDefaults {
   gateway_url?: string | null
   model?: string | null

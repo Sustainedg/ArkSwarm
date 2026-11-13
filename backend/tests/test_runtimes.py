@@ -74,7 +74,7 @@ async def _collect(definition: AgentDefinition, action: str) -> list[dict]:
 
 def test_cli_kernels_declare_a_provisioner():
     """三个 CLI 内核都要声明安装方式，否则「运行时」页无从下手。"""
-    for type_id in ("claude-code", "codex", "gemini-cli"):
+    for type_id in ("claude-code", "codex", "gemini-cli", "hermes-agent"):
         provisioner = get_agent(type_id).provisioner
         assert provisioner is not None, f"{type_id} 未声明 provisioner"
         assert provisioner.manager and provisioner.package, f"{type_id} 缺少包管理器/包名"
@@ -411,7 +411,7 @@ async def test_timeout_kills_the_child_and_reports_error(monkeypatch: pytest.Mon
 async def test_list_runtimes_reports_status_and_provisioning(client: httpx.AsyncClient):
     payload = (await client.get("/api/runtimes")).json()
     items = {item["id"]: item for item in payload["items"]}
-    assert {"claude-code", "codex", "gemini-cli"} <= set(items)
+    assert {"claude-code", "codex", "gemini-cli", "hermes-agent"} <= set(items)
     claude = items["claude-code"]
     assert claude["provisioning"]["supported"] is True
     assert claude["provisioning"]["manager"] == "npm"

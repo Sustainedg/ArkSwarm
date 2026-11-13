@@ -12,6 +12,7 @@ from typing import AsyncIterator
 from ..agents import AgentContext, AgentDefinition, AgentRun, Runtime
 from ..agents.events import AgentEvent, error, log, run_finished, run_started
 from ..credentials import scrub_event
+from ..egress import proxy_env_for_subprocess
 from ..settings import get_settings
 from .manager import ActiveRun
 
@@ -170,7 +171,15 @@ async def stream_cli_run(
 
     # 凭据按环境变量注入（值绝不进日志/事件）；适配器/网关给的同名变量优先级更高，
     # 网关始终是模型密钥的唯一来源。
-    env = {**os.environ, **ctx.credentials, **invocation.env}
+    env = {**os.environ, **proxy_env_for_subprocess(), **ctx.credentials, **invocation.env}
+    #: 用户安装脚本常把可执行文件放到 ~/.local/bin，服务进程的 PATH 可能不含该目录，
+    #: 这里补上，让 hermes 等用户安装的 CLI 内核能被找到。
+    home = env.get("HOME", "")
+    if home:
+        local_bin = os.path.join(home, ".local", "bin")
+        path = env.get("PATH", "")
+        if local_bin not in path:
+            env["PATH"] = f"{local_bin}:{path}" if path else local_bin
     env = {k: v.replace("{{RUN_DIR}}", str(run_dir)) for k, v in env.items()}
 
     executable = shutil.which(invocation.argv[0]) if invocation.argv else None

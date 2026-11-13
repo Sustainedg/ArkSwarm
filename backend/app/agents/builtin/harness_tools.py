@@ -11,6 +11,8 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from ...egress import proxy_env_for_subprocess
+
 MAX_OUTPUT = 8000
 DEFAULT_TIMEOUT = 120
 
@@ -107,7 +109,7 @@ class WorkspaceTools:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(self.root),
-            env={**os.environ, **self.env},
+            env={**os.environ, **proxy_env_for_subprocess(), **self.env},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

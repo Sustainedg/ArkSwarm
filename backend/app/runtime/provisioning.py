@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal
 
 from ..agents.base import AgentDefinition, RuntimeProvisioner
@@ -61,6 +62,36 @@ def _command_env() -> dict[str, str]:
     env = {**os.environ}
     env.setdefault("CI", "1")
     env.setdefault("NO_COLOR", "1")
+    return env
+
+
+async def _provision_env() -> dict[str, str]:
+    """安装 / 更新 / 卸载 / 查询版本的运行环境：基础环境 + PATH 补齐 + 代理。"""
+    env = _command_env()
+    #: 用户安装脚本常把可执行文件放到 ~/.local/bin，服务进程的 PATH 可能不含该目录，
+    #: 这里补上，让安装后的内核命令（hermes update --check 等）能被找到。
+    home = env.get("HOME", "")
+    if home:
+        local_bin = os.path.join(home, ".local", "bin")
+        path = env.get("PATH", "")
+        if local_bin not in path:
+            env["PATH"] = f"{local_bin}:{path}" if path else local_bin
+    #: 从数据库读取代理设置，注入到子进程环境变量里，
+    #: 让安装 / 更新 / 查询版本等命令能通过代理访问 GitHub / npm registry 等。
+    try:
+        from ..api.system import get_proxy_url
+
+        proxy = await get_proxy_url()
+    except Exception:
+        proxy = None
+    if proxy:
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                     "http_proxy", "https_proxy", "all_proxy"):
+            env[key] = proxy
+        #: git 单独认 http.proxy 配置，环境变量不够；通过 GIT_CONFIG_* 注入。
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.proxy"
+        env["GIT_CONFIG_VALUE_0"] = proxy
     return env
 
 
@@ -178,7 +209,7 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
         )
         return
 
-    env = _command_env()
+    env = await _provision_env()
     display = _display(_redact(argv, env))
     yield _event(
         "started",
@@ -267,7 +298,7 @@ async def latest_version(definition: AgentDefinition) -> dict[str, Any]:
         return {"supported": False, "latest": None, "command": None, "error": "该运行时不支持查询最新版本"}
 
     argv = provisioner.latest_argv
-    env = _command_env()
+    env = await _provision_env()
     command = _display(_redact(argv, env))
     try:
         process = await asyncio.create_subprocess_exec(
@@ -301,3 +332,152 @@ async def latest_version(definition: AgentDefinition) -> dict[str, Any]:
         "command": command,
         "error": None if ok else (text[-400:] or f"查询命令退出码 {process.returncode}"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 后台任务跟踪：安装 / 更新 / 卸载在后台执行，客户端断线后可重连续看进度
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _ProvisionLogLine:
+    """一条安装日志行。"""
+
+    text: str
+    level: str | None = None
+
+
+class ProvisionJob:
+    """一次安装 / 更新 / 卸载任务的状态，支持断线重连。
+
+    后台任务把输出行追加到 ``lines`` 并推送给所有订阅者；
+    客户端断线后可重新订阅，先收已有行、再实时收新行。
+    """
+
+    def __init__(self, runtime_id: str, name: str, action: Action) -> None:
+        self.runtime_id = runtime_id
+        self.name = name
+        self.action = action
+        self.started_at = time.time()
+        self.status: str = "running"
+        self.error: str | None = None
+        self.lines: list[_ProvisionLogLine] = []
+        self._subscribers: list[asyncio.Queue] = []
+        self._done = asyncio.Event()
+
+    def add_line(self, text: str, level: str | None = None) -> None:
+        line = _ProvisionLogLine(text=text, level=level)
+        self.lines.append(line)
+        for queue in self._subscribers:
+            queue.put_nowait(line)
+
+    def finish(self, status: str, error: str | None = None) -> None:
+        self.status = status
+        self.error = error
+        self._done.set()
+        for queue in self._subscribers:
+            queue.put_nowait(None)
+
+    async def subscribe(self) -> AsyncIterator[_ProvisionLogLine | None]:
+        """订阅输出行：先发已有行，再实时发新行，最后发 None 表示结束。"""
+        queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers.append(queue)
+        try:
+            n = len(self.lines)
+            for i in range(n):
+                yield self.lines[i]
+            if self._done.is_set():
+                yield None
+                return
+            while True:
+                item = await queue.get()
+                yield item
+                if item is None:
+                    break
+        finally:
+            with contextlib.suppress(ValueError):
+                self._subscribers.remove(queue)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "runtime_id": self.runtime_id,
+            "name": self.name,
+            "action": self.action,
+            "status": self.status,
+            "error": self.error,
+            "started_at": self.started_at,
+        }
+
+
+class _ProvisionJobRegistry:
+    """按内核 id 跟踪进行中 / 刚完成的安装任务。"""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, ProvisionJob] = {}
+
+    def get(self, runtime_id: str) -> ProvisionJob | None:
+        return self._jobs.get(runtime_id)
+
+    def start(self, runtime_id: str, name: str, action: Action) -> ProvisionJob:
+        job = ProvisionJob(runtime_id=runtime_id, name=name, action=action)
+        self._jobs[runtime_id] = job
+        return job
+
+    def clear(self, runtime_id: str) -> None:
+        self._jobs.pop(runtime_id, None)
+
+    def list(self) -> list[dict[str, Any]]:
+        return [job.snapshot() for job in self._jobs.values()]
+
+
+job_registry = _ProvisionJobRegistry()
+
+
+async def run_provision_background(definition: AgentDefinition, action: Action) -> ProvisionJob:
+    """在后台启动一次安装 / 更新 / 卸载，返回可订阅的任务对象。
+
+    后台任务与 SSE 连接解耦：客户端断线只是关掉订阅者，子进程继续跑，
+    客户端重连后能从头看到全部输出。
+    """
+    job = job_registry.start(definition.id, definition.name, action)
+    asyncio.create_task(_execute_provision(definition, action, job))
+    return job
+
+
+async def _execute_provision(
+    definition: AgentDefinition, action: Action, job: ProvisionJob
+) -> None:
+    """执行安装任务，将输出写入 job 对象。"""
+    try:
+        async for event in stream_provision(definition, action):
+            event_type = event.get("type", "")
+            if event_type == "provision.started":
+                command = event.get("command")
+                if command:
+                    job.add_line(f"执行命令：{command}")
+            elif event_type == "provision.output":
+                job.add_line(event.get("text", ""), event.get("level"))
+            elif event_type == "provision.finished":
+                job.finish(
+                    "ok" if event.get("ok") else "error",
+                    event.get("error"),
+                )
+    except Exception as exc:
+        job.finish("error", str(exc))
+
+
+async def stream_job(job: ProvisionJob) -> AsyncIterator[dict[str, Any]]:
+    """订阅一个任务的输出，产出 SSE 事件（用于断线重连）。"""
+    yield _event("started", runtime_id=job.runtime_id, action=job.action, command=None)
+    async for line in job.subscribe():
+        if line is None:
+            break
+        yield _event("output", runtime_id=job.runtime_id, text=line.text, level=line.level)
+    yield _event(
+        "finished",
+        runtime_id=job.runtime_id,
+        action=job.action,
+        ok=job.status == "ok",
+        status=job.status,
+        error=job.error,
+    )

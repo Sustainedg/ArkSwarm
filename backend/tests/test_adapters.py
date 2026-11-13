@@ -22,7 +22,7 @@ def ctx(**overrides) -> AgentContext:
 
 
 def test_registry_exposes_first_party_adapters():
-    for expected in ("claude-code", "codex", "gemini-cli", "openai-harness", "custom-cli"):
+    for expected in ("claude-code", "codex", "gemini-cli", "openai-harness", "custom-cli", "hermes-agent"):
         assert expected in known_ids()
 
 
@@ -545,3 +545,64 @@ def test_codex_app_server_ignores_dirty_lines():
         _, run = _app_server_run()
         events = list(run.feed(line))
         assert [e.type.value for e in events] == ["log"], line
+
+
+def test_hermes_agent_invocation_uses_stream_json_and_oneshot():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(system_prompt=None))
+    assert invocation.argv[0] == "hermes"
+    assert "chat" in invocation.argv
+    assert "--oneshot" in invocation.argv
+    assert "--format" in invocation.argv
+    fmt_idx = invocation.argv.index("--format")
+    assert invocation.argv[fmt_idx + 1] == "stream-json"
+    assert "-q" in invocation.argv
+    q_idx = invocation.argv.index("-q")
+    assert invocation.argv[q_idx + 1] == "hello world"
+
+
+def test_hermes_agent_session_resume():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(session_id="hermes-sess-1"))
+    assert "--session" in invocation.argv
+    s_idx = invocation.argv.index("--session")
+    assert invocation.argv[s_idx + 1] == "hermes-sess-1"
+
+
+def test_hermes_agent_system_prompt_prepend():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx())
+    q_idx = invocation.argv.index("-q")
+    prompt = invocation.argv[q_idx + 1]
+    assert prompt.startswith("You are a tester.")
+
+
+def test_hermes_agent_safe_mode_flag():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(options={"approval_mode": "safe"}))
+    assert "--safe-mode" in invocation.argv
+
+
+def test_hermes_agent_home_dir_env():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(home_dir="/tmp/hermes-home"))
+    assert invocation.env["HERMES_HOME"] == "/tmp/hermes-home"
+
+
+def test_hermes_agent_stream_parsing():
+    definition = get_agent("hermes-agent")
+    run = definition.create_run(ctx())
+    lines = [
+        {"type": "system", "subtype": "init", "session_id": "hs1", "model": "claude-sonnet"},
+        {"type": "text", "text": "Hello "},
+        {"type": "text", "text": "world"},
+        {"type": "tool_use", "name": "read_file", "id": "t1", "input": {"path": "/tmp/x"}},
+        {"type": "tool_result", "id": "t1", "output": "file content"},
+        {"type": "result", "session_id": "hs1", "exit_code": 0, "tokens": {"input": 10, "output": 5, "total": 15}},
+    ]
+    events = [e for line in lines for e in run.feed(json.dumps(line))]
+    kinds = [e.type.value for e in events]
+    assert kinds.count("session") == 1
+    assert run.emitted_text == "Hello world"
+    assert "tool.call" in kinds and "tool.result" in kinds and "usage" in kinds
+    assert run.session_id == "hs1"

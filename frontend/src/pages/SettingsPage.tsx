@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CredentialVault } from '../components/CredentialVault'
 import { GatewayManager } from '../components/GatewayManager'
+import { ProxySettings } from '../components/ProxySettings'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
@@ -114,6 +115,8 @@ export function SettingsPage() {
         </section>
 
         <GatewayManager />
+
+        <ProxySettings />
 
         <CredentialVault />
 

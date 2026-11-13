@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -313,6 +314,13 @@ class AgentDefinition(ABC):
         if not self.executable:
             return Availability(True, detail="进程内运行，无需本地可执行文件")
         path = shutil.which(self.executable)
+        if not path:
+            #: 用户安装脚本（curl | bash 等）常把可执行文件放到 ~/.local/bin，
+            #: 服务进程的 PATH 可能不含该目录，这里兜底查一次。
+            local_bin = os.path.join(os.environ.get("HOME", ""), ".local", "bin")
+            candidate = os.path.join(local_bin, self.executable)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                path = candidate
         if not path:
             return Availability(False, detail=f"未在 PATH 中找到 `{self.executable}`")
         return Availability(True, version=self._probe_version(path), detail=path)

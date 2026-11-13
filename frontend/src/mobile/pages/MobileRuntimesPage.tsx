@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
-import type { AgentRuntime, ProvisionEvent, RuntimeAction, RuntimeLatest } from '../../lib/types'
+import type { AgentRuntime, ProvisionEvent, ProvisionJobInfo, RuntimeAction, RuntimeLatest } from '../../lib/types'
 import { RefreshIcon } from '../../components/Icons'
 import { KernelLogo } from '../../components/KernelLogo'
 import { MobileSheet } from '../components/MobileSheet'
@@ -35,7 +34,6 @@ interface Job {
  * 日志在弹层里滚动，可随时中止。
  */
 export function MobileRuntimesPage() {
-  const navigate = useNavigate()
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -44,6 +42,11 @@ export function MobileRuntimesPage() {
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const showLogRef = useRef(false)
+  const [showLog, setShowLog] = useState(false)
+  const [provisionJobs, setProvisionJobs] = useState<Record<string, ProvisionJobInfo>>({})
+
+  const logRef = useRef<HTMLPreElement>(null)
 
   const checkLatest = async (runtime: AgentRuntime) => {
     if (!runtime.provisioning.commands?.latest?.length) return
@@ -95,6 +98,12 @@ export function MobileRuntimesPage() {
       // 「检查更新」是每个内核一次远端查询，不能挡住首屏：卡片先出来，结果到了再补。
       setLoading(false)
       await Promise.all(items.map((item) => checkLatest(item)))
+      try {
+        const jobs = await api.listProvisionJobs()
+        setProvisionJobs(Object.fromEntries(jobs.map((j) => [j.runtime_id, j])))
+      } catch {
+        /* 忽略 */
+      }
     } catch (e) {
       setError(describeError(e))
     } finally {
@@ -107,6 +116,12 @@ export function MobileRuntimesPage() {
     return () => abortRef.current?.abort()
   }, [])
 
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
+  }, [job?.lines])
+
   const start = async (runtime: AgentRuntime, action: RuntimeAction) => {
     if (action === 'uninstall') {
       const command = (runtime.provisioning.commands?.uninstall ?? []).join(' ')
@@ -115,14 +130,33 @@ export function MobileRuntimesPage() {
     const controller = new AbortController()
     abortRef.current = controller
     setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], status: 'running' })
+    setShowLog(true)
+    showLogRef.current = true
+    setProvisionJobs((prev) => ({
+      ...prev,
+      [runtime.id]: { runtime_id: runtime.id, name: runtime.name, action, status: 'running', started_at: Date.now() / 1000 },
+    }))
 
     const onEvent = (event: ProvisionEvent) => {
-      if (event.type === 'provision.output') {
+      if (event.type === 'provision.started' && event.command) {
+        setJob((prev) =>
+          prev ? { ...prev, lines: [...prev.lines, { text: `执行命令：${event.command}` }] } : prev,
+        )
+      } else if (event.type === 'provision.output') {
         setJob((prev) =>
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
       } else if (event.type === 'provision.finished') {
         setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        setProvisionJobs((prev) =>
+          prev[runtime.id]
+            ? { ...prev, [runtime.id]: { ...prev[runtime.id], status: event.ok ? 'ok' : 'error', error: event.error } }
+            : prev,
+        )
+        if (!showLogRef.current) {
+          setShowLog(true)
+          showLogRef.current = true
+        }
       }
     }
 
@@ -134,6 +168,48 @@ export function MobileRuntimesPage() {
       setJob((prev) =>
         prev ? { ...prev, status: 'error', error: controller.signal.aborted ? '已中止' : describeError(e) } : prev,
       )
+      if (!showLogRef.current) {
+        setShowLog(true)
+        showLogRef.current = true
+      }
+    } finally {
+      abortRef.current = null
+      void reload()
+    }
+  }
+
+  /** 从后端重连到一个进行中 / 已完成的任务，获取全部日志。 */
+  const viewProgress = async (runtimeId: string) => {
+    const info = provisionJobs[runtimeId]
+    if (!info) return
+    setShowLog(true)
+    showLogRef.current = true
+    if (job && job.runtimeId === runtimeId && job.lines.length > 0) return
+    setJob({ runtimeId, name: info.name, action: info.action, lines: [], status: info.status })
+    const controller = new AbortController()
+    abortRef.current = controller
+    const onEvent = (event: ProvisionEvent) => {
+      if (event.type === 'provision.started' && event.command) {
+        setJob((prev) =>
+          prev ? { ...prev, lines: [...prev.lines, { text: `执行命令：${event.command}` }] } : prev,
+        )
+      } else if (event.type === 'provision.output') {
+        setJob((prev) =>
+          prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
+        )
+      } else if (event.type === 'provision.finished') {
+        setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        setProvisionJobs((prev) =>
+          prev[runtimeId]
+            ? { ...prev, [runtimeId]: { ...prev[runtimeId], status: event.ok ? 'ok' : 'error', error: event.error } }
+            : prev,
+        )
+      }
+    }
+    try {
+      await api.streamProvisionJob(runtimeId, onEvent, controller.signal)
+    } catch {
+      /* 忽略 */
     } finally {
       abortRef.current = null
       void reload()
@@ -173,7 +249,7 @@ export function MobileRuntimesPage() {
                 provisioning.installed &&
                 Boolean(provisioning.commands?.update?.length) &&
                 (updateTarget !== null || !canCheck || !remote)
-              const busy = job?.status === 'running' && job.runtimeId === runtime.id
+              const busy = provisionJobs[runtime.id]?.status === 'running'
               return (
                 <div className="card runtime-card" key={runtime.id}>
                   <div className="runtime-head">
@@ -201,6 +277,17 @@ export function MobileRuntimesPage() {
                   {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
 
                   <div className="row wrap" style={{ gap: 6 }}>
+                    {busy && (
+                      <>
+                        <span className="pill brand">正在{ACTION_LABELS[provisionJobs[runtime.id]!.action]}…</span>
+                        <button
+                          className="btn sm"
+                          onClick={() => void viewProgress(runtime.id)}
+                        >
+                          查看进度
+                        </button>
+                      </>
+                    )}
                     {canCheck && (
                       <button
                         className="btn sm"
@@ -225,9 +312,6 @@ export function MobileRuntimesPage() {
                         卸载
                       </button>
                     ) : null}
-                    <button className="btn sm" onClick={() => navigate('/agents')}>
-                      管理智能体（{runtime.agents}）
-                    </button>
                     {runtime.docs_url && (
                       <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
                         文档 ↗
@@ -241,10 +325,25 @@ export function MobileRuntimesPage() {
         </div>
       </div>
 
-      {job && (
+      {job && showLog && (
         <MobileSheet
           title={`${ACTION_LABELS[job.action]}「${job.name}」`}
-          onClose={() => setJob(null)}
+          onClose={() => {
+            if (job.status === 'running') {
+              setShowLog(false)
+              showLogRef.current = false
+            } else {
+              if (job) void api.clearProvisionJob(job.runtimeId).catch(() => {})
+              setProvisionJobs((prev) => {
+                const next = { ...prev }
+                if (job) delete next[job.runtimeId]
+                return next
+              })
+              setJob(null)
+              setShowLog(false)
+              showLogRef.current = false
+            }
+          }}
           full
           footer={
             job.status === 'running' ? (
@@ -252,7 +351,20 @@ export function MobileRuntimesPage() {
                 中止
               </button>
             ) : (
-              <button className="btn block" onClick={() => setJob(null)}>
+              <button
+                className="btn block"
+                onClick={() => {
+                  if (job) void api.clearProvisionJob(job.runtimeId).catch(() => {})
+                  setProvisionJobs((prev) => {
+                    const next = { ...prev }
+                    if (job) delete next[job.runtimeId]
+                    return next
+                  })
+                  setJob(null)
+                  setShowLog(false)
+                  showLogRef.current = false
+                }}
+              >
                 关闭
               </button>
             )
@@ -266,7 +378,7 @@ export function MobileRuntimesPage() {
               <span className="dim small">任务在服务器本地执行。</span>
             </div>
             {job.error && <div className={`banner ${job.status === 'ok' ? 'info' : 'err'}`}>{job.error}</div>}
-            <pre className="runtime-log">
+            <pre className="runtime-log" ref={logRef}>
               {job.lines.length === 0
                 ? '等待输出…'
                 : job.lines.map((line, index) => (
