@@ -42,11 +42,19 @@ from .util import as_list, flatten_content, truthy
 #: Hermes 的配置目录（默认 ``~/.hermes``），``HERMES_HOME`` 可整体挪走。
 _CONFIG_DIR = Path.home() / ".hermes"
 
-#: Hermes 的主配置文件（YAML 格式），MCP 服务器声明在其中的 ``mcp_servers`` 块。
+#: Hermes 的主配置文件（YAML 格式）。
 _CONFIG_FILE = "config.yaml"
+
+#: 人格文件：内核从 ``HERMES_HOME`` 读它，并把内容注入系统提示词
+#: （``hermes chat --ignore-rules`` 的帮助里写明会自动注入 SOUL.md）。
+_SOUL_FILE = "SOUL.md"
 
 #: 平台「技能市场」安装目录（``<config>/skills/.skillhub/<skill>``），可卸载。
 _MARKET_DIRNAME = ".skillhub"
+
+#: **运行时**目录：内核自带解释器（``tools``）与按工程根哈希存的依赖环境（``installs``）。
+#: 它们与用户配置、技能、会话无关，可以跨隔离目录共享（见 :meth:`HermesAgent._share_runtime`）。
+_RUNTIME_DIRS = ("tools", "installs")
 
 
 def hermes_home() -> Path:
@@ -88,7 +96,9 @@ class HermesAgent(AgentDefinition):
         homepage="https://github.com/NousResearch/hermes-agent",
     )
     api_key_env = "OPENROUTER_API_KEY"
-    base_url_env = "OPENROUTER_BASE_URL"
+    #: Hermes **没有**「换个端点」的环境变量：``OPENROUTER_BASE_URL`` 它不读，
+    #: 自定义端点只能走命令行（``--provider custom --base-url …``），见 :meth:`build_invocation`。
+    base_url_env = None
     default_gateway = "https://openrouter.ai/api/v1"
     default_model = "anthropic/claude-sonnet-4.6"
     protocol = "openai"
@@ -119,8 +129,8 @@ class HermesAgent(AgentDefinition):
             default="yolo",
             options=[
                 {"value": "yolo", "label": "yolo · 自动批准所有工具调用"},
-                {"value": "safe", "label": "safe · 安全模式（禁用个人配置与规则）"},
-                {"value": "default", "label": "default · 每次询问"},
+                {"value": "safe", "label": "safe · 排障模式（禁用个人配置 / 规则 / 插件 / MCP）"},
+                {"value": "default", "label": "default · 每次询问（非交互运行下可能卡在授权提示）"},
             ],
         ),
         ConfigField(
@@ -130,7 +140,7 @@ class HermesAgent(AgentDefinition):
             default="prepend",
             options=[
                 {"value": "prepend", "label": "拼接到提示词最前面"},
-                {"value": "config", "label": "写入 config.yaml 的 system_prompt"},
+                {"value": "soul", "label": "写入隔离配置目录的 SOUL.md（内核自己的身份文件）"},
             ],
         ),
         ConfigField(
@@ -146,7 +156,7 @@ class HermesAgent(AgentDefinition):
             FieldType.STRING,
             advanced=True,
             placeholder="openrouter / openai / anthropic",
-            help="覆盖 config.yaml 里的默认供应商（配合网关使用）。",
+            help="没选自定义网关时生效；选了网关则由平台接管路由（--provider custom）。",
         ),
         ConfigField(
             "oneshot",
@@ -229,6 +239,59 @@ class HermesAgent(AgentDefinition):
             },
         )
 
+    # -- 隔离目录 ------------------------------------------------------------
+
+    def _share_runtime(self, home: Path) -> None:
+        """把真实家目录里的**运行时**软链进隔离家目录，避免内核在每个新家里重装一遍依赖。
+
+        Hermes 的 ``HERMES_HOME`` 不只是配置目录，它同时是运行时根：``tools/`` 放它自带的
+        解释器与 uv，``installs/`` 按工程根哈希放依赖环境。平台的隔离目录是「一条对话一份」，
+        若不同步这两项，内核会在新家里完整装一遍依赖（数百 MB、要联网、要几分钟）。
+
+        只共享这两类**运行时代码**；技能、配置、会话与记忆仍留在隔离家目录里。
+        链接失败不阻断运行（内核会退化成在自己的家里装一遍依赖），因此这里只跳过、不抛错。
+        """
+        source = hermes_home()
+        if source == home:
+            return
+        for name in _RUNTIME_DIRS:
+            src, dst = source / name, home / name
+            if not src.exists() or dst.exists() or dst.is_symlink():
+                continue
+            try:
+                dst.symlink_to(src, target_is_directory=True)
+            except OSError:
+                continue
+
+    @staticmethod
+    def _runtime_store() -> Path | None:
+        """真实家目录里装着解释器的运行时目录（``tools/facts.json`` 的 ``python.entry``）。
+
+        ``HERMES_RUNTIME_DIR`` 让内核把**当前进程的运行时**认成真实路径。隔离家目录是
+        「一条对话一份」的临时目录：内核启动自检时若发现 ``sys.executable`` 与
+        ``<HERMES_HOME>/tools`` 拼出来的解释器不是同一个路径，就会当场重写**共享**的
+        ``hermes-agent/.hermes/bin/hermes`` 启动器，把这条临时路径写死进去——目录一删，
+        所有对话乃至 shell 里的 ``hermes`` 都会 ``exec: ... not found``。
+
+        尽力而为：读不到 ``facts.json`` 就当本机没有真实运行时，不设这个变量，
+        让内核按自己的默认值走（它会退化成在自己的家里装一遍依赖）。
+        """
+        store = hermes_home() / "tools"
+        rel = "python.exe" if os.name == "nt" else "bin/python3"
+        try:
+            facts = json.loads((store / "facts.json").read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return None
+        packages = facts.get("packages") if isinstance(facts, dict) else None
+        python = packages.get("python") if isinstance(packages, dict) else None
+        entry = python.get("entry") if isinstance(python, dict) else None
+        return store if entry and (store / str(entry) / rel).is_file() else None
+
+    def _write_soul(self, home: Path, text: str) -> None:
+        """把人写进隔离家目录的 ``SOUL.md``（Hermes 从 ``HERMES_HOME`` 读它注入提示词）。"""
+        home.mkdir(parents=True, exist_ok=True)
+        (home / _SOUL_FILE).write_text(text, encoding="utf-8")
+
     # -- 构造启动命令 --------------------------------------------------------
 
     def build_invocation(self, ctx: AgentContext) -> Invocation:
@@ -246,14 +309,22 @@ class HermesAgent(AgentDefinition):
         if ctx.model:
             argv += ["--model", ctx.model]
 
-        # 供应商
-        provider = options.get("provider")
-        if provider:
-            argv += ["--provider", str(provider)]
+        # 网关：Hermes 只认命令行上的「自定义端点」，环境变量不生效
+        # （实测 OPENROUTER_BASE_URL 被忽略：它会拿网关密钥去请求真 OpenRouter，直接 401）。
+        if ctx.gateway_url and ctx.api_key:
+            argv += [
+                "--provider", "custom",
+                "--base-url", ctx.gateway_url,
+                "--api-key", ctx.api_key,
+            ]
+        elif options.get("provider"):
+            argv += ["--provider", str(options["provider"])]
 
-        # 审批模式
+        # 审批模式：非交互子进程里不自动批准，工具调用会卡在授权提示上。
         mode = options.get("approval_mode") or "yolo"
-        if mode == "safe":
+        if mode == "yolo":
+            argv.append("--yolo")
+        elif mode == "safe":
             argv.append("--safe-mode")
 
         # 工具集
@@ -261,9 +332,9 @@ class HermesAgent(AgentDefinition):
         if toolsets:
             argv += ["--toolsets", ",".join(toolsets)]
 
-        # 会话续接
+        # 会话续接（Hermes 的续接开关是 --resume，不是 --session）
         if ctx.session_id:
-            argv += ["--session", ctx.session_id]
+            argv += ["--resume", ctx.session_id]
 
         # 额外参数
         argv += [str(a) for a in as_list(options.get("extra_args") or [])]
@@ -271,30 +342,31 @@ class HermesAgent(AgentDefinition):
         # 提示词与人格
         prompt = ctx.prompt
         env = self.effective_env(ctx)
-        files: dict[str, str] = {}
 
-        # 隔离配置目录（技能与 MCP 共用）
         if ctx.home_dir:
+            # 隔离配置目录（技能与 MCP 共用），并复用它所需的运行时。
+            home = Path(ctx.home_dir)
             env["HERMES_HOME"] = ctx.home_dir
+            self._share_runtime(home)
+            # 运行时必须锚定真实家目录：否则内核会把隔离家目录当成自己的完整数据根，
+            # 用它（临时的）路径重写共享启动器，见 _runtime_store()。
+            store = self._runtime_store()
+            if store is not None:
+                env["HERMES_RUNTIME_DIR"] = str(store)
 
-        # 人格注入
         if ctx.system_prompt:
             sp_mode = options.get("system_prompt_mode") or "prepend"
-            if sp_mode == "config":
-                import yaml
-
-                files[_CONFIG_FILE] = yaml.dump(
-                    {"system_prompt": ctx.system_prompt},
-                    default_flow_style=False,
-                    allow_unicode=True,
-                )
+            # 旧的 "config"（曾试图写 config.yaml —— Hermes 没有这个键，等于静默丢弃人格）
+            # 按 SOUL.md 处理，让存量智能体的人格真正生效。
+            if sp_mode in ("soul", "config") and ctx.home_dir:
+                self._write_soul(Path(ctx.home_dir), ctx.system_prompt)
             else:
                 prompt = f"{ctx.system_prompt}\n\n---\n\n{prompt}"
 
         # 用 -q 把提示词走命令行参数（Hermes 要求 --format stream-json 配合 -q）
         argv += ["-q", prompt]
 
-        return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, files=files)
+        return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir)
 
     # -- 解析输出 ------------------------------------------------------------
 
@@ -315,12 +387,13 @@ class HermesAgent(AgentDefinition):
     def _dispatch(self, payload: dict[str, Any], run: AgentRun) -> Iterable[AgentEvent]:
         kind = payload.get("type")
 
-        # system: 初始化事件，携带 session_id 与 model
+        # system: 初始化事件。Hermes 的 init 里 session_id 是空的，
+        # 真正的会话 id 在末尾的 result 里补发（见下）。
         if kind == "system":
             subtype = payload.get("subtype")
             if subtype == "init":
                 sid = payload.get("session_id")
-                if sid:
+                if sid and run.state.get("session") != sid:
                     run.state["session"] = sid
                     yield session(sid)
                 if payload.get("model"):
@@ -334,13 +407,13 @@ class HermesAgent(AgentDefinition):
                 yield text_delta(text)
             return
 
-        # tool_use: 工具调用
+        # tool_use: 工具调用（Hermes 的调用 id 字段叫 tool_call_id）
         if kind == "tool_use":
             name = payload.get("name") or "tool"
             input_ = payload.get("input") or {}
             yield tool_call(
                 name,
-                payload.get("id") or payload.get("tool_id"),
+                payload.get("tool_call_id") or payload.get("id") or payload.get("tool_id"),
                 **(input_ if isinstance(input_, dict) else {"input": input_}),
             )
             return
@@ -348,16 +421,20 @@ class HermesAgent(AgentDefinition):
         # tool_result: 工具结果
         if kind == "tool_result":
             yield tool_result(
-                payload.get("id") or payload.get("tool_id") or payload.get("name"),
+                payload.get("tool_call_id") or payload.get("id") or payload.get("tool_id"),
                 flatten_content(payload.get("output") or payload.get("result")),
                 bool(payload.get("is_error") or payload.get("error")),
             )
             return
 
-        # result: 终止事件，携带用量统计与退出码
+        # result: 终止事件，携带会话 id、用量统计与退出码
         if kind == "result":
-            tokens = payload.get("tokens")
-            if isinstance(tokens, dict) and tokens:
+            sid = payload.get("session_id")
+            if sid and run.state.get("session") != sid:
+                run.state["session"] = sid
+                yield session(sid)
+            tokens = self._normalize_usage(payload.get("tokens"))
+            if tokens:
                 yield usage(**tokens)
             exit_code = payload.get("exit_code")
             if payload.get("error"):
@@ -366,9 +443,35 @@ class HermesAgent(AgentDefinition):
             elif exit_code is not None and exit_code not in (0, 130):
                 run.state["is_error"] = True
                 yield error(f"Hermes 以退出码 {exit_code} 结束")
+            elif not run.emitted_text and payload.get("text"):
+                # 没走流式增量（例如回答太短只有一条汇总）时补发正文，
+                # 否则界面与落库都会是空回复。
+                yield text_delta(str(payload["text"]))
             return
 
         if kind == "error":
             run.state["is_error"] = True
             yield error(payload.get("message") or flatten_content(payload))
             return
+
+    @staticmethod
+    def _normalize_usage(raw: Any) -> dict[str, int]:
+        """把 Hermes 的 ``input/output/total/cache_read/cache_write`` 归一成平台口径。
+
+        界面按 ``input_tokens / output_tokens / cache_read_input_tokens`` 汇总用量，
+        字段名不同就等于「没有用量」，所以这里必须翻译一次。
+        """
+        if not isinstance(raw, dict):
+            return {}
+        mapping = {
+            "input": "input_tokens",
+            "output": "output_tokens",
+            "total": "total_tokens",
+            "cache_read": "cache_read_input_tokens",
+            "cache_write": "cache_creation_input_tokens",
+        }
+        return {
+            target: int(raw[source])
+            for source, target in mapping.items()
+            if isinstance(raw.get(source), (int, float))
+        }

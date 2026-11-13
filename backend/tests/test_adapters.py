@@ -559,14 +559,51 @@ def test_hermes_agent_invocation_uses_stream_json_and_oneshot():
     assert "-q" in invocation.argv
     q_idx = invocation.argv.index("-q")
     assert invocation.argv[q_idx + 1] == "hello world"
+    assert invocation.cwd == "/tmp/ws"
+
+
+def test_hermes_agent_routes_the_gateway_through_cli_flags():
+    """Hermes 不读 ``OPENROUTER_BASE_URL``：自定义端点只能走命令行，否则它会拿网关密钥
+    去请求真 OpenRouter（HTTP 401，用户看到的就是「没有回复」）。"""
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx())
+    joined = " ".join(invocation.argv)
+    assert "--provider custom" in joined
+    assert "--base-url https://gateway.example/v1" in joined
+    assert "--api-key sk-secret" in joined
+    # 端点不能再退回会被内核忽略的环境变量
+    assert "OPENROUTER_BASE_URL" not in invocation.env
+    assert definition.base_url_env is None
+
+    # 没选自定义网关（官方链路）：平台不接管路由，交给内核自己的配置
+    official = definition.build_invocation(ctx(gateway_url=None, api_key=None))
+    assert "--provider" not in official.argv
+    assert "--api-key" not in official.argv
+
+
+def test_hermes_agent_user_provider_applies_without_gateway():
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(
+        ctx(gateway_url=None, api_key=None, options={"provider": "anthropic"})
+    )
+    joined = " ".join(invocation.argv)
+    assert "--provider anthropic" in joined
 
 
 def test_hermes_agent_session_resume():
     definition = get_agent("hermes-agent")
     invocation = definition.build_invocation(ctx(session_id="hermes-sess-1"))
-    assert "--session" in invocation.argv
-    s_idx = invocation.argv.index("--session")
+    assert "--session" not in invocation.argv
+    s_idx = invocation.argv.index("--resume")
     assert invocation.argv[s_idx + 1] == "hermes-sess-1"
+
+
+def test_hermes_agent_yolo_is_declared():
+    """配置里写着「yolo · 自动批准所有工具调用」，就必须真的传 --yolo：
+    非交互子进程里没有审批提示可答，工具调用会一直卡住。"""
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(options={"approval_mode": "yolo"}))
+    assert "--yolo" in invocation.argv
 
 
 def test_hermes_agent_system_prompt_prepend():
@@ -575,6 +612,96 @@ def test_hermes_agent_system_prompt_prepend():
     q_idx = invocation.argv.index("-q")
     prompt = invocation.argv[q_idx + 1]
     assert prompt.startswith("You are a tester.")
+
+
+def test_hermes_agent_system_prompt_soul_file(tmp_path):
+    """人格走内核自己的身份文件 ``SOUL.md``（``config.yaml`` 没有 system_prompt 这个键，
+    写进去等于静默丢弃人格）。"""
+    definition = get_agent("hermes-agent")
+    home = tmp_path / "hermes-home"
+    invocation = definition.build_invocation(
+        ctx(home_dir=str(home), options={"system_prompt_mode": "soul"})
+    )
+    assert (home / "SOUL.md").read_text(encoding="utf-8") == "You are a tester."
+    # 人格没进提示词，避免重复注入
+    assert invocation.argv[invocation.argv.index("-q") + 1] == "hello world"
+
+    # 存量配置里的旧值 "config" 按同一条路径处理（否则人格继续被静默丢掉）
+    legacy = tmp_path / "legacy-home"
+    definition.build_invocation(
+        ctx(home_dir=str(legacy), options={"system_prompt_mode": "config"})
+    )
+    assert (legacy / "SOUL.md").is_file()
+
+
+def test_hermes_agent_shares_runtime_with_the_isolated_home(tmp_path, monkeypatch):
+    """隔离家目录要复用内核的真实运行时，否则每条新对话都要重装一遍依赖。"""
+    real = tmp_path / "real-hermes"
+    (real / "tools").mkdir(parents=True)
+    (real / "installs").mkdir()
+    (real / "skills").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(real))
+
+    home = tmp_path / "isolated"
+    home.mkdir()
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(home_dir=str(home)))
+
+    assert invocation.env["HERMES_HOME"] == str(home)
+    for name in ("tools", "installs"):
+        assert (home / name).is_symlink(), name
+        assert (home / name).resolve() == (real / name).resolve()
+    # 用户数据不共享：技能目录仍留在隔离家目录里
+    assert not (home / "skills").exists()
+
+
+def test_hermes_agent_anchors_runtime_to_the_real_store(tmp_path, monkeypatch):
+    """运行时要用真实路径：内核会拿它跟 sys.executable 比对，不一致就重写共享启动器。
+
+    隔离家目录是临时的；一旦内核用 ``<隔离家>/tools/...`` 重写
+    ``hermes-agent/.hermes/bin/hermes``，目录删掉后每一轮对话都会
+    ``exec: ... not found``。
+    """
+    real = tmp_path / "real-hermes"
+    entry = "python-3.14.9-linux-x64"
+    python = real / "tools" / entry / "bin" / "python3"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    (real / "tools" / "facts.json").write_text(
+        json.dumps({"packages": {"python": {"entry": entry}}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("HERMES_HOME", str(real))
+
+    home = tmp_path / "isolated"
+    home.mkdir()
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(home_dir=str(home)))
+
+    assert invocation.env["HERMES_RUNTIME_DIR"] == str(real / "tools")
+
+
+def test_hermes_agent_leaves_runtime_dir_unset_without_a_store(tmp_path, monkeypatch):
+    """没有真实运行时就不要瞎指路径：让内核按自己的默认值走。"""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "empty-hermes"))
+    home = tmp_path / "isolated"
+    home.mkdir()
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(home_dir=str(home)))
+    assert "HERMES_RUNTIME_DIR" not in invocation.env
+
+
+def test_hermes_agent_ignores_malformed_runtime_facts(tmp_path, monkeypatch):
+    """``facts.json`` 形状不对也不能让一轮对话起不来（尽力而为）。"""
+    real = tmp_path / "real-hermes"
+    (real / "tools").mkdir(parents=True)
+    (real / "tools" / "facts.json").write_text('{"packages": []}', encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(real))
+
+    home = tmp_path / "isolated"
+    home.mkdir()
+    definition = get_agent("hermes-agent")
+    invocation = definition.build_invocation(ctx(home_dir=str(home)))
+    assert "HERMES_RUNTIME_DIR" not in invocation.env
 
 
 def test_hermes_agent_safe_mode_flag():
@@ -590,19 +717,67 @@ def test_hermes_agent_home_dir_env():
 
 
 def test_hermes_agent_stream_parsing():
+    """真实样本：``hermes chat --oneshot --format stream-json`` 的输出。"""
     definition = get_agent("hermes-agent")
     run = definition.create_run(ctx())
     lines = [
-        {"type": "system", "subtype": "init", "session_id": "hs1", "model": "claude-sonnet"},
-        {"type": "text", "text": "Hello "},
-        {"type": "text", "text": "world"},
-        {"type": "tool_use", "name": "read_file", "id": "t1", "input": {"path": "/tmp/x"}},
-        {"type": "tool_result", "id": "t1", "output": "file content"},
-        {"type": "result", "session_id": "hs1", "exit_code": 0, "tokens": {"input": 10, "output": 5, "total": 15}},
+        {"type": "system", "subtype": "init", "model": "deepseek-v4.1-flash", "session_id": "", "timestamp": 1},
+        {"type": "tool_use", "name": "search_files", "tool_call_id": "call_00_x", "input": {"path": ".", "pattern": "*"}, "timestamp": 2},
+        {"type": "tool_result", "name": "search_files", "tool_call_id": "call_00_x", "output": '{"total_count": 1}', "is_error": False, "timestamp": 3},
+        {"type": "text", "text": "你好", "timestamp": 4},
+        {"type": "text", "text": "，我是卡卡", "timestamp": 5},
+        {
+            "type": "result",
+            "session_id": "local-abc",
+            "exit_code": 0,
+            "text": "你好，我是卡卡",
+            "tokens": {"input": 25091, "output": 2, "total": 25093, "cache_read": 2048, "cache_write": 0},
+            "duration_ms": 2023,
+            "timestamp": 6,
+        },
     ]
     events = [e for line in lines for e in run.feed(json.dumps(line))]
     kinds = [e.type.value for e in events]
+    # init 里的 session_id 是空的，真正的会话 id 在 result 里补发一次
     assert kinds.count("session") == 1
-    assert run.emitted_text == "Hello world"
-    assert "tool.call" in kinds and "tool.result" in kinds and "usage" in kinds
-    assert run.session_id == "hs1"
+    assert run.session_id == "local-abc"
+    assert run.emitted_text == "你好，我是卡卡"  # 不应与 result.text 重复
+    calls = [e for e in events if e.type.value == "tool.call"]
+    results = [e for e in events if e.type.value == "tool.result"]
+    assert calls[0].call_id == results[0].call_id == "call_00_x"
+    usage_events = [e for e in events if e.type.value == "usage"]
+    # 用量要归一成平台口径，否则界面上的 token 统计恒为 0
+    assert usage_events[0].payload["input_tokens"] == 25091
+    assert usage_events[0].payload["output_tokens"] == 2
+    assert usage_events[0].payload["cache_read_input_tokens"] == 2048
+
+
+def test_hermes_agent_result_text_is_a_fallback():
+    """内核只发一条汇总（没有 text 增量）时，正文不能被丢掉。"""
+    definition = get_agent("hermes-agent")
+    run = definition.create_run(ctx())
+    payload = {
+        "type": "result",
+        "session_id": "local-fb",
+        "exit_code": 0,
+        "text": "只有汇总正文",
+        "tokens": {"input": 1, "output": 2, "total": 3},
+    }
+    events = list(run.feed(json.dumps(payload)))
+    assert run.emitted_text == "只有汇总正文"
+    assert [e.type.value for e in events].count("message.delta") == 1
+
+
+def test_hermes_agent_surfaces_nonzero_exit():
+    definition = get_agent("hermes-agent")
+    run = definition.create_run(ctx())
+    payload = {
+        "type": "result",
+        "session_id": "local-err",
+        "exit_code": 1,
+        "text": "OpenRouter rejected your API key",
+    }
+    events = list(run.feed(json.dumps(payload)))
+    kinds = [e.type.value for e in events]
+    assert "error" in kinds
+    assert run.state.get("is_error") is True
