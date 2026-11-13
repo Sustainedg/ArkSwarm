@@ -31,7 +31,7 @@ from ..agents.skills import (
     safe_skill_dirname,
     write_market_marker,
 )
-from ..models import AgentProfile, AgentSkill, Conversation, Skill
+from ..models import AgentProfile, AgentSkill, Skill
 from ..settings import get_settings
 from ..skillhub import extract_skill_archive
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
@@ -277,13 +277,15 @@ async def prepare_skill_home(
     session: AsyncSession,
     definition: AgentDefinition,
     profile: AgentProfile,
-    conversation: Conversation,
+    conversation: Any,
     ctx: AgentContext,
     *,
     scope_id: str | None = None,
 ) -> list[str]:
     """把智能体分配到的技能物化进该内核的隔离目录，并把结果写回 ``ctx``。
 
+    ``scope_id`` 是隔离目录的作用域（默认用对话 id；协作运行会传自己的作用域）。
+    传了 ``scope_id`` 时 ``conversation`` 可以为 ``None``（协作运行没有对话）。
     返回需要提示给用户的说明/告警（由运行层作为 ``log`` 事件暴露）。
     """
     ctx.skills = await skills_for_agent(session, profile)

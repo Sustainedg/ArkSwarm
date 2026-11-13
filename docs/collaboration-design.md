@@ -140,7 +140,7 @@ api.py ──▶ engine.py ──▶ store.py ──▶ tables.py
 | 2 | `backend/app/db.py::init_db` | import `app.collab.tables` 注册新表；再调 `_add_missing_columns()` 幂等补齐后加的可选列（SQLite 的 `create_all` 不会 ALTER 旧表，见 §8） | ✅ M0/M1 |
 | 3 | `backend/app/main.py::lifespan` | +3 行：启动时把残留的 `running` 运行标记为 `interrupted` | ✅ M0 |
 | 4 | `backend/app/transport/sse.py` | `api/sse.py` 平移到通用传输设施；`api/conversations.py` 改 1 行 import | ✅ M0 |
-| 5 | `backend/app/runtime/skills.py` | `prepare_skill_home(..., scope_id=None)`：隔离目录改用调用方给的作用域 | M5 |
+| 5 | `backend/app/runtime/skills.py` | `prepare_skill_home(..., scope_id=None)`：隔离目录改用调用方给的作用域（协作运行传「运行 × 智能体 × 通道」；`prepare_mcp_home` 同一形态） | ✅ M5 |
 | 6 | `backend/app/collab/*` | 协作域全部实现（见 §2.1 模块树） | M0 起 |
 | 7 | `frontend/src/App.tsx` | `NAV` 加 1 项 + `Routes` 加 4 条 | ✅ M2 |
 | 8 | `frontend/src/lib/api.ts`、`lib/types.ts` | 追加协作类型与接口（不改现有导出；`streamPost` 加一个泛型参数） | ✅ M2 |
@@ -398,7 +398,7 @@ Edge {
 | --- | --- | --- | --- |
 | L1 提示词 | `capability_scope` + 输出契约注入 | 所有内核 | 只是约束，不是保证 |
 | L2 工作目录 | 协作组在新建时可填「工作路径」；留空则按运行 ID 分配默认目录。所有岗位都拿到同一个绝对路径并作为 cwd，prompt 明确它是唯一允许访问的目录 | 所有内核 | 路径不再因智能体而异；`none` / `read` 仍由提示词约束 + 越权审计兜底 |
-| L3 参数覆盖 | 节点级 `options_override`（复用 `DynamicForm` 按该智能体类型的 `config_fields` 渲染），如只读/计划模式、关闭工具 | 支持相应能力的内核 | 框架**不写任何内核分支**，纯透传 |
+| L3 参数覆盖 | 节点级 `options_override`（复用 `DynamicForm` 按该智能体类型的 `config_fields` 渲染），如只读/计划模式、关闭工具。**已弃用（V0.27）**：本版仍兼容读取旧图里的值，下一版移除 —— 一个岗位用什么参数跑，应由它绑定的智能体决定（技能 / MCP 同理），协作层不该再有一套只在这里生效的设置 | 支持相应能力的内核 | 框架**不写任何内核分支**，纯透传 |
 | L4 越权审计 | 运行前后对共享工作目录做指纹快照（文件路径 + 大小 + mtime + 内容哈希，带文件数/体积上限）；`read`/`none` 节点被检出改动 → `error` 事件 + 卡片标红 + 工单打回 | 所有内核 | 通用、无需内核知识 |
 
 诚实声明（写进文档"已知限制"）：L3 的效果取决于内核自身能力；L4 是**事后发现**而非事前阻止；
@@ -750,7 +750,7 @@ curl -s http://127.0.0.1:8010/api/health
 | **M4f 超长单行输出不再打断运行** ✅ | 执行层自建行缓冲（`runtime/runner.py` 的 `_StreamLines`）：内核把整段代码或工具结果塞进一行 JSONL 时，不再抛 「Separator is found, but chunk is longer than limit」把整轮运行判成 error；单行越过 64 MiB 上限只丢该行并补一条 `log(warn)`，stdout 与 stderr 同一条路径 | 已完成：`backend/tests/test_runner.py`（默认 `readline` 会炸的前提、整行读出、内存上限兜底、端到端超长单行跑通）；`bash scripts/test.sh` |
 | **M4g 一轮多个工单块不再判死** ✅ | 同一轮里出现多个 `work_order` 块时取最后一个，并产出一条 `collab.notice(warn)` 说明偏差；草稿块不再进正文；提示词同步要求「整轮只输出一个、正文里不要粘贴草稿」 | 已完成：`test_parse_takes_the_last_block_when_a_round_has_several`、`test_round_with_two_work_order_blocks_uses_the_last_one`；`bash scripts/test.sh` |
 | **M4h 收尾汇报** ✅ | 根工单完成后交回入口智能体汇报：引擎附上整次协作的结构化汇总，入口智能体用一次 `done` 把结论回复给用户；汇报轮只允许 `done`/`ask_user`；`report_at` 保证每轮只汇报一次（用户追问重新开启后清零） | 已完成：`test_root_ticket_closure_reports_back_to_entry`、`test_entry_closing_the_ticket_itself_does_not_report_twice`、`test_user_follow_up_opens_a_new_report_round`、`test_collab_migration.py` 的补列用例；`bash scripts/test.sh` |
-| **M5 打磨** | 技能物化接入协作运行、用量统计与导出、运行复制/模板 | `pytest` + 前端 build；技能端到端确认"仅分配生效" |
+| **M5 打磨** | ✅ 技能与 MCP 物化接入协作运行（与对话链路同一条路径）；待做：用量统计与导出、运行复制 / 模板 | 已完成部分：`tests/test_collab_provisioning.py` 端到端确认「仅分配生效」（未分配的不出现）、聊天与工单各一个隔离「家」；`bash scripts/test.sh` |
 
 每个里程碑单独提交、单独验证（铁律 8），M1 完成前不碰前端画布。
 
@@ -870,7 +870,11 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 「挑最该介入的那张」、以及脏数据类型（`goal` 是数字、`artifacts` 混入 `{kind:'file'}` 与 `null`）不崩。
 其中 `result.artifacts` 为 `{kind: 'file', path}` 这一条正是冒烟发现的坑（原先会显示成 `[object Object]`）。
 
-**下一步（M5）**：技能物化接入协作运行（按智能体分配物化技能）、用量统计与导出、运行复制/模板；
+**已完成（M5 第一项）**：技能与 MCP 物化接入协作运行——按岗位分配物化进内核隔离目录，
+与对话链路走同一条路径（`execution._build_context` 复用 `prepare_skill_home` / `prepare_mcp_home`），
+不再向用户播报「协作运行暂未注入」。隔离「家」的作用域是「运行 × 智能体 × 通道」：
+聊天通道与工单通道并行跑同一个智能体时互不覆盖。
+**下一步（M5 其余项）**：用量统计与导出、运行复制 / 模板；
 以及 M4 留白的时间线独立「工单卡 / 审查卡」（目前沿用 `MessageView` + `gist` 表达）。
 
 **M4b · 用户决策卡 —— 已完成。**

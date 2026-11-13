@@ -18,16 +18,17 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, select
 
 from ..agents import AgentContext, AgentDefinition, get_agent
 from ..agents.events import AgentEvent
 from ..credentials import with_notice
-from ..models import AgentMcpServer, AgentProfile, AgentSkill, Gateway, new_id
+from ..models import AgentProfile, Gateway, new_id
 from ..runtime.credentials import decrypt_for_profile
 from ..runtime.gateway import bind_gateway
 from ..runtime.manager import ActiveRun
+from ..runtime.mcp import prepare_mcp_home
 from ..runtime.runner import stream_run
+from ..runtime.skills import prepare_skill_home
 from ..settings import get_settings
 from .graph import effective_workspace_scope
 from .schemas import NodeSpec, WorkspaceScope
@@ -49,7 +50,7 @@ class PreparedStep:
     ctx: AgentContext
     workspace: str
     scope: WorkspaceScope
-    #: 需要以 notice 暴露给用户的说明（例如「技能这次没注入」）
+    #: 需要以 notice 暴露给用户的说明（技能 / MCP 物化过程中的告警与提示）
     warnings: list[str] = field(default_factory=list)
     #: 共享工作目录在运行前的指纹（只读节点才做）
     audit_before: dict[str, Any] = field(default_factory=dict)
@@ -201,16 +202,14 @@ def audit_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
 # --- 步骤准备与执行 ---------------------------------------------------------
 
 
-async def _profile_skill_count(session: AsyncSession, profile_id: str) -> int:
-    query = select(func.count()).select_from(AgentSkill).where(AgentSkill.agent_profile_id == profile_id)
-    return int((await session.execute(query)).scalar() or 0)
+def _home_scope(run_id: str, profile_id: str, channel: str) -> str:
+    """内核隔离「家」的作用域：运行 × 智能体 × 通道。
 
-
-async def _profile_mcp_count(session: AsyncSession, profile_id: str) -> int:
-    query = select(func.count()).select_from(AgentMcpServer).where(
-        AgentMcpServer.agent_profile_id == profile_id
-    )
-    return int((await session.execute(query)).scalar() or 0)
+    与对话链路同构（一次对话就是「一个智能体的一段隔离配置」）：协作的聊天通道与工单通道
+    并行（见 :func:`engine.prepare_chat`），同一个运行里不同岗位也可能共用同一个内核。
+    三者合一，既保证「本次运行生效的技能 / MCP == 该岗位分配到的」，也不会互相覆盖隔离目录。
+    """
+    return f"{run_id}-{profile_id}-{channel}"
 
 
 @dataclass(slots=True)
@@ -228,8 +227,6 @@ class ResolvedProfile:
     credentials: dict[str, str]
     cwd: str
     scope: WorkspaceScope
-    #: 需要以 notice 暴露给用户的说明（例如「技能这次没注入」）
-    warnings: list[str] = field(default_factory=list)
 
 
 async def _resolve_profile(
@@ -250,6 +247,8 @@ async def _resolve_profile(
     gateway_row = await session.get(Gateway, profile.gateway_id) if profile.gateway_id else None
     binding = bind_gateway(definition, gateway_row)
 
+    # 节点级参数覆盖：已弃用（见 docs/collaboration-design.md §4.3），本版仍兼容读取，
+    # 下一版移除；新图不要再依赖它。
     options = definition.coerce_options(profile.options or {})
     if node.options_override:
         options = {**options, **definition.coerce_options({**options, **node.options_override})}
@@ -257,18 +256,6 @@ async def _resolve_profile(
     model = profile.model or definition.resolve_model(None)
     cwd, scope = _step_cwd(run, node)
 
-    warnings: list[str] = []
-    skill_count = await _profile_skill_count(session, profile.id)
-    if skill_count:
-        warnings.append(
-            f"智能体「{profile.name}」分配了 {skill_count} 个技能，但协作运行暂未注入技能"
-            "（技能物化安排在 M5，见 docs/collaboration-design.md §11）"
-        )
-    mcp_count = await _profile_mcp_count(session, profile.id)
-    if mcp_count:
-        warnings.append(
-            f"智能体「{profile.name}」挂着 {mcp_count} 个 MCP 服务器，但协作运行暂未注入 MCP 配置"
-        )
     return ResolvedProfile(
         profile=profile,
         definition=definition,
@@ -280,48 +267,57 @@ async def _resolve_profile(
         credentials=await decrypt_for_profile(session, profile.id),
         cwd=cwd,
         scope=scope,
-        warnings=warnings,
     )
 
 
-def _build_context(
+async def _build_context(
+    session: AsyncSession,
     *,
-    profile: AgentProfile,
-    definition: AgentDefinition,
-    options: dict[str, Any],
-    model: str | None,
-    gateway: str | None,
-    api_key: str | None,
-    auth_style: str | None,
-    credentials: dict[str, str],
-    cwd: str,
+    resolved: ResolvedProfile,
+    home_scope: str,
     prompt: str,
     history: list[dict[str, str]] | None = None,
-) -> AgentContext:
+) -> tuple[AgentContext, list[str]]:
+    """组装一次运行的上下文，并把分配到的技能与 MCP 物化进该内核的隔离目录。
+
+    物化走的是与对话链路（``runtime.service.prepare_run``）**完全相同的一条路径**：
+    技能先落、MCP 复用同一个「家」，物化告警原样交回调用方，由运行层作为 notice 暴露。
+    """
+    profile = resolved.profile
+    definition = resolved.definition
+
     text = prompt
     # 凭据只以环境变量注入（值不进提示词），人格里只加一段「可用凭据」的名字清单。
-    system_prompt = with_notice(profile.system_prompt or None, credentials)
+    system_prompt = with_notice(profile.system_prompt or None, resolved.credentials)
     if system_prompt and not definition.capabilities.native_system_prompt:
         # 适配器不接受独立人格参数时，把人格折进这一轮的输入（同对话链路的做法）
         text = f"[system]\n{system_prompt}\n\n{prompt}"
         system_prompt = None
 
-    return AgentContext(
+    ctx = AgentContext(
         agent_id=profile.id,
         agent_name=profile.name,
-        options=options,
-        gateway_url=gateway,
-        api_key=api_key,
-        auth_style=auth_style,
-        model=model,
+        options=resolved.options,
+        gateway_url=resolved.gateway,
+        api_key=resolved.api_key,
+        auth_style=resolved.auth_style,
+        model=resolved.model,
         system_prompt=system_prompt,
-        credentials=credentials,
-        workspace_dir=cwd,
+        credentials=resolved.credentials,
+        workspace_dir=resolved.cwd,
         # 「不共享记忆」：每次步骤都是全新会话，历史只走工单载荷
         session_id=None,
         history=list(history or []),
         prompt=text,
     )
+    # 技能与 MCP 共用一个「家」：先物化技能定下 home_dir，MCP 再复用它（顺序不能反）。
+    warnings = await prepare_skill_home(
+        session, definition, profile, None, ctx, scope_id=home_scope
+    )
+    warnings += await prepare_mcp_home(
+        session, definition, profile, None, ctx, scope_id=home_scope
+    )
+    return ctx, warnings
 
 
 async def prepare_step(
@@ -334,16 +330,10 @@ async def prepare_step(
 ) -> PreparedStep:
     """解析智能体与智能体、组装一次工单步骤的上下文。"""
     resolved = await _resolve_profile(session, run=run, node=node)
-    ctx = _build_context(
-        profile=resolved.profile,
-        definition=resolved.definition,
-        options=resolved.options,
-        model=resolved.model,
-        gateway=resolved.gateway,
-        api_key=resolved.api_key,
-        auth_style=resolved.auth_style,
-        credentials=resolved.credentials,
-        cwd=resolved.cwd,
+    ctx, warnings = await _build_context(
+        session,
+        resolved=resolved,
+        home_scope=_home_scope(run.id, resolved.profile.id, "step"),
         prompt=prompt,
     )
 
@@ -353,7 +343,7 @@ async def prepare_step(
         ctx=ctx,
         workspace=resolved.cwd,
         scope=resolved.scope,
-        warnings=resolved.warnings,
+        warnings=warnings,
     )
     if resolved.scope is not WorkspaceScope.WRITE:
         prepared.audit_root = resolved.cwd
@@ -370,21 +360,15 @@ async def prepare_chat(
 ) -> PreparedStep:
     """组装入口智能体的一次聊天上下文。
 
-    与工单步骤共用智能体/智能体解析与适配器能力，但**不做越权审计、不注入技能警告之外的
-    工单记忆**。聊天历史已经由 ``prompt.build_chat_prompt`` 折进这一轮正文；这里仍保持
-    ``session_id=None``，避免不同设备/重试时悄悄续接到旧服务端会话。
+    与工单步骤共用智能体 / 适配器解析、技能与 MCP 物化，但**不做越权审计**。聊天历史已经由
+    ``prompt.build_chat_prompt`` 折进这一轮正文；这里仍保持 ``session_id=None``，
+    避免不同设备 / 重试时悄悄续接到旧服务端会话。
     """
     resolved = await _resolve_profile(session, run=run, node=node)
-    ctx = _build_context(
-        profile=resolved.profile,
-        definition=resolved.definition,
-        options=resolved.options,
-        model=resolved.model,
-        gateway=resolved.gateway,
-        api_key=resolved.api_key,
-        auth_style=resolved.auth_style,
-        credentials=resolved.credentials,
-        cwd=resolved.cwd,
+    ctx, warnings = await _build_context(
+        session,
+        resolved=resolved,
+        home_scope=_home_scope(run.id, resolved.profile.id, "chat"),
         prompt=prompt,
     )
     return PreparedStep(
@@ -393,7 +377,7 @@ async def prepare_chat(
         ctx=ctx,
         workspace=resolved.cwd,
         scope=resolved.scope,
-        warnings=resolved.warnings,
+        warnings=warnings,
     )
 
 
