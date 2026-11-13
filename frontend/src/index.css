@@ -661,6 +661,13 @@ code, pre, .mono { font-family: var(--mono); }
 .tool-card { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); margin-top: 8px; overflow: hidden; }
 .tool-card summary { cursor: pointer; padding: 7px 11px; font-size: 12px; display: flex; gap: 8px; align-items: center; list-style: none; }
 .tool-card summary::-webkit-details-marker { display: none; }
+/* 折叠箭头：收起指右、展开转 90°，让人一眼看出这一行可以点开。 */
+.disclosure-caret { flex: none; font-size: 9px; line-height: 1; color: var(--text-dim); transition: transform 0.15s ease; }
+.tool-card[open] > summary .disclosure-caret { transform: rotate(90deg); }
+/* 「过程」折叠块：连续的思考 / 工具调用收成一行，点开按原顺序逐条查看。 */
+.process-fold-body { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--border); }
+.process-fold-body .tool-card { margin-top: 0; }
+.process-fold-hint { margin-left: auto; }
 .tool-card pre { margin: 0; padding: 10px 12px; font-size: 12px; overflow: auto; max-height: 300px; border-top: 1px solid var(--border); background: #0e0d17; }
 .tool-chip { font-size: 10px; padding: 1px 7px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tool-chip.err { background: rgba(248, 113, 113, 0.14); color: var(--danger); }

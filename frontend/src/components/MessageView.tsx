@@ -34,6 +34,10 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
   const showTrailingCursor =
     Boolean(message.streaming) && (timeline.length === 0 || timeline[lastIndex].kind !== 'text')
 
+  // 连续的「思考 / 工具调用 / 工具结果」收成一个可展开的「过程」块：
+  // 默认折叠成一行，点开才按原顺序逐条查看；正文原样内联，整条时间线顺序不变。
+  const blocks = groupTimeline(timeline)
+
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
       <div className={`avatar${isUser ? ' user' : ''}`}>{isUser ? '🙋' : (avatar ?? '🤖')}</div>
@@ -45,20 +49,27 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
           {message.status === 'interrupted' && <span className="pill warn">已中断</span>}
         </div>
 
-        {timeline.map((part, index) => (
-          <TimelinePart
-            key={`${part.kind}-${index}`}
-            part={part}
-            active={Boolean(message.streaming)}
-            cursor={Boolean(message.streaming) && index === lastIndex && part.kind === 'text'}
-          />
-        ))}
+        {blocks.map((block) =>
+          block.kind === 'text' ? (
+            <div
+              key={`text-${block.index}`}
+              className={`bubble-body${
+                Boolean(message.streaming) && block.index === lastIndex ? ' streaming' : ''
+              }`}
+            >
+              <MarkdownView text={block.part.text ?? ''} />
+            </div>
+          ) : (
+            <ProcessFold key={`process-${block.items[0].index}`} items={block.items} />
+          ),
+        )}
 
         {showTrailingCursor && <div className="bubble-body streaming" />}
 
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
             <summary>
+              <DisclosureCaret />
               <span className="tool-chip">日志</span>
               <span className="dim">{message.logs.length} 条运行日志</span>
             </summary>
@@ -72,11 +83,59 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
   )
 }
 
-function TimelinePart({ part, active, cursor }: { part: MessagePart; active: boolean; cursor: boolean }) {
+type TimelineItem = { part: MessagePart; index: number }
+type TimelineBlock =
+  | { kind: 'text'; part: MessagePart; index: number }
+  | { kind: 'process'; items: TimelineItem[] }
+
+/** 把时间线切成「正文」与「连续的过程片段」两种块，只做归并、不改变先后顺序。 */
+function groupTimeline(timeline: MessagePart[]): TimelineBlock[] {
+  const blocks: TimelineBlock[] = []
+  timeline.forEach((part, index) => {
+    if (part.kind === 'text') {
+      blocks.push({ kind: 'text', part, index })
+      return
+    }
+    const last = blocks[blocks.length - 1]
+    if (last && last.kind === 'process') last.items.push({ part, index })
+    else blocks.push({ kind: 'process', items: [{ part, index }] })
+  })
+  return blocks
+}
+
+/**
+ * 一段连续的「思考 / 工具调用 / 工具结果」：默认收成一行，点标题栏展开后按原顺序列出每一步，
+ * 每一步还能再单独点开看详情。这样一轮几十次工具调用也只是一行，不再「每次调用都占一条」。
+ */
+function ProcessFold({ items }: { items: TimelineItem[] }) {
+  const thinking = items.filter((item) => item.part.kind === 'thinking').length
+  const tools = items.length - thinking
+  const summary = [thinking > 0 ? `思考 ${thinking}` : '', tools > 0 ? `工具调用 ${tools}` : '']
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <details className="tool-card process-fold">
+      <summary>
+        <DisclosureCaret />
+        <span className="tool-chip">过程</span>
+        <span className="dim">{summary}</span>
+        <span className="dim small process-fold-hint">点击展开</span>
+      </summary>
+      <div className="process-fold-body">
+        {items.map(({ part, index }) => (
+          <TimelinePart key={`${part.kind}-${index}`} part={part} cursor={false} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function TimelinePart({ part, cursor }: { part: MessagePart; cursor: boolean }) {
   if (part.kind === 'thinking') {
     return (
-      <details className="tool-card thinking-card" open={active}>
+      <details className="tool-card thinking-card">
         <summary>
+          <DisclosureCaret />
           <span className="tool-chip">思考</span>
           <span className="dim">推理过程</span>
         </summary>
@@ -101,6 +160,7 @@ function ToolCard({ part }: { part: MessagePart }) {
   return (
     <details className="tool-card">
       <summary>
+        <DisclosureCaret />
         <span className={`tool-chip${part.is_error ? ' err' : ''}`}>{part.name ?? label}</span>
         <span className="dim">{isCall ? '工具调用' : '工具结果'}</span>
         {!isCall && <span className="dim mono-sm" style={{ marginLeft: 'auto' }}>
@@ -110,4 +170,9 @@ function ToolCard({ part }: { part: MessagePart }) {
       <pre>{payload || '(空)'}</pre>
     </details>
   )
+}
+
+/** 折叠箭头：收起时指右，展开时转 90°。纯装饰，点击由原生 details 处理。 */
+function DisclosureCaret() {
+  return <span className="disclosure-caret" aria-hidden>▶</span>
 }
