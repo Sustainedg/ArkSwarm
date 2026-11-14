@@ -16,6 +16,7 @@ from ..db import get_session
 from ..models import AgentProfile, Conversation, Gateway, Message
 from ..runtime import registry
 from ..runtime import skills as skill_service
+from ..runtime import titles
 from ..runtime.service import (
     ConfigurationError,
     new_conversation,
@@ -422,6 +423,10 @@ async def send_message(
     except ConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     start_run(prepared)
+    # 这是这条对话的第一句话：丢一个后台任务用「设置」里指定的智能体把标题概括得更准
+    # （临时标题已经在 prepare_run 里按首行写好，真跑不出来也不影响使用）。
+    if prepared.title_pending:
+        titles.schedule(prepared.conversation.id, prepared.conversation.title, prepared.user_message.content)
     return _stream_prepared(prepared)
 
 

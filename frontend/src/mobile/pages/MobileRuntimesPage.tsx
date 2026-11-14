@@ -28,7 +28,7 @@ interface Job {
 }
 
 /**
- * 运行时（移动端）：与桌面端同一套接口，交互改成卡片 + 底部弹层。
+ * 内核管理（移动端）：与桌面端同一套接口，交互改成卡片 + 底部弹层。
  *
  * 这里只管「装 / 升 / 卸」这一件事；用某个内核的智能体（网关 · 模型 · 人格）在「智能体」页维护。
  * 日志在弹层里滚动，可随时中止。
@@ -61,7 +61,7 @@ export function MobileRuntimesPage() {
     }
   }
 
-  /** 强制重测一个运行时（后端把结果写回缓存，界面直接用新值覆盖）。 */
+  /** 强制重测一个内核（后端把结果写回缓存，界面直接用新值覆盖）。 */
   const refreshStatus = async (runtime: AgentRuntime) => {
     setRefreshing((prev) => ({ ...prev, [runtime.id]: true }))
     try {
@@ -125,7 +125,7 @@ export function MobileRuntimesPage() {
   const start = async (runtime: AgentRuntime, action: RuntimeAction) => {
     if (action === 'uninstall') {
       const command = (runtime.provisioning.commands?.uninstall ?? []).join(' ')
-      if (!confirm(`确认卸载运行时「${runtime.name}」？\n将执行：${command}`)) return
+      if (!confirm(`确认卸载内核「${runtime.name}」？\n将执行：${command}`)) return
     }
     const controller = new AbortController()
     abortRef.current = controller
@@ -219,7 +219,7 @@ export function MobileRuntimesPage() {
   return (
     <div className="m-page">
       <MobileTopBar
-        title="运行时"
+        title="内核管理"
         subtitle="内核安装状态与版本"
         actions={
           <button className="m-icon-btn" onClick={() => void reload()} aria-label="刷新">
@@ -230,7 +230,7 @@ export function MobileRuntimesPage() {
       <div className="m-page-body">
         <div className="stack">
           {error && <div className="banner err">{error}</div>}
-          {loading && <div className="m-empty">正在读取运行时状态…</div>}
+          {loading && <div className="m-empty">正在读取内核状态…</div>}
 
           <div className="m-list">
             {runtimes.map((runtime) => {

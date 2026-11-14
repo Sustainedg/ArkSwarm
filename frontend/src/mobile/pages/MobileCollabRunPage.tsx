@@ -5,7 +5,7 @@ import { api, collabRunFileUrl, isNetworkError, streamGet, streamPost } from '..
 import { useComposerDraft } from '../../lib/composerDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
-import { MediaUrlProvider } from '../../lib/media'
+import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
 } from '../../lib/collabStream'
@@ -80,7 +80,7 @@ export function MobileCollabRunPage() {
   const [chatOpen, setChatOpen] = useState(false)
   /** 发送模式：对话（只和入口智能体聊）还是推进任务（把这句话接到工单上接着跑） */
   const [sendMode, setSendMode] = useState<'chat' | 'work'>('chat')
-  const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
+  const [pendingUser, setPendingUser] = useState<{ id: string; text: string; attachments: string[] } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
@@ -295,7 +295,9 @@ export function MobileCollabRunPage() {
   const stream = useCallback(
     async (path: string, body: unknown, userText?: string) => {
       if (!detail) return
-      const pending = userText ? { id: `local-user-${Date.now()}`, text: userText } : null
+      const pending = userText
+        ? { id: `local-user-${Date.now()}`, text: userText, attachments: [] }
+        : null
       if (pending) setPendingUser(pending)
       setError(null)
       try {
@@ -328,20 +330,28 @@ export function MobileCollabRunPage() {
       setChatOpen(true)
       const pending = {
         id: `local-user-${Date.now()}`,
-        text: text.trim() || `（附上 ${files.length} 个文件）`,
+        text: text.trim(),
+        attachments: paths,
       }
       setPendingUser(pending)
       setError(null)
+      /** 第一个事件到达即代表消息已落库：此刻把待发附件从输入区收走，而不是等整轮聊天跑完。 */
+      let cleared = paths.length === 0
       try {
         await subscribeChat(detail.id, (onEvent, signal) =>
           streamPost<RunEvent>(
             `/api/collab/runs/${detail.id}/chat`,
             { content: text, attachments: paths },
-            onEvent,
+            (event) => {
+              if (!cleared) {
+                cleared = true
+                setAttachments([])
+              }
+              onEvent(event)
+            },
             signal,
           ),
         )
-        setAttachments([])
       } finally {
         setPendingUser(null)
       }
@@ -490,7 +500,14 @@ export function MobileCollabRunPage() {
       entries.push({
         id: pendingUser.id,
         label: '你',
-        message: { id: pendingUser.id, role: 'user', content: pendingUser.text, parts: [], status: 'complete' },
+        message: {
+          id: pendingUser.id,
+          role: 'user',
+          // 附件清单拼回正文：图片缩略图当场就画进「你」的气泡，不用等落库后重新拉取。
+          content: composeWithAttachments(pendingUser.text, pendingUser.attachments),
+          parts: [],
+          status: 'complete',
+        },
       })
     }
     const persisted = new Set(visibleSteps.map((step) => step.id))

@@ -47,6 +47,8 @@ class PreparedRun:
     skill_warnings: list[str] = field(default_factory=list)
     #: MCP 物化过程中的说明/告警，同为 log 事件
     mcp_warnings: list[str] = field(default_factory=list)
+    #: 这条对话是不是「刚开头」（标题还是兜底值）：是就交给调用方安排一次自动起标题
+    title_pending: bool = False
 
 
 class ConfigurationError(Exception):
@@ -253,7 +255,10 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     )
     session.add(assistant_message)
 
-    if conversation.title in (DEFAULT_TITLE, "") and payload.content.strip():
+    # 标题还是兜底值＝这条对话刚开头：先用首行当临时标题（侧边栏立刻有名字），
+    # 之后由调用方安排一次「自动起标题」把它换成概括得更准的名字（见 runtime/titles.py）。
+    title_pending = conversation.title in (DEFAULT_TITLE, "")
+    if title_pending and payload.content.strip():
         conversation.title = payload.content.strip().splitlines()[0][:80]
     conversation.updated_at = datetime.now(timezone.utc)
 
@@ -275,6 +280,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
         assistant_message=assistant_message,
         skill_warnings=skill_warnings,
         mcp_warnings=mcp_warnings,
+        title_pending=title_pending,
     )
 
 

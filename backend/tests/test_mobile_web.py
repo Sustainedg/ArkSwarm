@@ -107,6 +107,18 @@ BOARD_STYLE_BANNER = (
 COMPOSER_STYLE_BANNER = (
     "/* ================= 输入区：一个框 + 框里的线条图标（两端共用这一份）================= */"
 )
+#: 「折叠分组」：技能页按内核、智能体页按分组的标题行（组件见 `components/CollapsibleGroup.tsx`）。
+COLLAPSE_STYLE_BANNER = (
+    "/* ================= 折叠分组：标题一行（点一下展开 / 折叠），内容默认收起（两端共用这一份）================= */"
+)
+#: 「MCP 详情」：身份头 + 分区卡片（组件见 `components/McpDetailBody.tsx`）。
+MCP_DETAIL_STYLE_BANNER = (
+    "/* ================= MCP 详情：身份头 + 分区卡片（桌面端与移动端共用这一份）================= */"
+)
+#: 「标签页」：胶囊分段控件（设置 / 技能 / 用量 / 协作导航共用）。样式在共享块之前，故取到 MCP 详情为止。
+TABS_STYLE_BANNER = (
+    "/* ================= 标签页：胶囊分段控件（设置 / 技能 / 用量 / 协作导航共用，两端共用这一份）================= */"
+)
 MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
 DESKTOP_COMPOSER_TUNING = "/* ---------- 桌面端：输入区寄在会话栏底部"
 MOBILE_COMPOSER_TUNING = "/* ---------- 移动端：输入区贴着屏幕最下边"
@@ -157,6 +169,70 @@ def test_ticket_board_card_styles_are_identical_on_both_ends():
     # 越权高亮必须真的在共享段里，不然这条守卫等于没守。
     assert ".board-entry.violation" in desktop
     assert ".board-tag.tone-error" in desktop
+
+
+@needs_frontend
+def test_collapsible_group_styles_are_identical_on_both_ends():
+    """折叠分组的样式两端各一份，共享段必须逐字一致。
+
+    技能页（按内核）与智能体页（按分组）用的是同一个组件、同一套 class；移动端不加载
+    index.css，忘了同步那一边，手机上标题行就会走样（箭头不转、数量徽章错位）。
+    """
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", COLLAPSE_STYLE_BANNER, COMPOSER_STYLE_BANNER
+    )
+    mobile = _shared_style_block(
+        MOBILE_SRC / "mobile.css", COLLAPSE_STYLE_BANNER, COMPOSER_STYLE_BANNER
+    )
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的「折叠分组」样式不一致：改了一边记得把另一边同步（共享段逐字一致）"
+    )
+    # 关键规则必须真的在共享段里，不然「逐字一致」可能只是两边一起空着。
+    assert ".collapse-head.open .collapse-caret" in desktop
+    assert ".collapse-count" in desktop
+
+
+@needs_frontend
+def test_tab_styles_are_identical_on_both_ends():
+    """标签页（胶囊分段控件）的样式两端各一份，共享段必须逐字一致。
+
+    `.tabs` / `.tab` 被设置 / 技能 / 用量 / 协作导航共用；移动端不加载 index.css，
+    忘了同步那一边，手机上选中块的圆角、圆点与焦点环就会跟桌面端不一样。
+    """
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", TABS_STYLE_BANNER, MCP_DETAIL_STYLE_BANNER
+    )
+    mobile = _shared_style_block(
+        MOBILE_SRC / "mobile.css", TABS_STYLE_BANNER, MCP_DETAIL_STYLE_BANNER
+    )
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的「标签页」样式不一致：改了一边记得把另一边同步（共享段逐字一致）"
+    )
+    # 关键规则必须真的在共享段里，不然「逐字一致」可能只是两边一起空着。
+    assert ".tab.active::before" in desktop
+    assert ":focus-visible" in desktop
+
+
+@needs_frontend
+def test_mcp_detail_styles_are_identical_on_both_ends():
+    """MCP 详情（身份头 + 分区卡片）的样式两端各一份，共享段必须逐字一致。
+
+    同一个 `McpDetailBody` 组件同时喂桌面端的右侧面板与移动端的详情弹层；移动端不加载
+    index.css，忘了同步那一边，手机上身份头就会塌掉（图标与状态标签挤在一起）。
+    """
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", MCP_DETAIL_STYLE_BANNER, COLLAPSE_STYLE_BANNER
+    )
+    mobile = _shared_style_block(
+        MOBILE_SRC / "mobile.css", MCP_DETAIL_STYLE_BANNER, COLLAPSE_STYLE_BANNER
+    )
+    assert desktop == mobile, (
+        "index.css 与 mobile.css 的「MCP 详情」样式不一致：改了一边记得把另一边同步（共享段逐字一致）"
+    )
+    # 关键规则必须真的在共享段里，不然「逐字一致」可能只是两边一起空着。
+    assert ".mcp-hero-tile" in desktop
+    # 值要换行而不是省略号截断 —— 启动命令很长，截断就等于看不到。
+    assert "overflow-wrap: anywhere" in desktop
 
 
 @needs_frontend
@@ -562,7 +638,7 @@ def test_agents_own_the_configuration_and_runtimes_own_the_install():
     assert "listGateways" in agents, "网关下拉要读 /api/gateways"
 
     settings = (MOBILE_SRC / "pages" / "MobileSettingsPage.tsx").read_text(encoding="utf-8")
-    assert "运行时" in settings and "技能" in settings
+    assert "内核管理" in settings and "技能" in settings
     assert "网关" in settings, "设置页要有自定义网关入口"
     assert "'/mcp'" in settings, "设置页要有 MCP 入口"
     # 运行概览 / 版本记录这些信息不再占小屏（只认小节标题，注释里提到不算）。

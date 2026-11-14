@@ -40,7 +40,7 @@
 4. **所有可配置项必须声明为 `ConfigField`。** 禁止在 React 里为某个智能体硬编码表单字段。
 5. **事件协议是框架与适配器之间唯一的方言。** 新增事件类型必须**同时**改：
    `agents/events.py`（枚举 + 构造器）、`runtime/service.py:consume_run`（累积/持久化）、
-   前端 `lib/types.ts` + `pages/ChatPage.tsx:applyEvent`、`docs/architecture.md` 的事件表。
+   前端 `lib/types.ts` + `lib/agentStream.ts:applyAgentEvent`、`docs/architecture.md` 的事件表。
 6. **凭据只经过 `app/security.py`。** 明文密钥禁止入库、进日志、进 SSE payload、进接口响应；
    命令行回显必须经 `runtime/runner.py:_redact` 脱敏。
 7. **界面文案、代码注释、docstring 一律用中文。** 专有名词（Claude Code、MCP、SSE、JSONL、Fernet…）
@@ -139,7 +139,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 **适配器只能产出前 10 种**；`turn.started`/`stream.closed` 由框架产出，适配器不得越权。
 新增事件类型必须走铁律 5 的四步同步改动。
 框架自有的旁路信封**不属于**本协议：协作域是 `collab.*`（`collab/protocol.py`），
-「运行时」页的安装 / 更新 / 卸载是 `provision.*`（`runtime/provisioning.py`）——
+「内核管理」页（设置 → 内核管理）的安装 / 更新 / 卸载是 `provision.*`（`runtime/provisioning.py`）——
 两者只在各自的页面内部消费，由框架层产出，不参与铁律 5 的四处同步。
 
 ### 3.2 `AgentDefinition` 契约（新增适配器要实现/声明）
@@ -338,12 +338,15 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   由聊天页弹面板 —— 不要再往顶栏塞「⋯」。
 - **分享成长图**：`src/lib/shareImage.ts`（Canvas 手绘，不引依赖）：对话页顶栏的分享按钮把当前
   对话渲染成 PNG，优先走 `navigator.share({ files })`，不支持就退回下载。
-- **安装归「运行时」，配置归「智能体」**：一个内核 = 一份安装 + N 个智能体，所以内核的
-  安装 / 更新 / 卸载留在运行时页，智能体（网关 · 模型 · 人格 · 技能 · 适配器选项）有自己的
-  配置页 `mobile/pages/MobileAgentsPage.tsx`。适配器选项仍由 `DynamicForm` 渲染，**不要**在前端硬编码字段。
+- **安装归「内核管理」，配置归「智能体」**：一个内核 = 一份安装 + N 个智能体，所以内核的
+  安装 / 更新 / 卸载留在**设置 → 内核管理**（原「运行时」，只是界面这一栏改名；代码里的
+  `runtime/` / `provisioner` / `/api/runtimes` 等标识符不变），智能体（网关 · 模型 · 人格 · 技能 ·
+  适配器选项）有自己的配置页 `mobile/pages/MobileAgentsPage.tsx`。适配器选项仍由 `DynamicForm`
+  渲染，**不要**在前端硬编码字段。内核管理**只有一处**（桌面端是设置里的标签页
+  `components/KernelManager.tsx`；移动端是独立一页），别再为它加第二个入口。
 - **网关是 API 密钥的唯一来源**：移动端设 `mobile/pages/MobileGatewaysPage.tsx`（自定义网关 CRUD +
   获取模型 + 手动旁路）。官方链路由启动播种生成，用户在智能体配置里直接选。
-- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（网关 / 技能 / MCP / 运行时 / 智能体）+
+- **移动端设置页只留「现在要动的开关」**：外观 + 配置入口（网关 / 技能 / MCP / 内核管理 / 智能体）+
   一行「更多」。运行概览、版本记录这些信息看桌面端即可；「更新到最新版本」
   （`pwa.ts:refreshShell()`）必须留着 —— 独立应用里没有刷新按钮，那是卡在旧外壳时的唯一出口。
 - **MCP 有两个入口**：主导航里的「MCP」页负责编目（新建 / 编辑 / 停用 / 删除 + 重新扫描），

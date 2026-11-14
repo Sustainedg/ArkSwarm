@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { McpAssignPanel } from '../components/McpAssignPanel'
+import { McpDetailBody } from '../components/McpDetailBody'
 import { McpServerForm } from '../components/McpServerForm'
 import { transportLabel } from '../components/McpPicker'
 import { Modal } from '../components/Modal'
@@ -197,13 +198,15 @@ export function McpPage() {
 
         <div className="skill-pane">
           {detail ? (
-            <McpDetailPane
-              server={detail}
-              onAssign={() => setAssigning(detail)}
-              onEdit={() => setEditing(detail)}
-              onToggle={() => void toggleEnabled(detail)}
-              onDelete={() => void remove(detail)}
-            />
+            <div style={{ padding: 22, overflow: 'auto' }}>
+              <McpDetailBody
+                server={detail}
+                onAssign={() => setAssigning(detail)}
+                onEdit={() => setEditing(detail)}
+                onToggle={() => void toggleEnabled(detail)}
+                onDelete={() => void remove(detail)}
+              />
+            </div>
           ) : (
             <div className="empty">
               <div className="empty-icon">🔌</div>
@@ -245,124 +248,6 @@ export function McpPage() {
         </Modal>
       )}
     </>
-  )
-}
-
-function McpDetailPane({
-  server,
-  onAssign,
-  onEdit,
-  onToggle,
-  onDelete,
-}: {
-  server: McpServerDetail
-  onAssign: () => void
-  onEdit: () => void
-  onToggle: () => void
-  onDelete: () => void
-}) {
-  return (
-    <div className="stack" style={{ padding: 22, overflow: 'auto' }}>
-      <div className="row wrap" style={{ gap: 8 }}>
-        <span className="pill brand">{server.source_label}</span>
-        {server.type_name && <span className="pill mono-sm">{server.type_name}</span>}
-        <span className="pill">{transportLabel(server.transport)}</span>
-        <span className="pill mono-sm">{server.slug}</span>
-        {!server.available && <span className="pill err">来源已消失</span>}
-        {!server.enabled && <span className="pill">已停用</span>}
-      </div>
-
-      <div className="row wrap" style={{ gap: 8 }}>
-        <button className="btn sm primary" onClick={onAssign}>
-          分配给智能体
-        </button>
-        {server.editable ? (
-          <>
-            <button className="btn sm" onClick={onEdit}>
-              编辑
-            </button>
-            <button className="btn sm" onClick={onToggle}>
-              {server.enabled ? '停用' : '启用'}
-            </button>
-            <button className="btn sm ghost" onClick={onDelete}>
-              删除
-            </button>
-          </>
-        ) : (
-          <span className="dim small">内容由该内核自己的配置决定，平台只读收录。</span>
-        )}
-      </div>
-
-      {server.note && <div className="banner info">{server.note}</div>}
-
-      <div>
-        <div className="card-section-title" style={{ marginBottom: 6 }}>
-          连接方式
-        </div>
-        <dl className="kv">
-          <dt>传输方式</dt>
-          <dd>{transportLabel(server.transport)}</dd>
-          {server.transport === 'stdio' ? (
-            <>
-              <dt>启动命令</dt>
-              <dd className="mono-sm">{server.command || '—'}</dd>
-              <dt>启动参数</dt>
-              <dd className="mono-sm">{server.args.length ? server.args.join(' ') : '—'}</dd>
-            </>
-          ) : (
-            <>
-              <dt>服务器地址</dt>
-              <dd className="mono-sm">{server.url || '—'}</dd>
-            </>
-          )}
-        </dl>
-      </div>
-
-      {(server.env_keys.length > 0 || server.header_keys.length > 0) && (
-        <div>
-          <div className="card-section-title" style={{ marginBottom: 6 }}>
-            密钥（只显示掩码）
-          </div>
-          <dl className="kv">
-            {server.env_keys.map((key) => (
-              <div key={`env-${key}`} style={{ display: 'contents' }}>
-                <dt className="mono-sm">环境变量 {key}</dt>
-                <dd className="mono-sm">{server.env_preview[key] ?? '••••'}</dd>
-              </div>
-            ))}
-            {server.header_keys.map((key) => (
-              <div key={`header-${key}`} style={{ display: 'contents' }}>
-                <dt className="mono-sm">请求头 {key}</dt>
-                <dd className="mono-sm">{server.header_preview[key] ?? '••••'}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
-
-      <div>
-        <div className="card-section-title" style={{ marginBottom: 6 }}>
-          分配给哪些智能体
-        </div>
-        {server.agents.length === 0 ? (
-          <div className="card-sub">尚未分配给任何智能体，当前不会被加载。</div>
-        ) : (
-          <div className="chips">
-            {server.agents.map((agent) => (
-              <span className="pill ok" key={agent.id}>
-                {agent.avatar} {agent.name}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <p className="dim small">
-        运行时由各内核适配器把它写进该对话的隔离配置：Claude Code 用独立的
-        <span className="mono-sm"> --mcp-config </span>并关闭其它 MCP 配置，Codex 只保留分配到的
-        <span className="mono-sm"> [mcp_servers] </span>，Gemini CLI 写进工作目录的项目级设置并限定启用范围。
-      </p>
-    </div>
   )
 }
 

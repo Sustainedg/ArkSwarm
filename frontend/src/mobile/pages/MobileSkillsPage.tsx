@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
+import { CollapsibleGroup } from '../../components/CollapsibleGroup'
+import { useExpandMap } from '../../lib/collapse'
 import type { Skill, SkillDetail } from '../../lib/types'
 import { SkillsMarket } from '../../components/SkillsMarket'
 import { MobileSheet } from '../components/MobileSheet'
@@ -51,6 +53,8 @@ function MobileSkillsLocal() {
   const [notice, setNotice] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [loading, setLoading] = useState(true)
+  /** 按内核分组默认折叠：先给一份目录，要看哪个内核点开哪个。 */
+  const { isExpanded, toggle } = useExpandMap()
 
   const reload = useCallback(async (params?: { source_kind?: string; q?: string }) => {
     try {
@@ -149,10 +153,13 @@ function MobileSkillsLocal() {
             </div>
           ) : (
             groups.map(([typeId, group]) => (
-              <div className="stack" key={typeId} style={{ gap: 8 }}>
-                <div className="card-section-title">
-                  {group.typeName}（{group.items.length}）
-                </div>
+              <CollapsibleGroup
+                key={typeId}
+                title={group.typeName}
+                count={group.items.length}
+                expanded={isExpanded(typeId)}
+                onToggle={() => toggle(typeId)}
+              >
                 {group.items.map((skill) => (
                   <button key={skill.id} className="m-item" onClick={() => void openDetail(skill)}>
                     <span className="m-item-main">
@@ -163,7 +170,7 @@ function MobileSkillsLocal() {
                     <span className="m-item-chevron">›</span>
                   </button>
                 ))}
-              </div>
+              </CollapsibleGroup>
             ))
           )}
         </div>

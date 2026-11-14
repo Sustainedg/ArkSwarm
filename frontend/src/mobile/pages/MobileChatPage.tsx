@@ -5,7 +5,7 @@ import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../
 import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
 import { useComposerDraft } from '../../lib/composerDraft'
 import { formatListTime } from '../../lib/datetime'
-import { MediaUrlProvider } from '../../lib/media'
+import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
 import { shortPath } from '../../lib/paths'
 import { useMarkConversationRead } from '../../lib/readReceipts'
 import { shareConversationImage } from '../../lib/shareImage'
@@ -32,6 +32,8 @@ import { describeError, short } from '../util'
 
 interface LiveTurn extends AgentStreamState {
   userText: string
+  /** 这一轮用户消息带上的附件（rel_path）：落库前先把缩略图画进「你」的气泡里 */
+  userAttachments: string[]
 }
 
 /** 待发送消息：AI 回复期间先攒着，本轮结束后按顺序自动发出。 */
@@ -313,6 +315,7 @@ export function MobileChatPage() {
       ...emptyAgentStream(),
       // 用户消息已经在数据库里（详情会拉到），这里只渲染正在生成的助手回复。
       userText: '',
+      userAttachments: [],
     })
 
     let cancelled = false
@@ -356,9 +359,34 @@ export function MobileChatPage() {
     /** 待发送队列里的附件：不传就用输入区当前挂着的附件 */
     queuedAttachments?: AttachmentRef[],
   ): Promise<boolean> => {
-    if (!active) return false
-    if (remoteRunning) return false
     const pending = regenerate ? [] : (queuedAttachments ?? attachments)
+
+    /**
+     * 消息没能发出去时，把正文与附件原样还给输入区，用户可以直接重发，不会凭空丢掉。
+     *
+     * 判据是**有没有收到事件**（`announced`）而不是有没有报错：服务端把用户消息落库之后才
+     * 开始推事件，所以「收到过事件」＝消息已经发出去了，之后哪怕连接断开、用户按了停止，
+     * 也只能算「没读到回复」，不能再把内容挂回输入区（那会变成重复发送）。
+     */
+    const restoreUnsent = () => {
+      if (regenerate) return
+      if (content.trim()) setDraft((prev) => (prev ? prev : content))
+      if (pending.length > 0) {
+        setAttachments((prev) => {
+          const seen = new Set(prev.map((item) => item.rel_path))
+          return [...prev, ...pending.filter((item) => !seen.has(item.rel_path))]
+        })
+      }
+    }
+
+    if (!active) {
+      restoreUnsent()
+      return false
+    }
+    if (remoteRunning) {
+      restoreUnsent()
+      return false
+    }
     if (!regenerate && !content.trim() && pending.length === 0) return false
 
     setError(null)
@@ -369,12 +397,18 @@ export function MobileChatPage() {
     attachedRunIdRef.current = null
     attachedLiveRef.current = false
     stickRef.current = true
-    setLive({ ...emptyAgentStream(), userText: regenerate ? '' : content })
+    setLive({
+      ...emptyAgentStream(),
+      userText: regenerate ? '' : content,
+      userAttachments: regenerate ? [] : pending.map((item) => item.rel_path),
+    })
 
     const controller = new AbortController()
     abortRef.current = controller
     const conversationId = active.id
     localStreamConversationRef.current = conversationId
+    /** 第一个事件到达即代表消息已经落库（`run.started` 最先到达）。 */
+    let announced = false
 
     try {
       await streamPost(
@@ -382,17 +416,26 @@ export function MobileChatPage() {
           ? `/api/conversations/${conversationId}/regenerate`
           : `/api/conversations/${conversationId}/messages`,
         regenerate ? {} : { content, attachments: pending.map((item) => item.rel_path) },
-        (event) => setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev)),
+        (event) => {
+          if (!announced) {
+            announced = true
+            // 服务端把用户消息落库之后才开始推事件，所以这里就是「消息已发出」的时刻：
+            // 把待发附件从输入区收走。不早于此刻清，POST 被拒 / 还没连上时附件原样留着可重发。
+            // 只清这一批（按 rel_path 命中），等待期间新加的附件保留。
+            if (pending.length > 0) {
+              const sent = new Set(pending.map((item) => item.rel_path))
+              setAttachments((prev) => prev.filter((item) => !sent.has(item.rel_path)))
+            }
+          }
+          setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev))
+        },
         controller.signal,
       )
-      // 消息已经落到服务端：只清掉这一批附件，等待期间新加的附件保留。
-      if (pending.length > 0) {
-        const sent = new Set(pending.map((item) => item.rel_path))
-        setAttachments((prev) => prev.filter((item) => !sent.has(item.rel_path)))
-      }
       return true
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') reportError(e)
+      // 一个事件都没收到＝这一轮根本没跑起来（POST 被拒 / 还没连上）：内容还给输入区。
+      if (!announced) restoreUnsent()
       return false
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -419,7 +462,7 @@ export function MobileChatPage() {
 
   /**
    * 输入区「发送」：
-   * - 空闲：直接发，草稿立刻清空（附件在发送成功后由 `send` 清掉）；
+   * - 空闲：直接发，草稿立刻清空（附件在消息落库、收到第一个事件时由 `send` 收走）；
    * - AI 正在回复：消息进入待发送队列，输入区马上可以继续写；本轮结束后按顺序自动发出。
    */
   const submitDraft = () => {
@@ -447,17 +490,9 @@ export function MobileChatPage() {
     const next = queue[0]
     if (next.conversationId !== active.id) return
     setQueue((prev) => prev.slice(1))
-    void send(next.content, false, next.attachments).then((ok) => {
-      if (ok) return
-      // 发送失败：内容还给输入区，别让队列自动重试成死循环。
-      setDraft((prev) => (prev ? prev : next.content))
-      if (next.attachments.length > 0) {
-        setAttachments((prev) => {
-          const seen = new Set(prev.map((item) => item.rel_path))
-          return [...prev, ...next.attachments.filter((item) => !seen.has(item.rel_path))]
-        })
-      }
-    })
+    // 发送失败时由 `send` 把正文与附件还回输入区（只还「一个事件都没收到」的那种）；
+    // 这里不再兜一次，免得消息其实已经落库、却把内容重复挂回输入框。
+    void send(next.content, false, next.attachments)
     // send / runActive 每次渲染都是新的，这里只盯队列与运行状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, runActive, active?.id])
@@ -688,14 +723,8 @@ export function MobileChatPage() {
     <MediaUrlProvider resolver={resolveMediaUrl}>
       <div className="m-page">
       <MobileTopBar
-        title={active?.agent_name ?? 'Magenta Agents'}
-        subtitle={
-          active
-            ? `${active.agent_type_id ?? '智能体'} · ${active.session_id ? `会话 ${short(active.session_id, 8)}` : '新会话'}`
-            : resolving
-              ? '正在加载…'
-              : '多智能体控制台'
-        }
+        centered
+        title={active ? active.title : resolving ? '正在加载…' : 'Magenta Agents'}
         actions={
           <>
             <button
@@ -760,9 +789,16 @@ export function MobileChatPage() {
           />
         ))}
 
-        {live?.userText && (
+        {live && (live.userText || live.userAttachments.length > 0) && (
           <MessageView
-            message={{ id: 'live-user', role: 'user', content: live.userText, parts: [], status: 'complete' }}
+            message={{
+              id: 'live-user',
+              role: 'user',
+              // 附件清单拼回正文：图片缩略图当场就画进「你」的气泡，不用等整轮回复跑完、重新拉库。
+              content: composeWithAttachments(live.userText, live.userAttachments),
+              parts: [],
+              status: 'complete',
+            }}
           />
         )}
 

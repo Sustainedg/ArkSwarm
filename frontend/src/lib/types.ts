@@ -273,6 +273,8 @@ export interface AgentProfile {
   enabled: boolean
   /** 默认智能体：新建对话不再先问选谁，直接用这颗星标着的那个（全局唯一） */
   is_default: boolean
+  /** 分组名：智能体页按它折叠分组展示（空串 = 未分组，排在最后） */
+  group_name: string
   created_at: string
   updated_at: string
   type_name?: string | null
@@ -290,6 +292,22 @@ export interface AgentProfile {
   /** 该智能体挂着的 MCP 服务器（同样只能通过分配获得） */
   mcp_ids: string[]
   mcp_servers: AgentMcpBrief[]
+}
+
+/** 「设置 → 对话标题」：自动生成对话标题用哪个智能体、哪个模型（留空即跟随默认智能体）。 */
+export interface TitleSettings {
+  /** 开着才会自动起标题（默认开） */
+  enabled: boolean
+  agent_profile_id?: string | null
+  model?: string | null
+  /** 派生字段：解析后的「默认智能体」与最终生效的智能体（界面只用来显示名字） */
+  default_agent_id?: string | null
+  default_agent_name?: string | null
+  effective_agent_id?: string | null
+  effective_agent_name?: string | null
+  /** 上一次自动起标题失败的原因与时间（成功一次就清掉）；用于界面上自查 */
+  last_error?: string | null
+  last_error_at?: string | null
 }
 
 export interface Skill {
@@ -877,6 +895,24 @@ export interface CollabRun {
   updated_at: string
   ticket_count: number
   open_tickets: number
+}
+
+/**
+ * 正在跑的协作智能体（`GET /api/collab/active-runs`）。
+ *
+ * 协作的运行登记在**协作域自己**那份运行表里，所以对话域的 `/api/system/overview` 看不到它们 ——
+ * 设置页的「正在运行的智能体」要两处都取。
+ */
+export interface ActiveCollabRun {
+  /** 协作运行 id（点进去看这条运行） */
+  run_id: string
+  /** 这条运行的名字（后端补上的，界面好认） */
+  title?: string | null
+  agent_name: string
+  /** step＝工单步骤，chat＝入口智能体与用户的对话回复 */
+  kind: 'step' | 'chat'
+  node_key?: string | null
+  elapsed_seconds: number
 }
 
 export interface CollabRunDetail extends CollabRun {

@@ -201,3 +201,37 @@ export function MoreIcon(props: IconProps) {
     </Icon>
   )
 }
+
+/** 插头：MCP 服务器（一个要与外界对接的「接口」）。 */
+export function PlugIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9.2 2.8v4.6" />
+      <path d="M14.8 2.8v4.6" />
+      <path d="M6.4 7.4h11.2v3.1a5.6 5.6 0 0 1-5.6 5.6 5.6 5.6 0 0 1-5.6-5.6z" />
+      <path d="M12 16.1v5.1" />
+    </Icon>
+  )
+}
+
+/** 钥匙：密钥 / 凭据（值只显示掩码）。 */
+export function KeyIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="7.8" cy="16.2" r="3.6" />
+      <path d="M10.4 13.6 20.2 3.8" />
+      <path d="m16.6 7.4 2.6 2.6" />
+      <path d="m14 10 2.2 2.2" />
+    </Icon>
+  )
+}
+
+/** 两环相扣：连接方式 / 关联。 */
+export function LinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M10 13.2a4.6 4.6 0 0 0 6.9.5l2.5-2.5a4.6 4.6 0 0 0-6.5-6.5l-1.4 1.4" />
+      <path d="M14 10.8a4.6 4.6 0 0 0-6.9-.5l-2.5 2.5a4.6 4.6 0 0 0 6.5 6.5l1.4-1.4" />
+    </Icon>
+  )
+}

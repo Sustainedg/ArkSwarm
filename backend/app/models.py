@@ -29,7 +29,11 @@ from sqlmodel import Field, SQLModel
 #: 只允许追加「带默认值、旧行可以留空」的列。
 ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # 「默认智能体」这一列是后加的：老行一律按「不是默认」补上，由 bootstrap 在启动时补一颗星
-    "agent_profiles": {"is_default": "BOOLEAN NOT NULL DEFAULT 0"},
+    # 「分组名」也是后加的：老行一律按空串补上（智能体页把空串归到「未分组」）
+    "agent_profiles": {
+        "is_default": "BOOLEAN NOT NULL DEFAULT 0",
+        "group_name": "VARCHAR(60) NOT NULL DEFAULT ''",
+    },
     "gateways": {},
     # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）
     "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
@@ -119,6 +123,8 @@ class AgentProfile(SQLModel, table=True):
     #: 默认智能体：新建对话不再先问「选谁」，直接用这颗星标着的那个（全局最多一个）。
     #: 老库由 `bootstrap.ensure_default_agent` 在启动时补一次；换星只走 `api/agents`。
     is_default: bool = Field(default=False)
+    #: 分组名：智能体页按它折叠分组展示（空串 = 未分组，永远排在最后）。
+    group_name: str = Field(default="", sa_column=Column(String(60), nullable=False))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     #: 软删除时间戳：删除智能体时只打标记（历史对话仍引用它）。打了标记的智能体从所有

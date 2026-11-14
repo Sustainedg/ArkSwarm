@@ -185,3 +185,42 @@ async def test_deleted_role_is_reported_as_validation_error(client: httpx.AsyncC
     created = await client.post("/api/collab/teams", json=body)
     codes = {issue["code"] for issue in created.json()["validation"]["errors"]}
     assert "node.agent_missing" in codes
+
+
+async def test_active_runs_lists_collab_agents_with_the_run_title(
+    client: httpx.AsyncClient, roles
+):
+    """「正在运行的智能体」要能查到协作里跑着的岗位（对话域那张运行表看不到它们）。
+
+    协作的运行登记在协作域自己的句柄表里（工单步骤 `registry` / 入口对话 `chat_registry`），
+    所以这里由协作域给一份汇总，并补上运行标题 —— 界面上要能认得出是哪次协作。
+    """
+    from app.collab import execution
+
+    created = await client.post(
+        "/api/collab/teams",
+        json={"name": "在跑的组", "entry_key": "ceo", "graph": graph_body(roles)},
+    )
+    run = await client.post(
+        "/api/collab/runs", json={"team_id": created.json()["id"], "title": "登录页改造"}
+    )
+    run_id = run.json()["id"]
+
+    execution.registry.register(run_id, "step-1", "SE", "se")
+    execution.chat_registry.register(run_id, "chat:msg-1", "CEO", "ceo")
+    try:
+        items = (await client.get("/api/collab/active-runs")).json()["items"]
+        by_agent = {item["agent_name"]: item for item in items}
+        assert by_agent["SE"]["kind"] == "step"
+        assert by_agent["SE"]["node_key"] == "se"
+        assert by_agent["SE"]["run_id"] == run_id
+        assert by_agent["SE"]["title"] == "登录页改造"
+        assert by_agent["CEO"]["kind"] == "chat"
+        assert by_agent["CEO"]["elapsed_seconds"] >= 0
+    finally:
+        # 句柄表是进程级的：用例收尾必须清干净，否则会漏进别的用例。
+        execution.registry.finish("step-1")
+        execution.chat_registry.finish("chat:msg-1")
+
+    after = (await client.get("/api/collab/active-runs")).json()["items"]
+    assert all(item["agent_name"] not in {"SE", "CEO"} for item in after)

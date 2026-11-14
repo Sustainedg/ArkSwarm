@@ -135,6 +135,26 @@ async def list_runs(team_id: str | None = None, session: AsyncSession = Depends(
     return {"items": [item.model_dump() for item in await _list_run_reads(session, team_id)]}
 
 
+@router.get("/active-runs")
+async def active_runs(session: AsyncSession = Depends(get_session)) -> dict:
+    """本进程里正在跑的协作智能体（工单步骤 + 入口智能体的对话回复）。
+
+    设置页的「正在运行的智能体」要一并显示它们：协作的运行登记在协作域自己这里，
+    对话域那份运行表（`GET /api/system/overview` 的 `active_runs`）看不到。
+    汇总接口留在各自域的边界上，所以这里由协作域自己给一份，并补上运行标题（界面好认）。
+    """
+    items = execution.active_runs()
+    if items:
+        ids = {item["run_id"] for item in items}
+        rows = (
+            await session.execute(select(CollabRun).where(CollabRun.id.in_(ids)))
+        ).scalars().all()
+        titles = {row.id: row.title for row in rows}
+        for item in items:
+            item["title"] = titles.get(item["run_id"])
+    return {"items": items}
+
+
 @router.post("/runs", status_code=201)
 async def create_run(payload: RunCreate, session: AsyncSession = Depends(get_session)) -> RunRead:
     try:

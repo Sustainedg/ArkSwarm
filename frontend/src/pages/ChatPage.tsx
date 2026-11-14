@@ -10,7 +10,7 @@ import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPo
 import { useComposerDraft } from '../lib/composerDraft'
 import { notifyConversationsChanged } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
-import { MediaUrlProvider } from '../lib/media'
+import { MediaUrlProvider, composeWithAttachments } from '../lib/media'
 import { shortPath } from '../lib/paths'
 import { useMarkConversationRead } from '../lib/readReceipts'
 import { shareConversationImage } from '../lib/shareImage'
@@ -31,6 +31,8 @@ import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn extends AgentStreamState {
   userText: string
+  /** 这一轮用户消息带上的附件（rel_path）：落库前先把缩略图画进「你」的气泡里 */
+  userAttachments: string[]
   agentName: string
   avatar: string
 }
@@ -291,6 +293,7 @@ export function ChatPage() {
       ...emptyAgentStream(),
       // 用户消息已经在数据库里（详情会拉到），这里只渲染正在生成的助手回复。
       userText: '',
+      userAttachments: [],
       agentName: conversation?.agent_name ?? activeRun.agent_name ?? '智能体',
       avatar: conversation?.agent_avatar ?? '🤖',
     })
@@ -373,9 +376,34 @@ export function ChatPage() {
     queuedAttachments?: AttachmentRef[],
   ): Promise<boolean> => {
     const conversation = active
-    if (!conversation) return false
-    if (remoteRunning) return false
     const pending = regenerate ? [] : (queuedAttachments ?? attachments)
+
+    /**
+     * 消息没能发出去时，把正文与附件原样还给输入区，用户可以直接重发，不会凭空丢掉。
+     *
+     * 判据是**有没有收到事件**（`announced`）而不是有没有报错：服务端把用户消息落库之后才
+     * 开始推事件，所以「收到过事件」＝消息已经发出去了，之后哪怕连接断开、用户按了停止，
+     * 也只能算「没读到回复」，不能再把内容挂回输入区（那会变成重复发送）。
+     */
+    const restoreUnsent = () => {
+      if (regenerate) return
+      if (content.trim()) setDraft((prev) => (prev ? prev : content))
+      if (pending.length > 0) {
+        setAttachments((prev) => {
+          const seen = new Set(prev.map((item) => item.rel_path))
+          return [...prev, ...pending.filter((item) => !seen.has(item.rel_path))]
+        })
+      }
+    }
+
+    if (!conversation) {
+      restoreUnsent()
+      return false
+    }
+    if (remoteRunning) {
+      restoreUnsent()
+      return false
+    }
     if (!regenerate && !content.trim() && pending.length === 0) return false
 
     setError(null)
@@ -390,6 +418,7 @@ export function ChatPage() {
     setLive({
       ...emptyAgentStream(),
       userText: regenerate ? '' : content,
+      userAttachments: regenerate ? [] : pending.map((item) => item.rel_path),
       agentName: conversation.agent_name ?? '智能体',
       avatar: conversation.agent_avatar ?? '🤖',
     })
@@ -410,19 +439,24 @@ export function ChatPage() {
           if (!announced) {
             announced = true
             notifyConversationsChanged()
+            // 服务端把用户消息落库之后才开始推事件（`run.started` 最先到达），
+            // 所以「收到第一个事件」＝「这条消息已经发出去了」—— 此刻把待发附件从输入区收走。
+            // 不早于这个时刻清：POST 被拒 / 还没连上时附件原样留着，用户可以直接重发，不会凭空丢掉。
+            // 只清这一批（按 rel_path 命中），等待期间新加的附件保留。
+            if (pending.length > 0) {
+              const sent = new Set(pending.map((item) => item.rel_path))
+              setAttachments((prev) => prev.filter((item) => !sent.has(item.rel_path)))
+            }
           }
           setLive((prev) => (prev ? { ...prev, ...applyAgentEvent(prev, event) } : prev))
         },
         controller.signal,
       )
-      // 消息已经落到服务端：只清掉这一批附件，等待期间新加的附件保留。
-      if (pending.length > 0) {
-        const sent = new Set(pending.map((item) => item.rel_path))
-        setAttachments((prev) => prev.filter((item) => !sent.has(item.rel_path)))
-      }
       return true
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') reportError(e)
+      // 一个事件都没收到＝这一轮根本没跑起来（POST 被拒 / 还没连上）：内容还给输入区。
+      if (!announced) restoreUnsent()
       return false
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -451,7 +485,7 @@ export function ChatPage() {
 
   /**
    * 输入区「发送」：
-   * - 空闲：直接发，草稿立刻清空（附件在发送成功后由 `send` 清掉）；
+   * - 空闲：直接发，草稿立刻清空（附件在消息落库、收到第一个事件时由 `send` 收走）；
    * - AI 正在回复：消息进入待发送队列，输入区马上可以继续写；本轮结束后按顺序自动发出。
    */
   const submitDraft = () => {
@@ -479,17 +513,9 @@ export function ChatPage() {
     const next = queue[0]
     if (next.conversationId !== active.id) return
     setQueue((prev) => prev.slice(1))
-    void send(next.content, false, next.attachments).then((ok) => {
-      if (ok) return
-      // 发送失败：内容还给输入区，别让队列自动重试成死循环。
-      setDraft((prev) => (prev ? prev : next.content))
-      if (next.attachments.length > 0) {
-        setAttachments((prev) => {
-          const seen = new Set(prev.map((item) => item.rel_path))
-          return [...prev, ...next.attachments.filter((item) => !seen.has(item.rel_path))]
-        })
-      }
-    })
+    // 发送失败时由 `send` 把正文与附件还回输入区（只还「一个事件都没收到」的那种）；
+    // 这里不再兜一次，免得消息其实已经落库、却把内容重复挂回输入框。
+    void send(next.content, false, next.attachments)
     // send / runActive 每次渲染都是新的，这里只盯队列与运行状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, runActive, active?.id])
@@ -708,13 +734,14 @@ export function ChatPage() {
       message,
       avatar: active?.agent_avatar ?? undefined,
     })),
-    ...(live?.userText
+    ...(live && (live.userText || live.userAttachments.length > 0)
       ? [{
           id: 'live-user',
           message: {
             id: 'live-user',
             role: 'user' as const,
-            content: live.userText,
+            // 附件清单拼回正文：图片缩略图当场就画进「你」的气泡，不用等整轮回复跑完、重新拉库。
+            content: composeWithAttachments(live.userText, live.userAttachments),
             parts: [],
             status: 'complete',
           },
@@ -745,44 +772,42 @@ export function ChatPage() {
       <section className="chat-pane">
         {active ? (
           <>
-            <div className="chat-topbar">
-              <div className="avatar">{active.agent_avatar}</div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>{active.agent_name}</div>
-                <div className="dim small">
-                  {active.agent_type_id ?? '智能体'} · {active.session_id ? `会话 ${active.session_id.slice(0, 8)}` : '新会话'}
-                </div>
+            {/* 顶栏只有一行对话名称（居中）+ 右侧分享 / 朗读：不再显示智能体名与内核说明。 */}
+            <div className="chat-topbar center-title">
+              <div className="chat-topbar-title" title={active.title}>
+                {active.title}
               </div>
-              <div className="spacer" style={{ flex: 1 }} />
-              <button
-                className="icon-btn"
-                onClick={() => void shareChat()}
-                disabled={messages.length === 0 || sharing}
-                aria-label="分享对话"
-                title="把这段对话生成长图分享出去"
-              >
-                <ShareIcon size={18} />
-              </button>
-              <button
-                className={`icon-btn${speech.enabled ? ' on' : ''}`}
-                onClick={() => {
-                  const next = !speech.enabled
-                  speech.setEnabled(next)
-                  setNotice(next ? '朗读已开启：新回复会自动念出来' : '朗读已关闭')
-                }}
-                disabled={!speech.supported}
-                aria-pressed={speech.enabled}
-                aria-label={speech.enabled ? '关闭朗读' : '开启朗读'}
-                title={
-                  !speech.supported
-                    ? '当前浏览器不支持朗读，可用系统自带的读屏'
-                    : speech.enabled
-                      ? '朗读已开启：新回复会自动念出来，点一下关闭'
-                      : '朗读已关闭：点一下开启，新回复会自动念出来'
-                }
-              >
-                <SpeakerIcon on={speech.enabled} size={18} />
-              </button>
+              <div className="chat-topbar-actions">
+                <button
+                  className="icon-btn"
+                  onClick={() => void shareChat()}
+                  disabled={messages.length === 0 || sharing}
+                  aria-label="分享对话"
+                  title="把这段对话生成长图分享出去"
+                >
+                  <ShareIcon size={18} />
+                </button>
+                <button
+                  className={`icon-btn${speech.enabled ? ' on' : ''}`}
+                  onClick={() => {
+                    const next = !speech.enabled
+                    speech.setEnabled(next)
+                    setNotice(next ? '朗读已开启：新回复会自动念出来' : '朗读已关闭')
+                  }}
+                  disabled={!speech.supported}
+                  aria-pressed={speech.enabled}
+                  aria-label={speech.enabled ? '关闭朗读' : '开启朗读'}
+                  title={
+                    !speech.supported
+                      ? '当前浏览器不支持朗读，可用系统自带的读屏'
+                      : speech.enabled
+                        ? '朗读已开启：新回复会自动念出来，点一下关闭'
+                        : '朗读已关闭：点一下开启，新回复会自动念出来'
+                  }
+                >
+                  <SpeakerIcon on={speech.enabled} size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="chat-scroll" ref={scrollRef} onScroll={onThreadScroll}>

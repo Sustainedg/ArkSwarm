@@ -1,4 +1,5 @@
 import type {
+  ActiveCollabRun,
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
@@ -11,6 +12,7 @@ import type {
   MarketSkillList,
   SkillDetail,
   SkillRescanResult, TestResult,
+  TitleSettings,
   UsageOverview,
 } from './types'
 
@@ -117,6 +119,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ proxy_url: proxyUrl }),
     }),
+  /** 「设置 → 对话标题」：自动生成对话标题用哪个智能体 / 模型。 */
+  getTitleSettings: () => request<TitleSettings>('/api/system/title'),
+  setTitleSettings: (body: { enabled: boolean; agent_profile_id?: string | null; model?: string | null }) =>
+    request<TitleSettings>('/api/system/title', { method: 'PUT', body: JSON.stringify(body) }),
   agentTypes: () => request<{ items: AgentType[] }>('/api/agent-types').then((r) => r.items),
 
   // --- 网关（API 密钥的唯一来源；官方链路 + 自定义网关）-----------------------
@@ -309,6 +315,9 @@ export const api = {
     const suffix = teamId ? `?team_id=${encodeURIComponent(teamId)}` : ''
     return request<{ items: CollabRun[] }>(`/api/collab/runs${suffix}`).then((r) => r.items)
   },
+  /** 正在跑的协作智能体（设置页「正在运行的智能体」用：协作的运行不在对话域那份运行表里）。 */
+  listActiveCollabRuns: () =>
+    request<{ items: ActiveCollabRun[] }>('/api/collab/active-runs').then((r) => r.items),
   createCollabRun: (body: { team_id: string; title?: string; workspace_dir?: string | null }) =>
     request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
   getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
+import { CollapsibleGroup } from '../components/CollapsibleGroup'
+import { useExpandMap } from '../lib/collapse'
 import type { Skill, SkillDetail } from '../lib/types'
 import { SkillsMarket } from '../components/SkillsMarket'
 
@@ -17,6 +19,8 @@ export function SkillsPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
+  /** 按内核分组默认折叠：技能多的时候先给一份目录，要看谁点开谁。 */
+  const { isExpanded, toggle } = useExpandMap()
 
   const reload = async (params?: { source_kind?: string; q?: string }) => {
     try {
@@ -152,10 +156,13 @@ export function SkillsPage() {
             </div>
           )}
           {groups.map((group) => (
-            <div key={group.typeId}>
-              <div className="card-section-title" style={{ padding: '8px 4px 4px' }}>
-                {group.typeName}（{group.items.length}）
-              </div>
+            <CollapsibleGroup
+              key={group.typeId}
+              title={group.typeName}
+              count={group.items.length}
+              expanded={isExpanded(group.typeId)}
+              onToggle={() => toggle(group.typeId)}
+            >
               {group.items.map((skill) => (
                 <div
                   key={skill.id}
@@ -173,7 +180,7 @@ export function SkillsPage() {
                   </div>
                 </div>
               ))}
-            </div>
+            </CollapsibleGroup>
           ))}
         </div>
 

@@ -6,6 +6,7 @@ import type { ArchitectureDoc } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { ProxySettings } from '../../components/ProxySettings'
+import { TitleSettingsSection } from '../../components/TitleSettings'
 import { refreshShell, useInstallController } from '../pwa'
 import { describeError } from '../util'
 
@@ -106,12 +107,14 @@ export function MobileSettingsPage({ version }: { version: string }) {
             <button className="m-item" onClick={() => navigate('/runtimes')}>
               <span style={{ fontSize: 18 }}>🧬</span>
               <span className="m-item-main">
-                <span className="m-item-title">运行时</span>
+                <span className="m-item-title">内核管理</span>
                 <span className="m-item-sub">内核的安装 / 更新 / 卸载，以及当前版本与检测状态</span>
               </span>
               <span className="m-item-chevron">›</span>
             </button>
           </div>
+
+          <TitleSettingsSection />
 
           <ProxySettings />
 

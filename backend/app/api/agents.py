@@ -160,6 +160,7 @@ async def _to_read(
         options=profile.options or {},
         enabled=profile.enabled,
         is_default=profile.is_default,
+        group_name=profile.group_name or "",
         created_at=profile.created_at,
         updated_at=profile.updated_at,
         type_name=type_name,
@@ -264,6 +265,7 @@ async def create_agent(payload: AgentProfileCreate, session: AsyncSession = Depe
         enabled=payload.enabled,
         # 第一个智能体自动戴上五角星（新建对话就能直接聊）；显式声明时以显式声明为准
         is_default=bool(payload.is_default) or not await _has_default(session),
+        group_name=(payload.group_name or "").strip()[:60],
     )
     session.add(profile)
     if profile.is_default:
@@ -418,6 +420,7 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
         model=profile.model,
         options=dict(profile.options or {}),
         enabled=profile.enabled,
+        group_name=profile.group_name or "",
     )
     session.add(clone)
     await session.commit()

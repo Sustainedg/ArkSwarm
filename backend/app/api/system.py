@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from .. import VERSION_HISTORY, __version__
 from ..agents import all_agents
 from ..db import SessionLocal
-from ..models import PlatformSetting
+from ..models import AgentProfile, PlatformSetting
 from ..runtime import availability as availability_service
 from ..runtime import registry
+from ..runtime import titles
+from ..runtime.service import pick_default_profile
 from ..settings import get_settings
 from .architecture_doc import build_architecture_page
 
@@ -63,10 +65,65 @@ async def set_proxy(payload: ProxySettings) -> dict:
     return {"proxy_url": value}
 
 
+class TitleSettings(BaseModel):
+    """自动起标题：是否开启、用哪个智能体、哪个模型（都留空 = 跟随「默认智能体」的默认模型）。"""
+
+    enabled: bool = True
+    agent_profile_id: str | None = None
+    model: str | None = None
+
+
+async def _title_settings_view(session) -> dict:
+    """把标题设置连同解析后的名字一起回给界面（界面只回名字，不必自己再查一遍）。
+
+    另附上一次自动起标题的失败原因：起标题是后台增强，失败只在日志里，用户看不到；
+    给它一个界面上能自查的出口（成功一次就清掉）。
+    """
+    settings = await titles.read_settings(session)
+    diagnostics = await titles.read_diagnostics(session)
+    chosen = None
+    if settings.agent_profile_id:
+        candidate = await session.get(AgentProfile, settings.agent_profile_id)
+        if candidate is not None and candidate.deleted_at is None:
+            chosen = candidate
+    fallback = await pick_default_profile(session)
+    effective = chosen or fallback
+    return {
+        "enabled": settings.enabled,
+        "agent_profile_id": settings.agent_profile_id,
+        "model": settings.model,
+        "default_agent_id": fallback.id if fallback else None,
+        "default_agent_name": fallback.name if fallback else None,
+        "effective_agent_id": effective.id if effective else None,
+        "effective_agent_name": effective.name if effective else None,
+        "last_error": diagnostics.last_error,
+        "last_error_at": diagnostics.last_error_at,
+    }
+
+
+@router.get("/system/title")
+async def get_title_settings() -> dict:
+    """读取「自动生成对话标题」的设置。"""
+    async with SessionLocal() as session:
+        return await _title_settings_view(session)
+
+
+@router.put("/system/title")
+async def set_title_settings(payload: TitleSettings) -> dict:
+    """保存标题设置。指定的智能体必须存在且未删除；留空表示跟随默认智能体。"""
+    agent_id = (payload.agent_profile_id or "").strip() or None
+    async with SessionLocal() as session:
+        if agent_id is not None:
+            profile = await session.get(AgentProfile, agent_id)
+            if profile is None or profile.deleted_at is not None:
+                raise HTTPException(status_code=422, detail="指定的智能体不存在")
+        await titles.write_settings(session, payload.enabled, agent_id, payload.model)
+        return await _title_settings_view(session)
+
+
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok", "version": __version__}
-
 
 @router.get("/system/overview")
 async def overview() -> dict:

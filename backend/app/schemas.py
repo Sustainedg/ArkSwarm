@@ -148,6 +148,8 @@ class AgentProfileCreate(BaseModel):
     enabled: bool = True
     #: 创建时就设为默认智能体（第一个智能体不传也会自动成为默认）
     is_default: bool = False
+    #: 分组名（智能体页按它折叠分组；空串 = 未分组）
+    group_name: str = Field(default="", max_length=60)
 
 
 class AgentProfileUpdate(BaseModel):
@@ -164,6 +166,8 @@ class AgentProfileUpdate(BaseModel):
     options: dict[str, Any] | None = None
     credentials: list[AgentCredentialInput] | None = None
     enabled: bool | None = None
+    #: 分组名；空串表示移出分组（归入「未分组」）
+    group_name: str | None = Field(default=None, max_length=60)
 
 
 class AgentSkillBrief(BaseModel):
@@ -204,6 +208,8 @@ class AgentProfileRead(BaseModel):
     enabled: bool
     #: 默认智能体：新建对话时不问就用它（全局唯一）
     is_default: bool = False
+    #: 分组名（空串 = 未分组）
+    group_name: str = ""
     created_at: datetime
     updated_at: datetime
     #: 派生字段

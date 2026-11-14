@@ -179,7 +179,6 @@
 [data-theme='light'] .brand-version,
 [data-theme='light'] .pill.brand,
 [data-theme='light'] .nav-link.active,
-[data-theme='light'] .tab.active,
 [data-theme='light'] .collab-toggle.on,
 [data-theme='light'] .board-filter.active { color: var(--brand-strong); }
 [data-theme='light'] .markdown-body a { color: var(--brand-strong); }
@@ -268,70 +267,79 @@ code, pre, .mono { font-family: var(--mono); }
   height: 100vh; overflow: hidden;
 }
 
+/* 侧边栏整体缩放进度：字体、图标与行距同比例收紧 10%（对话列表不再显得拥挤）。
+   只在这一块生效 —— 用 `var(--sbs, 1)` 是因为 `.chat-item` 也被技能页等复用，
+   那些地方拿不到这个变量，会按原尺寸渲染。 */
 .sidebar {
+  --sbs: 0.9;
   min-height: 0;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 18px 14px; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: calc(6px * var(--sbs));
+  padding: calc(18px * var(--sbs)) calc(14px * var(--sbs)); border-right: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(23, 22, 42, 0.85), rgba(11, 10, 18, 0.6));
   backdrop-filter: blur(12px);
 }
 
-.brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px; }
+.brand { display: flex; align-items: center; gap: calc(10px * var(--sbs)); padding: calc(4px * var(--sbs)) calc(8px * var(--sbs)) calc(16px * var(--sbs)); }
 .brand-mark {
-  width: 30px; height: 30px; border-radius: 9px; flex: none;
+  width: calc(30px * var(--sbs)); height: calc(30px * var(--sbs)); border-radius: calc(9px * var(--sbs)); flex: none;
   background: linear-gradient(135deg, var(--brand), #7b5cff);
   box-shadow: 0 6px 18px rgba(217, 79, 208, 0.4);
-  display: grid; place-items: center; font-size: 15px;
+  display: grid; place-items: center; font-size: calc(15px * var(--sbs));
 }
-.brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 6px; }
+.brand-name { font-weight: 650; font-size: calc(15px * var(--sbs)); letter-spacing: -0.02em; display: flex; align-items: center; gap: calc(6px * var(--sbs)); }
 .brand-version {
-  font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 20px;
+  font-size: calc(9.5px * var(--sbs)); font-weight: 600; letter-spacing: 0.02em;
+  padding: 1px calc(6px * var(--sbs)); border-radius: 20px;
   background: var(--brand-soft); color: #f0a9ea; border: 1px solid rgba(217, 79, 208, 0.35);
 }
-.brand-sub { font-size: 11px; color: var(--text-dim); }
+.brand-sub { font-size: calc(11px * var(--sbs)); color: var(--text-dim); }
 
 /* 主导航：与移动端抽屉的 `.m-drawer-link` 同一套行样式（图标 · 文字 · 右侧箭头）。 */
 .nav-link {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  border-radius: var(--radius-sm); color: var(--text-muted); font-size: 14px; font-weight: 550;
+  display: flex; align-items: center; gap: calc(10px * var(--sbs)); padding: calc(10px * var(--sbs)) calc(12px * var(--sbs));
+  border-radius: var(--radius-sm); color: var(--text-muted); font-size: calc(14px * var(--sbs)); font-weight: 550;
   transition: background 0.15s, color 0.15s;
 }
 .nav-link:hover { background: var(--bg-hover); color: var(--text); }
 .nav-link.active { background: var(--brand-soft); color: #f6d9f4; }
-.nav-link .nav-icon { flex: none; width: 20px; text-align: center; font-size: 17px; line-height: 1; }
+.nav-link .nav-icon { flex: none; width: calc(20px * var(--sbs)); text-align: center; font-size: calc(17px * var(--sbs)); line-height: 1; }
 .nav-chevron { margin-left: auto; color: var(--text-dim); }
-.nav-badge { margin-left: auto; font-size: 10px; padding: 1px 7px; border-radius: 20px; background: var(--bg-hover); color: var(--text-muted); }
+.nav-badge { margin-left: auto; font-size: calc(10px * var(--sbs)); padding: 1px calc(7px * var(--sbs)); border-radius: 20px; background: var(--bg-hover); color: var(--text-muted); }
 
 /* 左侧栏下半部分的对话列表（与移动端抽屉同构：导航在上、列表在下） */
 .sidebar-conversations {
-  display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0;
-  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: calc(6px * var(--sbs)); flex: 1; min-height: 0;
+  margin-top: calc(10px * var(--sbs)); padding-top: calc(10px * var(--sbs)); border-top: 1px solid var(--border);
 }
-.sidebar-section-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 4px; }
-.sidebar-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
-.sidebar-picker { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-section-head { display: flex; align-items: center; justify-content: space-between; gap: calc(6px * var(--sbs)); padding: 0 calc(4px * var(--sbs)); }
+.sidebar-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: calc(4px * var(--sbs)); }
+.sidebar-picker { display: flex; flex-direction: column; gap: calc(4px * var(--sbs)); }
 
-.sidebar-footer { margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
+.sidebar-footer {
+  margin-top: auto; padding: calc(12px * var(--sbs)) calc(8px * var(--sbs)) calc(4px * var(--sbs));
+  border-top: 1px solid var(--border); font-size: calc(11px * var(--sbs)); color: var(--text-dim);
+}
 
 /* 折叠按钮：点一下在「图标 + 文字」与「只有图标」之间切换（宽度跟着侧边栏走，状态记在本机） */
 .sidebar-toggle {
-  margin-left: auto; flex: none; width: 26px; height: 26px; display: grid; place-items: center;
+  margin-left: auto; flex: none; width: calc(26px * var(--sbs)); height: calc(26px * var(--sbs));
+  display: grid; place-items: center;
   border: 1px solid transparent; border-radius: 8px; background: none;
-  color: var(--text-dim); font-size: 15px; line-height: 1; cursor: pointer;
+  color: var(--text-dim); font-size: calc(15px * var(--sbs)); line-height: 1; cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .sidebar-toggle:hover { background: var(--bg-hover); color: var(--text); }
 
 /* 折叠态：只剩一列图标。与窄屏（≤980px）那份布局同构，只是由用户手动触发。 */
 .app-shell.collapsed { grid-template-columns: 68px 1fr; }
-.app-shell.collapsed .brand { flex-direction: column; gap: 8px; padding: 4px 0 14px; }
+.app-shell.collapsed .brand { flex-direction: column; gap: calc(8px * var(--sbs)); padding: calc(4px * var(--sbs)) 0 calc(14px * var(--sbs)); }
 .app-shell.collapsed .sidebar-toggle { margin-left: 0; }
 .app-shell.collapsed .brand-text,
 .app-shell.collapsed .nav-link .nav-label,
 .app-shell.collapsed .nav-chevron,
 .app-shell.collapsed .sidebar-conversations,
 .app-shell.collapsed .sidebar-footer { display: none; }
-.app-shell.collapsed .nav-link { justify-content: center; padding: 10px 8px; }
+.app-shell.collapsed .nav-link { justify-content: center; padding: calc(10px * var(--sbs)) calc(8px * var(--sbs)); }
 
 .main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 
@@ -344,14 +352,20 @@ code, pre, .mono { font-family: var(--mono); }
 .page-header .spacer { flex: 1; }
 .page-body { flex: 1; overflow: auto; padding: 22px 26px 40px; }
 
+/* 设置页的页头：只留标题，把分割线让给下面的标签栏 —— 于是「设置 / 标签栏 / 内容」三段清晰，
+   7 个标签也有整行的宽度可用（标签本身见 `.tabs` / `.tab`）。 */
+.page-header.settings-head { padding-bottom: 12px; border-bottom: none; }
+.settings-tabbar { display: flex; padding: 0 26px 12px; border-bottom: 1px solid var(--border); }
+
 /* ---------- 对话 ---------- */
 .chat-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
 /* ---------- 对话行（左侧栏列表 / 选智能体新建对话共用） ----------
-   鼠标移上去时右上角浮出「⋯ 会话操作 / ✎ 重命名 / 🗑 删除」三个小图标（见 ConversationList）。 */
+   鼠标移上去时右上角浮出「⋯ 会话操作 / ✎ 重命名 / 🗑 删除」三个小图标（见 ConversationList）。
+   尺寸走 `var(--sbs, 1)`：在侧边栏里随侧边栏一起缩小 10%，技能页等复用同一 class 的地方保持原样。 */
 .chat-item {
   position: relative; display: block; width: 100%; text-align: left; color: inherit;
-  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  padding: calc(8px * var(--sbs, 1)) calc(10px * var(--sbs, 1)); border-radius: var(--radius-sm); cursor: pointer;
   border: 1px solid transparent; background: none; font: inherit;
   transition: background 0.15s, border-color 0.15s;
 }
@@ -359,7 +373,7 @@ code, pre, .mono { font-family: var(--mono); }
 .chat-item.active { background: var(--brand-soft); border-color: rgba(217, 79, 208, 0.3); }
 .chat-item:disabled { opacity: 0.55; cursor: not-allowed; }
 .chat-item-main {
-  display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; text-align: left;
+  display: flex; flex-direction: column; gap: calc(3px * var(--sbs, 1)); width: 100%; min-width: 0; text-align: left;
   padding: 0; border: none; background: none; color: inherit; font: inherit; cursor: pointer;
   transition: padding-right 0.15s;
 }
@@ -367,16 +381,16 @@ code, pre, .mono { font-family: var(--mono); }
    选中行的底色是半透明的品牌色，动作条 `background: inherit` 也半透明，
    不让开的话标题和时间会直接透到图标底下。 */
 .chat-item:hover .chat-item-main,
-.chat-item:focus-within .chat-item-main { padding-right: 84px; }
-.chat-item-title { font-weight: 550; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item:focus-within .chat-item-main { padding-right: calc(84px * var(--sbs, 1)); }
+.chat-item-title { font-weight: 550; font-size: calc(13px * var(--sbs, 1)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 标题前的小状态点：正在回复（转圈）优先于未读（实心点）。
    放在标题左侧而不是右上角 —— 右上角悬停时会被「⋯ ✎ 🗑」盖住。 */
-.chat-item-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.chat-item-head { display: flex; align-items: center; gap: calc(7px * var(--sbs, 1)); min-width: 0; }
 .chat-item-head > .chat-item-title { flex: 1; min-width: 0; }
-.chat-item-state { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.chat-item-state { flex: none; width: calc(8px * var(--sbs, 1)); height: calc(8px * var(--sbs, 1)); border-radius: 50%; }
 .chat-item-state.unread { background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .chat-item-state.running {
-  width: 9px; height: 9px; background: transparent;
+  width: calc(9px * var(--sbs, 1)); height: calc(9px * var(--sbs, 1)); background: transparent;
   border: 1.6px solid var(--brand-soft); border-top-color: var(--brand);
   animation: chat-item-spin 0.8s linear infinite;
 }
@@ -384,30 +398,42 @@ code, pre, .mono { font-family: var(--mono); }
 @media (prefers-reduced-motion: reduce) {
   .chat-item-state.running { animation: none; border-color: var(--brand); }
 }
-.chat-item-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+.chat-item-meta { font-size: calc(11px * var(--sbs, 1)); color: var(--text-dim); display: flex; gap: calc(6px * var(--sbs, 1)); align-items: center; }
 /* 智能体名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
 .chat-item-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-item-time { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
 /* 行内动作：平时不占地方，鼠标移上去（或键盘走进去）才浮出来 */
 .chat-item-actions {
-  display: none; position: absolute; top: 5px; right: 6px; gap: 1px;
-  padding-left: 14px; background: inherit;
+  display: none; position: absolute; top: calc(5px * var(--sbs, 1)); right: calc(6px * var(--sbs, 1)); gap: 1px;
+  padding-left: calc(14px * var(--sbs, 1)); background: inherit;
 }
 .chat-item:hover .chat-item-actions, .chat-item:focus-within .chat-item-actions { display: flex; }
 .chat-item-act {
-  display: grid; place-items: center; width: 24px; height: 24px; flex: none;
+  display: grid; place-items: center; width: calc(24px * var(--sbs, 1)); height: calc(24px * var(--sbs, 1)); flex: none;
   border: none; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer;
 }
 .chat-item-act:hover { background: var(--bg-panel); color: var(--text); }
 .chat-item-act.danger:hover { color: var(--danger); }
 .chat-item-rename {
-  width: 100%; padding: 5px 8px; border: 1px solid var(--brand); border-radius: 6px;
-  background: var(--bg-input); color: var(--text); font: inherit; font-size: 13px; outline: none;
+  width: 100%; padding: calc(5px * var(--sbs, 1)) calc(8px * var(--sbs, 1)); border: 1px solid var(--brand); border-radius: 6px;
+  background: var(--bg-input); color: var(--text); font: inherit; font-size: calc(13px * var(--sbs, 1)); outline: none;
 }
 
 /* 撑满外层高度：消息区自己滚，输入区因此永远贴在窗口底部（否则短对话里输入框浮在半空）。 */
 .chat-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .chat-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
+/* 对话页的顶栏：只有一行居中的对话名称 + 右侧分享 / 朗读。三栏 grid，左右两栏各占等宽，
+   标题因此永远落在正中（左边那栏留空 —— 不再显示智能体名与内核说明）。
+   用修饰类而不是直接改 `.chat-topbar`：协作岗位面板（`.collab-agent-panel-head`）复用了同一个
+   顶栏，它是「头像 + 标题 + 状态 + 关闭」的 flex 排布，不能被这里的 grid 顶掉。 */
+.chat-topbar.center-title {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+}
+.chat-topbar-title {
+  grid-column: 2; min-width: 0; text-align: center;
+  font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-topbar-actions { grid-column: 3; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .chat-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
 /* ---------- 对话：全局唯一一份气泡布局 ----------
    单聊、协作主对话、协作岗位实时对话都渲染同一个 `ConversationThread`，
@@ -575,6 +601,103 @@ code, pre, .mono { font-family: var(--mono); }
   border: 1px dashed var(--border); border-radius: var(--radius-sm);
   color: var(--text-dim); font-size: 11.5px;
 }
+
+/* ================= 标签页：胶囊分段控件（设置 / 技能 / 用量 / 协作导航共用，两端共用这一份）================= */
+/* 凹槽 + 抬起的选中块：选中态用「更高的面 + 一点外阴影」而不是只换个浅底色，对比度高
+   （两种主题下都是 `--text` 压在面板色上），也看得出「这一块是抬起来的」。
+   标签前那颗品牌色圆点只在选中时亮起，但**不选中也占位**（透明）—— 这样切换标签不会
+   因为多/少一个元素而让文字左右跳。 */
+.tabs {
+  display: flex; flex-wrap: wrap; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg);
+}
+.tab {
+  display: inline-flex; align-items: center; flex: none;
+  padding: 7px 14px; border: none; border-radius: 9px; background: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 550; color: var(--text-muted);
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+.tab::before {
+  content: ''; flex: none; width: 5px; height: 5px; margin-right: 7px; border-radius: 50%;
+  background: transparent; transition: background 0.16s ease, box-shadow 0.16s ease;
+}
+.tab:hover { background: var(--bg-hover); color: var(--text); }
+.tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.tab.active {
+  background: var(--bg-panel); color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32), inset 0 0 0 1px var(--border-strong);
+}
+.tab.active::before { background: var(--brand); box-shadow: 0 0 7px var(--brand-glow); }
+@media (prefers-reduced-motion: reduce) {
+  .tab, .tab::before { transition: none; }
+}
+
+/* ================= MCP 详情：身份头 + 分区卡片（桌面端与移动端共用这一份）================= */
+/* 一处实现、两端复用（桌面端是右侧详情面板，移动端是详情弹层，同一个 `McpDetailBody` 组件）。
+   要点：① 先给「这是什么」一个身份头（图标 + 名称 + 元信息 + 状态），别再一上来就是一排标签；
+   ② 信息按「连接方式 / 密钥 / 分配」分成带图标的卡片，每张卡片内部是「标签 : 值」行；
+   ③ 值**换行**而不是省略号截断 —— 启动命令常常很长，截断就等于看不到。
+   两端的样式各写一份、共享段逐字一致（移动端不加载 index.css）。 */
+.mcp-detail { display: flex; flex-direction: column; gap: 14px; }
+.mcp-hero {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: linear-gradient(140deg, var(--brand-soft), transparent 60%), var(--bg-panel);
+}
+.mcp-hero-tile {
+  flex: none; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+  color: #fff; background: linear-gradient(135deg, var(--brand), #7b5cff);
+  box-shadow: 0 6px 16px var(--brand-glow);
+}
+.mcp-hero-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mcp-hero-name { font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+.mcp-hero-meta { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; overflow-wrap: anywhere; }
+.mcp-hero-desc { font-size: 12px; color: var(--text-muted); line-height: 1.65; }
+.mcp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mcp-section {
+  display: flex; flex-direction: column; gap: 9px; padding: 13px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel);
+}
+.mcp-section-head { display: flex; align-items: center; gap: 7px; color: var(--text-muted); }
+.mcp-section-head svg { flex: none; color: var(--brand); }
+.mcp-section-title { font-size: 11.5px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
+.mcp-rows { display: flex; flex-direction: column; gap: 7px; }
+.mcp-row { display: grid; grid-template-columns: 92px 1fr; gap: 2px 10px; align-items: start; }
+.mcp-row-label { font-size: 11.5px; color: var(--text-dim); }
+.mcp-row-value { font-size: 12.5px; overflow-wrap: anywhere; }
+.mcp-row-value.mono { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; }
+.mcp-key-name { color: var(--text); font-weight: 600; }
+.mcp-masked { color: var(--text-dim); letter-spacing: 0.05em; }
+.mcp-agents { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-agent {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input);
+  font-size: 12px; color: var(--text);
+}
+.mcp-agent-avatar {
+  flex: none; width: 21px; height: 21px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--bg-hover); font-size: 12px; line-height: 1;
+}
+.mcp-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.7; }
+
+/* ================= 折叠分组：标题一行（点一下展开 / 折叠），内容默认收起（两端共用这一份）================= */
+.collapse-group { display: flex; flex-direction: column; }
+.collapse-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text-muted); font: inherit; font-size: 12.5px; font-weight: 600;
+  letter-spacing: 0.02em; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.collapse-head:hover { background: var(--bg-hover); color: var(--text); }
+.collapse-head:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.collapse-caret { flex: none; font-size: 9px; color: var(--text-dim); transition: transform 0.15s; }
+.collapse-head.open .collapse-caret { transform: rotate(90deg); }
+.collapse-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collapse-count {
+  flex: none; font-size: 10.5px; font-weight: 600; padding: 1px 8px; border-radius: 20px;
+  background: var(--bg-hover); color: var(--text-muted);
+}
+.collapse-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 8px; }
 
 /* ================= 输入区：一个框 + 框里的线条图标（两端共用这一份）================= */
 /* 框里依次是：附件 / 语音、输入框、发送（运行中变成停止）；框上方可以插一条说明
@@ -817,8 +940,30 @@ code, pre, .mono { font-family: var(--mono); }
 .empty { text-align: center; padding: 60px 20px; color: var(--text-dim); }
 .empty-icon { font-size: 34px; margin-bottom: 12px; opacity: 0.7; }
 
-/* ---------- 运行时管理 ---------- */
-.runtime-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
+/* ---------- 内核管理（设置 → 内核管理） ---------- */
+.runtime-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(285px, 1fr)); }
+/* 整张卡就是一个按钮（内核卡片点进详情、设置页「正在运行的智能体」里的协作运行点进那条运行）：
+   按钮不继承字体、默认居中，这里补齐这几项，再给悬停与键盘焦点反馈。 */
+.card-clickable {
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.card-clickable:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.card-clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .card-clickable { transition: none; }
+  .card-clickable:hover { transform: none; }
+}
+/* 内核卡片：文字列 + 右侧一个会滑动的箭头 */
+.runtime-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.runtime-card-chevron {
+  flex: none; align-self: center; color: var(--text-dim); font-size: 18px; line-height: 1;
+  transition: transform 0.15s, color 0.15s;
+}
+.card-clickable:hover .runtime-card-chevron { color: var(--text-muted); transform: translateX(2px); }
+@media (prefers-reduced-motion: reduce) {
+  .runtime-card-chevron { transition: none; }
+}
 /* 内核 Logo：把单色 SVG 当遮罩用，颜色跟着文字走（深浅两套外观自适应） */
 .kernel-logo {
   display: inline-block;
@@ -940,12 +1085,6 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 12px 14px; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
   max-height: 46vh; overflow: auto;
 }
-
-/* ---------- 页内页签（协作） ---------- */
-.tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); }
-.tab { padding: 6px 14px; border-radius: 999px; font-size: 12.5px; color: var(--text-muted); transition: background 0.15s, color 0.15s; }
-.tab:hover { color: var(--text); }
-.tab.active { background: var(--brand-soft); color: #f6d9f4; box-shadow: inset 0 0 0 1px rgba(217, 79, 208, 0.28); }
 
 /* ---------- 协作：运行 / 设置 两栏骨架 ---------- */
 .collab-shell { display: grid; grid-template-columns: 268px 1fr; flex: 1; min-height: 0; }
@@ -1634,7 +1773,7 @@ code, pre, .mono { font-family: var(--mono); }
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 68px 1fr; }
   .brand-text, .nav-link .nav-label, .nav-chevron, .sidebar-footer { display: none; }
-  .nav-link { justify-content: center; padding: 10px 8px; }
+  .nav-link { justify-content: center; padding: calc(10px * var(--sbs, 1)) calc(8px * var(--sbs, 1)); }
   /* 这么窄的窗口本来就只剩图标，折叠按钮没有意义 */
   .sidebar-toggle { display: none; }
   .chat-shell { grid-template-columns: 1fr; }

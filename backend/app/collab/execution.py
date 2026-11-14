@@ -86,6 +86,10 @@ class StepRegistry:
     def active_for(self, run_id: str) -> list[ActiveRun]:
         return [h for h in self._handles.values() if h.conversation_id == run_id and not h.finished]
 
+    def list_active(self) -> list[ActiveRun]:
+        """本进程里**所有**还在跑的句柄（跨运行，给「正在运行的智能体」汇总用）。"""
+        return [h for h in self._handles.values() if not h.finished]
+
     def active_for_node(self, run_id: str, node_key: str) -> list[ActiveRun]:
         """这个运行下、某个岗位上仍在跑的句柄（聊天通道用来避免同一岗位并发）。"""
         return [h for h in self.active_for(run_id) if getattr(h, "node_key", "") == node_key]
@@ -409,6 +413,31 @@ def is_running(run_id: str) -> bool:
 
 def is_chat_running(run_id: str) -> bool:
     return bool(chat_registry.active_for(run_id))
+
+
+def active_runs() -> list[dict[str, Any]]:
+    """本进程里正在跑的协作智能体：工单步骤 + 入口智能体的对话回复。
+
+    协作的运行登记在**协作域自己这里**（``registry`` / ``chat_registry``），不在对话域那份
+    ``runtime.manager.registry`` 里 —— 所以「正在运行的智能体」只看对话域的话，协作里跑着的
+    岗位一个都不会出现。这是一份跨运行的汇总，由协作域自己给出（框架层不反向依赖协作域）。
+
+    ``run_id`` 就是协作运行 id（``ActiveRun.conversation_id`` 在协作域承载的是它）。
+    """
+    summary: list[dict[str, Any]] = []
+    for kind, handles in (("step", registry), ("chat", chat_registry)):
+        for handle in handles.list_active():
+            snapshot = handle.snapshot()
+            summary.append(
+                {
+                    "run_id": snapshot["conversation_id"],
+                    "agent_name": snapshot["agent_name"],
+                    "kind": kind,
+                    "node_key": getattr(handle, "node_key", "") or None,
+                    "elapsed_seconds": snapshot["elapsed_seconds"],
+                }
+            )
+    return summary
 
 
 def cancel_chat(run_id: str) -> bool:

@@ -1,10 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
-import { RefreshIcon } from '../components/Icons'
-import { KernelLogo } from '../components/KernelLogo'
-import { Modal } from '../components/Modal'
+import { useEffect, useRef, useState, type RefObject } from 'react'
+import { RefreshIcon } from './Icons'
+import { KernelLogo } from './KernelLogo'
+import { Modal } from './Modal'
 import { api, ApiError } from '../lib/api'
 import { formatListTime } from '../lib/datetime'
-import type { AgentRuntime, ProvisionEvent, ProvisionJobInfo, RuntimeAction, RuntimeLatest } from '../lib/types'
+import type {
+  AgentRuntime,
+  ProvisionEvent,
+  ProvisionJobInfo,
+  RuntimeAction,
+  RuntimeLatest,
+} from '../lib/types'
 
 const ACTION_LABELS: Record<RuntimeAction, string> = {
   install: '安装',
@@ -27,13 +33,15 @@ interface Job {
 }
 
 /**
- * 运行时页：管理各 CLI 内核在本机的那份可执行文件。
+ * 内核管理：各 CLI 内核在本机的那份可执行文件（装没装、什么版本、要不要升级）。
  *
- * 与「智能体配置」不同：那里配置的是「怎么调用某个内核」，这里管的是「内核本身装没装、
- * 什么版本、要不要升级」。安装 / 更新 / 卸载都是改本机环境的长任务，因此执行过程
- * 以日志流实时回显，并且随时可以中止（中止即杀掉子进程）。
+ * 与「智能体」页分工不同：那里配置的是「怎么调用某个内核」，这里管的是**内核本身**。
+ * 安装 / 更新 / 卸载都是改本机环境的长任务，执行过程以日志流实时回显、随时可中止。
+ *
+ * 交互：列表只给**一行摘要**（Logo · 名称 · 公司 / 版本 · 状态），点卡片进**详情**看完整信息
+ * 与动作 —— 动作按钮与安装日志都收在详情里，卡片本身保持干净（一处实现，桌面端设置页用）。
  */
-export function RuntimesPage() {
+export function KernelManager() {
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -41,12 +49,15 @@ export function RuntimesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
-  const showLogRef = useRef(false)
-  const [showLog, setShowLog] = useState(false)
   const [provisionJobs, setProvisionJobs] = useState<Record<string, ProvisionJobInfo>>({})
-
+  /** 正在看详情的内核 id（点卡片打开） */
+  const [openId, setOpenId] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
+
+  const openRuntime = runtimes.find((item) => item.id === openId) ?? null
+  // 只认「属于当前这条详情」的任务日志：别的内核的安装进度不该在这里串台。
+  const openJob = job && job.runtimeId === openId ? job : null
 
   const checkLatest = async (runtime: AgentRuntime) => {
     if (!runtime.provisioning.commands?.latest?.length) return
@@ -61,7 +72,7 @@ export function RuntimesPage() {
     }
   }
 
-  /** 强制重测一个运行时（后端会把结果写回缓存，界面直接用新值覆盖）。 */
+  /** 强制重测一个内核（后端会把结果写回缓存，界面直接用新值覆盖）。 */
   const refreshStatus = async (runtime: AgentRuntime) => {
     setRefreshing((prev) => ({ ...prev, [runtime.id]: true }))
     try {
@@ -96,7 +107,7 @@ export function RuntimesPage() {
       setRuntimes(items)
       setError(null)
       // 「检查更新」是每个内核一次远端查询（npm view 之类），不能挡住首屏：
-      // 卡片先出来，查到结果再逐个补上，不然页面会一直停在「正在读取运行时状态…」。
+      // 卡片先出来，查到结果再逐个补上。
       setLoading(false)
       await Promise.all(items.map((item) => checkLatest(item)))
       try {
@@ -121,21 +132,25 @@ export function RuntimesPage() {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight
     }
-  }, [job?.lines])
+  }, [openJob?.lines])
 
   const start = async (runtime: AgentRuntime, action: RuntimeAction) => {
     if (action === 'uninstall') {
       const command = (runtime.provisioning.commands?.uninstall ?? []).join(' ')
-      if (!confirm(`确认卸载运行时「${runtime.name}」？\n将执行：${command}`)) return
+      if (!confirm(`确认卸载内核「${runtime.name}」？\n将执行：${command}`)) return
     }
     const controller = new AbortController()
     abortRef.current = controller
     setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], status: 'running' })
-    setShowLog(true)
-    showLogRef.current = true
     setProvisionJobs((prev) => ({
       ...prev,
-      [runtime.id]: { runtime_id: runtime.id, name: runtime.name, action, status: 'running', started_at: Date.now() / 1000 },
+      [runtime.id]: {
+        runtime_id: runtime.id,
+        name: runtime.name,
+        action,
+        status: 'running',
+        started_at: Date.now() / 1000,
+      },
     }))
 
     const onEvent = (event: ProvisionEvent) => {
@@ -148,18 +163,19 @@ export function RuntimesPage() {
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
       } else if (event.type === 'provision.finished') {
-        setJob((prev) =>
-          prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev,
-        )
+        setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
         setProvisionJobs((prev) =>
           prev[runtime.id]
-            ? { ...prev, [runtime.id]: { ...prev[runtime.id], status: event.ok ? 'ok' : 'error', error: event.error } }
+            ? {
+                ...prev,
+                [runtime.id]: {
+                  ...prev[runtime.id],
+                  status: event.ok ? 'ok' : 'error',
+                  error: event.error,
+                },
+              }
             : prev,
         )
-        if (!showLogRef.current) {
-          setShowLog(true)
-          showLogRef.current = true
-        }
       }
     }
 
@@ -171,10 +187,6 @@ export function RuntimesPage() {
       setJob((prev) =>
         prev ? { ...prev, status: 'error', error: controller.signal.aborted ? '已中止' : describe(e) } : prev,
       )
-      if (!showLogRef.current) {
-        setShowLog(true)
-        showLogRef.current = true
-      }
     } finally {
       abortRef.current = null
       void reload()
@@ -186,13 +198,11 @@ export function RuntimesPage() {
     setJob((prev) => (prev ? { ...prev, status: 'error', error: '已中止' } : prev))
   }
 
-  /** 从后端重连到一个进行中 / 已完成的任务，获取全部日志。 */
+  /** 从后端重连到一个进行中 / 已完成的任务，把全部日志取回来。 */
   const viewProgress = async (runtimeId: string) => {
     const info = provisionJobs[runtimeId]
     if (!info) return
-    setShowLog(true)
-    showLogRef.current = true
-    // 本次会话已启动且有日志，直接展示
+    // 本次会话已经拿过它的日志了，直接展示
     if (job && job.runtimeId === runtimeId && job.lines.length > 0) return
     setJob({ runtimeId, name: info.name, action: info.action, lines: [], status: info.status })
     const controller = new AbortController()
@@ -225,143 +235,174 @@ export function RuntimesPage() {
     }
   }
 
+  const openDetail = (runtime: AgentRuntime) => {
+    setOpenId(runtime.id)
+    // 这个内核还有没看完的任务：一进来就把日志接上（进度页与安装动作在同一个窗口里）。
+    if (provisionJobs[runtime.id] && job?.runtimeId !== runtime.id) void viewProgress(runtime.id)
+  }
+
+  const closeDetail = () => {
+    const closing = openId
+    setOpenId(null)
+    // 任务还在跑：留着记录（再点开还能看进度），只是把窗口关掉。
+    if (!job || job.runtimeId !== closing || job.status === 'running') return
+    void api.clearProvisionJob(job.runtimeId).catch(() => {})
+    setProvisionJobs((prev) => {
+      const next = { ...prev }
+      delete next[job.runtimeId]
+      return next
+    })
+    setJob(null)
+  }
+
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1 className="page-title">运行时</h1>
-          <p className="page-desc">
-            各 CLI 内核在本机的那份可执行文件。可以查看安装状态与版本，并直接安装、更新或卸载。
-          </p>
-        </div>
-        <div className="spacer" />
-        <button className="btn" onClick={() => void reload()} disabled={loading}>
-          ↻ 刷新
-        </button>
-      </header>
-
-      <div className="page-body stack">
+      <div className="stack">
         {error && <div className="banner err">{error}</div>}
-        {loading && <div className="empty"><p>正在读取运行时状态…</p></div>}
+
+        <div className="row" style={{ gap: 8 }}>
+          <span className="dim small" style={{ flex: 1 }}>
+            共 {runtimes.length} 个内核 · 点卡片看详情（安装 / 更新 / 卸载也都在详情里）
+          </span>
+          <button className="btn" onClick={() => void reload()} disabled={loading}>
+            ↻ 刷新
+          </button>
+        </div>
+
+        {loading && runtimes.length === 0 && (
+          <div className="empty">
+            <p>正在读取内核状态…</p>
+          </div>
+        )}
         {!loading && runtimes.length === 0 && !error && (
           <div className="empty">
             <div className="empty-icon">🧬</div>
-            <p>没有已注册的运行时。</p>
+            <p>没有已注册的内核。</p>
           </div>
         )}
 
         <div className="runtime-grid">
           {runtimes.map((runtime) => (
-            <RuntimeCard
+            <KernelCard
               key={runtime.id}
               runtime={runtime}
-              refreshing={Boolean(refreshing[runtime.id])}
-              onRefresh={() => void refreshStatus(runtime)}
               latest={latest[runtime.id]}
-              checking={Boolean(checking[runtime.id])}
               busy={provisionJobs[runtime.id]?.status === 'running'}
               runningAction={provisionJobs[runtime.id]?.status === 'running' ? provisionJobs[runtime.id].action : null}
-              onViewProgress={() => void viewProgress(runtime.id)}
-              onCheck={() => void checkLatest(runtime)}
-              onRun={(action) => void start(runtime, action)}
+              onOpen={() => openDetail(runtime)}
             />
           ))}
         </div>
       </div>
 
-      {job && showLog && (
+      {openRuntime && (
         <Modal
-          title={`${ACTION_LABELS[job.action]}「${job.name}」`}
-          onClose={() => {
-            if (job.status === 'running') {
-              setShowLog(false)
-              showLogRef.current = false
-            } else {
-              if (job) void api.clearProvisionJob(job.runtimeId).catch(() => {})
-              setProvisionJobs((prev) => {
-                const next = { ...prev }
-                if (job) delete next[job.runtimeId]
-                return next
-              })
-              setJob(null)
-              setShowLog(false)
-              showLogRef.current = false
-            }
-          }}
           wide
+          title={`内核 · ${openRuntime.name}`}
+          onClose={closeDetail}
           footer={
-            <>
-              {job.status === 'running' ? (
-                <button className="btn danger" onClick={cancel}>
-                  中止
-                </button>
-              ) : (
-                <button
-                  className="btn"
-                  onClick={() => {
-                    if (job) void api.clearProvisionJob(job.runtimeId).catch(() => {})
-                    setProvisionJobs((prev) => {
-                      const next = { ...prev }
-                      if (job) delete next[job.runtimeId]
-                      return next
-                    })
-                    setJob(null)
-                    setShowLog(false)
-                    showLogRef.current = false
-                  }}
-                >
-                  关闭
-                </button>
-              )}
-            </>
+            <button className="btn" onClick={closeDetail}>
+              关闭
+            </button>
           }
         >
-          <div className="row wrap" style={{ gap: 8 }}>
-            <span className={`pill ${job.status === 'running' ? 'brand' : job.status === 'ok' ? 'ok' : 'err'}`}>
-              {job.status === 'running' ? '进行中…' : job.status === 'ok' ? '完成' : '失败'}
-            </span>
-            <span className="dim small">{ACTION_LABELS[job.action]}任务在服务器本地执行，关掉窗口不会中断。</span>
-          </div>
-          {job.error && <div className={`banner ${job.status === 'ok' ? 'info' : 'err'}`}>{job.error}</div>}
-          <pre className="runtime-log" ref={logRef}>
-            {job.lines.length === 0
-              ? '等待输出…'
-              : job.lines.map((line, index) => (
-                  <span key={index} className={line.level === 'warn' ? 'runtime-log-warn' : undefined}>
-                    {line.text}
-                    {'\n'}
-                  </span>
-                ))}
-          </pre>
+          <KernelDetail
+            runtime={openRuntime}
+            latest={latest[openRuntime.id]}
+            checking={Boolean(checking[openRuntime.id])}
+            refreshing={Boolean(refreshing[openRuntime.id])}
+            job={openJob}
+            logRef={logRef}
+            onRefresh={() => void refreshStatus(openRuntime)}
+            onCheck={() => void checkLatest(openRuntime)}
+            onRun={(action) => void start(openRuntime, action)}
+            onCancel={cancel}
+          />
         </Modal>
       )}
     </>
   )
 }
 
-interface CardProps {
+/** 列表卡片：**一行摘要**，整张卡是一个按钮 —— 点它进详情。 */
+function KernelCard({
+  runtime,
+  latest,
+  busy,
+  runningAction,
+  onOpen,
+}: {
+  runtime: AgentRuntime
+  latest?: RuntimeLatest
+  busy: boolean
+  runningAction: RuntimeAction | null
+  onOpen: () => void
+}) {
+  const provisioning = runtime.provisioning
+  const remote = latest?.latest ?? null
+  const current = provisioning.version ? versionCore(provisioning.version) : null
+  const upToDate = Boolean(remote && current && versionCore(remote) === current)
+  return (
+    <button
+      type="button"
+      className="card card-clickable"
+      onClick={onOpen}
+      aria-label={`查看内核「${runtime.name}」的详情`}
+    >
+      <span className="runtime-head">
+        <KernelLogo logo={runtime.logo} />
+        <span className="runtime-card-text">
+          <span className="card-title">{runtime.name}</span>
+          <span className="card-sub runtime-sub">
+            <span>{kernelSummary(runtime, current)}</span>
+            {upToDate && <span className="pill ok">已是最新</span>}
+            {busy && runningAction && (
+              <span className="pill brand">正在{ACTION_LABELS[runningAction]}…</span>
+            )}
+          </span>
+          <span className="dim small">{detectedLabel(provisioning.checked_at)}</span>
+        </span>
+        <span className="runtime-card-chevron" aria-hidden>
+          ›
+        </span>
+      </span>
+    </button>
+  )
+}
+
+/** 详情：完整状态 + 动作 + 这次的安装日志（有任务时才出现）。 */
+function KernelDetail({
+  runtime,
+  latest,
+  checking,
+  refreshing,
+  job,
+  logRef,
+  onRefresh,
+  onCheck,
+  onRun,
+  onCancel,
+}: {
   runtime: AgentRuntime
   latest?: RuntimeLatest
   checking: boolean
   refreshing: boolean
-  busy: boolean
-  runningAction: RuntimeAction | null
-  onViewProgress: () => void
-  onCheck: () => void
+  job: Job | null
+  logRef: RefObject<HTMLPreElement>
   onRefresh: () => void
+  onCheck: () => void
   onRun: (action: RuntimeAction) => void
-}
-
-function RuntimeCard({ runtime, latest, checking, refreshing, busy, runningAction, onViewProgress, onCheck, onRefresh, onRun }: CardProps) {
+  onCancel: () => void
+}) {
   const provisioning = runtime.provisioning
   const managed = provisioning.supported
   const remote = latest?.latest ?? null
   const canCheck = Boolean(provisioning.commands?.latest?.length)
   const current = provisioning.version ? versionCore(provisioning.version) : null
+  const busy = job?.status === 'running'
   // 查到比本机更高的版本才提示「更新到 X」；已经是最新版就不给更新入口。
   // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
   const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
-  // 远端最新版本与本机一致时，在版本号旁边挂一个「已是最新」，一眼就知道不用再点更新。
   const upToDate = Boolean(remote && current && versionCore(remote) === current)
   const showUpdate =
     managed &&
@@ -370,45 +411,41 @@ function RuntimeCard({ runtime, latest, checking, refreshing, busy, runningActio
     (updateTarget !== null || !canCheck || !remote)
 
   return (
-    <div className="card runtime-card">
+    <div className="stack">
       <div className="runtime-head">
         <KernelLogo logo={runtime.logo} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="card-title">{runtime.name}</div>
-          <div className="card-sub runtime-sub">
-            <span>{kernelSummary(runtime, current)}</span>
-            {upToDate && <span className="pill ok">已是最新</span>}
+          <div className="card-sub">
+            {runtime.vendor} · {runtime.runtime === 'api' ? '进程内运行' : '本地 CLI'}
           </div>
-          <div className="dim small">{detectedLabel(provisioning.checked_at)}</div>
         </div>
-        {/* 「重新检测」收成右上角一个小图标：状态本来就带缓存，这是个偶尔点一次的备用动作 */}
-        <button
-          className="icon-btn"
-          onClick={onRefresh}
-          disabled={refreshing || busy}
-          aria-label="重新检测"
-          title="重新检测安装状态与版本"
-        >
-          <RefreshIcon size={16} className={refreshing ? 'spin' : undefined} />
-        </button>
+        <span className={`pill ${provisioning.installed ? 'ok' : managed ? 'warn' : ''}`}>
+          {provisioning.installed ? '已安装' : managed ? '未安装' : '不适用'}
+        </span>
       </div>
 
       {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
 
-      <div className="row wrap" style={{ gap: 6, marginTop: 'auto' }}>
-        {runningAction && (
+      <dl className="kv">
+        <dt>安装方式</dt>
+        <dd>{managed ? '平台代管（可安装 / 更新 / 卸载）' : runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}</dd>
+        <dt>当前版本</dt>
+        <dd>{current ?? '—'}</dd>
+        {canCheck && (
           <>
-            <span className="pill brand">正在{ACTION_LABELS[runningAction]}…</span>
-            <button className="btn sm" onClick={onViewProgress}>
-              查看进度
-            </button>
+            <dt>远端最新</dt>
+            <dd>
+              {checking ? '查询中…' : remote ?? (latest?.error ? '查询失败' : '—')}
+              {!checking && upToDate && remote ? '（已是最新）' : ''}
+            </dd>
           </>
         )}
-        {canCheck && (
-          <button className="btn sm" onClick={onCheck} disabled={checking || busy}>
-            {checking ? '查询中…' : '检查更新'}
-          </button>
-        )}
+        <dt>检测时间</dt>
+        <dd>{detectedLabel(provisioning.checked_at)}</dd>
+      </dl>
+
+      <div className="row wrap" style={{ gap: 8 }}>
         {managed && !provisioning.installed && provisioning.commands?.install?.length ? (
           <button className="btn sm primary" onClick={() => onRun('install')} disabled={busy}>
             安装
@@ -424,17 +461,53 @@ function RuntimeCard({ runtime, latest, checking, refreshing, busy, runningActio
             卸载
           </button>
         ) : null}
+        {canCheck && (
+          <button className="btn sm" onClick={onCheck} disabled={checking || busy}>
+            {checking ? '查询中…' : '检查更新'}
+          </button>
+        )}
+        <button className="btn sm" onClick={onRefresh} disabled={refreshing || busy}>
+          <RefreshIcon size={14} className={refreshing ? 'spin' : undefined} />
+          重新检测
+        </button>
         {runtime.docs_url && (
           <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
             文档 ↗
           </a>
         )}
       </div>
+
+      {job && (
+        <div className="stack" style={{ gap: 8 }}>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <span className={`pill ${job.status === 'running' ? 'brand' : job.status === 'ok' ? 'ok' : 'err'}`}>
+              {job.status === 'running' ? `正在${ACTION_LABELS[job.action]}…` : job.status === 'ok' ? '完成' : '失败'}
+            </span>
+            <span className="dim small">{ACTION_LABELS[job.action]}任务在服务器本地执行，关掉窗口不会中断。</span>
+            {job.status === 'running' && (
+              <button className="btn sm danger" onClick={onCancel}>
+                中止
+              </button>
+            )}
+          </div>
+          {job.error && <div className={`banner ${job.status === 'ok' ? 'info' : 'err'}`}>{job.error}</div>}
+          <pre className="runtime-log" ref={logRef}>
+            {job.lines.length === 0
+              ? '等待输出…'
+              : job.lines.map((line, index) => (
+                  <span key={index} className={line.level === 'warn' ? 'runtime-log-warn' : undefined}>
+                    {line.text}
+                    {'\n'}
+                  </span>
+                ))}
+          </pre>
+        </div>
+      )}
     </div>
   )
 }
 
-/** 卡片副标题：所属公司 + 当前版本（卡片上只留这三样，其余信息收进按钮后面的动作里）。 */
+/** 卡片副标题：所属公司 + 当前版本（卡片上只留这三样，其余信息在详情里）。 */
 function kernelSummary(runtime: AgentRuntime, current: string | null): string {
   const provisioning = runtime.provisioning
   if (!provisioning.supported) {

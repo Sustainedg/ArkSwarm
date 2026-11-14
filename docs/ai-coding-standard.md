@@ -351,7 +351,8 @@ class AcmeHarness(OpenAIHarnessBase):
 - **对话只有一份展示模块**：所有对话（单聊、协作主对话、协作岗位实时对话，含移动端）都渲染
   `ConversationThread`（内部只用 `MessageView` 画气泡）；岗位线程的装配逻辑只有
   `CollabAgentThread` 一份。禁止再写第二套气泡 / 线程布局。
-- 事件并入状态统一在 `ChatPage.applyEvent`，新增事件类型在这里加一个 `case`。
+- 事件并入状态统一在 `src/lib/agentStream.ts` 的 `applyAgentEvent()`（对话页与协作页共用这一份），
+  新增事件类型在这里加一个 `case`。
 - 无 UI 框架 / 无状态管理库；CSS 手写，沿用 `card`、`btn`、`pill`、`banner`、`grid` 等既有 class。
 - 面向用户的文案中文；错误展示沿用 `describe(error)`。
 - **移动端（`/m/`）是独立入口，不是桌面端的窄屏适配**：入口 `frontend/m/index.html` + `src/mobile/`，
@@ -371,8 +372,10 @@ class AcmeHarness(OpenAIHarnessBase):
 - **「操作图标」用线条 SVG**（`src/components/Icons.tsx`，两端共用）：输入区、顶栏这类
   需要与文字同色的小图标，emoji 的尺寸与颜色随系统而变、同一排对不齐；这类图标一律
   `stroke="currentColor"`，尺寸走 `size` 参数。
-- **智能体设置挂在运行时页**：移动端没有独立的智能体配置页，内核的安装 / 更新与它的实例配置
-  在同一处 —— 两件事本来就是一体的。
+- **安装归「内核管理」，配置归「智能体」**：内核的安装 / 更新 / 卸载在「设置 → 内核管理」
+  （两端都有，桌面端是设置里的标签页）；智能体（内核 + 网关 + 模型 + 人格 + 技能）有自己的配置页
+  —— 移动端是 `mobile/pages/MobileAgentsPage.tsx`（有守卫断言它必须存在），**不要**再把「实例配置」
+  塞回内核页（`MobileAgentSettings.tsx` 已取消：密钥归网关）。
 - **外观（深色 / 浅色 / 跟随系统）只有一份实现**（`src/lib/theme.ts`）：解析结果写在
   `<html data-theme>`，两端样式表各自的 `:root` 是深色默认、浅色只加 `[data-theme='light']`
   覆盖块。**界面里不要写死深色**：先加 CSS 变量、再补浅色值；两端都要用到的新配色，两份样式表

@@ -6,10 +6,13 @@ import {
   validateCredentials,
 } from '../../components/CredentialEditor'
 import { DynamicForm } from '../../components/DynamicForm'
+import { CollapsibleGroup } from '../../components/CollapsibleGroup'
 import { StarIcon } from '../../components/Icons'
 import { McpPicker } from '../../components/McpPicker'
 import { SkillPicker } from '../../components/SkillPicker'
 import { api } from '../../lib/api'
+import { groupAgents } from '../../lib/agentGroups'
+import { useExpandMap } from '../../lib/collapse'
 import type {
   AgentProfile,
   AgentType,
@@ -67,6 +70,10 @@ export function MobileAgentsPage() {
     void reload()
   }, [reload])
 
+  /** 按分组折叠展示（默认展开：一进页面就能看到卡片，想收起来再点标题）。 */
+  const { isExpanded, toggle } = useExpandMap(true)
+  const groups = useMemo(() => groupAgents(agents), [agents])
+
   const duplicate = async (agent: AgentProfile) => {
     try {
       await api.duplicateAgent(agent.id)
@@ -115,6 +122,57 @@ export function MobileAgentsPage() {
       setTesting({ agent, result: { ok: false, message: describeError(e), checks: [] }, busy: false })
     }
   }
+  /** 一张智能体卡片（分组之后嵌在 `CollapsibleGroup` → `.m-list` 里）。 */
+  const renderAgentCard = (agent: AgentProfile) => (
+    <div className="card" key={agent.id}>
+      <div className="row">
+        <span className="avatar">{agent.avatar}</span>
+        <div className="m-item-main">
+          <div className="m-item-title">{agent.name}</div>
+          <div className="m-item-sub">
+            {agent.type_name ?? agent.type_id} ·{' '}
+            {agent.gateway_kind === 'official' || !agent.gateway_name ? '官方默认' : agent.gateway_name}
+          </div>
+          <div className="dim small">模型 {agent.model ?? '默认'}</div>
+        </div>
+        {agent.skills.length > 0 && agent.enabled && (
+          <span className="pill">{agent.skills.length} 技能</span>
+        )}
+        {!agent.enabled && <span className="pill warn">已停用</span>}
+        <button
+          type="button"
+          className={`star-btn${agent.is_default ? ' on' : ''}`}
+          onClick={() => void toggleDefault(agent)}
+          aria-pressed={agent.is_default}
+          aria-label={
+            agent.is_default
+              ? `取消「${agent.name}」的默认智能体`
+              : `把「${agent.name}」设为默认智能体`
+          }
+          title={agent.is_default ? '默认智能体（点一下取消）' : '设为默认智能体'}
+        >
+          <StarIcon size={18} on={agent.is_default} />
+        </button>
+      </div>
+      <div className="m-item-actions" style={{ marginTop: 0 }}>
+        <button className="btn sm" onClick={() => void runTest(agent)}>
+          测试
+        </button>
+        <button className="btn sm" onClick={() => void toggleEnabled(agent)}>
+          {agent.enabled ? '停用' : '启用'}
+        </button>
+        <button className="btn sm" onClick={() => setEditing(agent)}>
+          编辑
+        </button>
+        <button className="btn sm" onClick={() => void duplicate(agent)}>
+          复制
+        </button>
+        <button className="btn sm danger" onClick={() => void remove(agent)}>
+          删除
+        </button>
+      </div>
+    </div>
+  )
 
   return (
     <div className="m-page">
@@ -141,56 +199,17 @@ export function MobileAgentsPage() {
               </button>
             </div>
           ) : (
-            <div className="m-list">
-              {agents.map((agent) => (
-                <div className="card" key={agent.id}>
-                  <div className="row">
-                    <span className="avatar">{agent.avatar}</span>
-                    <div className="m-item-main">
-                      <div className="m-item-title">{agent.name}</div>
-                      <div className="m-item-sub">
-                        {agent.type_name ?? agent.type_id} ·{' '}
-                        {agent.gateway_kind === 'official' || !agent.gateway_name ? '官方默认' : agent.gateway_name}
-                      </div>
-                      <div className="dim small">模型 {agent.model ?? '默认'}</div>
-                    </div>
-                    {agent.skills.length > 0 && agent.enabled && (
-                      <span className="pill">{agent.skills.length} 技能</span>
-                    )}
-                    {!agent.enabled && <span className="pill warn">已停用</span>}
-                    <button
-                      type="button"
-                      className={`star-btn${agent.is_default ? ' on' : ''}`}
-                      onClick={() => void toggleDefault(agent)}
-                      aria-pressed={agent.is_default}
-                      aria-label={
-                        agent.is_default
-                          ? `取消「${agent.name}」的默认智能体`
-                          : `把「${agent.name}」设为默认智能体`
-                      }
-                      title={agent.is_default ? '默认智能体（点一下取消）' : '设为默认智能体'}
-                    >
-                      <StarIcon size={18} on={agent.is_default} />
-                    </button>
-                  </div>
-                  <div className="m-item-actions" style={{ marginTop: 0 }}>
-                    <button className="btn sm" onClick={() => void runTest(agent)}>
-                      测试
-                    </button>
-                    <button className="btn sm" onClick={() => void toggleEnabled(agent)}>
-                      {agent.enabled ? '停用' : '启用'}
-                    </button>
-                    <button className="btn sm" onClick={() => setEditing(agent)}>
-                      编辑
-                    </button>
-                    <button className="btn sm" onClick={() => void duplicate(agent)}>
-                      复制
-                    </button>
-                    <button className="btn sm danger" onClick={() => void remove(agent)}>
-                      删除
-                    </button>
-                  </div>
-                </div>
+            <div className="stack">
+              {groups.map((group) => (
+                <CollapsibleGroup
+                  key={group.key}
+                  title={group.label}
+                  count={group.items.length}
+                  expanded={isExpanded(group.key)}
+                  onToggle={() => toggle(group.key)}
+                >
+                  <div className="m-list">{group.items.map(renderAgentCard)}</div>
+                </CollapsibleGroup>
               ))}
             </div>
           )}
@@ -285,6 +304,7 @@ function AgentForm({
   const [typeId, setTypeId] = useState<string>(agent?.type_id ?? agentTypes[0]?.id ?? '')
   const [name, setName] = useState(agent?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? AVATARS[0])
+  const [groupName, setGroupName] = useState(agent?.group_name ?? '')
   const [tagline, setTagline] = useState(agent?.tagline ?? '')
   const [description, setDescription] = useState(agent?.description ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt ?? '')
@@ -363,6 +383,7 @@ function AgentForm({
     try {
       const payload = {
         name: name.trim(),
+        group_name: groupName.trim(),
         type_id: selected.id,
         avatar,
         tagline: tagline.trim() || null,
@@ -393,6 +414,17 @@ function AgentForm({
       <div className="field">
         <label className="field-label">名称</label>
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 代码审查员" />
+      </div>
+
+      <div className="field">
+        <label className="field-label">分组</label>
+        <input
+          className="input"
+          value={groupName}
+          onChange={(event) => setGroupName(event.target.value)}
+          placeholder="例如 开发 / 写作（留空就归入「未分组」）"
+        />
+        <span className="field-help">智能体页按它折叠分组展示；留空表示未分组，永远排在最后。</span>
       </div>
 
       <div className="field">

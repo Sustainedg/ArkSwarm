@@ -137,6 +137,9 @@ async def test_system_architecture_endpoint_returns_rendered_docs(client: httpx.
 
 
 async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncClient):
+    # 关掉「自动起标题」：本用例验证的是首行兜底标题；自动起标题单独在 test_titles.py 覆盖。
+    await client.put("/api/system/title", json={"enabled": False})
+
     agent = await make_agent(client)
     role = await make_profile(
         client,

@@ -83,3 +83,18 @@ export function splitAttachmentBlock(content: string): { text: string; paths: st
     .filter(Boolean)
   return { text: content.slice(0, match.index).trimEnd(), paths }
 }
+
+/**
+ * `splitAttachmentBlock` 的逆向操作：把附件清单拼回正文末尾。
+ *
+ * 实时卡片（`live`）在消息落库、被重新拉回来之前就把它渲染出来了，手上只有正文与
+ * `rel_path` 清单；这里拼成与后端 `app.attachments.compose_with_attachments` **逐字一致**
+ * 的字符串，`MessageView` 才能用同一套解析把附件缩略图画进「你」的气泡里 ——
+ * 否则刚发出去的图要等整轮回复跑完、重新拉库时才出现（正是「附件还留在输入框」的观感来源）。
+ */
+export function composeWithAttachments(content: string, relPaths: string[]): string {
+  if (relPaths.length === 0) return content
+  const block = `📎 附件（已存入工作目录，可直接读取）：\n${relPaths.map((path) => `- ${path}`).join('\n')}`
+  const text = content.trim()
+  return text ? `${text}\n\n${block}` : block
+}

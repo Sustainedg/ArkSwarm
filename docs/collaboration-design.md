@@ -826,7 +826,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `backend/app/collab/prompt.py` | `build_step_prompt()`：把「岗位说明 + 输出协议 + 工单字段 + 上游交付摘要 + 本工单历史 + 本轮要求」拼成一次输入（纯函数，**只读 `gist` 不读 `content`**） |
 | `backend/app/collab/execution.py` | 全域**唯一**接触 `runtime`/`agents` 的边界：`prepare_step`（`history=[]`、`session_id=None`、按 `workspace_scope` 决定工作目录、按分配物化技能与 MCP）、`stream_step`、`snapshot_workspace/finish_audit`、`StepRegistry`（复用 `runtime.manager`） |
 | `backend/app/collab/engine.py` | `prepare_turn`（校验图 → 落用户发言 → 建/唤醒根工单）+ `consume_turn`（预算检查 → 子工单汇聚 → 取就绪工单 → 跑一步 → 解析动作 → 落库），串行、`MAX_STEPS_PER_TURN=200` |
-| `backend/app/collab/api.py` | 运行相关接口：`GET/POST /runs`、`GET/DELETE /runs/{id}`、`POST /runs/{id}/messages`（SSE）、`/resume`（SSE）、`/cancel`、`POST /steps/{id}/retry` |
+| `backend/app/collab/api.py` | 运行相关接口：`GET/POST /runs`、`GET/DELETE /runs/{id}`、`POST /runs/{id}/messages`（SSE）、`/resume`（SSE）、`/cancel`、`POST /steps/{id}/retry`；`GET /active-runs` 给一份「本进程里正在跑的协作智能体」汇总（工单步骤 + 入口对话，带运行标题）—— 协作的运行登记在协作域自己的句柄表里，对话域那份运行表看不到，设置页的「正在运行的智能体」要靠这条接口把两处一起列出来 |
 | `backend/app/collab/tables.py` | 工单补 `owner_key/holder_key/submitter_key`，步骤补 `gist`（交付摘要的结构性落点） |
 | `backend/tests/test_collab_engine.py` | 5 项端到端：完整闭环（7 步、1 次返工、`tickets_used=2`）、下游只见工单、协议违规挂起后重试续跑、入口 `ask_user` 后应答续跑、重复启动/无目标续跑被拒 |
 | `backend/tests/fakes/fake_collab_agent.py` | 替身智能体：按 prompt 里的岗位 key 取剧本，可输出字符串模拟协议违规 |

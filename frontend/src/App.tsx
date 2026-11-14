@@ -6,13 +6,12 @@ import { ChatPage } from './pages/ChatPage'
 import { CollabPage } from './pages/CollabPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { McpPage } from './pages/McpPage'
-import { RuntimesPage } from './pages/RuntimesPage'
 import { SkillsPage } from './pages/SkillsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { UsagePage } from './pages/UsagePage'
 
 //: 与移动端抽屉的主导航**同一份菜单**（顺序、命名、图标都一样）：
-//: 「智能体配置」「运行时」不在菜单里，从「设置」页的配置入口进（移动端就是这么放的）。
+//: 「内核管理」「自定义网关」不在菜单里，收在「设置」页的标签页里（移动端是配置入口）。
 const NAV = [
   { to: '/chat', icon: '💬', label: '对话' },
   { to: '/agents', icon: '🤖', label: '智能体' },
@@ -40,7 +39,7 @@ function readSidebarCollapsed(): boolean {
  *
  * 对话列表与移动端抽屉里那份同构 —— 导航和对话都在同一块，不再让聊天页自带第二条列表栏。
  * 导航的顺序、命名与行的样式（图标 · 文字 · 右侧箭头）也和移动端抽屉对齐；
- * 「智能体配置」「运行时」不在主导航里，收在「设置」页的配置入口（与移动端一致）。
+ * 「内核管理」「自定义网关」不在主导航里，收在「设置」页的标签页里（与移动端一致）。
  */
 export default function App() {
   const [version, setVersion] = useState('')
@@ -123,7 +122,9 @@ export default function App() {
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/mcp" element={<McpPage />} />
           <Route path="/agents" element={<AgentsPage />} />
-          <Route path="/runtimes" element={<RuntimesPage />} />
+          {/* 内核管理已经收进「设置 → 内核管理」（以前这里有独立一页，还从设置里再链一次，
+              等于同一个东西有两个入口）。老地址保留重定向，书签不会失效。 */}
+          <Route path="/runtimes" element={<Navigate to="/settings?tab=kernels" replace />} />
           <Route path="/usage" element={<UsagePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

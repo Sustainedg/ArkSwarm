@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { McpAssignPanel } from '../../components/McpAssignPanel'
+import { McpDetailBody } from '../../components/McpDetailBody'
 import { McpServerForm } from '../../components/McpServerForm'
 import { transportLabel } from '../../components/McpPicker'
 import { api } from '../../lib/api'
@@ -204,81 +205,14 @@ export function MobileMcpPage() {
             setDetail(null)
           }}
         >
-          <div className="row wrap" style={{ gap: 6 }}>
-            <span className="pill brand">{detail.source_label}</span>
-            {detail.type_name && <span className="pill">{detail.type_name}</span>}
-            <span className="pill">{transportLabel(detail.transport)}</span>
-            {!detail.available && <span className="pill err">来源已消失</span>}
-            {!detail.enabled && <span className="pill">已停用</span>}
-          </div>
-
-          {detail.description && <p className="muted" style={{ fontSize: 13.5 }}>{detail.description}</p>}
-
-          <div className="field">
-            <span className="field-label">连接方式</span>
-            {detail.transport === 'stdio' ? (
-              <p className="dim small" style={{ lineHeight: 1.6 }}>
-                {detail.command || '—'}
-                {detail.args.length > 0 && ` ${detail.args.join(' ')}`}
-              </p>
-            ) : (
-              <p className="dim small" style={{ lineHeight: 1.6 }}>{detail.url || '—'}</p>
-            )}
-          </div>
-
-          {(detail.env_keys.length > 0 || detail.header_keys.length > 0) && (
-            <div className="field">
-              <span className="field-label">密钥（只显示掩码）</span>
-              <div className="stack" style={{ gap: 4 }}>
-                {detail.env_keys.map((key) => (
-                  <p className="dim small" key={`env-${key}`}>
-                    环境变量 {key}：{detail.env_preview[key] ?? '••••'}
-                  </p>
-                ))}
-                {detail.header_keys.map((key) => (
-                  <p className="dim small" key={`header-${key}`}>
-                    请求头 {key}：{detail.header_preview[key] ?? '••••'}
-                  </p>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="field">
-            <span className="field-label">分配给哪些智能体</span>
-            {detail.agents.length === 0 ? (
-              <p className="dim small">还没有智能体挂着这个服务器。</p>
-            ) : (
-              <div className="row wrap" style={{ gap: 6 }}>
-                {detail.agents.map((agent) => (
-                  <span className="pill" key={agent.id}>
-                    {agent.avatar} {agent.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button className="btn sm primary" onClick={() => setAssigning(true)}>
-              分配给智能体
-            </button>
-            {detail.editable ? (
-              <>
-                <button className="btn sm" onClick={() => setEditing(detail)}>
-                  编辑
-                </button>
-                <button className="btn sm" onClick={() => void toggleEnabled(detail)}>
-                  {detail.enabled ? '停用' : '启用'}
-                </button>
-                <button className="btn sm ghost" onClick={() => void remove(detail)}>
-                  删除
-                </button>
-              </>
-            ) : (
-              <span className="dim small">内容由该内核自己的配置决定，平台只读收录。</span>
-            )}
-          </div>
+          <McpDetailBody
+            server={detail}
+            showName={false}
+            onAssign={() => setAssigning(true)}
+            onEdit={() => setEditing(detail)}
+            onToggle={() => void toggleEnabled(detail)}
+            onDelete={() => void remove(detail)}
+          />
         </MobileSheet>
       )}
 

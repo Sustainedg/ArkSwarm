@@ -167,9 +167,13 @@ def test_every_kernel_declares_a_logo_that_is_committed():
 
 @needs_frontend
 def test_runtime_cards_use_the_shared_logo_and_trimmed_copy():
-    """两端运行时卡片：名字前面挂官方 Logo，文案只留名称 / 公司 / 当前版本。"""
+    """内核卡片：名字前面挂官方 Logo，文案只留名称 / 公司 / 当前版本。
+
+    桌面端这份 UI 已经收进「设置 → 内核管理」（`components/KernelManager.tsx`，
+    列表卡片 + 详情弹层）；移动端仍是自己一页（卡片 + 底部弹层）。
+    """
     pages = [
-        FRONTEND / "src" / "pages" / "RuntimesPage.tsx",
+        FRONTEND / "src" / "components" / "KernelManager.tsx",
         MOBILE_SRC / "pages" / "MobileRuntimesPage.tsx",
     ]
     for path in pages:

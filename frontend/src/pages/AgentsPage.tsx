@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { CollapsibleGroup } from '../components/CollapsibleGroup'
 import {
   CredentialEditor,
   credentialsToDraft,
@@ -11,6 +12,8 @@ import { StarIcon } from '../components/Icons'
 import { McpPicker } from '../components/McpPicker'
 import { SkillPicker } from '../components/SkillPicker'
 import { api, ApiError } from '../lib/api'
+import { groupAgents } from '../lib/agentGroups'
+import { useExpandMap } from '../lib/collapse'
 import type {
   AgentProfile,
   AgentType,
@@ -90,6 +93,9 @@ export function AgentsPage() {
   }, [])
 
   const typeMap = useMemo(() => Object.fromEntries(types.map((t) => [t.id, t])), [types])
+  /** 按分组折叠展示（默认展开：一进页面就能看到卡片，想收起来再点标题）。 */
+  const { isExpanded, toggle } = useExpandMap(true)
+  const groups = useMemo(() => groupAgents(agents), [agents])
 
   /** 点卡片右上角的五角星：设为默认智能体（再点一下取消），全局只有一颗。 */
   const toggleDefault = async (agent: AgentProfile) => {
@@ -140,6 +146,105 @@ export function AgentsPage() {
     }
   }
 
+  /**
+   * 一张智能体卡片。分组之后它嵌在 `CollapsibleGroup` → `.grid` 里，抽成函数免得缩进成一大坨。
+   */
+  const renderAgentCard = (agent: AgentProfile) => {
+    const type = typeMap[agent.type_id]
+    const availability = agent.availability ?? type?.availability
+    // 可用性那一颗已经写着「2.1.316 (Claude Code)」这类版本串时，别再重复一遍内核名
+    // （只写「0.68.0」这种没有内核名的版本串，仍然要保留名字那颗）
+    const showTypeName = !versionCarriesName(
+      availability?.installed ? availability.version : null,
+      agent.type_name ?? agent.type_id,
+    )
+    return (
+      <article className="card" key={agent.id}>
+        <div className="card-head">
+          <div className="avatar" style={{ width: 40, height: 40, fontSize: 19 }}>
+            {agent.avatar}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div className="card-title">{agent.name}</div>
+            <div className="card-sub">{agent.tagline ?? '无备注'}</div>
+          </div>
+          <button
+            type="button"
+            className={`star-btn${agent.is_default ? ' on' : ''}`}
+            onClick={() => void toggleDefault(agent)}
+            aria-pressed={agent.is_default}
+            aria-label={
+              agent.is_default
+                ? `取消「${agent.name}」的默认智能体`
+                : `把「${agent.name}」设为默认智能体`
+            }
+            title={
+              agent.is_default
+                ? '默认智能体：新建对话直接用它（点一下取消）'
+                : '设为默认智能体：新建对话直接用它'
+            }
+          >
+            <StarIcon size={18} on={agent.is_default} />
+          </button>
+        </div>
+
+        <div className="chips">
+          {showTypeName && <span className="pill brand">{agent.type_name ?? agent.type_id}</span>}
+          <span className={`pill ${agent.runtime === 'api' ? 'brand' : ''}`}>
+            {agent.runtime === 'api' ? '进程内 API' : '本地 CLI'}
+          </span>
+          {availability &&
+            (availability.installed ? (
+              <span className="pill ok">
+                <span className="dot" />
+                {availability.version ?? '就绪'}
+              </span>
+            ) : (
+              <span className="pill err">
+                <span className="dot off" />
+                未安装
+              </span>
+            ))}
+          {agent.enabled ? <span className="pill ok">已启用</span> : <span className="pill warn">已停用</span>}
+          {agent.skills.length > 0 && <span className="pill ok">🧩 {agent.skills.length} 个技能</span>}
+          {agent.mcp_servers.length > 0 && (
+            <span className="pill ok">🔌 {agent.mcp_servers.length} 个 MCP</span>
+          )}
+          {agent.credentials.length > 0 && <span className="pill">🔑 {agent.credentials.length} 条凭据</span>}
+        </div>
+
+        <dl className="kv tight">
+          <dt>网关</dt>
+          <dd title={agent.gateway_base_url ?? ''}>
+            {agent.gateway_kind === 'official' || !agent.gateway_name
+              ? '官方默认'
+              : agent.gateway_name}
+          </dd>
+          <dt>模型</dt>
+          <dd>{agent.model ?? '默认'}</dd>
+        </dl>
+
+        <div className="card-actions" style={{ marginLeft: 0 }}>
+          <button className="btn sm primary" onClick={() => void runTest(agent)}>
+            连通性测试
+          </button>
+          <button className="btn sm" onClick={() => void toggleEnabled(agent)}>
+            {agent.enabled ? '停用' : '启用'}
+          </button>
+          <button className="btn sm" onClick={() => setEditing(agent)}>
+            编辑
+          </button>
+          <button className="btn sm" onClick={() => void duplicate(agent)}>
+            复制
+          </button>
+          <button className="btn sm danger" onClick={() => void remove(agent)}>
+            删除
+          </button>
+        </div>
+      </article>
+    )
+  }
+
   return (
     <>
       <header className="page-header">
@@ -175,102 +280,18 @@ export function AgentsPage() {
             </p>
           </div>
         ) : (
-          <div className="grid">
-            {agents.map((agent) => {
-              const type = typeMap[agent.type_id]
-              const availability = agent.availability ?? type?.availability
-              // 可用性那一颗已经写着「2.1.316 (Claude Code)」这类版本串时，别再重复一遍内核名
-              // （只写「0.68.0」这种没有内核名的版本串，仍然要保留名字那颗）
-              const showTypeName = !versionCarriesName(
-                availability?.installed ? availability.version : null,
-                agent.type_name ?? agent.type_id,
-              )
-              return (
-                <article className="card" key={agent.id}>
-                  <div className="card-head">
-                    <div className="avatar" style={{ width: 40, height: 40, fontSize: 19 }}>
-                      {agent.avatar}
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="card-title">{agent.name}</div>
-                      <div className="card-sub">{agent.tagline ?? '无备注'}</div>
-                    </div>
-                    <button
-                      type="button"
-                      className={`star-btn${agent.is_default ? ' on' : ''}`}
-                      onClick={() => void toggleDefault(agent)}
-                      aria-pressed={agent.is_default}
-                      aria-label={
-                        agent.is_default
-                          ? `取消「${agent.name}」的默认智能体`
-                          : `把「${agent.name}」设为默认智能体`
-                      }
-                      title={
-                        agent.is_default
-                          ? '默认智能体：新建对话直接用它（点一下取消）'
-                          : '设为默认智能体：新建对话直接用它'
-                      }
-                    >
-                      <StarIcon size={18} on={agent.is_default} />
-                    </button>
-                  </div>
-
-                  <div className="chips">
-                    {showTypeName && <span className="pill brand">{agent.type_name ?? agent.type_id}</span>}
-                    <span className={`pill ${agent.runtime === 'api' ? 'brand' : ''}`}>
-                      {agent.runtime === 'api' ? '进程内 API' : '本地 CLI'}
-                    </span>
-                    {availability &&
-                      (availability.installed ? (
-                        <span className="pill ok">
-                          <span className="dot" />
-                          {availability.version ?? '就绪'}
-                        </span>
-                      ) : (
-                        <span className="pill err">
-                          <span className="dot off" />
-                          未安装
-                        </span>
-                      ))}
-                    {agent.enabled ? <span className="pill ok">已启用</span> : <span className="pill warn">已停用</span>}
-                    {agent.skills.length > 0 && <span className="pill ok">🧩 {agent.skills.length} 个技能</span>}
-                    {agent.mcp_servers.length > 0 && (
-                      <span className="pill ok">🔌 {agent.mcp_servers.length} 个 MCP</span>
-                    )}
-                    {agent.credentials.length > 0 && <span className="pill">🔑 {agent.credentials.length} 条凭据</span>}
-                  </div>
-
-                  <dl className="kv tight">
-                    <dt>网关</dt>
-                    <dd title={agent.gateway_base_url ?? ''}>
-                      {agent.gateway_kind === 'official' || !agent.gateway_name
-                        ? '官方默认'
-                        : agent.gateway_name}
-                    </dd>
-                    <dt>模型</dt>
-                    <dd>{agent.model ?? '默认'}</dd>
-                  </dl>
-
-                  <div className="card-actions" style={{ marginLeft: 0 }}>
-                    <button className="btn sm primary" onClick={() => void runTest(agent)}>
-                      连通性测试
-                    </button>
-                    <button className="btn sm" onClick={() => void toggleEnabled(agent)}>
-                      {agent.enabled ? '停用' : '启用'}
-                    </button>
-                    <button className="btn sm" onClick={() => setEditing(agent)}>
-                      编辑
-                    </button>
-                    <button className="btn sm" onClick={() => void duplicate(agent)}>
-                      复制
-                    </button>
-                    <button className="btn sm danger" onClick={() => void remove(agent)}>
-                      删除
-                    </button>
-                  </div>
-                </article>
-              )
-            })}
+          <div className="stack">
+            {groups.map((group) => (
+              <CollapsibleGroup
+                key={group.key}
+                title={group.label}
+                count={group.items.length}
+                expanded={isExpanded(group.key)}
+                onToggle={() => toggle(group.key)}
+              >
+                <div className="grid">{group.items.map(renderAgentCard)}</div>
+              </CollapsibleGroup>
+            ))}
           </div>
         )}
       </div>
@@ -372,6 +393,7 @@ function AgentModal({
 
   const [name, setName] = useState(agent?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '🛠️')
+  const [groupName, setGroupName] = useState(agent?.group_name ?? '')
   const [tagline, setTagline] = useState(agent?.tagline ?? '')
   const [description, setDescription] = useState(agent?.description ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt ?? '')
@@ -457,6 +479,7 @@ function AgentModal({
     try {
       const payload: Record<string, unknown> = {
         name: name.trim(),
+        group_name: groupName.trim(),
         type_id: selected.id,
         avatar,
         tagline: tagline.trim() || null,
@@ -545,6 +568,17 @@ function AgentModal({
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="field span-2">
+              <label className="field-label">分组</label>
+              <input
+                className="input"
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+                placeholder="例如 开发 / 写作（留空就归入「未分组」）"
+              />
+              <span className="field-help">智能体页按它折叠分组展示；留空表示未分组，永远排在最后。</span>
             </div>
 
             <div className="field span-2">
