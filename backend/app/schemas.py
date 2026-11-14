@@ -276,8 +276,10 @@ class SkillRead(BaseModel):
     file_count: int = 0
     note: str | None = None
     used_by_agents: int = 0
-    #: 由「技能市场」装入的技能为 True（可以卸载），其余只读
+    #: 由「技能市场」装入的技能为 True（可在市场页卸载），其余只读
     is_market: bool = False
+    #: 能否从技能页删除：内核自带（system）之外的技能都可以
+    deletable: bool = False
     #: 市场技能对应的市场页地址
     source_url: str | None = None
 

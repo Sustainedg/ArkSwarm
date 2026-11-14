@@ -213,6 +213,10 @@ export const api = {
     return request<{ items: Skill[] }>(`/api/skills${suffix}`).then((r) => r.items)
   },
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
+  deleteSkill: (id: string) =>
+    request<{ ok: boolean; name: string }>(`/api/skills/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
 
   // --- MCP 服务器（统一编目 + 通过智能体分配生效）-----------------------------

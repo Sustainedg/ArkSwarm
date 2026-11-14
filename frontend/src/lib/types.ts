@@ -327,8 +327,10 @@ export interface Skill {
   file_count: number
   note?: string | null
   used_by_agents: number
-  /** 由「技能市场」装入的技能为 true（可在技能页卸载），其余只读 */
+  /** 由「技能市场」装入的技能为 true（可在市场页卸载），其余只读 */
   is_market: boolean
+  /** 能否从技能页删除：内核自带（system）之外的技能都可以 */
+  deletable: boolean
   /** 市场技能对应的市场页地址 */
   source_url?: string | null
 }

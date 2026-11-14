@@ -127,7 +127,8 @@ async def uninstall_market_skill(
     """卸载一个由市场装入的技能（只删平台装进去的目录）。"""
     try:
         name = await skill_service.uninstall_market_skill(session, payload.skill_id)
+    except skill_service.SkillNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except skill_service.SkillError as exc:
-        status = 404 if "不存在" in str(exc) else 422
-        raise HTTPException(status_code=status, detail=str(exc)) from None
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     return {"ok": True, "name": name}

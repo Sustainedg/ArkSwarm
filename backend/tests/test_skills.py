@@ -378,6 +378,133 @@ async def test_skills_api_lists_rescans_and_shows_detail(client: httpx.AsyncClie
     assert next(item for item in items if item["slug"] == "alpha")["available"] is False
 
 
+async def test_removed_market_skills_are_hidden_from_list(client: httpx.AsyncClient):
+    """市场技能卸载后（旧数据里可能只标了 available=False）不该继续出现在列表里。"""
+    from app.models import Skill
+
+    async with SessionLocal() as session:
+        session.add(
+            Skill(
+                id="custom-cli:gone-market",
+                type_id="custom-cli",
+                slug="gone-market",
+                name="已卸载的市场技能",
+                source_kind="market",
+                path="/nonexistent",
+                available=False,
+            )
+        )
+        await session.commit()
+
+    items = (await client.get("/api/skills")).json()["items"]
+    assert all(item["slug"] != "gone-market" for item in items)
+    assert (await client.get("/api/skills", params={"source_kind": "market"})).json()["items"] == []
+    # 显式查询失效技能时仍能看到，方便排查历史分配。
+    assert [
+        item["slug"]
+        for item in (await client.get("/api/skills", params={"available": False})).json()["items"]
+    ] == ["gone-market"]
+
+
+async def test_delete_non_system_skill_removes_dir_and_assignment(
+    client: httpx.AsyncClient, catalog: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """个人技能可以从技能页删除：目录、编目行与智能体分配一起消失。"""
+    monkeypatch.setattr(
+        skill_service, "skill_roots_for_type", lambda _type_id: [skill_service.SkillRoot(str(catalog))]
+    )
+    await client.post("/api/skills/rescan")
+    agent = await make_agent(client)
+    role = await make_role(client, agent)
+    assigned = await client.put(
+        f"/api/agents/{role['id']}/skills", json={"skill_ids": ["custom-cli:alpha"]}
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert (catalog / "alpha").is_dir()
+
+    response = await client.delete("/api/skills/custom-cli:alpha")
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "alpha"
+    assert not (catalog / "alpha").exists()
+    assert (await client.get("/api/skills/custom-cli:alpha")).status_code == 404
+    roles = (await client.get("/api/agents")).json()["items"]
+    assert next(item for item in roles if item["id"] == role["id"])["skill_ids"] == []
+
+
+async def test_delete_refuses_system_skill_and_outside_path(
+    client: httpx.AsyncClient, catalog: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """内核自带技能不能删；数据库里的路径越出技能根时也拒绝删除。"""
+    from app.models import Skill
+
+    monkeypatch.setattr(
+        skill_service, "skill_roots_for_type", lambda _type_id: [skill_service.SkillRoot(str(catalog))]
+    )
+    outside = tmp_path / "outside-skill"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("# 越界技能\n", encoding="utf-8")
+
+    async with SessionLocal() as session:
+        session.add(
+            Skill(
+                id="custom-cli:builtin",
+                type_id="custom-cli",
+                slug="builtin",
+                name="内核技能",
+                source_kind="system",
+                path=str(catalog / "alpha"),
+            )
+        )
+        session.add(
+            Skill(
+                id="custom-cli:outside",
+                type_id="custom-cli",
+                slug="outside",
+                name="越界技能",
+                source_kind="user",
+                path=str(outside),
+            )
+        )
+        await session.commit()
+
+    response = await client.delete("/api/skills/custom-cli:builtin")
+    assert response.status_code == 422
+    assert "内核自带" in response.json()["detail"]
+
+    response = await client.delete("/api/skills/custom-cli:outside")
+    assert response.status_code == 422
+    assert "不在" in response.json()["detail"]
+    assert outside.is_dir()
+
+
+async def test_delete_missing_skill_returns_404(client: httpx.AsyncClient):
+    """不存在的技能返回 404（不靠中文字符串匹配状态码）。"""
+    response = await client.delete("/api/skills/custom-cli:missing")
+    assert response.status_code == 404
+    assert "不存在" in response.json()["detail"]
+
+
+async def test_delete_reports_directory_failure(
+    client: httpx.AsyncClient, catalog: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """磁盘删不掉时要显式报错，不能假装成功（否则重扫会把技能加回来）。"""
+    monkeypatch.setattr(
+        skill_service, "skill_roots_for_type", lambda _type_id: [skill_service.SkillRoot(str(catalog))]
+    )
+    await client.post("/api/skills/rescan")
+
+    def refuse(_path, *_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(skill_service.shutil, "rmtree", refuse)
+    response = await client.delete("/api/skills/custom-cli:alpha")
+    assert response.status_code == 422
+    assert "删除" in response.json()["detail"]
+    assert (catalog / "alpha").is_dir()
+    # 编目行还在：失败不能留下「数据库已删、目录还在」的半截状态。
+    assert (await client.get("/api/skills/custom-cli:alpha")).status_code == 200
+
+
 async def test_agent_skills_come_only_from_assignment(client: httpx.AsyncClient, catalog: Path):
     await client.post("/api/skills/rescan")
     agent = await make_agent(client)

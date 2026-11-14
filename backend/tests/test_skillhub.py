@@ -186,17 +186,18 @@ async def test_install_then_appears_and_uninstall(client, market, skills_home: P
     # 已进入统一编目，来源是市场技能
     items = (await client.get("/api/skills", params={"source_kind": "market"})).json()["items"]
     assert [item["slug"] for item in items] == ["market-skill"]
-    assert items[0]["source_label"] == "市场技能"
+    assert items[0]["source_label"] == "腾讯 SkillHub"
     assert items[0]["is_market"] is True
 
-    # 卸载：目录消失、编目里标记失效
+    # 卸载：目录消失、编目里也不再保留这条技能
     removed = await client.post(
         "/api/skillhub/uninstall", json={"skill_id": "claude-code:market-skill"}
     )
     assert removed.status_code == 200, removed.text
     assert not installed.exists()
-    detail = (await client.get("/api/skills/claude-code:market-skill")).json()
-    assert detail["available"] is False
+    assert (await client.get("/api/skills/claude-code:market-skill")).status_code == 404
+    left = (await client.get("/api/skills", params={"source_kind": "market"})).json()["items"]
+    assert left == []
 
 
 async def test_install_unknown_kernel_rejected(client, market):

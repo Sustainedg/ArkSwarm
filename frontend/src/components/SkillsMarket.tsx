@@ -13,7 +13,7 @@ const SORTS = [
 const PAGE_SIZE = 24
 
 /**
- * 技能市场（SkillHub）：浏览、搜索、安装。
+ * 技能市场：浏览并安装腾讯 SkillHub（skillhub.cn）上的技能。
  *
  * 安装后技能落在对应内核的技能根里，仍需到「智能体 → 技能」分配才会在运行时生效。
  * 组件本身只负责市场侧交互，安装成功通过 `onInstalled` 回给页面（用于刷新本地列表）。
@@ -66,6 +66,7 @@ export function SkillsMarket({
       const rows = await api.listSkills({ source_kind: 'market' })
       const map: Record<string, string> = {}
       for (const row of rows) {
+        if (!row.available) continue // 已卸载（目录没了）的技能不算已安装
         // 按「内核 + slug」记录：同一技能装到不同内核是各自独立的安装。
         map[installKey(row.type_id, row.slug)] = row.id
       }
@@ -156,7 +157,7 @@ export function SkillsMarket({
         className="input"
         style={{ flex: 1, minWidth: 180 }}
         value={query}
-        placeholder="搜索技能市场（名称 / 说明）"
+        placeholder="搜索腾讯 SkillHub（名称 / 说明）"
         onChange={(e) => search(e.target.value)}
       />
       <select className="select" value={sortBy} onChange={(e) => changeSort(e.target.value)}>
@@ -191,6 +192,9 @@ export function SkillsMarket({
       style={{ padding: variant === 'mobile' ? 0 : '16px 22px', overflow: 'auto' }}
     >
       {header}
+      <div className="dim small">
+        技能来源：腾讯 SkillHub（skillhub.cn）。安装后可到「智能体 → 技能」分配，也可在「本地技能」里删除。
+      </div>
       {error && <div className="banner err">{error}</div>}
       {notice && <div className="banner ok">{notice}</div>}
 

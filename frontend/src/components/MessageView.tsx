@@ -1,6 +1,5 @@
 import type { MessagePart } from '../lib/types'
 import { isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
-import { summarizeUsage } from '../lib/usage'
 import { MarkdownView } from './MarkdownView'
 import { ZoomableImage } from './ZoomableImage'
 
@@ -18,7 +17,6 @@ export interface RenderMessage {
 
 export function MessageView({ message, avatar, label }: { message: RenderMessage; avatar?: string; label?: string }) {
   const isUser = message.role === 'user'
-  const outputTokens = summarizeUsage([message.usage]).output
   // 发消息时附件被后端写进正文末尾的「📎 附件」清单；这里把它拆出来，图片画缩略图，
   // 正文照常渲染 —— 否则自己发出去的图，在气泡里只剩一行看不到的路径。
   const { text: bodyText, paths: attachmentPaths } = isUser
@@ -53,7 +51,6 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
       <div className="bubble">
         <div className="bubble-head">
           <span>{isUser ? '你' : (label ?? '智能体')}</span>
-          {outputTokens > 0 && <span className="dim">{`${outputTokens.toLocaleString()} tok`}</span>}
           {message.status === 'error' && <span className="pill err">出错</span>}
           {message.status === 'interrupted' && <span className="pill warn">已中断</span>}
         </div>

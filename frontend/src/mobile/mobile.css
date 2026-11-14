@@ -62,6 +62,8 @@
   --radius: 14px;
   --radius-sm: 10px;
   --radius-lg: 20px;
+  /* 正文嵌图的预览宽度上限：聊天气泡本来就窄，预览图不必占满整行；点开可看原图。 */
+  --md-image-preview: 280px;
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
   --font: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -376,9 +378,6 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 14px; display: flex; flex-direction: column; gap: 10px;
 }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.m-stat { background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 12px; }
-.m-stat-label { font-size: 11px; color: var(--text-dim); }
-.m-stat-value { font-size: 15px; font-weight: 600; margin-top: 3px; word-break: break-all; }
 
 .card-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); font-weight: 600; margin: 2px 0 2px; }
 
@@ -503,6 +502,65 @@ code, pre, .mono { font-family: var(--mono); }
   background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 12px; font-size: 13px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
 }
+
+/* 技能详情（底部弹层里）：一份分块的「技能说明书」 */
+.m-skill-detail { display: flex; flex-direction: column; gap: 12px; padding-bottom: 8px; }
+.m-skill-hero {
+  padding: 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background:
+    radial-gradient(130% 160% at 0% 0%, var(--brand-soft), transparent 60%),
+    var(--bg-panel);
+}
+.m-skill-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.m-skill-kernel { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.m-skill-title { margin: 8px 0 0; font-size: 20px; line-height: 1.3; font-weight: 680; }
+.m-skill-desc {
+  margin-top: 6px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 13px; line-height: 1.65; color: var(--text-muted);
+}
+.m-skill-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.m-skill-chip {
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-input); color: var(--text-muted); font-size: 11px;
+}
+.m-skill-section {
+  padding: 14px 15px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel);
+}
+.m-skill-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.m-skill-section-head h3 { margin: 0; font-size: 12.5px; font-weight: 650; }
+.m-skill-section-head span { margin-left: auto; font-size: 10.5px; color: var(--text-dim); }
+.m-skill-agents { display: flex; flex-wrap: wrap; gap: 6px; }
+.m-skill-agent {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px 4px 5px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); font-size: 12px;
+}
+.m-skill-agent-avatar {
+  display: grid; place-items: center; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--brand-soft); font-size: 12px;
+}
+.m-skill-text { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-muted); white-space: pre-wrap; }
+.m-skill-empty { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-dim); }
+.m-skill-body {
+  max-height: 40vh; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input);
+  font-size: 12.5px; line-height: 1.7;
+}
+.m-skill-body .markdown-body { font-size: 12.5px; }
+.m-skill-file-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.m-skill-file-list li {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 7px 2px; border-top: 1px dashed var(--border);
+}
+.m-skill-file-list li:first-child { border-top: none; }
+.m-skill-file-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+}
+.m-skill-file-size { flex: none; font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 /* ---------- 底部弹层（移动端替代桌面的居中 Modal） ---------- */
 .m-sheet-backdrop {
@@ -1232,9 +1290,8 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-scope-btn:hover { border-color: var(--border-strong); color: var(--text); }
 .composer-scope-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 输入框下面那一条（用量统计等）：贴着框的下沿 */
+/* 输入框下面那一条：贴着框的下沿 */
 .composer-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
-.composer-foot .usage-bar { margin-top: 0; }
 
 /* ---------- 移动端：输入区贴着屏幕最下边 ---------- */
 /* 只留 6px 收边，底部安全区**不照搬**：iOS 独立应用里 `env(safe-area-inset-bottom)` 是 34px，
@@ -1276,11 +1333,6 @@ code, pre, .mono { font-family: var(--mono); }
   flex: none; padding: 0 2px; border: none; background: none;
   color: var(--text-dim); font-size: 12px; cursor: pointer;
 }
-
-/* token 用量在输入框「下面」（贴底的是输入框本体）；开关那排在输入框上面 */
-.m-usage { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); margin-bottom: 7px; flex-wrap: wrap; }
-.m-usage b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.composer-foot .m-usage { margin-bottom: 0; }
 
 /* 默认智能体：卡片右上角的五角星（点亮是黄的，全局只有一颗）；手指要好点，做大一档 */
 .star-btn {
@@ -1487,9 +1539,13 @@ code, pre, .mono { font-family: var(--mono); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* 正文里嵌的图（Markdown ![]()）：按气泡宽度自适应，点开看原图 */
-.zoomable.md-image { display: block; margin: 8px 0; max-width: 100%; }
-.zoomable.md-image img { max-width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+/* 正文里嵌的图（Markdown ![]()）：按**预览尺寸**显示，点开看原图。
+   不直接铺满气泡：生图动辄 1024px，铺满后一条消息就占掉大半屏；宽度封顶后
+   气泡也会跟着缩到图片宽度，而不是留一条空白。竖图按比例缩放，不裁切。
+   注意别写成 min(100%, …)：百分比会让气泡按整行宽度参与收缩计算，反而缩不回去；
+   窄屏由 width:auto + 容器宽度自然收窄，不需要再加 100%。 */
+.zoomable.md-image { display: block; margin: 8px 0; max-width: var(--md-image-preview); }
+.zoomable.md-image img { max-width: 100%; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .md-image-missing { color: var(--text-dim); font-size: 12px; }
 
 
@@ -1778,16 +1834,162 @@ code, pre, .mono { font-family: var(--mono); }
 /* 技能市场卡片：描述限高，避免长文案把卡片撑得很高 */
 .skills-market-cards .card > p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
-/* ================= 用量页：token 消耗与技能分配 ================= */
-.m-usage-stats { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); }
-.m-stat.highlight { border-color: rgba(217, 79, 208, 0.4); background: var(--brand-soft); }
-.m-stat-unit { font-size: 11px; color: var(--text-dim); margin-left: 4px; font-weight: 500; }
-.m-usage-num {
-  flex: none; align-self: center; text-align: right; white-space: nowrap;
-  font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 650;
+/* ================= 用量页：总消耗 / token 构成 / 每日趋势 / 智能体 / 技能 ================= */
+.m-usage-range-row { flex: none; display: flex; align-items: center; gap: 6px; }
+.m-usage-range-row .input { flex: 1; min-width: 0; }
+
+.m-usage-hero {
+  flex: none;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 170% at 0% 0%, var(--brand-soft), transparent 58%),
+    linear-gradient(135deg, var(--bg-panel), var(--bg-elevated));
 }
-.m-usage-bars { display: flex; flex-direction: column; gap: 6px; }
-.m-usage-bar-row { display: grid; grid-template-columns: 44px 1fr 52px; align-items: center; gap: 8px; }
-.m-usage-bar-track { height: 8px; border-radius: 6px; background: var(--bg-hover); overflow: hidden; }
-.m-usage-bar-fill { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); }
-.m-usage-bar-value { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-muted); }
+.m-usage-hero-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.m-usage-kicker {
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.09em;
+}
+.m-usage-scope {
+  flex: none; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-elevated); color: var(--text-muted); font-size: 11px;
+}
+.m-usage-hero-value {
+  font-size: 34px; line-height: 1.05; font-weight: 700;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+}
+.m-usage-hero-value > span {
+  margin-left: 6px; font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--text-dim);
+}
+.m-usage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.m-usage-chips > span {
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-elevated); color: var(--text-muted); font-size: 11px;
+}
+
+.m-usage-ring-row {
+  display: flex; align-items: center; gap: 16px;
+  padding-top: 12px; border-top: 1px dashed var(--border);
+}
+.m-usage-ring {
+  position: relative; display: grid; place-items: center; flex: none;
+  width: 88px; height: 88px; border-radius: 50%;
+}
+.m-usage-ring::after {
+  content: ''; position: absolute; inset: 10px; border-radius: 50%;
+  background: var(--bg-elevated); box-shadow: inset 0 0 0 1px var(--border);
+}
+.m-usage-ring-inner {
+  position: relative; z-index: 1; display: flex; flex-direction: column;
+  align-items: center; text-align: center;
+}
+.m-usage-ring-inner strong { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.m-usage-ring-inner span { font-size: 9.5px; color: var(--text-dim); }
+.m-usage-legend {
+  display: grid; flex: 1; grid-template-columns: 1fr 1fr; gap: 7px 12px;
+  min-width: 0; margin: 0; padding: 0; list-style: none;
+}
+.m-usage-legend li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.m-usage-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.m-usage-legend-label { font-size: 11px; color: var(--text-muted); }
+.m-usage-legend-value {
+  margin-left: auto; font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+.m-usage-panel {
+  flex: none;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.m-usage-panel-head { display: flex; align-items: baseline; gap: 8px; }
+.m-usage-panel-title { font-size: 13.5px; font-weight: 650; }
+.m-usage-panel-sub { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+
+.m-usage-chart { display: flex; flex-direction: column; gap: 7px; }
+.m-usage-chart-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) 50px;
+  align-items: center; gap: 8px;
+}
+.m-usage-chart-date { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.m-usage-chart-row.today .m-usage-chart-date { color: var(--brand); font-weight: 700; }
+.m-usage-chart-track { display: flex; height: 10px; overflow: hidden; border-radius: 999px; background: var(--bg-hover); }
+.m-usage-chart-seg { display: block; height: 100%; }
+.m-usage-chart-seg.seg-input { background: linear-gradient(90deg, var(--brand), var(--brand-strong)); }
+.m-usage-chart-seg.seg-output { background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
+.m-usage-chart-seg.seg-cache {
+  background: linear-gradient(90deg, var(--brand), var(--accent));
+  opacity: 0.22;
+}
+.m-usage-chart-value {
+  text-align: right; font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.m-usage-chart-legend { display: flex; justify-content: flex-end; gap: 12px; font-size: 10.5px; color: var(--text-dim); }
+.m-usage-chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.m-usage-chart-legend i { width: 6px; height: 6px; border-radius: 50%; }
+
+.m-usage-agent-list, .m-usage-skill-list { display: flex; flex-direction: column; gap: 2px; }
+.m-usage-agent { display: flex; align-items: center; gap: 9px; padding: 8px 4px; }
+.m-usage-rank {
+  flex: none; width: 20px; font-family: var(--mono); font-size: 9.5px;
+  color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
+.m-usage-avatar {
+  display: grid; place-items: center; flex: none;
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--bg-input); border: 1px solid var(--border); font-size: 15px;
+}
+.m-usage-agent-main { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.m-usage-agent-line, .m-usage-skill-line { display: flex; align-items: baseline; gap: 8px; }
+.m-usage-agent-name, .m-usage-skill-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 600;
+}
+.m-usage-agent-total, .m-usage-skill-calls {
+  flex: none; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
+.m-usage-agent-total em, .m-usage-skill-calls em {
+  margin-left: 3px; font-size: 9.5px; font-weight: 500; font-style: normal; color: var(--text-dim);
+}
+.m-usage-agent-meta, .m-usage-skill-meta {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; color: var(--text-dim);
+}
+.m-usage-agent-track, .m-usage-skill-track {
+  display: block; height: 4px; overflow: hidden;
+  border-radius: 999px; background: var(--bg-hover);
+}
+.m-usage-agent-track > span {
+  display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), var(--brand-strong));
+}
+.m-usage-skill-track > span {
+  display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--brand));
+}
+
+.m-usage-skill-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.m-usage-skill-summary > div {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-elevated);
+}
+.m-usage-skill-summary strong { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.m-usage-skill-summary span { font-size: 10.5px; color: var(--text-dim); }
+
+.m-usage-skill {
+  display: flex; align-items: flex-start; gap: 9px; width: 100%;
+  padding: 8px 4px; border: 1px solid transparent; border-radius: 10px;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.m-usage-skill:active { background: var(--bg-hover); border-color: var(--border); }
+.m-usage-skill-main { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.m-usage-note {
+  margin: 0; padding-top: 10px; border-top: 1px dashed var(--border);
+  font-size: 10.5px; line-height: 1.6; color: var(--text-dim);
+}
+.m-usage-empty-line { padding: 8px; font-size: 12px; color: var(--text-dim); }

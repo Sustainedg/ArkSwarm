@@ -43,6 +43,7 @@ def _describe(row: Skill, counts: dict[str, int]) -> SkillRead:
         note=row.note,
         used_by_agents=counts.get(row.id, 0),
         is_market=row.source_kind == skill_service.MARKET_SOURCE,
+        deletable=skill_service.is_deletable(row),
         source_url=(row.source_url or None),
     )
 
@@ -95,3 +96,15 @@ async def get_skill(skill_id: str, session: AsyncSession = Depends(get_session))
         ],
     )
     return detail.model_dump()
+
+
+@router.delete("/{skill_id}")
+async def delete_skill(skill_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    """删除技能：内核自带（system）之外的技能都允许删，同时断开智能体分配。"""
+    try:
+        name = await skill_service.delete_skill(session, skill_id)
+    except skill_service.SkillNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except skill_service.SkillError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return {"ok": True, "name": name}

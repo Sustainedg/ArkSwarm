@@ -216,6 +216,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   供「用量」页统计调用次数；默认不识别——「技能调用长什么样」是适配器的知识）。
   技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
   但落盘路径仍由适配器声明、框架不硬编码。
+- **删除语义**：用户显式删除（`DELETE /api/skills/{id}`）或从市场卸载
+  （`POST /api/skillhub/uninstall`）时，先断开 `agent_skills` 分配、再删编目行 —— 这是唯一的
+  「删行」入口，磁盘目录删不掉要抛错，不能静默当作成功。扫描时发现技能目录**意外消失**
+  （不是用户操作）仍只把 `available` 置 False，保住分配关系。
 - `AgentContext.skills` / `AgentContext.home_dir`：框架注入的「本次运行生效的技能」与
   「物化好的隔离目录」（技能与 MCP 共用同一个「家」），适配器在 `build_invocation()` 里据此
   设置自己的配置目录环境变量。
@@ -515,7 +519,8 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 - ❌ 用"清空/重建数据库"来解决 schema 变更。
 - ❌ 在框架层硬编码某个内核的技能目录或配置变量（应通过 `discover_skills()` / `skill_mount()` 声明）。
 - ❌ 让智能体用到未分配的技能（把本机个人/插件技能顺手带进一次运行）。
-- ❌ 把技能目录删了就顺手删 `skills` 记录（应只把 `available` 置 False，保住智能体分配）。
+- ❌ 技能目录**意外消失**就顺手删 `skills` 记录（应只把 `available` 置 False，保住智能体分配；
+  用户显式删除 / 市场卸载是唯一例外，走 `runtime/skills.py` 的删除流程，先断开分配再删行）。
 - ❌ 在框架层硬编码某个内核的 MCP 配置文件、键名或命令行开关（应通过 `discover_mcp_servers()` /
   `mcp_mount()` 声明）。
 - ❌ 让智能体连上未分配的 MCP 服务器（把本机配置里的服务器顺手带进一次运行）。

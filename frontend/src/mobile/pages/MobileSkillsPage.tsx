@@ -4,6 +4,8 @@ import { CollapsibleGroup } from '../../components/CollapsibleGroup'
 import { useExpandMap } from '../../lib/collapse'
 import type { Skill, SkillDetail } from '../../lib/types'
 import { SkillsMarket } from '../../components/SkillsMarket'
+import { MarkdownView } from '../../components/MarkdownView'
+import { stripFrontmatter } from '../../lib/skillBody'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError } from '../util'
@@ -14,6 +16,7 @@ const SOURCE_OPTIONS = [
   { value: 'project', label: '项目技能' },
   { value: 'plugin', label: '插件技能' },
   { value: 'system', label: '内核系统技能' },
+  { value: 'market', label: '腾讯 SkillHub' },
 ]
 
 /** 技能：本地编目 + 技能市场两个页签；技能只有被智能体分配后才生效。 */
@@ -52,13 +55,16 @@ function MobileSkillsLocal() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [loading, setLoading] = useState(true)
   /** 按内核分组默认折叠：先给一份目录，要看哪个内核点开哪个。 */
   const { isExpanded, toggle } = useExpandMap()
 
   const reload = useCallback(async (params?: { source_kind?: string; q?: string }) => {
     try {
-      setSkills(await api.listSkills(params))
+      // 已卸载的市场技能不该再出现；后端会过滤，这里再兜一层（旧数据里可能还留着失效行）。
+      const rows = await api.listSkills(params)
+      setSkills(rows.filter((skill) => !(skill.is_market && !skill.available)))
       setError(null)
     } catch (e) {
       setError(describeError(e))
@@ -91,6 +97,29 @@ function MobileSkillsLocal() {
       setSelected(await api.getSkill(skill.id))
     } catch (e) {
       setError(describeError(e))
+    }
+  }
+
+  const deleteSelected = async () => {
+    if (!selected) return
+    if (
+      !confirm(
+        `删除技能「${selected.name}」？\n会删除它的源目录，并解除所有智能体对它的分配。`,
+      )
+    ) {
+      return
+    }
+    setDeleting(true)
+    setNotice(null)
+    try {
+      const result = await api.deleteSkill(selected.id)
+      setNotice(`已删除「${result.name}」`)
+      setSelected(null)
+      await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+    } catch (e) {
+      setError(describeError(e))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -176,61 +205,129 @@ function MobileSkillsLocal() {
         </div>
 
       {selected && (
-        <MobileSheet full title={`技能 · ${selected.name}`} onClose={() => setSelected(null)}>
-          <div className="row wrap" style={{ gap: 6 }}>
-            <span className="pill brand">{selected.type_name ?? selected.type_id}</span>
-            <span className="pill">{selected.source_label}</span>
-            {!selected.available && <span className="pill err">目录已消失</span>}
-            <span className="pill">{selected.file_count} 个文件</span>
-          </div>
-
-          <p className="muted" style={{ fontSize: 13.5 }}>{selected.description || '（无描述）'}</p>
-
-          {selected.when_to_use && (
-            <div className="field">
-              <span className="field-label">适用场景</span>
-              <p className="dim small" style={{ lineHeight: 1.6 }}>{selected.when_to_use}</p>
-            </div>
-          )}
-
-          <div className="field">
-            <span className="field-label">被哪些智能体使用</span>
-            {selected.agents.length === 0 ? (
-              <p className="dim small">还没有智能体分配这个技能。</p>
-            ) : (
-              <div className="row wrap" style={{ gap: 6 }}>
-                {selected.agents.map((agent) => (
-                  <span className="pill" key={agent.id}>
-                    {agent.avatar} {agent.name}
-                  </span>
-                ))}
+        <MobileSheet
+          full
+          title="技能详情"
+          onClose={() => setSelected(null)}
+          footer={
+            selected.deletable ? (
+              <button
+                className="btn danger block"
+                onClick={() => void deleteSelected()}
+                disabled={deleting}
+              >
+                {deleting ? '删除中…' : '删除技能'}
+              </button>
+            ) : undefined
+          }
+        >
+          <div className="m-skill-detail">
+            <header className="m-skill-hero">
+              <div className="m-skill-kicker">
+                <span className="pill brand">{selected.source_label}</span>
+                <span className="m-skill-kernel">{selected.type_name ?? selected.type_id}</span>
+                {!selected.available && <span className="pill err">目录已消失</span>}
               </div>
+              <h2 className="m-skill-title">{selected.name}</h2>
+              {selected.description && <p className="m-skill-desc">{selected.description}</p>}
+              <div className="m-skill-chips">
+                <span className="m-skill-chip">{selected.file_count} 个文件</span>
+                {selected.version && <span className="m-skill-chip">v{selected.version}</span>}
+                {selected.author && <span className="m-skill-chip">作者 {selected.author}</span>}
+              </div>
+            </header>
+
+            {selected.note && <div className="banner info">{selected.note}</div>}
+
+            <section className="m-skill-section">
+              <div className="m-skill-section-head">
+                <h3>使用它的智能体</h3>
+                <span>{selected.agents.length}</span>
+              </div>
+              {selected.agents.length === 0 ? (
+                <p className="m-skill-empty">还没有智能体分配这个技能。</p>
+              ) : (
+                <div className="m-skill-agents">
+                  {selected.agents.map((agent) => (
+                    <span className="m-skill-agent" key={agent.id}>
+                      <span className="m-skill-agent-avatar">{agent.avatar || '🤖'}</span>
+                      {agent.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {selected.when_to_use && (
+              <section className="m-skill-section">
+                <div className="m-skill-section-head">
+                  <h3>适用场景</h3>
+                </div>
+                <p className="m-skill-text">{selected.when_to_use}</p>
+              </section>
+            )}
+
+            <section className="m-skill-section">
+              <div className="m-skill-section-head">
+                <h3>完整描述</h3>
+                <span>SKILL.md</span>
+              </div>
+              {selected.body ? (
+                <>
+                  <div className="m-skill-body">
+                    <MarkdownView text={stripFrontmatter(selected.body)} />
+                  </div>
+                  {selected.body_truncated && (
+                    <p className="m-skill-empty">内容过长，已截断显示。</p>
+                  )}
+                </>
+              ) : (
+                <p className="m-skill-empty">（SKILL.md 为空或不可读）</p>
+              )}
+            </section>
+
+            <section className="m-skill-section">
+              <div className="m-skill-section-head">
+                <h3>允许的工具</h3>
+              </div>
+              {selected.allowed_tools.length === 0 ? (
+                <p className="m-skill-empty">未声明允许的工具。</p>
+              ) : (
+                <div className="row wrap" style={{ gap: 6 }}>
+                  {selected.allowed_tools.map((tool) => (
+                    <span className="pill" key={tool}>
+                      {tool}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {selected.files.length > 0 && (
+              <section className="m-skill-section">
+                <div className="m-skill-section-head">
+                  <h3>文件清单</h3>
+                  <span>{selected.files.length}</span>
+                </div>
+                <ul className="m-skill-file-list">
+                  {selected.files.map((file) => (
+                    <li key={file.path}>
+                      <span className="m-skill-file-name">{file.path}</span>
+                      <span className="m-skill-file-size">{formatBytes(file.size)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
           </div>
-
-          {selected.allowed_tools.length > 0 && (
-            <div className="field">
-              <span className="field-label">允许的工具</span>
-              <div className="row wrap" style={{ gap: 6 }}>
-                {selected.allowed_tools.map((tool) => (
-                  <span className="pill" key={tool}>
-                    {tool}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {selected.body && (
-            <div className="field">
-              <span className="field-label">
-                SKILL.md{selected.body_truncated ? '（已截断）' : ''}
-              </span>
-              <div className="skill-body">{selected.body}</div>
-            </div>
-          )}
         </MobileSheet>
       )}
     </div>
   )
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }

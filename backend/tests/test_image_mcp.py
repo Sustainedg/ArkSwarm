@@ -43,6 +43,13 @@ def test_generations_url_normalises_gateway_shapes(image_mcp):
     assert normalize("http://127.0.0.1:8000/v1/") == "http://127.0.0.1:8000/v1/images/generations"
 
 
+def test_edits_url_normalises_gateway_shapes(image_mcp):
+    """图生图走同一个 /v1 根下的 /images/edits。"""
+    normalize = image_mcp.edits_url
+    assert normalize("https://api.example.com") == "https://api.example.com/v1/images/edits"
+    assert normalize("https://api.example.com/v1/") == "https://api.example.com/v1/images/edits"
+
+
 def test_generations_url_requires_gateway(image_mcp):
     with pytest.raises(image_mcp.ConfigError, match="IMAGE_GEN_GATEWAY"):
         image_mcp.generations_url("")
@@ -76,6 +83,38 @@ def test_sniff_image_type_by_magic(image_mcp):
     assert image_mcp.sniff_image_type(b"\x00\x01\x02") == "image/png"
 
 
+# --- 参考图入参（图生图） ------------------------------------------------------
+
+
+def test_input_image_url_reads_workspace_file(image_mcp, monkeypatch, tmp_path):
+    """工作目录内的参考图要转成 base64 data URL：网关在另一台机器上，读不到本机路径。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "attachments").mkdir()
+    source = tmp_path / "attachments" / "in.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nfake-image")
+    url = image_mcp.input_image_url("attachments/in.png")
+    assert url.startswith("data:image/png;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]) == source.read_bytes()
+
+
+def test_input_image_url_passes_http_through(image_mcp):
+    """http(s) 地址原样交给网关下载，不在本地读文件。"""
+    assert image_mcp.input_image_url("https://cdn.example/a.png") == "https://cdn.example/a.png"
+
+
+def test_input_image_url_rejects_outside_workspace(image_mcp, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="工作目录内"):
+        image_mcp.input_image_url(str(tmp_path.parent / "outside.png"))
+
+
+def test_input_image_url_rejects_unsupported_type(image_mcp, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "in.gif").write_bytes(b"GIF89a-not-supported")
+    with pytest.raises(ValueError, match="PNG / JPEG / WebP"):
+        image_mcp.input_image_url("in.gif")
+
+
 # --- 协议分发 ------------------------------------------------------------------
 
 
@@ -92,6 +131,8 @@ def test_initialize_and_list_tools(image_mcp):
     tools = reply["result"]["tools"]
     assert [tool["name"] for tool in tools] == [image_mcp.TOOL_NAME]
     assert tools[0]["inputSchema"]["required"] == ["prompt"]
+    # 参考图入参是图生图的入口，工具描述里也要说清楚
+    assert {"image", "images"} <= set(tools[0]["inputSchema"]["properties"])
 
 
 def test_notifications_are_silently_ignored(image_mcp):
@@ -139,6 +180,63 @@ def test_generate_image_saves_files_and_returns_paths(
     assert f"generated-images/{files[0].name}" in text
     assert str(tmp_path) not in text
     assert "![](" in text
+
+
+def test_generate_image_with_reference_uses_edits(image_mcp, monkeypatch, tmp_path):
+    """传参考图时改走 /v1/images/edits，并把本地图片转成网关能取的 data URL。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "in.png").write_bytes(b"\x89PNG\r\n\x1a\ninput")
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, payload, **kwargs):
+        calls.append((url, payload))
+        return {"data": [{"b64_json": _b64_png()}]}
+
+    monkeypatch.setattr(image_mcp, "_post_json", fake_post)
+    text = image_mcp.generate_image(
+        {"prompt": "把背景改成蓝色", "image": "attachments/in.png", "size": "1024x1024"},
+        {"gateway": "https://gw.example/v1", "model": "seedream", "api_key": "", "timeout": 30.0},
+    )
+    url, payload = calls[0]
+    assert url == "https://gw.example/v1/images/edits"
+    assert payload["images"][0]["image_url"].startswith("data:image/png;base64,")
+    assert payload["prompt"] == "把背景改成蓝色"
+    assert "已根据 1 张参考图生成 1 张图片" in text
+
+
+def test_generate_image_merges_image_and_images(image_mcp, monkeypatch, tmp_path):
+    """image 与 images 可以一起用；多张参考图按顺序进同一份请求。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.png").write_bytes(b"\x89PNG\r\n\x1a\na")
+    (tmp_path / "b.png").write_bytes(b"\x89PNG\r\n\x1a\nb")
+    captured: dict = {}
+
+    def fake_post(url, payload, **kwargs):
+        captured.update(payload)
+        return {"data": [{"b64_json": _b64_png()}]}
+
+    monkeypatch.setattr(image_mcp, "_post_json", fake_post)
+    image_mcp.generate_image(
+        {"prompt": "合成这两张图", "image": "a.png", "images": ["b.png", "https://cdn.example/c.png"]},
+        {"gateway": "https://gw.example/v1", "model": "seedream", "api_key": "", "timeout": 30.0},
+    )
+    assert [row["image_url"].split(",")[0] for row in captured["images"][:2]] == [
+        "data:image/png;base64",
+        "data:image/png;base64",
+    ]
+    assert captured["images"][2]["image_url"] == "https://cdn.example/c.png"
+
+
+def test_generate_image_validates_reference_images(image_mcp, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    config = {"gateway": "https://gw.example/v1", "model": "seedream", "api_key": "", "timeout": 30.0}
+    with pytest.raises(ValueError, match="最多"):
+        image_mcp.generate_image({"prompt": "x", "images": ["a.png"] * 11}, config)
+    with pytest.raises(ValueError, match="字符串数组"):
+        image_mcp.generate_image({"prompt": "x", "images": "a.png"}, config)
+    with pytest.raises(ValueError, match="不存在"):
+        image_mcp.generate_image({"prompt": "x", "image": "missing.png"}, config)
 
 
 def test_generate_image_validates_arguments(image_mcp, monkeypatch, tmp_path):
@@ -190,13 +288,22 @@ class _FakeGateway(BaseHTTPRequestHandler):
     """假生图网关：校验请求形状后回一张 1×1 PNG 的 b64。"""
 
     def do_POST(self):  # noqa: N802 - http.server 的命名约定
-        self.path.endswith("/v1/images/generations") or self._reject(404, "路径不对")
+        assert self.path.endswith(("/v1/images/generations", "/v1/images/edits")), self.path
+        is_edit = self.path.endswith("/v1/images/edits")
         length = int(self.headers.get("Content-Length") or 0)
         payload = json.loads(self.rfile.read(length) or b"{}")
         if self.headers.get("Authorization") != "Bearer sk-test-not-a-real-key":
             self._reject(401, "密钥不对")
         if payload.get("model") != "flux-dev" or not payload.get("prompt"):
             self._reject(400, "请求体不对")
+        if is_edit:
+            images = payload.get("images")
+            if not (
+                isinstance(images, list)
+                and images
+                and str(images[0].get("image_url") or "").startswith("data:image/png;base64,")
+            ):
+                self._reject(400, "参考图不对")
         body = json.dumps({"data": [{"b64_json": _b64_png()}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -278,7 +385,66 @@ def test_stdio_round_trip_against_fake_gateway(image_mcp, monkeypatch, tmp_path)
         server.server_close()
 
 
+def test_stdio_edit_round_trip_against_fake_gateway(image_mcp, monkeypatch, tmp_path):
+    """端到端走图生图：参考图从工作目录读入，工具结果仍是相对路径。"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeGateway)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "attachments").mkdir()
+        (tmp_path / "attachments" / "in.png").write_bytes(b"\x89PNG\r\n\x1a\ninput")
+        import subprocess
+
+        env = {
+            "PATH": "/usr/bin:/bin",
+            image_mcp.ENV_GATEWAY: f"http://{host}:{port}",
+            image_mcp.ENV_MODEL: "flux-dev",
+            image_mcp.ENV_API_KEY: "sk-test-not-a-real-key",
+        }
+        process = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            input="\n".join(
+                [
+                    json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "generate_image",
+                                "arguments": {
+                                    "prompt": "把方块改成蓝色",
+                                    "image": "attachments/in.png",
+                                },
+                            },
+                        }
+                    ),
+                ]
+            ),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            cwd=tmp_path,
+        )
+        assert process.returncode == 0, process.stderr
+        replies = [json.loads(line) for line in process.stdout.splitlines() if line.strip()]
+        call = {reply.get("id"): reply for reply in replies}[2]
+        assert "error" not in call
+        text = call["result"]["content"][0]["text"]
+        assert "已根据 1 张参考图生成 1 张图片" in text
+        assert str(tmp_path) not in text
+        assert list((tmp_path / "generated-images").glob("image-*.png"))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 # --- 与平台的衔接：作为「平台通用」服务器建进目录 -------------------------------
+
 
 
 async def test_register_as_platform_mcp_server(client):

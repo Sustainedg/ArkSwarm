@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
@@ -22,7 +22,6 @@ import type {
   Message,
 } from '../../lib/types'
 import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
-import { summarizeUsage } from '../../lib/usage'
 import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
 import { Composer } from '../../components/Composer'
 import { useMobileMenu } from '../components/MobileMenuButton'
@@ -708,11 +707,6 @@ export function MobileChatPage() {
       }
     : null
 
-  const usage = useMemo(
-    () => summarizeUsage([...messages.filter((m) => m.role === 'assistant').map((m) => m.usage), live?.usage]),
-    [messages, live?.usage],
-  )
-
   // 气泡与输入区里的图片都从这条出口取：rel_path → 对话工作目录的只读文件 URL。
   const resolveMediaUrl = useCallback(
     (relPath: string) => (active ? conversationFileUrl(active.id, relPath) : null),
@@ -891,25 +885,6 @@ export function MobileChatPage() {
                 </div>
               )}
             </>
-          ) : null
-        }
-        // 用量统计挪到输入框「下面」：贴底的是输入框。
-        footer={
-          usage.messages > 0 ? (
-            <div className="m-usage">
-              <span>
-                读取 <b>{usage.input.toLocaleString()}</b> tok
-              </span>
-              <span>
-                输出 <b>{usage.output.toLocaleString()}</b> tok
-              </span>
-              <span>
-                总计 <b>{usage.total.toLocaleString()}</b> tok
-              </span>
-              <span>
-                缓存命中 <b>{usage.cacheRatio === null ? '—' : `${Math.round(usage.cacheRatio * 100)}%`}</b>
-              </span>
-            </div>
           ) : null
         }
       />

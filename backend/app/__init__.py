@@ -1,9 +1,34 @@
 from __future__ import annotations
 
-__version__ = "V0.40"
+__version__ = "V0.41"
 
 #: 版本记录（最新在前）。新增发布时，请同步修改 ``__version__`` 并在此追加一条。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
+    {
+        "version": "V0.41",
+        "date": "2026-11-14",
+        "title": "技能可删除 · 用量页重做 · 图片生成支持图生图",
+        "highlights": (
+            "技能页可删除非内核自带技能（个人 / 项目 / 插件 / 市场）：先断开智能体分配、再删编目行，"
+            "磁盘侧只允许删内核声明的技能根内、含 `SKILL.md` 的目录；市场卸载同步移除编目，"
+            "删目录失败会显式报错而不是假装成功（扫描时目录意外消失仍只标失效，保住分配）",
+            "两端用量页重做：token 构成环图、每日分色柱状图、智能体与技能排行，并支持刷新；"
+            "对话页不再在气泡 / 输入框下显示 token，统一到用量页查看",
+            "对话里的嵌图改为预览尺寸（桌面端 ≤ 380px、移动端 ≤ 280px），不再铺满气泡；"
+            "点一下仍可全屏看原图",
+            "技能市场来源统一标为「腾讯 SkillHub」（skillhub.cn），安装后仍走「严格仅分配」",
+            "`generate_image` 新增 `image` / `images` 入参：不传照旧走 `POST /v1/images/generations`（文生图），"
+            "传了就改走 `POST /v1/images/edits`（图生图 / 图片编辑），一次可带多张参考图 —— "
+            "doubao-seedream-5-lite 这类同时支持生成与编辑的模型终于用上了编辑能力",
+            "参考图支持**工作目录内的相对路径**（如 `attachments/a.png`、刚生成的 "
+            "`generated-images/….png`）与 http(s) 地址；本地文件由服务器读成 base64 data URL 再发 —— "
+            "网关在另一台机器上，拿不到本机路径；只支持 PNG / JPEG / WebP，单张 ≤ 10 MB、一次最多 10 张",
+            "入参校验都给可操作的中文提示：路径越出工作目录、文件不存在、空文件、格式不支持、"
+            "参考图超限，都作为 `isError` 工具结果回给模型，而不是拖垮服务器",
+            "`backend/tests/test_image_mcp.py` 补 6 个用例：data URL 转换、http 透传、越界与格式校验、"
+            "`image` + `images` 合并、图生图请求形状，以及起真实子进程走 stdio 的图生图端到端",
+        ),
+    },
     {
         "version": "V0.40",
         "date": "2026-11-14",

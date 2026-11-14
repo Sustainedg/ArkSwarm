@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -45,7 +46,7 @@ SOURCE_LABELS = {
     "plugin": "插件技能",
     "system": "内核系统技能",
     "manual": "平台技能",
-    MARKET_SOURCE: "市场技能",
+    MARKET_SOURCE: "腾讯 SkillHub",
 }
 
 #: 同名技能的去重优先级（越小越优先）；市场技能是用户显式安装的，优先级最高
@@ -136,6 +137,12 @@ async def list_rows(
         statement = statement.where(Skill.source_kind == source_kind)
     if available is not None:
         statement = statement.where(Skill.available == available)  # noqa: E712
+    else:
+        # 市场技能被卸载后目录就没了，它不该再出现在技能列表里（用户看到的「已卸载」）。
+        # 内核自带技能目录消失时仍保留一行并显示「目录已消失」，提示分配关系需要清理。
+        statement = statement.where(
+            or_(Skill.source_kind != MARKET_SOURCE, Skill.available == True)  # noqa: E712
+        )
     rows = (await session.execute(statement)).scalars().all()
     if query:
         needle = query.strip().lower()
@@ -151,6 +158,11 @@ async def list_rows(
 
 async def get_row(session: AsyncSession, skill_id: str) -> Skill | None:
     return await session.get(Skill, skill_id)
+
+
+def is_deletable(row: Skill) -> bool:
+    """内核自带（``system``）之外的技能都允许从技能页删除。"""
+    return row.source_kind != "system"
 
 
 async def usage_counts(session: AsyncSession) -> dict[str, int]:
@@ -406,6 +418,10 @@ class SkillError(Exception):
     """技能操作失败：消息面向用户。"""
 
 
+class SkillNotFound(SkillError):
+    """技能不存在（API 层据此映射 404，不靠中文字符串匹配）。"""
+
+
 def skill_roots_for_type(type_id: str) -> list[SkillRoot]:
     """某个内核声明的技能根；未知内核或该内核不支持技能时抛 :class:`SkillError`。"""
     try:
@@ -445,6 +461,21 @@ def _is_under(root: Path, candidate: Path) -> bool:
         return False
 
 
+def _delete_tree(target: Path, name: str) -> None:
+    """删掉一个技能目录；失败要显式暴露。
+
+    不能 ``ignore_errors=True``：删到一半失败时接口会回「已删除」，但目录还在，
+    下一次重扫又把它加回编目 —— 用户会看到技能删不掉却没有任何提示。
+    """
+    try:
+        shutil.rmtree(target)
+    except FileNotFoundError:
+        # 检查与删除之间目录被别的进程删掉了：结果与目标一致，视为成功。
+        return
+    except OSError as exc:
+        raise SkillError(f"删除「{name}」的目录失败：{exc}（请检查文件权限后重试）") from exc
+
+
 def _remove_installed_skill(type_id: str, row: Skill) -> None:
     """卸载一个市场技能：只删「我们装进去的目录」，越界或非市场技能一律拒绝。
 
@@ -465,7 +496,54 @@ def _remove_installed_skill(type_id: str, row: Skill) -> None:
         for root in skill_roots_for_type(type_id)
     ):
         raise SkillError(f"「{row.name}」不在可写入的技能目录内，拒绝删除")
-    shutil.rmtree(target, ignore_errors=True)
+    _delete_tree(target, row.name)
+
+
+def _remove_skill_directory(type_id: str, row: Skill) -> None:
+    """删掉技能自己的源目录；只允许删该内核声明过的技能根之下的目录。
+
+    这是技能页「删除」的磁盘侧护栏：数据库里的路径即便被改坏，也只能删到技能根内部，
+    并且目标必须真的像一个技能目录（含 ``SKILL.md``、不是符号链接、不是技能根本身）。
+    """
+    target = Path(row.path)
+    if not target.exists():
+        return
+    if target.is_symlink() or not target.is_dir():
+        raise SkillError(f"「{row.name}」的路径不是一个技能目录，拒绝删除")
+    if not (target / SKILL_FILE).is_file():
+        raise SkillError(f"「{row.name}」目录内没有 {SKILL_FILE}，拒绝删除")
+    for root in skill_roots_for_type(type_id):
+        base = Path(root.path)
+        try:
+            if target.resolve() == base.resolve():
+                continue
+        except OSError:
+            continue
+        if _is_under(base, target):
+            _delete_tree(target, row.name)
+            return
+    raise SkillError(f"「{row.name}」不在内核声明的技能目录内，拒绝删除")
+
+
+async def _drop_skill_row(session: AsyncSession, row: Skill) -> None:
+    """断开智能体分配并删除编目行，然后重扫（目录已删时不会把技能加回来）。"""
+    await session.execute(delete(AgentSkill).where(AgentSkill.skill_id == row.id))
+    await session.delete(row)
+    await session.commit()
+    await rescan(session)
+
+
+async def delete_skill(session: AsyncSession, skill_id: str) -> str:
+    """删除一个非内核自带的技能（个人 / 项目 / 插件 / 市场…），返回技能名。"""
+    row = await get_row(session, skill_id)
+    if row is None:
+        raise SkillNotFound(f"技能不存在：{skill_id}")
+    if not is_deletable(row):
+        raise SkillError(f"「{row.name}」是内核自带技能，不能删除")
+    name = row.name
+    _remove_skill_directory(row.type_id, row)
+    await _drop_skill_row(session, row)
+    return name
 
 
 async def wait_for_market_registration(
@@ -529,13 +607,13 @@ async def install_market_skill(
 
 
 async def uninstall_market_skill(session: AsyncSession, skill_id: str) -> str:
-    """卸载一个市场技能：删掉安装目录并标记失效，触发一次重扫。返回被删技能名。"""
+    """卸载一个市场技能：删掉安装目录、断开分配并移除编目记录。返回被删技能名。"""
     row = await get_row(session, skill_id)
     if row is None:
-        raise SkillError(f"技能不存在：{skill_id}")
+        raise SkillNotFound(f"技能不存在：{skill_id}")
+    name = row.name
     _remove_installed_skill(row.type_id, row)
-    row.available = False
-    row.updated_at = datetime.now(timezone.utc)
-    await session.commit()
-    await rescan(session)
-    return row.name
+    # 卸载 = 从平台移除：先断开「智能体 → 技能」的分配（外键是 RESTRICT），
+    # 再删编目行。否则技能会以「目录已消失」的形式继续留在技能页与市场已装列表里。
+    await _drop_skill_row(session, row)
+    return name

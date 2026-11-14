@@ -347,7 +347,7 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 
 ### 5.1 技能市场（SkillHub）
 
-平台的「技能」页可以把第三方技能社区 [skillhub.cn](https://skillhub.cn) 的技能**装进某个内核**：
+平台的「技能」页可以把**腾讯 SkillHub**（[skillhub.cn](https://skillhub.cn)）的技能**装进某个内核**：
 
 ```
 skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏览
@@ -359,8 +359,13 @@ skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏
   `SkillRoot`，框架不硬编码路径。
 - **装完仍需分配**：安装只是把技能放进了内核的编目范围（`source_kind=market`），要
   智能体真正用上，还得在「智能体 → 技能」里分配——与内核自带技能同一套「严格仅分配」规则。
-- **可卸载，但有护栏**：只有当技能目录内有市场安装标记（``.skillhub.json``）**且**目录落在
-  `installable` 技能根内时，卸载才允许删；内核自带技能永远不会被市场卸载接口删掉。
+- **可卸载，但有护栏**：市场页卸载要求目录内有市场安装标记（``.skillhub.json``）**且**目录落在
+  `installable` 技能根内；内核自带技能永远不会被市场卸载接口删掉。
+  卸载会同时断开「智能体 → 技能」分配并删掉编目记录——已卸载的技能不再出现在技能页/市场列表里
+  （目录被外部删掉的旧记录也会被列表过滤掉）。
+- **技能页可删非内核技能**：`DELETE /api/skills/{id}` 允许删除个人 / 项目 / 插件 / 市场等
+  **非内核自带**技能（`source_kind != system`），同样断开分配、删编目记录；磁盘侧只允许删
+  该内核声明的技能根之内、含 `SKILL.md` 的目录，越界路径一律拒绝。
 - **解压安全**：拒绝 zip-slip（绝对路径 / `..`）、跳过符号链接、限制文件数与解压后总字节数。
 - **接口**：`GET/POST /api/skillhub/*`（列表 / 内核 / 详情 / 安装 / 卸载），见 ``api/skillhub.py``。
 
@@ -413,16 +418,21 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
   （`tests/test_mobile_web.py::test_mcp_detail_styles_are_identical_on_both_ends` 守着逐字一致）。
 
 **平台自带的通用服务器**：`scripts/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
-服务器（stdio、纯标准库）——把 OpenAI 兼容网关的 `POST /v1/images/generations` 包成一个
-`generate_image` 工具。在「MCP」页新建服务器（命令 `python scripts/image_mcp_server.py`），
-配置全走它的环境变量（加密落库、运行时注入）：
+服务器（stdio、纯标准库）——把 OpenAI 兼容网关的生图接口包成一个 `generate_image` 工具：
+不传参考图走 `POST /v1/images/generations`（文生图）；传 `image` / `images` 则走
+`POST /v1/images/edits`（图生图 / 图片编辑，支持一次给多张参考图）。在「MCP」页新建服务器
+（命令 `python scripts/image_mcp_server.py`），配置全走它的环境变量（加密落库、运行时注入）：
 
 | 环境变量 | 说明 |
 | --- | --- |
 | `IMAGE_GEN_GATEWAY` | 生图网关地址（裸域名或带 `/v1` 都行，自动归一化） |
-| `IMAGE_GEN_MODEL` | 生图模型名 |
+| `IMAGE_GEN_MODEL` | 生图模型名（需支持图片编辑时才有图生图能力，如 `doubao-seedream-5-lite`） |
 | `IMAGE_GEN_API_KEY` | 网关密钥（无鉴权的本地网关可不填） |
 | `IMAGE_GEN_TIMEOUT` | 单次生图超时秒数（默认 300） |
+
+参考图取值：**工作目录内的相对路径**（如 `attachments/a.png`、`generated-images/b.png`）或
+http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给网关 —— 网关在另一台机器上，
+拿不到本机路径。只支持 PNG / JPEG / WebP，单张 ≤ 10 MB、一次最多 10 张。
 
 生成的图片落在**对话工作目录**的 `generated-images/` 下，工具结果只回**工作目录内的相对路径**
 （如 `generated-images/image-….png`）——大图不进上下文，模型把该路径写进 `![](…)` 即可在页面上

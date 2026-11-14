@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """图片生成 MCP 服务器（stdio 传输）。
 
-一个随平台分发的「平台通用」MCP 服务器：把 OpenAI 兼容网关的
-``POST /v1/images/generations`` 包成一个 ``generate_image`` 工具，
-分配到它的智能体就能在对话里生图。
+一个随平台分发的「平台通用」MCP 服务器：把 OpenAI 兼容网关的生图接口
+包成一个 ``generate_image`` 工具，分配到它的智能体就能在对话里生图。
+
+* 不传参考图 → ``POST /v1/images/generations``（文生图）
+* 传 ``image`` / ``images`` → ``POST /v1/images/edits``（图生图 / 图片编辑）；
+  参考图可以是工作目录内的相对路径（读成 base64 data URL）或 http(s) 地址
 
 配置全部来自环境变量（在「MCP」页新建 / 编辑服务器时填写；值经平台
 加密落库，运行时由内核注入本进程，绝不会出现在日志或对话里）：
@@ -30,6 +33,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -57,6 +61,9 @@ ENV_TIMEOUT = "IMAGE_GEN_TIMEOUT"
 DEFAULT_TIMEOUT = 300.0
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_IMAGES = 4
+#: 图生图的参考图张数与单张字节上限（参考图要 base64 进请求体，别让请求撑爆）
+MAX_INPUT_IMAGES = 10
+MAX_INPUT_BYTES = 10 * 1024 * 1024
 _SIZE_RE = re.compile(r"^\d{2,5}[xX]\d{2,5}$")
 
 #: 图片保存的子目录（相对本进程工作目录，即对话工作目录）
@@ -89,11 +96,11 @@ def load_config() -> dict[str, Any]:
     }
 
 
-def generations_url(gateway: str) -> str:
-    """把网关地址归一化成生图端点。
+def _api_base(gateway: str) -> str:
+    """把网关地址归一化成 OpenAI 兼容的 ``/v1`` 根。
 
     用户可能填 ``https://api.example.com`` 也可能填 ``https://api.example.com/v1``，
-    两种都收敛到 ``/v1/images/generations``（与网关探测的 URL 归一化同一套口径）。
+    两种都收敛到 ``.../v1``（与网关探测的 URL 归一化同一套口径）。
     """
     base = (gateway or "").rstrip("/")
     if not base:
@@ -102,8 +109,21 @@ def generations_url(gateway: str) -> str:
             f"在环境变量 {ENV_GATEWAY} 里填写网关地址（例如 https://api.example.com）"
         )
     if base.endswith("/v1"):
-        return f"{base}/images/generations"
-    return f"{base}/v1/images/generations"
+        return base
+    return f"{base}/v1"
+
+
+def generations_url(gateway: str) -> str:
+    """文生图端点：``POST /v1/images/generations``。"""
+    return f"{_api_base(gateway)}/images/generations"
+
+
+def edits_url(gateway: str) -> str:
+    """图生图（图片编辑）端点：``POST /v1/images/edits``。
+
+    参考图在这个端点上传递；往 ``/images/generations`` 塞 ``image`` 会被网关拒绝。
+    """
+    return f"{_api_base(gateway)}/images/edits"
 
 
 # --- 客户端层 -----------------------------------------------------------------
@@ -183,14 +203,69 @@ _EXT_BY_TYPE = {
 }
 
 
-def sniff_image_type(data: bytes) -> str:
-    """按文件头识别图片类型；认不出来时按 png 兜底（生图网关几乎只回这两种）。"""
+def _known_image_type(data: bytes) -> str | None:
+    """按文件头识别图片类型；认不出来返回 None。"""
     for magic, mime in _MAGIC_TYPES:
         if data.startswith(magic):
             return mime
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    return "image/png"
+    return None
+
+
+def sniff_image_type(data: bytes) -> str:
+    """按文件头识别图片类型；认不出来时按 png 兜底（生图网关几乎只回这两种）。"""
+    return _known_image_type(data) or "image/png"
+
+
+#: 网关接受的参考图类型（GIF 等其它格式会在上游被拒，这里提前说清楚）
+INPUT_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+
+_HTTP_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _read_workspace_image(spec: str) -> tuple[bytes, str]:
+    """读取工作目录内的参考图，返回 (字节, 类型)；越界或类型不支持时给出中文提示。"""
+    candidate = Path(spec)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(Path.cwd().resolve())
+    except (OSError, ValueError):
+        raise ValueError(f"参考图只能读工作目录内的文件：「{spec}」不在工作目录里") from None
+    if not resolved.is_file():
+        raise ValueError(f"参考图不存在：「{spec}」")
+    try:
+        size = resolved.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"读不到参考图「{spec}」：{exc}") from exc
+    if size > MAX_INPUT_BYTES:
+        raise ValueError(
+            f"参考图「{spec}」超过 {MAX_INPUT_BYTES // (1024 * 1024)} MB，请先压缩或缩小尺寸"
+        )
+    try:
+        data = resolved.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"读不到参考图「{spec}」：{exc}") from exc
+    if not data:
+        raise ValueError(f"参考图「{spec}」是空文件")
+    mime = _known_image_type(data)
+    if mime not in INPUT_IMAGE_TYPES:
+        raise ValueError(f"参考图「{spec}」的格式不支持，仅支持 PNG / JPEG / WebP")
+    return data, mime
+
+
+def input_image_url(spec: str) -> str:
+    """把工具入参里的参考图变成网关认识的 ``image_url``。
+
+    工作目录内的文件读成 base64 data URL —— 网关在另一台机器上，拿不到本机路径；
+    http(s) 地址原样传，交给网关自己下载。
+    """
+    if _HTTP_URL_RE.match(spec):
+        return spec
+    data, mime = _read_workspace_image(spec)
+    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
 def _save_image(data: bytes) -> tuple[Path, str]:
@@ -225,7 +300,20 @@ TOOL_SCHEMA: dict[str, Any] = {
     "properties": {
         "prompt": {
             "type": "string",
-            "description": "要生成的图片内容描述（必填，用具体的中文或英文描述）",
+            "description": "要生成的图片内容描述；编辑图片时写清要改成什么样（必填）",
+        },
+        "image": {
+            "type": "string",
+            "description": (
+                "要编辑的参考图：工作目录内的相对路径（如 attachments/a.png、"
+                "generated-images/b.png）或 http(s) 图片地址。提供后走图片编辑（图生图），"
+                "不提供就是文生图"
+            ),
+        },
+        "images": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": f"多张参考图（最多 {MAX_INPUT_IMAGES} 张），与 image 可同时使用；同样支持工作目录相对路径或 http(s) 地址",
         },
         "size": {
             "type": "string",
@@ -240,13 +328,36 @@ TOOL_SCHEMA: dict[str, Any] = {
 }
 
 TOOL_DESCRIPTION = (
-    "生成图片：按文字描述调用生图网关，图片会保存到工作目录的 "
-    f"{IMAGE_SUBDIR}/ 下，并返回文件路径。需要配图、画示意图、做插画时使用。"
+    "生成或编辑图片：按文字描述调用生图网关，图片会保存到工作目录的 "
+    f"{IMAGE_SUBDIR}/ 下，并返回文件路径。传 image / images（工作目录内的图片路径或 http 地址）"
+    "就是图片编辑（图生图），不传就是文生图。需要配图、画示意图、改图时使用。"
 )
 
 
+def _input_images(arguments: dict[str, Any]) -> list[str]:
+    """取出 image / images 两个参数合并后的参考图列表；形状不对时给可操作的中文提示。"""
+    specs: list[str] = []
+    single = arguments.get("image")
+    if isinstance(single, str):
+        if single.strip():
+            specs.append(single.strip())
+    elif single is not None:
+        raise ValueError("image 参数必须是图片路径或 http(s) 地址的字符串")
+    many = arguments.get("images")
+    if many is not None:
+        if not isinstance(many, list):
+            raise ValueError("images 参数必须是图片路径 / 地址的字符串数组")
+        for item in many:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("images 参数里的每一项都必须是非空的图片路径或 http(s) 地址")
+            specs.append(item.strip())
+    if len(specs) > MAX_INPUT_IMAGES:
+        raise ValueError(f"参考图最多 {MAX_INPUT_IMAGES} 张，收到 {len(specs)} 张")
+    return specs
+
+
 def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
-    """执行一次生图：校验入参 → 调网关 → 落盘 → 返回给模型的说明文本。"""
+    """执行一次生图 / 图片编辑：校验入参 → 调网关 → 落盘 → 返回给模型的说明文本。"""
     prompt = str(arguments.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("请提供要生成的图片描述（参数 prompt）")
@@ -265,12 +376,19 @@ def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
         raise ValueError("n 参数必须是 1-4 的整数") from None
     if not 1 <= count <= MAX_IMAGES:
         raise ValueError(f"n 参数必须是 1-{MAX_IMAGES} 的整数")
+    specs = _input_images(arguments)
 
     payload: dict[str, Any] = {"model": config["model"], "prompt": prompt, "n": count}
     if size:
         payload["size"] = size.lower()
+    if specs:
+        # 图生图：参考图只能走 /images/edits；本地文件转成 data URL，网关才拿得到
+        payload["images"] = [{"image_url": input_image_url(spec)} for spec in specs]
+        target = edits_url(config["gateway"])
+    else:
+        target = generations_url(config["gateway"])
     result = _post_json(
-        generations_url(config["gateway"]),
+        target,
         payload,
         api_key=config["api_key"],
         timeout=config["timeout"],
@@ -282,8 +400,6 @@ def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
         try:
             b64 = str(item.get("b64_json") or "")
             if b64:
-                import base64
-
                 saved.append(_save_image(base64.b64decode(b64)))
                 continue
             url = str(item.get("url") or "")
@@ -299,7 +415,14 @@ def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
             "生图网关没有返回可用的图片" + (f"（{failures[0]}）" if failures else "")
         )
 
-    lines = [f"已生成 {len(saved)} 张图片，保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："]
+    if specs:
+        headline = (
+            f"已根据 {len(specs)} 张参考图生成 {len(saved)} 张图片，"
+            f"保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："
+        )
+    else:
+        headline = f"已生成 {len(saved)} 张图片，保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："
+    lines = [headline]
     for path, mime in saved:
         lines.append(f"- {workspace_relative(path)}（{mime.removeprefix('image/').upper()}）")
     lines.append(
