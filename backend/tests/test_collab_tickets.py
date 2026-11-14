@@ -448,6 +448,99 @@ def test_coordinator_example_demonstrates_delegation():
     assert '"action": "submit"' in engineer_guide
 
 
+def test_step_prompt_lists_the_whole_team_not_only_my_assignees():
+    """每个岗位都要看得见整个团队：有谁、谁负责什么、入口是谁。
+
+    用户反馈：入口智能体（CEO）答不出「团队里有哪些人」。此前 prompt 只告诉它自己的派发对象，
+    组里配了审查者也无从得知 —— 同一张图里 CTO 因此说过「本协作没有安排审查者」。
+    """
+    from app.collab.prompt import TeamMember, TicketView, build_step_prompt
+    from app.collab.schemas import Duty, NodeSpec, TicketState
+
+    node = NodeSpec(key="se", agent_profile_id="r-se", duty=Duty.ENGINEER)
+    ticket = TicketView(id="t1", title="做点事", brief={"goal": "目标"}, state=TicketState.OPEN.value)
+    roster = [
+        TeamMember(key="ceo", label="CEO", duty=Duty.COORDINATOR, is_entry=True, instructions="只负责派活"),
+        TeamMember(key="se", label="SE", duty=Duty.ENGINEER),
+        TeamMember(key="qa", label="审查员", duty=Duty.REVIEWER, instructions="逐条核对验收标准"),
+    ]
+    text = build_step_prompt(
+        team_name="小组",
+        workspace_path="/tmp/x",
+        node=node,
+        ticket=ticket,
+        history=[],
+        assignees=[],
+        reviewer=None,
+        is_entry=False,
+        roster=roster,
+    )
+    assert "—— 协作组名册（系统提供的团队结构，只读）——" in text
+    assert "CEO（ceo） · 协调者 · 入口，唯一和用户对话的智能体 · 只负责派活" in text
+    assert "SE（se） · 实施者" in text
+    assert "审查员（qa） · 审查者 · 逐条核对验收标准" in text
+    # 名册只是背景，不能顶着「输出协议」的权威：派发 / 审查对象仍以协议为准
+    assert "一律以「输出协议」里列出的对象为准" in text
+    # 名册排在输出协议之前（协议带一长串规则与示例，埋在后面等于没说）
+    assert text.index("—— 协作组名册") < text.index("输出协议：")
+
+
+def test_step_prompt_without_a_roster_is_unchanged():
+    """不给名册（老调用方、纯函数单测）时不凭空多出一段。"""
+    from app.collab.prompt import TicketView, build_step_prompt
+    from app.collab.schemas import Duty, NodeSpec, TicketState
+
+    node = NodeSpec(key="se", agent_profile_id="r-se", duty=Duty.ENGINEER)
+    ticket = TicketView(id="t1", title="做点事", brief={"goal": "目标"}, state=TicketState.OPEN.value)
+    text = build_step_prompt(
+        team_name="小组",
+        workspace_path="/tmp/x",
+        node=node,
+        ticket=ticket,
+        history=[],
+        assignees=[],
+        reviewer=None,
+        is_entry=False,
+    )
+    assert "名册" not in text
+
+
+def test_protocol_guide_never_speaks_for_the_whole_team_about_reviewers():
+    """带 submit 但不是提交方的节点，不能被说成「本协作没有安排审查者」。
+
+    真实事故：CTO 的契约是 delegate/done/submit/reject，它自己没有 review 出边，协议说明就渲染成
+    「本协作没有安排审查者，提交即完成」；CTO 把这句关于**整张图**的断言原样写进下游工单与最终汇报。
+    而组里其实配了审查者（SDE --review--> QA），于是审查明明跑了，用户收到的却是「没设置审查员」。
+    """
+    from app.collab.schemas import Duty
+
+    guide = render_protocol_guide(
+        duty_label="协调者",
+        actions=(
+            TicketAction.DELEGATE,
+            TicketAction.DONE,
+            TicketAction.SUBMIT,
+            TicketAction.REJECT,
+        ),
+        assignees=["Leo-SDE（SDE）"],
+        reviewer=None,
+        duty=Duty.COORDINATOR,
+    )
+    assert "本协作没有安排审查者" not in guide
+    # 只描述这张工单自己的结局：还是得让模型知道 submit 之后就没有审查环节了
+    assert "不经过审查环节" in guide
+
+    # 真正的提交方不受影响：交到审查者手里时照样报出是谁审
+    submitter_guide = render_protocol_guide(
+        duty_label="实施者",
+        actions=(TicketAction.SUBMIT, TicketAction.DONE),
+        assignees=[],
+        reviewer="Vera-QA（QA）",
+        duty=Duty.ENGINEER,
+    )
+    assert "你提交后由「Vera-QA（QA）」审查。" in submitter_guide
+
+
 # --- 字符串里的裸引号（线上真实故障） ----------------------------------------------
 
 #: 模型在 JSON 字符串里直接写 ASCII 双引号：第一个引号会提前结束字符串，整块判死。

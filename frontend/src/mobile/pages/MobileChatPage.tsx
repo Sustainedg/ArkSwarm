@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
-import { api, ApiError, streamGet, streamPost } from '../../lib/api'
+import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
+import { useComposerDraft } from '../../lib/composerDraft'
 import { formatListTime } from '../../lib/datetime'
+import { MediaUrlProvider } from '../../lib/media'
 import { shortPath } from '../../lib/paths'
 import { useMarkConversationRead } from '../../lib/readReceipts'
 import { shareConversationImage } from '../../lib/shareImage'
@@ -63,7 +65,11 @@ export function MobileChatPage() {
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [live, setLive] = useState<LiveTurn | null>(null)
-  const [draft, setDraft] = useState('')
+  /**
+   * 草稿（文字 + 待发附件）按对话各记各的：切到别的对话再切回来，没发出去的内容还在原处，
+   * 不会跟着跳。发送成功即清空，那一段记忆也跟着抹掉。
+   */
+  const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(conversationId)
   const [error, setError] = useState<string | null>(null)
   /** 后台同步（轮询）产生的提示：下一次同步成功就撤掉，不长期占着界面 */
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -77,8 +83,6 @@ export function MobileChatPage() {
   /** `/chat` 的默认对话还没定下来（或一条对话都没有）时不给空状态，避免闪一下 */
   const [resolving, setResolving] = useState(true)
 
-  /** 已上传、等待随消息发出的附件（输入区共享组件持有 UI，状态由本页持有） */
-  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   /** AI 回复期间按下的消息：本轮结束后自动发出（只针对当前这条对话） */
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   /** 正在生成长图（生成要几百毫秒，期间按钮置灰，避免连点出两张） */
@@ -93,6 +97,21 @@ export function MobileChatPage() {
   const [modelDraft, setModelDraft] = useState('')
   /** 一次性的提示（分享图已下载之类），与错误分开显示 */
   const [notice, setNotice] = useState<string | null>(null)
+
+  /**
+   * 统一上报异常：网络中断（切到后台、断网、休眠唤醒）是可自愈的，交给 `syncError` ——
+   * 下一次拉取成功就会撤掉，不能在屏幕上长眠；其余错误留在 `error` 上，等用户下一次操作。
+   *
+   * 这正是「切回 PWA 后 Load failed 一直消不掉」的根因：在途的 SSE 流在后台被浏览器掐断，
+   * 原来这里直接写进 `error`，而 `error` 只有用户主动做点什么才会被清。
+   */
+  const reportError = useCallback((e: unknown) => {
+    if (isNetworkError(e)) {
+      setSyncError(describeError(e))
+      return
+    }
+    setError(describeError(e))
+  }, [])
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -155,11 +174,11 @@ export function MobileChatPage() {
         return detail
       } catch (e) {
         // 过期请求的失败也不该在当前这条对话上报错。
-        if (openedConversationRef.current === id) setError(describeError(e))
+        if (openedConversationRef.current === id) reportError(e)
         return null
       }
     },
-    [applyDetail],
+    [applyDetail, reportError],
   )
 
   /** 后台同步（每 3 秒）：只更新数据，不覆盖用户主动操作产生的提示。 */
@@ -373,7 +392,7 @@ export function MobileChatPage() {
       }
       return true
     } catch (e) {
-      if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
+      if ((e as Error)?.name !== 'AbortError') reportError(e)
       return false
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -474,7 +493,7 @@ export function MobileChatPage() {
       })
       if (outcome === 'downloaded') setNotice('分享图已生成，已开始下载（当前环境不支持系统分享面板）')
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
     } finally {
       setSharing(false)
     }
@@ -494,7 +513,7 @@ export function MobileChatPage() {
     try {
       await api.deleteConversation(active.id)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
       return
     }
     selfDeletedRef.current = active.id
@@ -515,7 +534,7 @@ export function MobileChatPage() {
       await api.updateConversation(active.id, { title })
       await open(active.id)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
     }
   }
 
@@ -554,7 +573,7 @@ export function MobileChatPage() {
     void api
       .listAgents()
       .then(setScopeAgents)
-      .catch((e) => setError(describeError(e)))
+      .catch(reportError)
   }
 
   /**
@@ -579,7 +598,7 @@ export function MobileChatPage() {
       setScopePanel(null)
       await open(active.id)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
     } finally {
       setScopeSaving(false)
     }
@@ -596,7 +615,7 @@ export function MobileChatPage() {
         setModelOptions(options)
         setModelDraft(options.current ?? active.model ?? '')
       })
-      .catch((e) => setError(describeError(e)))
+      .catch(reportError)
   }
 
   const applyModel = async (value?: string) => {
@@ -613,7 +632,7 @@ export function MobileChatPage() {
       setScopePanel(null)
       await open(active.id)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
     } finally {
       setScopeSaving(false)
     }
@@ -659,8 +678,15 @@ export function MobileChatPage() {
     [messages, live?.usage],
   )
 
+  // 气泡与输入区里的图片都从这条出口取：rel_path → 对话工作目录的只读文件 URL。
+  const resolveMediaUrl = useCallback(
+    (relPath: string) => (active ? conversationFileUrl(active.id, relPath) : null),
+    [active?.id],
+  )
+
   return (
-    <div className="m-page">
+    <MediaUrlProvider resolver={resolveMediaUrl}>
+      <div className="m-page">
       <MobileTopBar
         title={active?.agent_name ?? 'Magenta Agents'}
         subtitle={
@@ -1037,6 +1063,7 @@ export function MobileChatPage() {
           )}
         </MobileSheet>
       )}
-    </div>
+      </div>
+    </MediaUrlProvider>
   )
 }

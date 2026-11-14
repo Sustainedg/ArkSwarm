@@ -404,6 +404,24 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
 - **接口**：`GET/POST /api/mcp-servers`、`POST /api/mcp-servers/rescan`、
   `GET/PATCH/DELETE /api/mcp-servers/{id}`、`PUT /api/agents/{id}/mcp-servers`，见 `api/mcp.py`。
 
+**平台自带的通用服务器**：`scripts/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
+服务器（stdio、纯标准库）——把 OpenAI 兼容网关的 `POST /v1/images/generations` 包成一个
+`generate_image` 工具。在「MCP」页新建服务器（命令 `python scripts/image_mcp_server.py`），
+配置全走它的环境变量（加密落库、运行时注入）：
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `IMAGE_GEN_GATEWAY` | 生图网关地址（裸域名或带 `/v1` 都行，自动归一化） |
+| `IMAGE_GEN_MODEL` | 生图模型名 |
+| `IMAGE_GEN_API_KEY` | 网关密钥（无鉴权的本地网关可不填） |
+| `IMAGE_GEN_TIMEOUT` | 单次生图超时秒数（默认 300） |
+
+生成的图片落在**对话工作目录**的 `generated-images/` 下，工具结果只回**工作目录内的相对路径**
+（如 `generated-images/image-….png`）——大图不进上下文，模型把该路径写进 `![](…)` 即可在页面上
+显示成图（前端按相对路径换成只读文件出口的 URL；给绝对路径会解析不到）。
+服务器内部按「协议层 → 工具层 → 客户端层 → 配置层」单向分层，测试见
+`backend/tests/test_image_mcp.py`。
+
 ## 7. 数据模型
 
 ```

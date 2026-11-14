@@ -6,9 +6,11 @@ import { AgentIcon, FolderIcon, ModelIcon, ShareIcon, SpeakerIcon } from '../com
 import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
-import { api, ApiError, streamGet, streamPost } from '../lib/api'
+import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../lib/api'
+import { useComposerDraft } from '../lib/composerDraft'
 import { notifyConversationsChanged } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
+import { MediaUrlProvider } from '../lib/media'
 import { shortPath } from '../lib/paths'
 import { useMarkConversationRead } from '../lib/readReceipts'
 import { shareConversationImage } from '../lib/shareImage'
@@ -61,9 +63,11 @@ export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [live, setLive] = useState<LiveTurn | null>(null)
-  const [draft, setDraft] = useState('')
-  /** 已上传、等待随消息发出的附件（输入区共享组件持有 UI，状态由本页持有） */
-  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
+  /**
+   * 草稿（文字 + 待发附件）按对话各记各的：切到别的对话再切回来，没发出去的内容还在原处，
+   * 不会跟着跳。发送成功即清空，那一段记忆也跟着抹掉。
+   */
+  const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(conversationId)
   /** AI 回复期间按下的消息：本轮结束后自动发出（只针对当前这条对话） */
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -121,6 +125,21 @@ export function ChatPage() {
   const stickRef = useRef(true)
   const stickConversationRef = useRef<string | null>(null)
 
+  /**
+   * 统一上报异常：网络中断（切后台、休眠唤醒、断网）是可自愈的，交给 `syncError` ——
+   * 下一次拉取成功就会撤掉；其余错误留在 `error` 上，等用户下一次操作。
+   *
+   * 不这样分流的话，切后台掐断的在途 SSE 会把一句原生「Load failed」写进 `error`，
+   * 而 `error` 只有用户主动做点什么才会被清 —— 这就是「切回来提示一直消不掉」的根因。
+   */
+  const reportError = useCallback((e: unknown) => {
+    if (isNetworkError(e)) {
+      setSyncError(describe(e))
+      return
+    }
+    setError(describe(e))
+  }, [])
+
   const applyDetail = useCallback((detail: ConversationDetail, resetLive: boolean) => {
     setMessages((prev) => (sameMessageList(prev, detail.messages) ? prev : detail.messages))
     setActive(detail.conversation)
@@ -158,10 +177,10 @@ export function ChatPage() {
         applyDetail(detail, true)
       } catch (e) {
         // 过期请求的失败也不该在当前这条对话上报错。
-        if (openedConversationRef.current === id) setError(describe(e))
+        if (openedConversationRef.current === id) reportError(e)
       }
     },
-    [applyDetail],
+    [applyDetail, reportError],
   )
 
   /** 正在看的这条对话已经不在了（多半是在别的设备上被删）：落到剩下的对话，别留一条消不掉的 404。 */
@@ -403,7 +422,7 @@ export function ChatPage() {
       }
       return true
     } catch (e) {
-      if ((e as Error)?.name !== 'AbortError') setError(describe(e))
+      if ((e as Error)?.name !== 'AbortError') reportError(e)
       return false
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -714,8 +733,15 @@ export function ChatPage() {
     [messages, live?.usage],
   )
 
+  // 气泡与输入区里的图片（附件缩略图、智能体产出的图）都从这条出口取：rel_path → 只读文件 URL。
+  const resolveMediaUrl = useCallback(
+    (relPath: string) => (active ? conversationFileUrl(active.id, relPath) : null),
+    [active?.id],
+  )
+
   return (
-    <div className="chat-shell">
+    <MediaUrlProvider resolver={resolveMediaUrl}>
+      <div className="chat-shell">
       <section className="chat-pane">
         {active ? (
           <>
@@ -1134,12 +1160,15 @@ export function ChatPage() {
           </div>
         </Modal>
       )}
-    </div>
+      </div>
+    </MediaUrlProvider>
   )
 }
 
 function describe(error: unknown): string {
   if (error instanceof ApiError) return `${error.status} · ${error.message}`
+  // 切后台 / 断网时浏览器抛的是「Load failed」这类原生英文，不该原样丢给用户。
+  if (isNetworkError(error)) return '连接中断：请检查网络后重试'
   return error instanceof Error ? error.message : String(error)
 }
 

@@ -434,6 +434,26 @@ async def test_downstream_only_sees_the_ticket_never_the_conversation(client: ht
     assert "已按审查意见补上对比度" in report_prompt
 
 
+async def test_every_role_sees_the_whole_team_roster(client: httpx.AsyncClient, full):
+    """每个岗位的 prompt 里都有全组名册：团队里有谁、谁负责什么、入口是谁。
+
+    真实反馈：入口智能体（CEO）答不出「团队里有哪些人」。此前 prompt 只列出**自己的派发对象**，
+    组里配了审查者也无从得知 —— 同一张图里 CTO 因此说过「本协作没有安排审查者」。
+    """
+    await start_run(client, full["agent_profiles"], "把登录页改成暗色主题")
+    all_prompts = prompts(full["state_dir"])
+    assert all_prompts
+    for text in all_prompts:
+        assert "—— 协作组名册（系统提供的团队结构，只读）——" in text
+        assert "CEO（ceo） · 协调者 · 入口，唯一和用户对话的智能体 · 只负责理解需求与派活，不写代码" in text
+        assert "CTO（cto） · 协调者 · 负责拆解任务与汇总" in text
+        assert "SE（se） · 实施者" in text
+        assert "审查员（qa） · 审查者" in text
+        # 名册正好 4 行（组里就这 4 个岗位），不是「自己 + 派发对象」那种半份名单
+        roster_part = text.split("—— 协作组名册（系统提供的团队结构，只读）——")[1].split("名册只说明")[0]
+        assert len([line for line in roster_part.splitlines() if line.strip()]) == 4
+
+
 async def test_run_workspace_path_is_passed_to_every_role(client: httpx.AsyncClient, full, tmp_path: Path):
     """新建协作任务时指定的工作路径必须原样传给每个岗位，并落在运行记录里。"""
     shared = (tmp_path / "shared-project").resolve()
@@ -955,6 +975,9 @@ async def test_entry_chat_stays_available_while_the_workflow_is_running(
         chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
         assert len(chat_prompts) == 1
         chat_prompt = chat_prompts[0]
+        # 用户问「团队里都有谁」时 CEO 得答得出来：聊天通道也带全组名册。
+        assert "—— 协作组名册（系统提供的团队结构，只读）——" in chat_prompt
+        assert "审查员（qa） · 审查者" in chat_prompt
         assert "《实现主题开关与持久化》" in chat_prompt
         assert "状态：review" in chat_prompt
         assert "最近结论：已完成主题开关与持久化" in chat_prompt

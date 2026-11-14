@@ -3,7 +3,7 @@ import type {
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
   ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
-  McpServerDetail, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeLatest, Skill,
   ProvisionJobInfo,
   MarketInstallInput,
   MarketInstallResult,
@@ -23,6 +23,24 @@ export class ApiError extends Error {
     this.status = status
     this.name = 'ApiError'
   }
+}
+
+/**
+ * 各浏览器对「fetch 传输层失败」的说法（WebKit：Load failed；Chromium：Failed to fetch；
+ * Firefox：NetworkError …）。这类失败不是接口给出的业务错误，而是连接真的断了。
+ */
+const NETWORK_FAILURE = /load failed|failed to fetch|networkerror|network error|network connection was lost|offline|err_internet_disconnected|err_network/i
+
+/**
+ * 这个异常是不是「网络中断」（可自愈），而不是接口返回的业务错误。
+ *
+ * 移动端切到后台、休眠唤醒、地铁里断网时，在途的 SSE / fetch 会以原生 `TypeError` 失败
+ * （`ApiError` 是我们自己封装的业务错误，不算）。这类失败下一轮请求通常就恢复了，
+ * 界面要把它当成「正在重连」而不是终态错误 —— 否则一个「Load failed」会永远挂在屏幕上。
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (error instanceof ApiError) return false
+  return error instanceof TypeError && NETWORK_FAILURE.test(error.message)
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -207,9 +225,9 @@ export const api = {
     return request<{ items: McpServer[] }>(`/api/mcp-servers${suffix}`).then((r) => r.items)
   },
   getMcpServer: (id: string) => request<McpServerDetail>(`/api/mcp-servers/${encodeURIComponent(id)}`),
-  createMcpServer: (body: unknown) =>
+  createMcpServer: (body: McpServerPayload) =>
     request<McpServer>('/api/mcp-servers', { method: 'POST', body: JSON.stringify(body) }),
-  updateMcpServer: (id: string, body: unknown) =>
+  updateMcpServer: (id: string, body: Partial<McpServerPayload>) =>
     request<McpServer>(`/api/mcp-servers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteMcpServer: (id: string) => request<void>(`/api/mcp-servers/${id}`, { method: 'DELETE' }),
   rescanMcpServers: () => request<McpRescanResult>('/api/mcp-servers/rescan', { method: 'POST' }),
@@ -307,6 +325,30 @@ export const api = {
     request<{ ok: boolean; cancelled: boolean }>(`/api/collab/runs/${id}/cancel`, { method: 'POST' }),
   /** 把某一步所在的工单放回队列（解析失败/中断后修复，随后续跑） */
   retryCollabStep: (stepId: string) => request<CollabRun>(`/api/collab/steps/${stepId}/retry`, { method: 'POST' }),
+}
+
+/**
+ * 工作目录文件的读取地址（图片预览、附件点开）：直接塞进 `<img src>`，不走 `request`。
+ *
+ * 路径按段编码但**保留 `/`**（后端路由是 `{rel_path:path}`）；中文文件名要能正确编码。
+ * 这是浏览器唯一能取到工作目录内文件的方式 —— 本地绝对路径在页面里必然是裂图。
+ */
+function fileUrl(prefix: string, id: string, relPath: string): string {
+  const encoded = relPath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+  return `${BASE}/api/${prefix}/${encodeURIComponent(id)}/files/${encoded}`
+}
+
+/** 对话工作目录里的文件地址（附件预览 / 智能体产出的图片）。 */
+export function conversationFileUrl(conversationId: string, relPath: string): string {
+  return fileUrl('conversations', conversationId, relPath)
+}
+
+/** 协作运行工作目录里的文件地址。 */
+export function collabRunFileUrl(runId: string, relPath: string): string {
+  return fileUrl('collab/runs', runId, relPath)
 }
 
 /**

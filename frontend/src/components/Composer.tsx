@@ -8,7 +8,8 @@
  * 附件与语音都收在这里，页面只提供数据与回调：
  * - `value` / `onChange`：草稿文字（页面持有，才能按场景清空与预填）；
  * - `attachments` / `onAttachmentsChange`：待发附件（页面持有，发送成功后由页面清空）；
- * - `onUpload`：把读好的 base64 交给页面调接口（不传就不显示回形针）；
+ * - `onUpload`：把读好的 base64 交给页面调接口（不传就不显示回形针，也不接管粘贴）；
+ *   **粘贴截图走同一条路径**：输入框里粘贴图片直接变成附件（见下方 `onPaste`）；
  * - `onSend`：正文与附件都空时不触发（除非页面开了 `allowEmptySend`），页面从自己的状态里取附件。
  */
 import {
@@ -18,13 +19,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type MutableRefObject,
   type ReactNode,
   type Ref,
 } from 'react'
 import type { AttachmentRef } from '../lib/types'
+import { isImagePath, useMediaUrl } from '../lib/media'
 import { describeSpeechError, finalTranscript, speechRecognitionCtor, type SpeechRecognizer } from '../lib/speech'
 import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from './Icons'
+import { ZoomableImage } from './ZoomableImage'
 
 /** 单个附件的上限，与服务端 `MAX_ATTACHMENT_BYTES` 保持一致（前端先拦一道，省一次往返）。 */
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
@@ -85,6 +89,28 @@ function readBase64(file: File): Promise<string> {
   })
 }
 
+/**
+ * 剪贴板里的图片常常**没有文件名**（截图）或只叫「image.png」。按 MIME 补一个带时间戳的名字，
+ * 落进工作目录后一眼能认出是哪次粘贴的。生成 `粘贴图片-20261114-153012.png` 这种。
+ */
+function pastedImageName(file: File): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  // `image/jpeg` → jpg，`image/svg+xml` → svg；认不出的类型退回 png。
+  const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('+xml', '')
+  return `粘贴图片-${stamp}.${ext}`
+}
+
+/** 粘贴图片的落库名：真实文件名（从文件管理器复制的）保留，截图那类通用名换成时间戳名。 */
+function nameForPastedImage(file: File): string {
+  const name = (file.name || '').trim()
+  if (!name || /^image\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(name)) return pastedImageName(file)
+  return name
+}
+
 export function Composer({
   value,
   onChange,
@@ -116,6 +142,8 @@ export function Composer({
    */
   const voiceSupported = useMemo(() => Boolean(speechRecognitionCtor()), [])
   const locked = disabled || (busy && !queueWhenBusy)
+  // 待发附件的取图出口（页面在顶层提供）：图片附件才能画缩略图并点开看。
+  const mediaUrl = useMediaUrl()
 
   // 卸载（离开页面 / 关掉弹层）时收起麦克风，别让识别在后台空转。
   useEffect(() => () => voiceRef.current?.abort(), [])
@@ -158,8 +186,13 @@ export function Composer({
     [onNotice],
   )
 
-  const pick = async (files: FileList | null) => {
-    if (!files || files.length === 0 || !onUpload) return
+  /**
+   * 把一批文件读成 base64 交给页面。回形针选文件与粘贴图片共用这一条路径，
+   * 上限校验、上传中的转圈、错误提示也就只有一份。
+   * `nameOf` 决定落库用的文件名：回形针用文件本名，粘贴的截图补一个时间戳名。
+   */
+  const uploadFiles = async (files: File[], nameOf: (file: File) => string = (file) => file.name) => {
+    if (files.length === 0 || !onUpload) return
     if (locked) {
       notify('当前还不能添加附件')
       return
@@ -167,13 +200,13 @@ export function Composer({
     setUploading(true)
     try {
       const uploaded: AttachmentRef[] = []
-      for (const file of Array.from(files)) {
+      for (const file of files) {
         if (file.size > MAX_ATTACHMENT_BYTES) {
-          notify(`「${file.name}」超过 ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB，换个小一点的文件`)
+          notify(`「${nameOf(file)}」超过 ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB，换个小一点的文件`)
           continue
         }
         const encoded = await readBase64(file)
-        uploaded.push(await onUpload(file.name, encoded))
+        uploaded.push(await onUpload(nameOf(file), encoded))
       }
       if (uploaded.length > 0) onAttachmentsChange([...attachments, ...uploaded])
     } catch (e) {
@@ -181,6 +214,27 @@ export function Composer({
     } finally {
       setUploading(false)
     }
+  }
+
+  const pick = (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    void uploadFiles(Array.from(files))
+  }
+
+  /**
+   * 粘贴：剪贴板里有图片就直接当附件传（截图最常见）。命中图片才 `preventDefault`，
+   * 免得浏览器顺手把图片的其他表示（URL / 文本）塞进输入框；没有图片时原样走默认的文本粘贴。
+   * 不支持上传（没给 `onUpload`）或当前禁用时，不接管，交回浏览器默认行为。
+   */
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onUpload) return
+    const images = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+    if (images.length === 0) return
+    event.preventDefault()
+    void uploadFiles(images, nameForPastedImage)
   }
 
   const toggleVoice = () => {
@@ -229,19 +283,26 @@ export function Composer({
 
       {attachments.length > 0 && (
         <div className="composer-attach-row">
-          {attachments.map((item) => (
-            <span className="composer-attach-chip" key={item.rel_path}>
-              <span className="composer-attach-name">{item.name}</span>
-              <button
-                onClick={() =>
-                  onAttachmentsChange(attachments.filter((row) => row.rel_path !== item.rel_path))
-                }
-                aria-label={`移除附件 ${item.name}`}
-              >
-                ✕
-              </button>
-            </span>
-          ))}
+          {attachments.map((item) => {
+            // 图片附件画缩略图并可点开看原图 —— 只显示文件名的话，粘的是哪张图根本认不出来。
+            const thumb = mediaUrl && isImagePath(item.name) ? mediaUrl(item.rel_path) : null
+            return (
+              <span className="composer-attach-chip" key={item.rel_path}>
+                {thumb && (
+                  <ZoomableImage className="composer-attach-thumb" src={thumb} alt={item.name} />
+                )}
+                <span className="composer-attach-name">{item.name}</span>
+                <button
+                  onClick={() =>
+                    onAttachmentsChange(attachments.filter((row) => row.rel_path !== item.rel_path))
+                  }
+                  aria-label={`移除附件 ${item.name}`}
+                >
+                  ✕
+                </button>
+              </span>
+            )
+          })}
         </div>
       )}
 
@@ -291,6 +352,8 @@ export function Composer({
           disabled={locked}
           // 高度不在这里量：草稿可能由页面清空（发送 / 换对话），只有盯着 `value` 的 effect 才收得回来。
           onChange={(event) => onChange(event.target.value)}
+          // 粘贴截图 → 直接变成待发附件（走与回形针同一条上传路径）。
+          onPaste={handlePaste}
           onKeyDown={(event) => {
             if (!submitOnEnter) return
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return

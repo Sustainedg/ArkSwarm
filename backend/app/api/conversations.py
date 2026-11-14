@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -314,6 +314,34 @@ async def upload_attachment(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
     except ConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.get("/{conversation_id}/files/{rel_path:path}")
+async def get_conversation_file(
+    conversation_id: str, rel_path: str, session: AsyncSession = Depends(get_session)
+) -> FileResponse:
+    """把工作目录里的一个文件回给浏览器看（附件点开预览、智能体产出的图片等）。
+
+    只读，且**仅限该对话工作目录内部**（`../` 穿越、目录、目录外软链一律拒绝）。附件本就是
+    工作目录里的普通文件，所以「预览我上传的图」与「看智能体生成的图」共用这一个出口 ——
+    这也是聊天里嵌图能真正显示出来的前提（浏览器取不到工作目录里的本地路径）。
+    """
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    try:
+        workspace = Path(resolve_workspace(conversation))
+        target = attachments.resolve_workspace_file(rel_path, workspace)
+    except attachments.AttachmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return FileResponse(
+        target,
+        media_type=attachments.guess_media_type(target.name),
+        # 内容会随对话进展变化（同名路径可能被重写），只让浏览器短暂缓存，避免看到旧图。
+        headers={"Cache-Control": "private, max-age=30"},
+    )
 
 
 def _sse_response(source: AsyncIterator[dict]) -> StreamingResponse:

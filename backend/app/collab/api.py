@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -323,6 +323,30 @@ async def upload_run_attachment(
     except execution.StepError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return stored.to_dict()
+
+
+@router.get("/runs/{run_id}/files/{rel_path:path}")
+async def get_run_file(
+    run_id: str, rel_path: str, session: AsyncSession = Depends(get_session)
+) -> FileResponse:
+    """把这次协作工作目录里的一个文件回给浏览器看（附件预览、岗位产出的图片等）。
+
+    只读，且仅限工作目录内部（与对话域同一个 `app.attachments.resolve_workspace_file` 守卫）；
+    路径不存在时不创建目录，直接 4xx。
+    """
+    try:
+        run = await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    try:
+        target = attachments.resolve_workspace_file(rel_path, execution.workspace_root(run))
+    except attachments.AttachmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    return FileResponse(
+        target,
+        media_type=attachments.guess_media_type(target.name),
+        headers={"Cache-Control": "private, max-age=30"},
+    )
 
 
 @router.post("/runs/{run_id}/resume")

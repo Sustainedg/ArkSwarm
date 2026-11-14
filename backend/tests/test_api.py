@@ -557,6 +557,43 @@ async def test_attachment_upload_guards(client: httpx.AsyncClient, tmp_path: Pat
         assert response.status_code == 409
 
 
+async def test_workspace_file_endpoint_serves_attachments_and_blocks_traversal(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """聊天里嵌图的前提：工作目录里的文件能被浏览器取到，且**只能**取到目录内部的。
+
+    附件的 rel_path 是工作目录里的相对路径，浏览器拿不到本地文件；没有这个只读出口，
+    上传/生成的图片在页面上永远是一个裂图或一串路径。
+    """
+    conversation, workspace = await _conversation_with_workspace(client, tmp_path)
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+P+/HgAFhAJ/"
+        "wlseKgAAAABJRU5ErkJggg=="
+    )
+    info = (
+        await client.post(
+            f"/api/conversations/{conversation['id']}/attachments",
+            json={"name": "截图.png", "content_base64": base64.b64encode(png).decode()},
+        )
+    ).json()
+
+    got = await client.get(f"/api/conversations/{conversation['id']}/files/{info['rel_path']}")
+    assert got.status_code == 200, got.text
+    assert got.headers["content-type"].startswith("image/png")
+    assert got.content == png
+
+    # 目录穿越被拒（不能读到工作目录以外的文件）；用编码过的 `../` 绕过客户端归一化。
+    (workspace.parent / "secret.txt").write_text("top secret", encoding="utf-8")
+    escape = await client.get(f"/api/conversations/{conversation['id']}/files/..%2Fsecret.txt")
+    assert escape.status_code == 422
+
+    # 不存在的文件给明确的 4xx，而不是裸 500
+    missing = await client.get(
+        f"/api/conversations/{conversation['id']}/files/attachments/nope.png"
+    )
+    assert missing.status_code == 422
+
+
 async def test_attachment_upload_reports_an_unusable_workspace(
     client: httpx.AsyncClient, tmp_path: Path
 ):

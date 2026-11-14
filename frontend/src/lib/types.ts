@@ -11,6 +11,9 @@ export interface ConfigField {
   help?: string | null
   options?: { value: string; label: string }[] | null
   advanced: boolean
+  /** 键值对字段（`keyvalue`）里每个键对应的「值」占位提示（键 → 提示文字）。
+   *  密钥类的值不下发到浏览器，只能把掩码当占位符，编辑时才分得清「空着」还是「已填好」。 */
+  entryPlaceholders?: Record<string, string | null> | null
 }
 
 export interface Capabilities {
@@ -374,6 +377,22 @@ export interface McpRescanResult {
   updated: number
   missing: number
   total: number
+}
+
+/** MCP 服务器的「新建 / 编辑」载荷（与后端 McpServerCreate/Update 字段一致）。 */
+export interface McpServerPayload {
+  name: string
+  slug?: string | null
+  description?: string | null
+  /** stdio / http / sse */
+  transport: string
+  command?: string | null
+  url?: string | null
+  args?: string[]
+  /** 值加密保存；编辑时留空＝保持原值，删掉整行＝删除 */
+  env?: Record<string, string>
+  headers?: Record<string, string>
+  enabled?: boolean
 }
 
 /** 技能市场（SkillHub）里的一个技能。 */

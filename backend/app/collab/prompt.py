@@ -94,6 +94,25 @@ class ChatHistoryEntry:
     content: str
 
 
+@dataclass(slots=True)
+class TeamMember:
+    """协作者名册里的一位成员（引擎从编排图导出，供每个节点知道「团队里有谁」）。
+
+    名册是**图的公开结构**（用户自己画的），不是别的智能体的记忆，因此不违反 C5：
+    它只回答「团队里有哪些人、谁负责什么、入口是谁」，不含任何人的对话原文或工单内容。
+    它**不**声明谁能指挥谁 —— 派发 / 审查 / 打回的对象是逐轮变化的，那个权威来源是
+    「输出协议」（见 ``ROSTER_CAVEAT``）。
+    """
+
+    key: str
+    label: str = ""
+    duty: Duty = Duty.ENGINEER
+    #: 是不是入口智能体（唯一直接和用户对话的那个人）
+    is_entry: bool = False
+    #: 这位负责什么；留空就只显示岗位，不硬塞一句通用文案
+    instructions: str = ""
+
+
 def ticket_code(ticket_id: str) -> str:
     return f"T-{ticket_id[:8]}"
 
@@ -133,6 +152,40 @@ def _history_text(history: Sequence[HistoryEntry]) -> str:
     return "\n".join(lines)
 
 
+#: 名册末尾的收敛说明：看得见全组 ≠ 可以指挥全组（那件事由「输出协议」逐轮给出）。
+ROSTER_CAVEAT = (
+    "名册只说明团队里有哪些人、谁负责什么；你能把工单派给谁、谁审你、你能打回给谁，"
+    "一律以「输出协议」里列出的对象为准。"
+)
+
+ROSTER_TITLE = "—— 协作组名册（系统提供的团队结构，只读）——"
+
+
+def roster_lines(roster: Sequence[TeamMember]) -> str:
+    """渲染团队成员名册（一行一人）。"""
+    lines: list[str] = []
+    for index, member in enumerate(roster, start=1):
+        name = (
+            f"{member.label}（{member.key}）"
+            if member.label and member.label != member.key
+            else member.key
+        )
+        tags = [DUTY_LABELS[member.duty]]
+        if member.is_entry:
+            tags.append("入口，唯一和用户对话的智能体")
+        if member.instructions.strip():
+            tags.append(_chat_text(member.instructions, 80))
+        lines.append(f"   {index}) {name} · {' · '.join(tags)}")
+    return "\n".join(lines)
+
+
+def roster_block(roster: Sequence[TeamMember], *, caveat: str = ROSTER_CAVEAT) -> list[str]:
+    """名册区块（题头 + 逐行 + 收敛说明）；空名册返回空列表。"""
+    if not roster:
+        return []
+    return [ROSTER_TITLE, roster_lines(roster), f"   {caveat}"]
+
+
 def build_step_prompt(
     *,
     team_name: str,
@@ -145,6 +198,7 @@ def build_step_prompt(
     rework_targets: Sequence[str] = (),
     user_message: str | None = None,
     node_labels: dict[str, str] | None = None,
+    roster: Sequence[TeamMember] = (),
     closing_report: bool = False,
     run_digest: Sequence[str] = (),
     downstream: Sequence[str] = (),
@@ -183,6 +237,12 @@ def build_step_prompt(
         f"能力边界（必须遵守）：{node.capability_scope.strip() or DUTY_DEFAULT_SCOPE[node.duty]}",
         f"工作路径（本次协作唯一允许访问的目录）：{workspace_path}",
         f"路径权限（必须遵守）：{WORKSPACE_NOTES[scope]}",
+    ]
+    # 名册紧跟岗位信息、排在冗长的输出协议之前：它是「我在和谁一起干活」的背景，
+    # 埋在一串协议规则与示例之后容易被忽略（用户反馈：入口智能体答不出团队里有谁）。
+    if roster:
+        header.extend(["", *roster_block(roster)])
+    header.extend([
         "",
         "输出协议：",
         render_protocol_guide(
@@ -193,7 +253,7 @@ def build_step_prompt(
             rework_targets=[named(key) for key in rework_targets],
             duty=node.duty,
         ),
-    ]
+    ])
 
     body = [
         "",
@@ -414,6 +474,7 @@ def build_chat_prompt(
     user_message: str,
     active_label: str | None = None,
     node_labels: dict[str, str] | None = None,
+    roster: Sequence[TeamMember] = (),
 ) -> str:
     """组装入口智能体的「常驻聊天」输入。
 
@@ -424,6 +485,9 @@ def build_chat_prompt(
     role_label = node.label or labels.get(node.key) or node.key
     scope = DUTY_DEFAULT_SCOPE[node.duty]
     ticket_text = "\n".join(_chat_ticket_block(ticket) for ticket in tickets) or "（还没有工单）"
+    roster_text = "\n".join(
+        roster_block(roster, caveat="名册只说明团队里有哪些人、谁负责什么；聊天里不派活。")
+    ) or f"{ROSTER_TITLE}\n（名册不可用）"
     if history:
         history_text = "\n".join(
             f"- {'用户' if turn.sender == 'user' else '你'}：{_chat_text(turn.content)}"
@@ -439,6 +503,8 @@ def build_chat_prompt(
 任务：{run_title}
 运行状态：{run_status}
 你的职责边界：{scope}
+
+{roster_text}
 
 用户可以在任务开始后随时找你：推进中、等待拍板时，甚至这一轮收尾之后都可以。
 常见内容是细化要求、询问进度、让你解释方案，或者只是聊两句。
@@ -472,4 +538,6 @@ def build_chat_prompt(
 ```
 5. chat_update 块只能放在最后；块里不要写注释，也不要把聊天正文塞进去。
 6. 其他智能体看不到聊天原文，所以真正需要执行的新要求必须写进 chat_update，光在正文里说“按这个做”是不会传下去的。
+7. 用户问「团队里有哪些人 / 谁负责什么」时，照上面的名册回答（岗位 + 职责，入口是谁）；
+   名册之外的人不存在，不要编造，也不要凭印象说某个岗位空缺。
 """

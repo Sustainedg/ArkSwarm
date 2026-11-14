@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MessageView, type RenderMessage } from '../../components/MessageView'
-import { api, streamGet, streamPost } from '../../lib/api'
+import { api, collabRunFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
+import { useComposerDraft } from '../../lib/composerDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
+import { MediaUrlProvider } from '../../lib/media'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
 } from '../../lib/collabStream'
@@ -65,7 +67,10 @@ export function MobileCollabRunPage() {
   //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
   const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
   const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
-  const [draft, setDraft] = useState('')
+  /**
+   * 草稿（文字 + 待发附件）按「运行」各记各的：切到别的运行再切回来，没发出去的内容还在原处。
+   */
+  const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(runId)
   const [busy, setBusy] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -73,8 +78,6 @@ export function MobileCollabRunPage() {
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   /** 与入口智能体的对话界面：默认不显示，点动画里的人物才弹出来 */
   const [chatOpen, setChatOpen] = useState(false)
-  /** 已上传、等待随消息发出的附件（只走入口智能体的聊天通道） */
-  const [attachments, setAttachments] = useState<AttachmentRef[]>([])
   /** 发送模式：对话（只和入口智能体聊）还是推进任务（把这句话接到工单上接着跑） */
   const [sendMode, setSendMode] = useState<'chat' | 'work'>('chat')
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
@@ -86,6 +89,14 @@ export function MobileCollabRunPage() {
   const chatBusyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sheetComposerRef = useRef<HTMLTextAreaElement | null>(null)
+  /** 当前横幅上的错误是不是「网络中断」（可自愈）：下一次拉取成功就把它撤掉，别让它一直挂着。 */
+  const networkErrorRef = useRef(false)
+
+  /** 统一上报异常：记下这次是不是网络中断，好让恢复后的第一次成功拉取把横幅撤掉。 */
+  const reportError = useCallback((e: unknown) => {
+    networkErrorRef.current = isNetworkError(e)
+    setError(describeError(e))
+  }, [])
 
   const team = useMemo(() => teams.find((item) => item.id === detail?.team_id), [teams, detail?.team_id])
   const leaderKey = detail?.entry_key ?? team?.entry_key ?? ''
@@ -112,12 +123,17 @@ export function MobileCollabRunPage() {
       const next = await api.getCollabRun(id)
       setDetail(next)
       setTurn((prev) => syncTurnWithRun(prev, next, next.tickets, next.steps, dismissedNotices))
+      // 连接恢复（切回 PWA、重连成功）：把上一次「网络中断」的横幅撤掉，别让它长眠在界面上。
+      if (networkErrorRef.current) {
+        networkErrorRef.current = false
+        setError(null)
+      }
       return next
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
       return null
     }
-  }, [dismissedNotices])
+  }, [dismissedNotices, reportError])
 
   // 协作组与智能体只用于把步骤渲染成「谁的产出」：头像与岗位名。
   useEffect(() => {
@@ -127,10 +143,10 @@ export function MobileCollabRunPage() {
         setTeams(teamList)
         setAgents(agentList)
       } catch (e) {
-        setError(describeError(e))
+        reportError(e)
       }
     })()
-  }, [])
+  }, [reportError])
 
   // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
   useEffect(() => () => {
@@ -177,7 +193,7 @@ export function MobileCollabRunPage() {
           } catch (e) {
             // 发起这一轮的响应断了不代表运行停了：先看落库状态，还在跑就继续订阅围观。
             if ((e as Error)?.name === 'AbortError') throw e
-            setError(describeError(e))
+            reportError(e)
           }
           if (controller.signal.aborted) return
           const latest = await load(target)
@@ -196,7 +212,7 @@ export function MobileCollabRunPage() {
           } catch (e) {
             // 网络层断开不是运行结束：退避后重订阅，总线会补发本轮事件。
             if ((e as Error)?.name === 'AbortError') throw e
-            setError(describeError(e))
+            reportError(e)
           }
           if (controller.signal.aborted) break
           // 以落库状态为准：运行真的收尾了才停，否则继续订阅。
@@ -204,7 +220,7 @@ export function MobileCollabRunPage() {
           if (!latest || latest.status !== 'running') break
         }
       } catch (e) {
-        if ((e as Error)?.name !== 'AbortError') setError(describeError(e))
+        if ((e as Error)?.name !== 'AbortError') reportError(e)
       } finally {
         busyRef.current = false
         abortRef.current = null
@@ -213,7 +229,7 @@ export function MobileCollabRunPage() {
         await load(target)
       }
     },
-    [load],
+    [load, reportError],
   )
 
   /** 入口智能体独立聊天通道：主流程在跑时也不占用、不打断这里的流。 */
@@ -371,7 +387,7 @@ export function MobileCollabRunPage() {
     try {
       await api.retryCollabStep(stepId)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
       return
     }
     await stream(`/api/collab/runs/${detail?.id}/resume`, {})
@@ -405,7 +421,7 @@ export function MobileCollabRunPage() {
     try {
       await api.deleteCollabRun(detail.id)
     } catch (e) {
-      setError(describeError(e))
+      reportError(e)
       return
     }
     forgetDismissedNotices(detail.id)
@@ -675,7 +691,11 @@ export function MobileCollabRunPage() {
       submitOnEnter
       /* 推进任务模式下空着也能发：那就是「让领导者继续推进」（等价于 /resume） */
       allowEmptySend={effectiveWork}
-      onNotice={setError}
+      onNotice={(text) => {
+        // 输入区的自述性提示（语音识别失败之类）：不是可自愈的网络中断，别被下一次刷新顺手撤掉。
+        networkErrorRef.current = false
+        setError(text)
+      }}
       inputLabel={`对「${leaderLabel}」说点什么`}
       inputRef={inputRef}
       header={composerHeader}
@@ -725,7 +745,8 @@ export function MobileCollabRunPage() {
   )
 
   return (
-    <div className="m-page">
+    <MediaUrlProvider resolver={(relPath) => (runId ? collabRunFileUrl(runId, relPath) : null)}>
+      <div className="m-page">
       <MobileTopBar
         onBack={() => navigate('/collab')}
         title={detail?.title ?? '协作运行'}
@@ -898,6 +919,7 @@ export function MobileCollabRunPage() {
           </div>
         </MobileSheet>
       )}
-    </div>
+      </div>
+    </MediaUrlProvider>
   )
 }

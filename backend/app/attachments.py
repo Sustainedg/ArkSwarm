@@ -9,6 +9,7 @@ base64 解码与「📎 附件」提示块只此一处，免得两边各写一�
 from __future__ import annotations
 
 import base64
+import mimetypes
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -80,8 +81,13 @@ def store_attachment(workspace: Path, name: str, raw: bytes) -> StoredAttachment
     return StoredAttachment(name=clean, rel_path=rel_path, path=str(target), size=len(raw))
 
 
-def attachment_relative_path(relative: str, workspace: Path | str) -> str:
-    """校验附件确实在本次运行的工作目录内，返回规范化的相对路径。"""
+def resolve_workspace_file(relative: str, workspace: Path | str) -> Path:
+    """把工作目录里的一个相对路径解析成真实绝对路径，并确保确实在目录内。
+
+    两处都用得着：附件进提示词前要校验（:func:`attachment_relative_path`），
+    以及把工作目录里的文件回给浏览器看（图片预览等）。只放行目录**内部**的普通文件 ——
+    ``../`` 穿越与目录本身都拒绝，异常信息面向用户、可直接展示。
+    """
     try:
         root = Path(workspace).resolve()
         candidate = Path(relative)
@@ -94,7 +100,18 @@ def attachment_relative_path(relative: str, workspace: Path | str) -> str:
         raise
     except (OSError, RuntimeError, ValueError) as exc:
         raise AttachmentError(f"附件不可用（路径无法解析）：{relative}") from exc
-    return candidate.relative_to(root).as_posix()
+    return candidate
+
+
+def attachment_relative_path(relative: str, workspace: Path | str) -> str:
+    """校验附件确实在本次运行的工作目录内，返回规范化的相对路径。"""
+    root = Path(workspace).resolve()
+    return resolve_workspace_file(relative, workspace).relative_to(root).as_posix()
+
+
+def guess_media_type(name: str) -> str:
+    """按文件名猜 MIME，供「把工作目录里的文件回给浏览器」用；认不出就是二进制流。"""
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
 def attachment_block(rel_paths: Sequence[str]) -> str:

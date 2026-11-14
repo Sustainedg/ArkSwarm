@@ -3,7 +3,7 @@
 校验分两层含义：
 
 * **能跑起来**（errors）：必须有唯一入口、每个节点可达、审查边必须与回边成对…
-* **可能不是你想要的**（warnings）：比如给审查者开了工作目录写权限。
+* **可能不是你想要的**（warnings）：比如某个节点从入口走不到、审查者没有可打回的对象。
 
 保存草稿时不拦 errors（编辑器要能边画边存），发起运行时才拒绝。
 """
@@ -430,18 +430,6 @@ def validate_graph(
                 GraphIssue(
                     code="node.reviewer_unused",
                     message=f"审查者「{node.label or node.key}」没有收到任何 review 边，它没有东西可审",
-                    node_key=node.key,
-                )
-            )
-        scope = effective_workspace_scope(node)
-        if scope is WorkspaceScope.WRITE and node.duty is not Duty.ENGINEER:
-            warnings.append(
-                GraphIssue(
-                    code="node.write_on_readonly_duty",
-                    message=(
-                        f"「{node.label or node.key}」是{duty_names[node.duty]}却开了工作目录写权限，"
-                        "建议改成只读（越权改动会被审计发现）"
-                    ),
                     node_key=node.key,
                 )
             )

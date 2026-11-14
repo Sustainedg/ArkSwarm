@@ -47,6 +47,7 @@ from .prompt import (
     ChatHistoryEntry,
     ChatTicketView,
     HistoryEntry,
+    TeamMember,
     TicketView,
     build_chat_prompt,
     build_step_prompt,
@@ -341,6 +342,25 @@ def _node_label(node: NodeSpec) -> str:
     return node.label or node.key
 
 
+def _team_roster(graph: GraphSpec, *, entry_key: str | None) -> list[TeamMember]:
+    """把编排图翻成一份名册：团队里有谁、谁负责什么、入口是谁。
+
+    图是用户自己画的公开结构，名册只是把它念给智能体听 —— 不含任何人的对话原文或工单内容，
+    因此不违反 C5（智能体之间不共享记忆）。此前一个节点只看得见自己的派发对象，
+    于是 CEO 答不出「团队里有谁」，CTO 也会误判「本协作没有审查者」。
+    """
+    return [
+        TeamMember(
+            key=spec.key,
+            label=spec.label,
+            duty=spec.duty,
+            is_entry=spec.key == entry_key,
+            instructions=spec.instructions,
+        )
+        for spec in graph.nodes
+    ]
+
+
 async def _active_step_label(
     session: AsyncSession, run_id: str, graph: GraphSpec
 ) -> str | None:
@@ -454,6 +474,7 @@ async def prepare_chat(
         user_message=spoken,
         active_label=await _active_step_label(session, run.id, graph),
         node_labels=labels,
+        roster=_team_roster(graph, entry_key=entry.key),
     )
     return PreparedChat(
         run=run,
@@ -810,6 +831,7 @@ async def _run_step(
         rework_targets=rework,
         user_message=user_message,
         node_labels=labels,
+        roster=_team_roster(graph, entry_key=prepared.entry.key),
         closing_report=closing_report,
         run_digest=digest,
         downstream=downstream,

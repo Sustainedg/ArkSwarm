@@ -7,6 +7,8 @@ import {
 } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { resolveImageSrc, useMediaUrl } from '../lib/media'
+import { ZoomableImage } from './ZoomableImage'
 
 const remarkPlugins = [remarkGfm]
 
@@ -47,6 +49,22 @@ const markdownComponents: Components = {
       </a>
     )
   },
+  img({ src, alt }) {
+    return <MarkdownImage src={typeof src === 'string' ? src : undefined} alt={alt} />
+  },
+}
+
+/**
+ * 正文里的图片（Markdown `![]()`）。外链直接加载；工作目录里的相对路径经页面的解析器
+ * 换成后端只读出口的 URL —— 这样智能体只要在回复里给出一张图（哪怕只是工作目录里的路径），
+ * 页面上就能真的显示出来，而不是一个裂图。解析不了时给一句可读的提示，不静默留白。
+ */
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const mediaUrl = useMediaUrl()
+  if (!src) return null
+  const resolved = resolveImageSrc(src, mediaUrl)
+  if (!resolved) return <span className="md-image-missing">{alt || src}</span>
+  return <ZoomableImage className="md-image" src={resolved} alt={alt} />
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {

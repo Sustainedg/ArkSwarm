@@ -2,11 +2,13 @@
  * 移动端共用的小工具：错误文案与时间显示。
  * 这里只放纯函数，不碰 DOM、不发请求。
  */
-import { ApiError } from '../lib/api'
+import { ApiError, isNetworkError } from '../lib/api'
 
 /** 把任意异常转成可直接展示的中文提示。 */
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) return `${error.status} · ${error.message}`
+  // 切后台 / 断网时浏览器抛的是「Load failed」这类原生英文，不该原样丢给用户。
+  if (isNetworkError(error)) return '连接中断：请检查网络后重试'
   return error instanceof Error ? error.message : String(error)
 }
 

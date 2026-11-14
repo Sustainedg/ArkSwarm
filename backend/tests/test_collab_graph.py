@@ -156,12 +156,13 @@ def test_unknown_role_is_reported_only_when_roles_are_known():
     assert "node.agent_missing" not in codes(g.validate_graph(graph, "ceo"))
 
 
-def test_write_scope_on_non_engineer_is_only_a_warning():
+def test_write_scope_on_non_engineer_is_accepted():
+    """协调者开写权限是合法配置（例如入口智能体负责落 PRD），不再告警。"""
     graph = canonical()
     graph.nodes[3].workspace_scope = WorkspaceScope.WRITE
     result = g.validate_graph(graph, "ceo", ROLES)
     assert result.ok
-    assert "node.write_on_readonly_duty" in warn_codes(result)
+    assert "node.write_on_readonly_duty" not in warn_codes(result)
 
 
 def test_helpers_resolve_flow_and_effective_defaults():

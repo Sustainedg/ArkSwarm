@@ -625,6 +625,11 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-attach-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-attach-chip button { flex: none; padding: 0 2px; border: none; background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+/* 图片附件在 chip 里配一小块方形缩略图（点开看原图）——只给文件名的话，粘的是哪张图认不出来 */
+.composer-attach-chip .composer-attach-thumb {
+  flex: none; width: 30px; height: 30px; border-radius: 7px; overflow: hidden; background: var(--bg-hover);
+}
+.composer-attach-chip .composer-attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
 /* 输入框上面那排快捷开关（对话页的「工作目录 / 智能体」）：贴着框，但不进框里 */
 .composer-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .composer-scope-btn {
@@ -779,6 +784,8 @@ code, pre, .mono { font-family: var(--mono); }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .textarea { resize: vertical; min-height: 92px; line-height: 1.6; }
 .input.mono { font-family: var(--mono); font-size: 12px; }
+/* MCP「JSON 视图」等整块配置编辑用的等宽文本域（与 .input.mono 同一套口径） */
+.textarea.mono { font-family: var(--mono); font-size: 12px; tab-size: 2; }
 .select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%); background-position: calc(100% - 16px) 17px, calc(100% - 11px) 17px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
 
 .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
@@ -1890,6 +1897,44 @@ code, pre, .mono { font-family: var(--mono); }
   border-radius: 50%; background: var(--border-strong);
 }
 .board-accordion.open .board-accordion-list { padding-top: 11px; border-top-color: var(--border); }
+
+/* ================= 图片：缩略图 + 点开放大（附件 / 正文嵌图，两端共用这一份）================= */
+/* 附件缩略图、气泡里的图、Markdown 嵌图都走同一套；可点开的图片组件见 components/ZoomableImage.tsx。
+   两端样式各一份（index.css / mobile.css 各写一份），改一边记得同步另一边。 */
+.zoomable {
+  appearance: none; display: inline-block; padding: 0; margin: 0; border: none;
+  background: none; cursor: zoom-in; line-height: 0; border-radius: var(--radius-sm);
+}
+.zoomable img { display: block; max-width: 100%; }
+.zoomable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* 全屏看原图：蒙层铺满，图片居中且不超出视口；点蒙层或按 Esc 关闭 */
+.img-lightbox {
+  position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center;
+  padding: 4vmin; background: rgba(0, 0, 0, 0.82); cursor: zoom-out;
+}
+.img-lightbox img { max-width: 96vw; max-height: 92vh; border-radius: var(--radius-sm); cursor: default; }
+.img-lightbox-close {
+  position: absolute; top: max(12px, env(safe-area-inset-top)); right: 14px;
+  width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 16px; line-height: 1;
+}
+.img-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
+
+/* 一条消息带过的附件：图片是缩略图，文档等是文件名胶囊 */
+.bubble-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.zoomable.bubble-attachment-thumb { width: 108px; height: 108px; overflow: hidden; border: 1px solid var(--border); }
+.zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.bubble-attachment-chip {
+  display: inline-flex; align-items: center; max-width: 240px; padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 正文里嵌的图（Markdown ![]()）：按气泡宽度自适应，点开看原图 */
+.zoomable.md-image { display: block; margin: 8px 0; max-width: 100%; }
+.zoomable.md-image img { max-width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.md-image-missing { color: var(--text-dim); font-size: 12px; }
 
 
 /* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */

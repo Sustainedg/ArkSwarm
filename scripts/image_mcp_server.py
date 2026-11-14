@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""图片生成 MCP 服务器（stdio 传输）。
+
+一个随平台分发的「平台通用」MCP 服务器：把 OpenAI 兼容网关的
+``POST /v1/images/generations`` 包成一个 ``generate_image`` 工具，
+分配到它的智能体就能在对话里生图。
+
+配置全部来自环境变量（在「MCP」页新建 / 编辑服务器时填写；值经平台
+加密落库，运行时由内核注入本进程，绝不会出现在日志或对话里）：
+
+* ``IMAGE_GEN_GATEWAY``   网关地址（如 ``https://api.example.com`` 或 ``.../v1``）
+* ``IMAGE_GEN_MODEL``     生图模型名
+* ``IMAGE_GEN_API_KEY``   网关密钥（无鉴权的本地网关可不填）
+* ``IMAGE_GEN_TIMEOUT``   单次生图超时秒数（默认 300）
+
+生成的图片落在本进程工作目录（即对话工作目录）的 ``generated-images/``
+下，工具结果回给模型的是**工作目录内的相对路径**（如
+``generated-images/image-….png``）—— 大图片不进上下文；相对路径既能被内核
+按工作目录读取，又能被模型原样写进 ``![](…)`` 在页面上显示成图。结果里还会
+带上这个写法提示，免得模型只甩一串地址、图反而看不见。
+
+单文件内的职责分层（自上而下，单向依赖）：
+
+    协议层（JSON-RPC 收发与分发）
+      → 工具层（generate_image 的入参校验与编排）
+          → 客户端层（调网关 / 下载图片）
+              → 配置层（读环境变量、拼 URL）
+
+只用标准库：stdio 传输里 stdout 是协议端口，日志一律走 stderr。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any
+
+SERVER_NAME = "magenta-image-gen"
+SERVER_VERSION = "1.0.0"
+#: MCP 协议版本；initialize 时优先回显客户端请求的版本
+PROTOCOL_VERSION = "2024-11-05"
+
+TOOL_NAME = "generate_image"
+
+ENV_GATEWAY = "IMAGE_GEN_GATEWAY"
+ENV_MODEL = "IMAGE_GEN_MODEL"
+ENV_API_KEY = "IMAGE_GEN_API_KEY"
+ENV_TIMEOUT = "IMAGE_GEN_TIMEOUT"
+
+#: 单张图片的字节上限与张数上限（防失控响应把磁盘塞满 / 上下文撑爆）
+DEFAULT_TIMEOUT = 300.0
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_IMAGES = 4
+_SIZE_RE = re.compile(r"^\d{2,5}[xX]\d{2,5}$")
+
+#: 图片保存的子目录（相对本进程工作目录，即对话工作目录）
+IMAGE_SUBDIR = "generated-images"
+
+
+# --- 配置层 -------------------------------------------------------------------
+
+
+class ConfigError(RuntimeError):
+    """配置缺失：消息面向用户，说明缺什么、去哪里补。"""
+
+
+def load_config() -> dict[str, Any]:
+    """读取环境变量里的网关配置；缺 gateway / model 不在这里报错，
+    留到真正调用时才提示 —— 服务器本身要先能启动，错误才能在对话里看到。"""
+    timeout = DEFAULT_TIMEOUT
+    raw_timeout = (os.environ.get(ENV_TIMEOUT) or "").strip()
+    if raw_timeout:
+        try:
+            timeout = max(1.0, float(raw_timeout))
+        except ValueError:
+            print(f"{ENV_TIMEOUT} 配置不成秒数（{raw_timeout}），按默认 {DEFAULT_TIMEOUT:.0f}s 处理",
+                  file=sys.stderr)
+    return {
+        "gateway": (os.environ.get(ENV_GATEWAY) or "").strip(),
+        "model": (os.environ.get(ENV_MODEL) or "").strip(),
+        "api_key": (os.environ.get(ENV_API_KEY) or "").strip(),
+        "timeout": timeout,
+    }
+
+
+def generations_url(gateway: str) -> str:
+    """把网关地址归一化成生图端点。
+
+    用户可能填 ``https://api.example.com`` 也可能填 ``https://api.example.com/v1``，
+    两种都收敛到 ``/v1/images/generations``（与网关探测的 URL 归一化同一套口径）。
+    """
+    base = (gateway or "").rstrip("/")
+    if not base:
+        raise ConfigError(
+            f"还没有配置生图网关：请在「MCP」页编辑这个服务器，"
+            f"在环境变量 {ENV_GATEWAY} 里填写网关地址（例如 https://api.example.com）"
+        )
+    if base.endswith("/v1"):
+        return f"{base}/images/generations"
+    return f"{base}/v1/images/generations"
+
+
+# --- 客户端层 -----------------------------------------------------------------
+
+
+class GatewayError(RuntimeError):
+    """调用网关失败：消息面向用户，可展示。"""
+
+
+def _post_json(
+    url: str, payload: dict[str, Any], *, api_key: str, timeout: float
+) -> Any:
+    """POST 一个 JSON 请求并解析响应；错误转成中文的 GatewayError。"""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = (exc.read() or b"").decode("utf-8", "replace")
+        except OSError:  # 读取错误正文失败时退回无正文
+            detail = ""
+        detail = detail.strip().replace("\n", " ")[:300]
+        raise GatewayError(f"生图网关返回 HTTP {exc.code}：{detail or '无响应正文'}") from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise GatewayError(f"无法连接生图网关：{exc}") from exc
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise GatewayError("生图网关返回的不是 JSON，无法解析生图结果") from exc
+
+
+def _download(url: str, *, timeout: float) -> tuple[bytes, str]:
+    """下载网关回的图片 URL；带字节上限，错误转成中文的 GatewayError。"""
+    request = urllib.request.Request(url, headers={"Accept": "image/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = response.read(MAX_IMAGE_BYTES + 1)
+            mime = (response.headers.get("Content-Type") or "").split(";")[0].strip()
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise GatewayError(f"下载生成的图片失败：{exc}") from exc
+    if len(data) > MAX_IMAGE_BYTES:
+        raise GatewayError(f"生成的图片超过 {MAX_IMAGE_BYTES // (1024 * 1024)} MB，已放弃下载")
+    if not data:
+        raise GatewayError("图片地址返回了空内容")
+    return data, mime
+
+
+def _image_items(payload: Any) -> list[dict[str, Any]]:
+    """从生图响应里取出图片条目；兼容 OpenAI 的 ``data`` 与个别网关的 ``images``。"""
+    if not isinstance(payload, dict):
+        return []
+    for key in ("data", "images"):
+        rows = payload.get(key)
+        if isinstance(rows, list) and rows:
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+#: 按魔数识别图片类型（b64 响应不带 mimeType，扩展名不能瞎猜）
+_MAGIC_TYPES: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+_EXT_BY_TYPE = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+def sniff_image_type(data: bytes) -> str:
+    """按文件头识别图片类型；认不出来时按 png 兜底（生图网关几乎只回这两种）。"""
+    for magic, mime in _MAGIC_TYPES:
+        if data.startswith(magic):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def _save_image(data: bytes) -> tuple[Path, str]:
+    """把图片字节写进工作目录的 generated-images/，返回 (路径, 类型)。"""
+    mime = sniff_image_type(data)
+    directory = Path.cwd() / IMAGE_SUBDIR
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = directory / f"image-{stamp}-{uuid.uuid4().hex[:6]}{_EXT_BY_TYPE.get(mime, '.png')}"
+    path.write_bytes(data)
+    return path, mime
+
+
+def workspace_relative(path: Path) -> str:
+    """把工作目录里的绝对路径收敛成**工作目录内的相对路径**。
+
+    工具结果里的路径是给模型抄进回复的：相对路径既能被内核按工作目录读取，又能被前端
+    直接渲染成图片（`![](generated-images/…)`）。给绝对路径的话，前端一句 `![](/vol1/…)`
+    就解析不到那个只读出口，页面只剩一串路径或一张裂图。真在目录外（理论到不了）才退回绝对路径。
+    """
+    try:
+        return path.relative_to(Path.cwd()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+# --- 工具层 -------------------------------------------------------------------
+
+
+TOOL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "prompt": {
+            "type": "string",
+            "description": "要生成的图片内容描述（必填，用具体的中文或英文描述）",
+        },
+        "size": {
+            "type": "string",
+            "description": "图片尺寸，格式为 宽x高（如 1024x1024）；不填由模型决定",
+        },
+        "n": {
+            "type": "integer",
+            "description": "一次生成几张（1-4，默认 1）",
+        },
+    },
+    "required": ["prompt"],
+}
+
+TOOL_DESCRIPTION = (
+    "生成图片：按文字描述调用生图网关，图片会保存到工作目录的 "
+    f"{IMAGE_SUBDIR}/ 下，并返回文件路径。需要配图、画示意图、做插画时使用。"
+)
+
+
+def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
+    """执行一次生图：校验入参 → 调网关 → 落盘 → 返回给模型的说明文本。"""
+    prompt = str(arguments.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("请提供要生成的图片描述（参数 prompt）")
+    config = config or load_config()
+    if not config["model"]:
+        raise ConfigError(
+            f"还没有配置生图模型：请在「MCP」页编辑这个服务器，"
+            f"在环境变量 {ENV_MODEL} 里填写模型名"
+        )
+    size = str(arguments.get("size") or "").strip()
+    if size and not _SIZE_RE.match(size):
+        raise ValueError(f"size 参数的格式应为 宽x高（如 1024x1024），收到的是「{size}」")
+    try:
+        count = int(arguments.get("n", 1))
+    except (TypeError, ValueError):
+        raise ValueError("n 参数必须是 1-4 的整数") from None
+    if not 1 <= count <= MAX_IMAGES:
+        raise ValueError(f"n 参数必须是 1-{MAX_IMAGES} 的整数")
+
+    payload: dict[str, Any] = {"model": config["model"], "prompt": prompt, "n": count}
+    if size:
+        payload["size"] = size.lower()
+    result = _post_json(
+        generations_url(config["gateway"]),
+        payload,
+        api_key=config["api_key"],
+        timeout=config["timeout"],
+    )
+
+    saved: list[tuple[Path, str]] = []
+    failures: list[str] = []
+    for item in _image_items(result):
+        try:
+            b64 = str(item.get("b64_json") or "")
+            if b64:
+                import base64
+
+                saved.append(_save_image(base64.b64decode(b64)))
+                continue
+            url = str(item.get("url") or "")
+            if url:
+                data, _mime = _download(url, timeout=config["timeout"])
+                saved.append(_save_image(data))
+                continue
+            failures.append("响应里既没有 b64_json 也没有 url")
+        except (GatewayError, ValueError) as exc:  # 单张失败不拖垮整批
+            failures.append(str(exc))
+    if not saved:
+        raise GatewayError(
+            "生图网关没有返回可用的图片" + (f"（{failures[0]}）" if failures else "")
+        )
+
+    lines = [f"已生成 {len(saved)} 张图片，保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："]
+    for path, mime in saved:
+        lines.append(f"- {workspace_relative(path)}（{mime.removeprefix('image/').upper()}）")
+    lines.append(
+        "要在回复里直接把图展示出来，就原样写一行 Markdown 图片："
+        f"`![]({workspace_relative(saved[0][0])})` —— 页面会渲染成图；只贴路径的话只会显示成一串字。"
+    )
+    lines.append("也可以继续对这些文件做后续处理。")
+    if failures:
+        lines.append(f"有 {len(failures)} 张生成失败：{'；'.join(failures)}")
+    return "\n".join(lines)
+
+
+# --- 协议层 -------------------------------------------------------------------
+
+
+def _result(msg_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+
+
+def _error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+
+
+def _tool_response(msg_id: Any, text: str, *, is_error: bool = False) -> dict[str, Any]:
+    """工具调用的标准回应：文本内容 + isError 标记（不抛协议错误，让模型看到原因）。"""
+    content = [{"type": "text", "text": text}]
+    result: dict[str, Any] = {"content": content}
+    if is_error:
+        result["isError"] = True
+    return _result(msg_id, result)
+
+
+def handle_message(message: Any) -> dict[str, Any] | None:
+    """分发一条 JSON-RPC 消息；通知（无 id）静默忽略，返回 None 表示不回应。"""
+    if not isinstance(message, dict):
+        return _error(None, -32600, "请求必须是 JSON 对象")
+    method = str(message.get("method") or "")
+    msg_id = message.get("id")
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+
+    if method == "initialize":
+        return _result(
+            msg_id,
+            {
+                "protocolVersion": str(params.get("protocolVersion") or PROTOCOL_VERSION),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            },
+        )
+    if msg_id is None:
+        # notifications/initialized、notifications/cancelled 等通知：无需回应
+        return None
+    if method == "ping":
+        return _result(msg_id, {})
+    if method == "tools/list":
+        return _result(
+            msg_id,
+            {
+                "tools": [
+                    {
+                        "name": TOOL_NAME,
+                        "description": TOOL_DESCRIPTION,
+                        "inputSchema": TOOL_SCHEMA,
+                    }
+                ]
+            },
+        )
+    if method == "tools/call":
+        name = str(params.get("name") or "")
+        if name != TOOL_NAME:
+            return _error(msg_id, -32602, f"未知工具：{name}")
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        try:
+            text = generate_image(arguments, load_config())
+        except (ConfigError, GatewayError, ValueError) as exc:
+            return _tool_response(msg_id, f"生成图片失败：{exc}", is_error=True)
+        except Exception as exc:  # noqa: BLE001 - 兜底：不让未知异常拖垮整个服务器
+            print(f"生图工具未预期的异常：{exc!r}", file=sys.stderr)
+            return _tool_response(msg_id, f"生成图片时发生未预期的错误：{exc}", is_error=True)
+        return _tool_response(msg_id, text)
+    return _error(msg_id, -32601, f"未知方法：{method}")
+
+
+def serve() -> int:
+    """主循环：逐行读 stdin（每行一条 JSON-RPC 消息），回应写回 stdout。"""
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            reply = _error(None, -32700, "收到无法解析的 JSON 行")
+        else:
+            try:
+                reply = handle_message(message)
+            except Exception as exc:  # noqa: BLE001 - 协议层兜底，同上
+                print(f"处理消息时未预期的异常：{exc!r}", file=sys.stderr)
+                reply = _error(None, -32603, f"内部错误：{exc}")
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(serve())

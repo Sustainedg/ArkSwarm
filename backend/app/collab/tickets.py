@@ -997,9 +997,17 @@ def render_protocol_guide(
     rework_text = "、".join(sorted(rework_targets))
 
     # 「谁审我」只对提交方有意义；审查者本人不需要这句。
+    # 措辞必须只说**这一张工单**：`reviewer` 是「本节点的 review 出边」，契约里带 submit 的协调者/审查者
+    # （真实配置：CTO 是 delegate/done/submit/reject）自己没有 review 出边，于是这句话曾经渲染成
+    # 「本协作没有安排审查者」—— 那是一句关于整张图的断言，被 CTO 原样转述进下游工单与最终汇报，
+    # 结果组里明明配了 QA 审查者（SDE --review--> QA 也在跑），用户收到的却是「没设置审查员」。
     reviewer_text = ""
     if TicketAction.SUBMIT in actions:
-        reviewer_text = f"你提交后由「{reviewer}」审查。" if reviewer else "本协作没有安排审查者，提交即完成。"
+        reviewer_text = (
+            f"你提交后由「{reviewer}」审查。"
+            if reviewer
+            else "你提交后直接完成：这张工单不经过审查环节。"
+        )
 
     rules: list[str] = [
         "先写给人看的说明（可用 Markdown）。",

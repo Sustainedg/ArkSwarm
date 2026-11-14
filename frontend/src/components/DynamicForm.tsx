@@ -149,7 +149,7 @@ function renderControl(field: ConfigField, value: unknown, onChange: (v: unknown
     }
 
     case 'keyvalue': {
-      return <KeyValueField value={value} onChange={onChange} />
+      return <KeyValueField value={value} onChange={onChange} placeholders={field.entryPlaceholders} />
     }
 
     default:
@@ -169,8 +169,20 @@ function renderControl(field: ConfigField, value: unknown, onChange: (v: unknown
  *
  * 草稿行放在组件内部：空行只是「还没填完」，不能立刻被过滤掉，否则「＋ 添加一项」看起来毫无反应。
  * 只有键非空的行才会写回表单值。
+ *
+ * `placeholders` 是「键 → 该行值的占位提示」：密钥类字段的值不会下发到浏览器，
+ * 编辑已有配置时那几行必须靠掩码占位（例如 `sk-a…bfb6`）才能看出已经填好，
+ * 否则一排空框跟「没配过」长得一模一样。
  */
-function KeyValueField({ value, onChange }: { value: unknown; onChange: (next: unknown) => void }) {
+function KeyValueField({
+  value,
+  onChange,
+  placeholders,
+}: {
+  value: unknown
+  onChange: (next: unknown) => void
+  placeholders?: Record<string, string | null> | null
+}) {
   const stored = useMemo(() => (value as Record<string, string>) ?? {}, [value])
   const [rows, setRows] = useState<[string, string][]>(() => Object.entries(stored))
   // 记住上次自己吐出去的值：外部把它换掉（例如切换内核重置 options）时才重建草稿行。
@@ -208,7 +220,7 @@ function KeyValueField({ value, onChange }: { value: unknown; onChange: (next: u
           <input
             className="input mono"
             value={entryValue}
-            placeholder="值"
+            placeholder={placeholders?.[key] ?? '值'}
             onChange={(e) => patch(index, 1, e.target.value)}
           />
           <button

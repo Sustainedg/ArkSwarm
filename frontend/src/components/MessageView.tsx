@@ -1,6 +1,8 @@
 import type { MessagePart } from '../lib/types'
+import { isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
 import { summarizeUsage } from '../lib/usage'
 import { MarkdownView } from './MarkdownView'
+import { ZoomableImage } from './ZoomableImage'
 
 export interface RenderMessage {
   id: string
@@ -17,6 +19,11 @@ export interface RenderMessage {
 export function MessageView({ message, avatar, label }: { message: RenderMessage; avatar?: string; label?: string }) {
   const isUser = message.role === 'user'
   const outputTokens = summarizeUsage([message.usage]).output
+  // 发消息时附件被后端写进正文末尾的「📎 附件」清单；这里把它拆出来，图片画缩略图，
+  // 正文照常渲染 —— 否则自己发出去的图，在气泡里只剩一行看不到的路径。
+  const { text: bodyText, paths: attachmentPaths } = isUser
+    ? splitAttachmentBlock(message.content)
+    : { text: message.content, paths: [] as string[] }
 
   // 一律按真实时间线渲染：思考 / 正文 / 工具调用与结果保持它们实际发生的先后顺序。
   // 旧消息只有 content 与工具、思考片段（没有内联正文段），这里把 content 合成一段兜底，
@@ -26,7 +33,7 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
     ? message.parts
     : [
         ...message.parts.filter((p) => p.kind === 'thinking'),
-        ...(message.content ? [{ kind: 'text', text: message.content } as MessagePart] : []),
+        ...(bodyText ? [{ kind: 'text', text: bodyText } as MessagePart] : []),
         ...message.parts.filter((p) => p.kind !== 'thinking' && p.kind !== 'text'),
       ]
 
@@ -67,6 +74,8 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
         )}
 
         {showThinking && <ThinkingBubble />}
+
+        {attachmentPaths.length > 0 && <AttachmentGallery paths={attachmentPaths} />}
 
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
@@ -171,6 +180,29 @@ function ToolCard({ part }: { part: MessagePart }) {
       </summary>
       <pre>{payload || '(空)'}</pre>
     </details>
+  )
+}
+
+/**
+ * 一条消息带过的附件：图片画成可点开放大的缩略图，其余（文档等）显示文件名胶囊。
+ * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）；拿不到解析器时退化成文件名，不至于空白。
+ */
+function AttachmentGallery({ paths }: { paths: string[] }) {
+  const mediaUrl = useMediaUrl()
+  return (
+    <div className="bubble-attachments">
+      {paths.map((relPath) => {
+        const name = relPath.split('/').pop() ?? relPath
+        const url = mediaUrl?.(relPath) ?? null
+        return url && isImagePath(relPath) ? (
+          <ZoomableImage key={relPath} className="bubble-attachment-thumb" src={url} alt={name} />
+        ) : (
+          <span className="bubble-attachment-chip" key={relPath}>
+            {name}
+          </span>
+        )
+      })}
+    </div>
   )
 }
 
