@@ -2,7 +2,7 @@ import type {
   ActiveCollabRun,
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
-  CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, Conversation,
+  CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, CollabBudgetPatch, Conversation,
   ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
   McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeLatest, Skill,
   ProvisionJobInfo,
@@ -336,6 +336,9 @@ export const api = {
   deleteCollabRun: (id: string) => request<void>(`/api/collab/runs/${id}`, { method: 'DELETE' }),
   cancelCollabRun: (id: string) =>
     request<{ ok: boolean; cancelled: boolean }>(`/api/collab/runs/${id}/cancel`, { method: 'POST' }),
+  /** 运行中调高预算（步数/工单/token 超限挂起后，调高再点「继续」救回来） */
+  patchCollabRunBudget: (id: string, body: CollabBudgetPatch) =>
+    request<CollabRun>(`/api/collab/runs/${id}/budget`, { method: 'POST', body: JSON.stringify(body) }),
   /** 把某一步所在的工单放回队列（解析失败/中断后修复，随后续跑） */
   retryCollabStep: (stepId: string) => request<CollabRun>(`/api/collab/steps/${stepId}/retry`, { method: 'POST' }),
 }

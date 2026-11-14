@@ -72,6 +72,17 @@ export function summarizeUsage(usages: (Record<string, unknown> | null | undefin
   return summary
 }
 
+/**
+ * 协作预算的 token 口径：后端把 ``run.usage`` 里所有数值字段直接相加
+ * （见 `collab/api.py:patch_run_budget`）。这里用同一套算法，避免界面校验与后端不一致。
+ */
+export function rawUsageTotal(usage: Record<string, unknown> | null | undefined): number {
+  return Object.values(usage ?? {}).reduce<number>(
+    (sum, value) => sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0),
+    0,
+  )
+}
+
 /* ---------- 用量页的时间范围（两端共用这一份口径）---------- */
 
 /** 用量页可选的预设范围；`custom` 用用户填的起止日期。 */

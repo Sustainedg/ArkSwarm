@@ -154,6 +154,7 @@ async def test_market_list_parsing(market):
     assert item["slug"] == "market-skill"
     assert item["downloads"] == 123
     assert item["verified"] is True
+    assert item["icon_url"] == "https://example.com/i.png"
     assert item["url"].endswith("/skills/market-skill")
 
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Composer } from '../components/Composer'
 import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
@@ -27,6 +27,7 @@ import type {
   Message,
 } from '../lib/types'
 import { sameMessageList, useAutoRefresh } from '../lib/useAutoRefresh'
+import { summarizeUsage } from '../lib/usage'
 
 interface LiveTurn extends AgentStreamState {
   userText: string
@@ -749,6 +750,16 @@ export function ChatPage() {
     ...(liveMessage ? [{ id: liveMessage.id, message: liveMessage, avatar: live?.avatar }] : []),
   ]
 
+  // 整段对话（含正在流式输出的这一轮）累计的 token 消耗。
+  const usageSummary = useMemo(
+    () =>
+      summarizeUsage([
+        ...messages.filter((m) => m.role === 'assistant').map((m) => m.usage),
+        live?.usage,
+      ]),
+    [messages, live?.usage],
+  )
+
   // 气泡与输入区里的图片（附件缩略图、智能体产出的图）都从这条出口取：rel_path → 只读文件 URL。
   const resolveMediaUrl = useCallback(
     (relPath: string) => (active ? conversationFileUrl(active.id, relPath) : null),
@@ -902,6 +913,43 @@ export function ChatPage() {
                         </div>
                       )}
                     </>
+                  }
+                  footer={
+                    usageSummary.messages > 0 ? (
+                      <div className="usage-bar" title="整段对话累计消耗">
+                        <span className="usage-tag">本对话消耗</span>
+                        <span className="usage-item">
+                          <span className="usage-label">读取</span>
+                          <span className="usage-value">{usageSummary.input.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">输出</span>
+                          <span className="usage-value">{usageSummary.output.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">总计</span>
+                          <span className="usage-value">{usageSummary.total.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">缓存命中</span>
+                          <span className="usage-value">
+                            {usageSummary.cacheRatio === null
+                              ? '—'
+                              : `${Math.round(usageSummary.cacheRatio * 100)}%`}
+                          </span>
+                        </span>
+                        {usageSummary.cacheRead > 0 && (
+                          <span className="usage-item usage-muted">
+                            <span className="usage-label">命中缓存</span>
+                            <span className="usage-value">{usageSummary.cacheRead.toLocaleString()}</span>
+                            <span className="usage-unit">tok</span>
+                          </span>
+                        )}
+                      </div>
+                    ) : null
                   }
                 />
               </div>

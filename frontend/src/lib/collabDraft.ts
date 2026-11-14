@@ -88,7 +88,7 @@ export function ticketStateMeta(state: string): { label: string; pill: string } 
 }
 
 export const DEFAULT_BUDGET: CollabBudget = {
-  max_steps: 60,
+  max_steps: 200,
   max_tickets: 30,
   max_rounds_per_ticket: 3,
   max_tokens: 0,

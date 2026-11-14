@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { CollapsibleGroup } from '../components/CollapsibleGroup'
+import { CollabSettingsPanel } from '../components/CollabSettingsPanel'
 import {
   CredentialEditor,
   credentialsToDraft,
@@ -14,9 +16,11 @@ import { SkillPicker } from '../components/SkillPicker'
 import { api, ApiError } from '../lib/api'
 import { groupAgents } from '../lib/agentGroups'
 import { useExpandMap } from '../lib/collapse'
+import { formatListTime } from '../lib/datetime'
 import type {
   AgentProfile,
   AgentType,
+  CollabTeam,
   Credential,
   Gateway,
   McpServer,
@@ -54,12 +58,35 @@ export function AgentsPage() {
   const [protocolLabels, setProtocolLabels] = useState<Record<string, string>>({})
   const [skills, setSkills] = useState<Skill[]>([])
   const [mcpServers, setMcpServers] = useState<McpServer[]>([])
+  const [teams, setTeams] = useState<CollabTeam[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 协作组是旁路数据：单独加载、单独报错，一个接口挂了不能把智能体列表一起带黑。 */
+  const [teamsLoading, setTeamsLoading] = useState(true)
+  const [teamError, setTeamError] = useState<string | null>(null)
+
+  /** 页内标签：智能体 / 协作组。写进 `?tab=`，刷新和分享链接都能落回同一处。 */
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'collab' ? 'collab' : 'agents'
+  const editingTeamId = tab === 'collab' ? params.get('team') ?? undefined : undefined
 
   const [editing, setEditing] = useState<AgentProfile | null>(null)
   const [creating, setCreating] = useState(false)
+  const [teamCreating, setTeamCreating] = useState(false)
+  const [newTeamName, setNewTeamName] = useState('')
   const [testing, setTesting] = useState<{ agent: AgentProfile; result: TestResult | null; busy: boolean } | null>(null)
+
+  const loadTeams = async () => {
+    setTeamsLoading(true)
+    try {
+      setTeams(await api.listCollabTeams())
+      setTeamError(null)
+    } catch (e) {
+      setTeamError(describe(e))
+    } finally {
+      setTeamsLoading(false)
+    }
+  }
 
   const reload = async () => {
     setLoading(true)
@@ -86,6 +113,8 @@ export function AgentsPage() {
     } finally {
       setLoading(false)
     }
+    // 协作组单独拉：它的失败只落在 teamError，不影响上面的智能体数据。
+    await loadTeams()
   }
 
   useEffect(() => {
@@ -96,6 +125,32 @@ export function AgentsPage() {
   /** 按分组折叠展示（默认展开：一进页面就能看到卡片，想收起来再点标题）。 */
   const { isExpanded, toggle } = useExpandMap(true)
   const groups = useMemo(() => groupAgents(agents), [agents])
+
+  /** 切换页内标签；离开智能体列表时把手上的弹窗收掉，避免下次回来还挂着。 */
+  const openTab = (next: 'agents' | 'collab') => {
+    setEditing(null)
+    setCreating(false)
+    setTeamCreating(false)
+    setTesting(null)
+    setParams(next === 'collab' ? { tab: 'collab' } : {})
+  }
+
+  /** 打开某张协作组的画布；传 null 回到协作组卡片列表。 */
+  const openTeam = (teamId: string | null) => {
+    setParams(teamId ? { tab: 'collab', team: teamId } : { tab: 'collab' })
+  }
+
+  const createTeam = async () => {
+    try {
+      const created = await api.createCollabTeam({ name: newTeamName.trim() || '新建协作组' })
+      setTeamCreating(false)
+      setNewTeamName('')
+      await loadTeams()
+      openTeam(created.id)
+    } catch (e) {
+      setTeamError(describe(e))
+    }
+  }
 
   /** 点卡片右上角的五角星：设为默认智能体（再点一下取消），全局只有一颗。 */
   const toggleDefault = async (agent: AgentProfile) => {
@@ -245,56 +300,209 @@ export function AgentsPage() {
     )
   }
 
+  /** 一张协作组卡片：点整张卡进入画布编排（与智能体卡片同一套外观）。 */
+  const renderTeamCard = (team: CollabTeam) => (
+    <button
+      type="button"
+      className="card card-clickable"
+      key={team.id}
+      onClick={() => openTeam(team.id)}
+      title={`进入「${team.name}」的协作组设置`}
+    >
+      <div className="card-head">
+        <div className="avatar" style={{ width: 40, height: 40, fontSize: 19 }}>
+          🤝
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div className="card-title">{team.name}</div>
+          <div className="card-sub">{team.description?.trim() || '未填写说明'}</div>
+        </div>
+        <span className={`pill ${team.validation.ok ? 'ok' : 'err'}`} style={{ marginLeft: 'auto' }}>
+          {team.validation.ok ? '可运行' : `${team.validation.errors.length} 个问题`}
+        </span>
+      </div>
+
+      <div className="chips">
+        <span className="pill">{team.node_count} 个岗位</span>
+        {team.entry_key && <span className="pill brand">入口 {team.entry_key}</span>}
+        {team.validation.errors.length > 0 && <span className="pill err">需要处理</span>}
+      </div>
+
+      <dl className="kv tight">
+        <dt>工作目录</dt>
+        <dd title={team.workspace_dir ?? ''}>{team.workspace_dir ?? '默认'}</dd>
+        <dt>更新</dt>
+        <dd>{formatListTime(team.updated_at)}</dd>
+      </dl>
+
+      <div className="card-actions" style={{ marginLeft: 0 }}>
+        <span className="dim small">点击进入协作组设置 →</span>
+      </div>
+    </button>
+  )
+
   return (
     <>
       <header className="page-header">
         <div>
           <h1 className="page-title">智能体</h1>
           <p className="page-desc">
-            智能体 = 内核 + 网关 + 模型 + 人格设定。同一个内核可以用不同网关 / 模型配置出多个智能体，供对话与协作使用。
+            {tab === 'agents'
+              ? '智能体 = 内核 + 网关 + 模型 + 人格设定。同一个内核可以用不同网关 / 模型配置出多个智能体，供对话与协作使用。'
+              : '协作组 = 多个智能体连成一张图。点卡片进入画布，配置岗位与工单流转。'}
           </p>
         </div>
+        <nav className="tabs">
+          <button
+            type="button"
+            className={`tab${tab === 'agents' ? ' active' : ''}`}
+            aria-current={tab === 'agents' ? 'page' : undefined}
+            onClick={() => openTab('agents')}
+          >
+            智能体
+          </button>
+          <button
+            type="button"
+            className={`tab${tab === 'collab' ? ' active' : ''}`}
+            aria-current={tab === 'collab' ? 'page' : undefined}
+            onClick={() => openTab('collab')}
+          >
+            协作组
+          </button>
+        </nav>
         <div className="spacer" />
-        <button className="btn" onClick={() => void reload()} disabled={loading}>
-          {loading ? <span className="spin">◌</span> : '↻'} 刷新
-        </button>
-        <button className="btn primary" onClick={() => setCreating(true)}>
-          + 新建智能体
-        </button>
+        {tab === 'agents' ? (
+          <>
+            <button className="btn" onClick={() => void reload()} disabled={loading}>
+              {loading ? <span className="spin">◌</span> : '↻'} 刷新
+            </button>
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              + 新建智能体
+            </button>
+          </>
+        ) : editingTeamId ? (
+          <button className="btn" onClick={() => openTeam(null)}>
+            ← 返回协作组列表
+          </button>
+        ) : (
+          <>
+            <button className="btn" onClick={() => void loadTeams()} disabled={teamsLoading}>
+              {teamsLoading ? <span className="spin">◌</span> : '↻'} 刷新
+            </button>
+            <button className="btn primary" onClick={() => setTeamCreating(true)}>
+              + 新建协作组
+            </button>
+          </>
+        )}
       </header>
 
-      <div className="page-body stack">
-        {error && <div className="banner err">{error}</div>}
+      {tab === 'collab' && editingTeamId ? (
+        <CollabSettingsPanel
+          teamId={editingTeamId}
+          teams={teams}
+          agents={agents}
+          onOpenTeam={openTeam}
+          onTeamsChanged={loadTeams}
+        />
+      ) : (
+        <div className="page-body stack">
+          {tab === 'agents' ? (
+            <>
+              {error && <div className="banner err">{error}</div>}
 
-        <div className="banner info">
-          支持的内核：{types.map((t) => t.name).join(' · ')}。密钥与模型白名单由「设置 → 自定义网关」统一管理，
-          这里只选择走哪条网关。
+              <div className="banner info">
+                支持的内核：{types.map((t) => t.name).join(' · ')}。密钥与模型白名单由「设置 → 自定义网关」统一管理，
+                这里只选择走哪条网关。
+              </div>
+
+              {agents.length === 0 && !loading ? (
+                <div className="empty">
+                  <div className="empty-icon">🤖</div>
+                  <p>还没有配置任何智能体。</p>
+                  <p className="dim small" style={{ marginTop: 6 }}>
+                    点击「新建智能体」，选择内核与网关，写下它的人格设定。
+                  </p>
+                </div>
+              ) : (
+                <div className="stack">
+                  {groups.map((group) => (
+                    <CollapsibleGroup
+                      key={group.key}
+                      title={group.label}
+                      count={group.items.length}
+                      expanded={isExpanded(group.key)}
+                      onToggle={() => toggle(group.key)}
+                    >
+                      <div className="grid">{group.items.map(renderAgentCard)}</div>
+                    </CollapsibleGroup>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {teamError && (
+                <div className="banner err">
+                  <div className="row" style={{ gap: 8 }}>
+                    <span style={{ flex: 1 }}>协作组加载失败：{teamError}</span>
+                    <button className="btn sm" onClick={() => void loadTeams()}>
+                      重试
+                    </button>
+                  </div>
+                </div>
+              )}
+              {teamsLoading && teams.length === 0 ? (
+                <div className="banner info">正在加载协作组…</div>
+              ) : teams.length === 0 ? (
+                <div className="empty">
+                  <div className="empty-icon">🤝</div>
+                  <p>还没有协作组。</p>
+                  <p className="dim small" style={{ marginTop: 6 }}>
+                    新建一个，然后把智能体拖到画布上连起来。
+                  </p>
+                  <button className="btn primary" style={{ marginTop: 14 }} onClick={() => setTeamCreating(true)}>
+                    + 新建协作组
+                  </button>
+                </div>
+              ) : (
+                <div className="grid">{teams.map(renderTeamCard)}</div>
+              )}
+            </>
+          )}
         </div>
+      )}
 
-        {agents.length === 0 && !loading ? (
-          <div className="empty">
-            <div className="empty-icon">🤖</div>
-            <p>还没有配置任何智能体。</p>
-            <p className="dim small" style={{ marginTop: 6 }}>
-              点击「新建智能体」，选择内核与网关，写下它的人格设定。
-            </p>
-          </div>
-        ) : (
-          <div className="stack">
-            {groups.map((group) => (
-              <CollapsibleGroup
-                key={group.key}
-                title={group.label}
-                count={group.items.length}
-                expanded={isExpanded(group.key)}
-                onToggle={() => toggle(group.key)}
-              >
-                <div className="grid">{group.items.map(renderAgentCard)}</div>
-              </CollapsibleGroup>
-            ))}
-          </div>
-        )}
-      </div>
+      {teamCreating && (
+        <Modal
+          title="新建协作组"
+          onClose={() => setTeamCreating(false)}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setTeamCreating(false)}>
+                取消
+              </button>
+              <button className="btn primary" onClick={() => void createTeam()}>
+                创建
+              </button>
+            </>
+          }
+        >
+          <label className="field">
+            <span className="field-label">名称</span>
+            <input
+              className="input"
+              autoFocus
+              value={newTeamName}
+              onChange={(e) => setNewTeamName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void createTeam()}
+              placeholder="例如：客户端研发组"
+            />
+          </label>
+          <span className="field-help">
+            创建后直接进入画布：从上方智能体抽屉拖入（或点选）智能体，再把节点连起来。
+          </span>
+        </Modal>
+      )}
 
       {(creating || editing) && (
         <AgentModal

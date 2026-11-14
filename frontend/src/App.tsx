@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
 import { ChatPage } from './pages/ChatPage'
@@ -32,6 +32,17 @@ function readSidebarCollapsed(): boolean {
     /* 隐私模式下 localStorage 可能不可用：默认展开 */
     return false
   }
+}
+
+/** 老的「协作设置」深链 → 智能体页的协作组标签，并尽量保留原来选中的那条协作组。 */
+function CollabSettingsRedirect() {
+  const { teamId } = useParams<{ teamId?: string }>()
+  return (
+    <Navigate
+      to={teamId ? `/agents?tab=collab&team=${encodeURIComponent(teamId)}` : '/agents?tab=collab'}
+      replace
+    />
+  )
 }
 
 /**
@@ -115,8 +126,9 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
           <Route path="/collab" element={<CollabPage />} />
-          <Route path="/collab/settings" element={<CollabPage />} />
-          <Route path="/collab/settings/:teamId" element={<CollabPage />} />
+          {/* 协作组设置已移到「智能体 → 协作组」；老地址保留重定向，书签与外部链接不会失效。 */}
+          <Route path="/collab/settings" element={<Navigate to="/agents?tab=collab" replace />} />
+          <Route path="/collab/settings/:teamId" element={<CollabSettingsRedirect />} />
           <Route path="/collab/runs/:runId" element={<CollabPage />} />
           <Route path="/roles" element={<Navigate to="/agents" replace />} />
           <Route path="/skills" element={<SkillsPage />} />

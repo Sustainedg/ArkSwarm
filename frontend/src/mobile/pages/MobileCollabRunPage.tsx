@@ -17,6 +17,7 @@ import type {
   AttachmentRef, CollabChoice, CollabEvent, CollabRunDetail, CollabTeam, AgentProfile, StreamClosedEvent,
 } from '../../lib/types'
 import { useAutoRefresh } from '../../lib/useAutoRefresh'
+import { rawUsageTotal } from '../../lib/usage'
 import { MobileCollabProgress } from '../components/MobileCollabProgress'
 import { Composer } from '../../components/Composer'
 import { MobileAgentConversationSheet } from '../components/MobileAgentConversationSheet'
@@ -75,6 +76,9 @@ export function MobileCollabRunPage() {
   const [chatBusy, setChatBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  //: 「提高预算」面板：步数/工单/token 超限挂起后，调高上限再继续
+  const [budgetOpen, setBudgetOpen] = useState(false)
+  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0 })
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   /** 与入口智能体的对话界面：默认不显示，点动画里的人物才弹出来 */
   const [chatOpen, setChatOpen] = useState(false)
@@ -403,6 +407,38 @@ export function MobileCollabRunPage() {
     await stream(`/api/collab/runs/${detail?.id}/resume`, {})
   }
 
+  /** 打开「提高预算」面板：预填当前上限的 1.5 倍（至少 +20），保存后可直接继续推进。 */
+  const openBudgetPatch = () => {
+    if (!detail) return
+    setMenuOpen(false)
+    const bump = (current: number) => Math.max(current + 20, Math.ceil(current * 1.5))
+    setBudgetDraft({
+      max_steps: bump(detail.budget.max_steps),
+      max_tickets: bump(detail.budget.max_tickets),
+      max_tokens: detail.budget.max_tokens ? bump(detail.budget.max_tokens) : 0,
+      timeout_seconds: detail.budget.timeout_seconds,
+    })
+    setBudgetOpen(true)
+  }
+
+  /** 保存新预算：成功后刷新详情；挂起原因清掉了，发消息或点继续就能把运行救回来。 */
+  const saveBudgetPatch = async () => {
+    if (!detail) return
+    try {
+      await api.patchCollabRunBudget(detail.id, {
+        max_steps: budgetDraft.max_steps,
+        max_tickets: budgetDraft.max_tickets,
+        max_tokens: budgetDraft.max_tokens,
+        timeout_seconds: budgetDraft.timeout_seconds,
+      })
+    } catch (e) {
+      reportError(e)
+      return
+    }
+    setBudgetOpen(false)
+    await load(detail.id)
+  }
+
   const answerAsk = (choice: CollabChoice) => {
     if (!detail || busy || chatBusy) return
     const text = collabChoiceAnswer(choice)
@@ -625,6 +661,7 @@ export function MobileCollabRunPage() {
    * 带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）。
    */
   const taskStarted = Boolean(detail?.goal)
+  const usedTokens = rawUsageTotal(detail?.usage)
   const advancing = status === 'running' || busy
   const modeToggleVisible = taskStarted && !advancing
   const modeLockedByAttachments = attachments.length > 0
@@ -920,6 +957,11 @@ export function MobileCollabRunPage() {
                 ■ 叫停这次运行
               </button>
             )}
+            {status !== 'running' && (
+              <button className="btn block" onClick={openBudgetPatch}>
+                ⤴ 提高预算（步数 / 工单 / 时限）
+              </button>
+            )}
             <button
               className="btn block"
               disabled={busy}
@@ -932,6 +974,79 @@ export function MobileCollabRunPage() {
             </button>
             <button className="btn block danger" onClick={() => void remove()}>
               删除这次运行
+            </button>
+          </div>
+        </MobileSheet>
+      )}
+
+      {budgetOpen && detail && (
+        <MobileSheet title="提高预算" onClose={() => setBudgetOpen(false)}>
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="banner info">
+              当前已用 {detail.steps_used} 步 / {detail.tickets_used} 张工单 / {usedTokens.toLocaleString()} tok。
+              新上限必须大于已用量（token 填 0 表示不限）；保存后发消息或点继续就能从中断处接着跑。
+            </div>
+            <label className="field">
+              <span className="field-label">步数上限（当前 {detail.budget.max_steps}）</span>
+              <input
+                className="input"
+                type="number"
+                min={detail.steps_used + 1}
+                value={budgetDraft.max_steps}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_steps: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">工单上限（当前 {detail.budget.max_tickets}）</span>
+              <input
+                className="input"
+                type="number"
+                min={detail.tickets_used + 1}
+                value={budgetDraft.max_tickets}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_tickets: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                token 上限（当前 {detail.budget.max_tokens ? detail.budget.max_tokens.toLocaleString() : '不限'}；0 = 不限）
+              </span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={budgetDraft.max_tokens}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_tokens: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">运行时限·秒（当前 {detail.budget.timeout_seconds}）</span>
+              <input
+                className="input"
+                type="number"
+                min={30}
+                value={budgetDraft.timeout_seconds}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, timeout_seconds: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <button
+              className="btn primary block"
+              onClick={() => void saveBudgetPatch()}
+              disabled={
+                budgetDraft.max_steps <= detail.steps_used ||
+                budgetDraft.max_tickets <= detail.tickets_used ||
+                (budgetDraft.max_tokens !== 0 && budgetDraft.max_tokens <= usedTokens) ||
+                budgetDraft.timeout_seconds < 30
+              }
+            >
+              保存
             </button>
           </div>
         </MobileSheet>

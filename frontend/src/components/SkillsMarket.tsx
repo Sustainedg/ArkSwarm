@@ -210,6 +210,7 @@ export function SkillsMarket({
           {body.map((skill) => (
             <div className="card" key={skill.slug}>
               <div className="card-head">
+                <SkillIcon url={skill.icon_url} name={skill.name} />
                 <div style={{ minWidth: 0 }}>
                   <div className="card-title">{skill.name}</div>
                   <div className="card-sub">{skill.author ? `作者 ${skill.author}` : skill.owner ?? ''}</div>
@@ -292,6 +293,41 @@ export function SkillsMarket({
 
 function installKey(typeId: string, slug: string): string {
   return `${typeId}:${slug}`
+}
+
+/** 市场技能图标：有图就用图；没图或图挂了退回首字，卡片高度保持一致。 */
+function SkillIcon({ url, name }: { url?: string | null; name: string }) {
+  const src = normalizeIconUrl(url)
+  const [broken, setBroken] = useState(false)
+
+  useEffect(() => setBroken(false), [src])
+
+  if (src && !broken) {
+    return (
+      <img
+        className="skill-icon"
+        src={src}
+        alt=""
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setBroken(true)}
+      />
+    )
+  }
+  return (
+    <div className="skill-icon skill-icon-fallback" aria-hidden="true">
+      {Array.from(name.trim())[0]?.toUpperCase() || '🧩'}
+    </div>
+  )
+}
+
+/** 市场偶尔给相对路径；统一补成完整地址，`<img>` 才能直接加载。 */
+function normalizeIconUrl(url?: string | null): string {
+  const value = (url || '').trim()
+  if (!value) return ''
+  if (value.startsWith('//')) return `https:${value}`
+  if (value.startsWith('/')) return `https://skillhub.cn${value}`
+  return value
 }
 
 /** 除了当前选中内核之外，这个技能还装在了哪些内核上。 */

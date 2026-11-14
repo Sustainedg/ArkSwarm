@@ -744,13 +744,22 @@ def _elapsed_seconds(started: datetime | None) -> float:
 def _budget_reason(run: CollabRun, prepared: PreparedTurn) -> str | None:
     budget = budget_from_storable(run.budget)
     if (run.steps_used or 0) >= budget.max_steps:
-        return f"已达步数上限（{budget.max_steps} 步）"
+        return (
+            f"已达步数上限（{budget.max_steps} 步）。"
+            "可以在运行的「提高预算」里调高步数上限，然后点「继续」从中断处接着跑。"
+        )
     if (run.tickets_used or 0) >= budget.max_tickets:
-        return f"已达工单上限（{budget.max_tickets} 张）"
+        return (
+            f"已达工单上限（{budget.max_tickets} 张）。"
+            "可以在运行的「提高预算」里调高工单上限，然后点「继续」从中断处接着跑。"
+        )
     if budget.max_tokens:
         used = sum(v for v in (run.usage or {}).values() if isinstance(v, (int, float)))
         if used >= budget.max_tokens:
-            return f"已达 token 上限（{budget.max_tokens}）"
+            return (
+                f"已达 token 上限（{budget.max_tokens}）。"
+                "可以在运行的「提高预算」里调高 token 上限（或设为 0 不限），然后点「继续」从中断处接着跑。"
+            )
     # 交互式协作的时限按「多久没有进展」计算，而不是从创建时间起累计：
     # 用户隔一段时间回来继续、或运行在 waiting_user 停留很久，都不该让它永久失效。
     # prepare_turn 会刷新 updated_at；每一步成功落库也会刷新它。

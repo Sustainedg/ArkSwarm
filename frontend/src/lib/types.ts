@@ -744,6 +744,17 @@ export interface CollabBudget {
   timeout_seconds: number
 }
 
+/**
+ * `POST /api/collab/runs/{id}/budget` 的请求体：预算超限挂起后只允许调高，
+ * 新值必须大于当前已用量（`max_tokens=0` 表示不限）。
+ */
+export interface CollabBudgetPatch {
+  max_steps?: number
+  max_tickets?: number
+  max_tokens?: number
+  timeout_seconds?: number
+}
+
 export interface CollabIssue {
   code: string
   message: string

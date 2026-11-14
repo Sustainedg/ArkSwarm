@@ -1,9 +1,10 @@
 /**
- * 「协作设置」页签：左栏协作组列表，中间是画布编排器，右侧是属性面板。
+ * 协作组编排面板：左栏协作组列表，中间是画布编排器，右侧是属性面板。
  *
- * 编辑的是**一张完整的图**：拖动/连线只改本地草稿，点「保存」才整图提交（`PUT /teams/{id}`）。
- * 每次改动都会防抖地调一次 `POST /teams/{id}/validate`，把「人话提示」实时显示出来 ——
- * 校验在服务端（与运行时同一套规则），前端不重复实现一遍。
+ * 入口在「智能体 → 协作组」：先看到协作组卡片，点卡片才进到这里（老地址 `/collab/settings*`
+ * 会重定向过去）。编辑的是**一张完整的图**：拖动/连线只改本地草稿，点「保存」才整图提交
+ * （`PUT /teams/{id}`）。每次改动都会防抖地调一次 `POST /teams/{id}/validate`，把「人话提示」
+ * 实时显示出来 —— 校验在服务端（与运行时同一套规则），前端不重复实现一遍。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CollabCanvas, type CollabSelection } from './CollabCanvas'

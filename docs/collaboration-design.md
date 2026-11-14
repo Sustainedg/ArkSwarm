@@ -79,9 +79,9 @@ backend/app/collab/            ← 新目录，协作域的全部逻辑都在这
   api.py             APIRouter(prefix="/api/collab")，薄
 
 frontend/src/
-  pages/CollabPage.tsx             协作页骨架：页内两个页签 + 数据加载（M2 ✅）
+  pages/CollabPage.tsx             协作页：只保留协作运行（设置已移到智能体页，M2 ✅）
   components/CollabRunsPanel.tsx   协作运行页签：运行列表 + 时间线 + 工单条 + 输入框（M2 ✅）
-  components/CollabSettingsPanel.tsx 协作设置页签：协作组列表 + 画布 + 属性面板（M2 ✅）
+  components/CollabSettingsPanel.tsx 协作组编排面板：智能体页「协作组」标签内使用（M2 ✅）
   components/CollabCanvas.tsx      画布：节点拖动 + 四向端口 + 正交避障连线 + 拖放添加节点（M2 ✅）
   lib/collabRouting.ts            连线端口推断与正交避障路由（纯函数）
   components/NodeInspector.tsx     节点 / 边 / 团队属性面板（M2 ✅）
@@ -475,6 +475,10 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
 - 超时：`budget.timeout_seconds` 是两次进展之间的空闲时限，不是从创建时间起累计的整轮上限；
   每次用户输入与步骤落库都会刷新 `run.updated_at`，因此 `waiting_user` 期间隔再久，用户回来继续时
   也会获得新的推进窗口。单步超时仍沿用 `settings.run_timeout_seconds`。
+- 预算超限挂起：步数 / 工单 / token 任一达到上限都会挂起并给出可读原因；用户可以
+  `POST /api/collab/runs/{id}/budget` **只调高**对应上限（`max_tokens=0` 表示不限），
+  清掉挂起原因后再 `POST /resume` 从原处续跑。新上限必须大于当前已用量，避免“调完立刻又挂起”。
+  默认 `max_steps=200`：拆子工单的图里 60 步很容易在收尾前被掐断。
 - 异常：任何步骤异常 → `error` 事件 + 运行置 `error`（工单保留现场，可重试该步）。
 - 解析失败 / 语义非法：不抛异常、不猜 —— 当前步骤落库 `error`、工单置 `blocked`、运行置
   `waiting_user`；用户修好模型/剧本后 `POST /api/collab/steps/{id}/retry` 把工单放回队列，再
@@ -509,6 +513,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 | `POST` | `/api/collab/runs/{id}/messages` | **SSE**：用户对入口智能体说话 / 回复提问 |
 | `GET` | `/api/collab/runs/{id}/stream` | **SSE**：订阅一次运行的实时事件（断开后重连、或在另一台设备上围观） |
 | `POST` | `/api/collab/runs/{id}/cancel` | 停止 |
+| `POST` | `/api/collab/runs/{id}/budget` | 预算超限挂起后调高步数 / 工单 / token 上限（只增不减；`max_tokens=0` 不限） |
 | `POST` | `/api/collab/runs/{id}/resume` | 从就绪队列继续推进 |
 | `POST` | `/api/collab/steps/{id}/retry` | 把某一步所在的工单放回队列（解析失败/中断后修复，随后 `resume` 续跑） |
 | `DELETE` | `/api/collab/runs/{id}` | 删除运行（级联删工单与步骤消息） |
@@ -528,17 +533,19 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 
 ## 7. 前端设计
 
-### 7.1 导航（已确认：单菜单 + 页内页签）
+### 7.1 导航（已确认：协作运行独立成页，编排入口收进智能体页）
 
 主导航（`App.tsx` 的 `NAV`）新增一项：`{ to: '/collab', icon: '🤝', label: '协作组' }`
-（放在「智能体」之后，与移动端抽屉里的叫法一致）。页面内两个页签，四个路由都指向同一个 `CollabPage`：
+（放在「智能体」之后，与移动端抽屉里的叫法一致）。协作页只保留运行；协作组的编排入口在
+「智能体」页的第二个标签（卡片列表 → 点卡片进入画布）：
 
-| 路由 | 页签 | 内容 |
+| 路由 | 位置 | 内容 |
 | --- | --- | --- |
 | `/collab` | 协作运行 | 左栏运行列表，主区时间线 + 工单条 + 输入框 |
 | `/collab/runs/:runId` | 协作运行 | 直接打开某次运行（刷新/分享链接不丢上下文） |
-| `/collab/settings` | 协作设置 | 左栏协作组列表，主区提示选择或新建 |
-| `/collab/settings/:teamId` | 协作设置 | 画布编排器（可刷新还原） |
+| `/agents?tab=collab` | 智能体 → 协作组 | 协作组卡片列表（新建 / 点卡片进入设置） |
+| `/agents?tab=collab&team=:teamId` | 智能体 → 协作组 | 画布编排器（可刷新还原） |
+| `/collab/settings*` | 旧地址 | 重定向到 `/agents?tab=collab*`，书签不失效 |
 
 ### 7.2 协作运行页
 
@@ -759,7 +766,7 @@ curl -s http://127.0.0.1:8010/api/health
 | --- | --- | --- |
 | **M0 契约冻结** ✅ | `tables.py` / `schemas.py` / `protocol.py` / `tickets.py` / `graph.py` + 单测；协作组路由；`init_db` 注册；`sse.py` 下沉 | 已完成，见 §13 |
 | **M1 引擎 MVP** ✅ | `prompt.py` + `execution.py` + `engine.py` + 运行 API：`/runs/{id}/messages`（SSE）串行跑通 CEO→CTO→SE→审查（含拆子工单与一次打回返工），并支持 `cancel`/`resume`/`retry`、预算与轮次上限、`ask_user` 挂起、越权审计 | 已完成，见 §13 |
-| **M2 编排设置** ✅ | 画布编辑器（拖智能体/拖节点/连线/实时校验/整图保存）+ 协作设置页；另建了「协作运行」页签的最小可用形态 | 已完成，见 §13（前端 `npm run build` 通过 + 后端契约已按前端调用顺序冒烟） |
+| **M2 编排设置** ✅ | 画布编辑器（拖智能体/拖节点/连线/实时校验/整图保存）+ 协作组编排入口（现在位于智能体页的「协作组」标签）；协作运行单独成页 | 已完成，见 §13（前端 `npm run build` 通过 + 后端契约已按前端调用顺序冒烟） |
 | **M3 防死循环收尾** ✅ | 边级 `max_rounds`、工单树深度上限与重名子工单去重、`run.error` 与提示的统一表达 | 已完成：`test_collab_guards.py` 覆盖 §3.3 全表（4 项端到端） |
 | **M4 协作运行页打磨** ✅ | 工单看板抽屉（子工单树 + 工单字段 + 产出文件 + 审查意见 + 越权审计）、顶栏预算「已用 / 上限」与工单状态摘要、编辑器里的边级返工上限 | 已完成：`npm run build` 通过 + 抽屉 SSR 冒烟（空/嵌套/脏数据）；时间线仍复用 `MessageView`（未拆出独立"工单卡"组件） |
 | **M4b 用户决策卡** ✅ | `ask_user` 的 `question + options` 协议、解析与语义校验；桌面端与移动端把等待用户拍板渲染成可点选项；旧记录无选项时按默认方案/自由填写兼容；移动端外壳缓存版本 v6 | 已完成：后端协议/引擎测试；`bash scripts/test.sh` + `npm run build` |
@@ -779,7 +786,7 @@ curl -s http://127.0.0.1:8010/api/health
 
 | 议题 | 决策 | 落地位置 |
 | --- | --- | --- |
-| 导航形态 | **一个「协作」菜单 + 页内页签**（协作运行 / 协作设置），保持主导航清爽 | §7.1；M2 |
+| 导航形态 | **「协作」菜单只放协作运行；协作组编排放在「智能体」页的协作组标签**，主导航保持清爽 | §7.1；M2 |
 | 工单协议 | **强制 `work_order` 结构化块**，三级容错解析；提示词给标准围栏 + 示例 | §4.1；M0 已实现 |
 | 并发模型 | **绝对串行**：同一时刻只推进一个步骤，杜绝共享工作目录的竞态与冲突 | §3.4；M1 |
 | 审查关系 | **可选**；一旦存在 `review` 边，图校验就强制要求对应的 `rework` 回边 | §3.3、§2.5；M0 已实现 |
@@ -866,7 +873,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | `backend/app/collab/graph.py` | `rework_edge()`：取「审查者 → 打回目标」那条边，读它的 `max_rounds` |
 | `backend/app/collab/engine.py` | `MAX_TICKET_DEPTH=5`、`MAX_DUPLICATE_CHILD_TITLES=2` 两个护栏；`_ticket_depth()`、`_child_count_with_title()`、`_reject_action()`（拒绝即挂起 + `run.error` + `waiting_user`）；`review/changes_requested` 分支按边级上限收紧 `ticket.max_rounds` |
 | `backend/app/collab/store.py` | 运行详情/列表回传 `budget` |
-| `backend/tests/test_collab_guards.py` | 4 项端到端：边级上限（第 2 轮打回被拒 + 边字段可读写）、拆解第 5 层拒绝并提示 `handoff`、第三次重名子工单被拒、`budget` 出现在运行详情与列表 |
+| `backend/tests/test_collab_guards.py` | 端到端：边级上限（第 2 轮打回被拒 + 边字段可读写）、拆解第 5 层拒绝并提示 `handoff`、第三次重名子工单被拒、`budget` 出现在运行详情与列表；预算救援覆盖步数与 token 两种超限（调高上限 / 设为不限后 `resume` 能跑完） |
 
 关于提示：护栏触发的说明**统一在本次推进收尾时**由 `_finalize` 发出一次（`notice(error)` + `run_status`），
 不再各自重复播报；被拒的动作不会留下半截产物。

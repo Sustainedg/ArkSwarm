@@ -69,6 +69,9 @@
      移动端在 mobile.css 里收得更小。 */
   --md-image-preview: 380px;
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  /* 分段控件的轨道与选中块：深浅两套主题各一组，避免在样式里写死黑色阴影 */
+  --control-inset-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
+  --control-raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   --font: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -144,6 +147,8 @@
   --canvas-node-shadow: 0 10px 24px rgba(46, 39, 88, 0.14);
 
   --shadow: 0 18px 48px rgba(37, 31, 68, 0.16);
+  --control-inset-shadow: inset 0 1px 2px rgba(37, 31, 68, 0.08);
+  --control-raised-shadow: 0 1px 2px rgba(37, 31, 68, 0.16);
 }
 
 /* 页面底色：与深色那份同构，只是把两团光晕换成浅色 */
@@ -766,8 +771,9 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .composer-scope-btn:hover { border-color: var(--border-strong); color: var(--text); }
 .composer-scope-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 输入框下面那一条：贴着框的下沿 */
+/* 输入框下面那一条（用量统计等）：贴着框的下沿 */
 .composer-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
+.composer-foot .usage-bar { margin-top: 0; }
 
 /* ---------- 桌面端：输入区寄在会话栏底部 ---------- */
 .chat-composer { border-top: 1px solid var(--border); padding: 14px 26px 18px; }
@@ -802,6 +808,20 @@ code, pre, .mono { font-family: var(--mono); }
   flex: none; padding: 0 2px; border: none; background: none;
   color: var(--text-dim); font-size: 12px; cursor: pointer;
 }
+
+.usage-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px;
+  margin-top: 8px; font-size: 11px; color: var(--text-dim);
+}
+.usage-tag {
+  padding: 1px 8px; border-radius: 20px; background: var(--accent-soft); color: var(--accent);
+  font-weight: 600;
+}
+.usage-item { display: inline-flex; align-items: baseline; gap: 4px; }
+.usage-label { color: var(--text-dim); }
+.usage-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-unit { color: var(--text-dim); font-size: 10px; }
+.usage-muted { opacity: 0.75; }
 
 /* ---------- 工具卡片 ---------- */
 .tool-card { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-panel); margin-top: 8px; overflow: hidden; }
@@ -1177,6 +1197,33 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---------- 协作：运行 / 设置 两栏骨架 ---------- */
 .collab-shell { display: grid; grid-template-columns: 268px 1fr; flex: 1; min-height: 0; }
 .collab-settings { display: grid; grid-template-columns: 250px 1fr; flex: 1; min-height: 0; }
+/* 与 CEO 对话时的发送模式：黑白小分段控件，贴在输入框上方。
+   轨道用内凹阴影压住，选中块抬起来 —— 只用文字色与面板色，不引入彩色。 */
+.composer-mode-row { display: flex; align-items: center; margin-bottom: 7px; }
+.composer-head .composer-mode-row { margin-bottom: 0; }
+.collab-mode-switch {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+  box-shadow: var(--control-inset-shadow);
+}
+.collab-mode-switch button {
+  min-width: 58px; padding: 4px 12px; border: none; border-radius: 6px; background: none;
+  color: var(--text-dim); font: inherit; font-size: 11.5px; font-weight: 600;
+  line-height: 1.45; letter-spacing: 0.01em; cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+.collab-mode-switch button:hover:not(:disabled):not(.active) {
+  background: var(--bg-hover); color: var(--text);
+}
+.collab-mode-switch button.active {
+  background: var(--text); color: var(--bg-panel);
+  box-shadow: var(--control-raised-shadow);
+}
+.collab-mode-switch button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.collab-mode-switch button:disabled { opacity: 0.34; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .collab-mode-switch button { transition: none; }
+}
 .collab-list { border-right: 1px solid var(--border); overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .collab-item {
   display: block; width: 100%; text-align: left; padding: 10px 11px; cursor: pointer; color: inherit;
@@ -1186,6 +1233,8 @@ code, pre, .mono { font-family: var(--mono); }
 .collab-item:hover { background: var(--bg-hover); }
 .collab-item.active { background: var(--brand-soft); border-color: rgba(217, 79, 208, 0.3); }
 .collab-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* 输入区复用普通对话的版式（.chat-composer）：不参与弹性收缩，消息区自己滚动。 */
+.collab-main > .chat-composer { flex: none; }
 .collab-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .collab-run-title { font-weight: 600; font-size: 14px; }
 .collab-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
@@ -1959,6 +2008,15 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* 技能市场卡片：描述限高，避免长文案把卡片撑得很高 */
 .skills-market-cards .card > p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* 市场技能图标：有图用图，缺图时用首字兜底，两种形态尺寸一致 */
+.skill-icon {
+  flex: none; width: 38px; height: 38px; border-radius: 10px;
+  object-fit: cover; background: var(--bg-input); border: 1px solid var(--border);
+}
+.skill-icon-fallback {
+  display: grid; place-items: center; font-size: 16px; font-weight: 600;
+  color: var(--text-muted); user-select: none;
+}
 
 /* ================= 用量页：总消耗 / token 构成 / 每日趋势 / 智能体 / 技能 ================= */
 .usage-page { gap: 16px; }

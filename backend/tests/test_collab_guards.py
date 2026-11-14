@@ -280,3 +280,119 @@ async def test_run_detail_reports_budget(client: httpx.AsyncClient, tmp_path: Pa
     assert detail["budget"] == budget
     listed = (await client.get("/api/collab/runs", params={"team_id": team["id"]})).json()["items"]
     assert listed and listed[0]["budget"]["max_steps"] == 7
+
+
+async def test_budget_patch_rescues_exhausted_run(client: httpx.AsyncClient, tmp_path: Path):
+    """步数超限挂起后，调高预算 + resume 必须能把运行救回来接着跑。
+
+    过去预算在创建运行时快照、超限后 resume 会立刻再挂起（「继续」按钮等于死的）；
+    ``/runs/{id}/budget`` 就是为此存在的。
+    """
+    # CEO 直接拆一张子工单给 SE：拆单 1 步 + SE 干活 1 步 + 交回 CEO 汇总 1 步 + 收尾汇报 1 步。
+    # 把 max_steps 压到 2，运行必然在收尾前挂起。
+    env = await make_env(
+        {
+            "ceo": [split("se", "实现暗色主题"), {"action": "done", "summary": "收尾"}],
+            "se": [{"action": "submit", "summary": "已实现"}],
+        },
+        tmp_path,
+    )
+    budget = {
+        "max_steps": 2,
+        "max_tickets": 10,
+        "max_rounds_per_ticket": 2,
+        "max_tokens": 0,
+        "timeout_seconds": 600,
+    }
+    spec = GraphSpec(
+        nodes=[
+            NodeSpec(key="ceo", agent_profile_id=env["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=env["agent_profiles"]["se"], label="SE", duty=Duty.ENGINEER),
+        ],
+        edges=[EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN)],
+    )
+    team = await create_team(client, spec, budget=budget)
+    run_id, _ = await start_run(client, team["id"], "把登录页改成暗色主题")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "步数上限" in (detail["error"] or "")
+    assert "提高预算" in (detail["error"] or "")  # 挂起原因要告诉用户去哪救
+
+    # 直接 resume：预算没变，必须立刻再挂起（旧行为的回归锚点）
+    resume = await client.post(f"/api/collab/runs/{run_id}/resume")
+    assert resume.status_code == 200, resume.text
+    await read_sse(resume)
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "步数上限" in (detail["error"] or "")
+
+    # 调预算：新上限必须大于已用步数
+    too_small = await client.post(f"/api/collab/runs/{run_id}/budget", json={"max_steps": 1})
+    assert too_small.status_code == 409, too_small.text
+
+    # 调高步数上限 → 挂起原因清掉 → resume 真的把运行推完
+    patched = await client.post(f"/api/collab/runs/{run_id}/budget", json={"max_steps": 20})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["budget"]["max_steps"] == 20
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["budget"]["max_steps"] == 20
+    assert detail["error"] is None  # 超限原因不再成立，必须清掉
+
+    resume = await client.post(f"/api/collab/runs/{run_id}/resume")
+    assert resume.status_code == 200, resume.text
+    await read_sse(resume)
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "done", detail["error"]
+    assert detail["steps_used"] > 2  # 确实又推进了，而不是原地挂起
+
+
+async def test_budget_patch_can_rescue_token_exhausted_run(client: httpx.AsyncClient, tmp_path: Path):
+    """token 超限挂起后，调高上限（或设为 0 不限）也必须能把运行救回来。"""
+    env = await make_env(
+        {
+            "ceo": [split("se", "实现暗色主题"), {"action": "done", "summary": "收尾"}],
+            "se": [{"action": "submit", "summary": "已实现"}],
+        },
+        tmp_path,
+    )
+    budget = {
+        "max_steps": 20,
+        "max_tickets": 10,
+        "max_rounds_per_ticket": 2,
+        "max_tokens": 20,
+        "timeout_seconds": 600,
+    }
+    spec = GraphSpec(
+        nodes=[
+            NodeSpec(key="ceo", agent_profile_id=env["agent_profiles"]["ceo"], label="CEO", duty=Duty.COORDINATOR),
+            NodeSpec(key="se", agent_profile_id=env["agent_profiles"]["se"], label="SE", duty=Duty.ENGINEER),
+        ],
+        edges=[EdgeSpec(from_key="ceo", to_key="se", kind=EdgeKind.ASSIGN)],
+    )
+    team = await create_team(client, spec, budget=budget)
+    run_id, _ = await start_run(client, team["id"], "把登录页改成暗色主题")
+
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "waiting_user"
+    assert "token 上限" in (detail["error"] or "")
+    used_tokens = sum(
+        value for value in (detail["usage"] or {}).values() if isinstance(value, (int, float))
+    )
+    assert used_tokens >= 20
+
+    # 新 token 上限不能低于已用量（0 除外，代表不限）
+    too_small = await client.post(f"/api/collab/runs/{run_id}/budget", json={"max_tokens": used_tokens - 1})
+    assert too_small.status_code == 409, too_small.text
+
+    patched = await client.post(f"/api/collab/runs/{run_id}/budget", json={"max_tokens": 0})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["budget"]["max_tokens"] == 0
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["error"] is None
+
+    resume = await client.post(f"/api/collab/runs/{run_id}/resume")
+    assert resume.status_code == 200, resume.text
+    await read_sse(resume)
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert detail["status"] == "done", detail["error"]

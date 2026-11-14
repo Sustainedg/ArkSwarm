@@ -153,7 +153,9 @@ class GraphSpec(BaseModel):
 class BudgetSpec(BaseModel):
     """一次协作运行的预算上限。任何一项超限都会挂起并明确提示用户。"""
 
-    max_steps: int = Field(default=60, ge=1)
+    # 一张子工单的最小生命周期（拆单→干活→评审→交回汇总）至少 4 步，有返工就是 6-8 步；
+    # 60 步在「领导者 + split 拆子工单」的图里跑十来张工单就会在收尾前被掐断。
+    max_steps: int = Field(default=200, ge=1)
     max_tickets: int = Field(default=30, ge=1)
     max_rounds_per_ticket: int = Field(default=3, ge=1)
     #: 0 表示不限制 token
@@ -262,6 +264,25 @@ class RunMessage(BaseModel):
     content: str = ""
     #: 已上传附件的相对路径（相对这次协作的工作目录，由 `/runs/{id}/attachments` 返回）
     attachments: list[str] = Field(default_factory=list)
+
+
+class RunBudgetPatch(BaseModel):
+    """运行中调整预算：只允许调大或补时限，不允许把预算调小到当前用量以下。
+
+    典型场景：步数/工单数超限挂起后，用户提高上限再点「继续」——
+    过去预算在创建运行时快照、超限后 resume 会立刻再挂起，运行等于救不回来。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: 新的步数上限；为空表示不改。必须大于当前已用步数。
+    max_steps: int | None = Field(default=None, ge=1)
+    #: 新的工单数上限；为空表示不改。必须大于当前已用工单数。
+    max_tickets: int | None = Field(default=None, ge=1)
+    #: 新的 token 上限（0 = 不限）；为空表示不改。0 以外的值必须大于当前已用 token。
+    max_tokens: int | None = Field(default=None, ge=0)
+    #: 新的运行时限（秒）；为空表示不改。
+    timeout_seconds: int | None = Field(default=None, ge=30)
 
 
 class RunAttachmentUpload(BaseModel):

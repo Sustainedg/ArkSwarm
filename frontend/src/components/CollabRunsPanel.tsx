@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CollabProgressBoard } from './CollabProgressBoard'
+import { Composer } from './Composer'
 import { ConversationThread, type ConversationThreadItem } from './ConversationThread'
 import type { RenderMessage } from './MessageView'
 import { TicketBoard } from './TicketBoard'
@@ -14,6 +15,8 @@ import { api, ApiError, streamGet, streamPost } from '../lib/api'
 import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
+import { composeWithAttachments } from '../lib/media'
+import { useComposerDraft } from '../lib/composerDraft'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
 } from '../lib/collabStream'
@@ -22,8 +25,9 @@ import {
 } from '../lib/collabNotices'
 import { buildCollabProgress } from '../lib/collabProgress'
 import { useAutoRefresh } from '../lib/useAutoRefresh'
-import { summarizeUsage } from '../lib/usage'
+import { rawUsageTotal, summarizeUsage } from '../lib/usage'
 import type {
+  AttachmentRef,
   CollabChoice, CollabEvent, CollabRun, CollabRunDetail, CollabTeam, AgentProfile, StreamClosedEvent,
 } from '../lib/types'
 
@@ -56,7 +60,8 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
   const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
   const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
-  const [draft, setDraft] = useState('')
+  /** 草稿与待发附件按运行各记各的：切走再回来还在原处（与普通对话共用同一份实现）。 */
+  const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(runId)
   const [busy, setBusy] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
   //: 空闲时的发送模式：auto = 有待回答的问题就走工单、否则只聊天；chat/work 是用户手动指定。
@@ -70,8 +75,11 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   //: 从岗位对话里的工单卡点进来时，看板直接定位到这张工单
   const [boardTicketId, setBoardTicketId] = useState<string | null>(null)
   const [progressOpen, setProgressOpen] = useState(false)
-  const [pendingUser, setPendingUser] = useState<{ id: string; text: string } | null>(null)
+  const [pendingUser, setPendingUser] = useState<{ id: string; text: string; attachments: string[] } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
+  //: 「提高预算」弹窗：步数/工单/token 超限挂起后，调高上限再继续
+  const [budgetOpen, setBudgetOpen] = useState(false)
+  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0 })
 
   const abortRef = useRef<AbortController | null>(null)
   const chatAbortRef = useRef<AbortController | null>(null)
@@ -289,7 +297,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   /** 发消息（或空内容触发重跑）并订阅这一轮的推进。 */
   const stream = async (path: string, body: unknown, userText?: string) => {
     if (!detail) return
-    const pending = userText ? { id: `local-user-${Date.now()}`, text: userText } : null
+    const pending = userText ? { id: `local-user-${Date.now()}`, text: userText, attachments: [] } : null
     if (pending) setPendingUser(pending)
     setError(null)
     try {
@@ -299,16 +307,33 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     }
   }
 
-  /** 把一句话发给入口智能体：主流程在跑时走独立聊天通道，否则走正常推进。 */
-  const sendMessage = async (text: string) => {
-    if (!detail || !text.trim()) return
-    if (status === 'running' || busy || chatActive) {
-      const pending = { id: `local-user-${Date.now()}`, text }
+  /**
+   * 把一句话发给入口智能体：主流程在跑、选了对话模式、或带附件时走独立聊天通道；
+   * 否则接到工单上继续推进。附件只落聊天线（工单推进的输入是结构化单据，没有附件位）。
+   */
+  const sendMessage = async (text: string, files: AttachmentRef[] = []) => {
+    if (!detail || (!text.trim() && files.length === 0)) return
+    if (status === 'running' || busy || chatActive || files.length > 0) {
+      const paths = files.map((item) => item.rel_path)
+      const pending = { id: `local-user-${Date.now()}`, text: text.trim(), attachments: paths }
       setPendingUser(pending)
       setError(null)
+      // 第一个事件到达即代表消息已落库：此刻把附件从输入区收走，而不是等整轮聊天跑完。
+      let cleared = paths.length === 0
       try {
         await subscribeChat(detail.id, (onEvent, signal) =>
-          streamPost<RunEvent>(`/api/collab/runs/${detail.id}/chat`, { content: text }, onEvent, signal),
+          streamPost<RunEvent>(
+            `/api/collab/runs/${detail.id}/chat`,
+            { content: text, attachments: paths },
+            (event) => {
+              if (!cleared) {
+                cleared = true
+                setAttachments([])
+              }
+              onEvent(event)
+            },
+            signal,
+          ),
         )
       } finally {
         setPendingUser(null)
@@ -316,6 +341,12 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       return
     }
     await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
+  /** 上传待发附件：走协作运行自己的附件目录，与移动端共用同一个接口。 */
+  const uploadAttachment = async (name: string, contentBase64: string) => {
+    if (!detail) throw new Error('还没有打开协作运行，暂时不能上传附件')
+    return api.uploadCollabAttachment(detail.id, { name, content_base64: contentBase64 })
   }
 
   const start = async () => {
@@ -363,6 +394,38 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       return
     }
     await stream(`/api/collab/runs/${detail.id}/resume`, {})
+  }
+
+  /** 打开「提高预算」弹窗：预填当前上限的 1.5 倍（至少 +20），改完保存后可直接点「继续」。 */
+  const openBudgetPatch = () => {
+    if (!detail) return
+    const bump = (current: number) => Math.max(current + 20, Math.ceil(current * 1.5))
+    setBudgetDraft({
+      max_steps: bump(detail.budget.max_steps),
+      max_tickets: bump(detail.budget.max_tickets),
+      max_tokens: detail.budget.max_tokens ? bump(detail.budget.max_tokens) : 0,
+      timeout_seconds: detail.budget.timeout_seconds,
+    })
+    setBudgetOpen(true)
+  }
+
+  /** 保存新预算：成功后刷新详情；挂起原因清掉了，「继续」按钮就能把运行救回来。 */
+  const saveBudgetPatch = async () => {
+    if (!detail) return
+    try {
+      await api.patchCollabRunBudget(detail.id, {
+        max_steps: budgetDraft.max_steps,
+        max_tickets: budgetDraft.max_tickets,
+        max_tokens: budgetDraft.max_tokens,
+        timeout_seconds: budgetDraft.timeout_seconds,
+      })
+    } catch (e) {
+      setError(describe(e))
+      return
+    }
+    setBudgetOpen(false)
+    await loadDetail(detail.id)
+    await loadRuns()
   }
 
   const answerAsk = (choice: CollabChoice) => {
@@ -423,7 +486,14 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       .sort((left, right) => String(left.at).localeCompare(String(right.at)))
       .map((item) => item.message),
     ...(pendingUser
-      ? [{ id: pendingUser.id, role: 'user' as const, content: pendingUser.text, parts: [], status: 'complete' }]
+      ? [{
+          id: pendingUser.id,
+          role: 'user' as const,
+          // 附件清单拼回正文：图片缩略图当场画进「你」的气泡，不用等落库后重新拉取。
+          content: composeWithAttachments(pendingUser.text, pendingUser.attachments),
+          parts: [],
+          status: 'complete',
+        }]
       : []),
     ...streamedLeader.map((step) => ({
       id: step.stepId,
@@ -516,7 +586,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const progressAttention = progress.nodes.some(
     (node) => node.state === 'waiting' || node.state === 'error' || node.state === 'active',
   )
-  const besideLeader = turn?.live && turn.live.nodeKey !== leaderKey ? turn.live : null
   const remoteRunning = status === 'running' && !busy
   const pendingAsks = useMemo(
     () =>
@@ -531,7 +600,13 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   //: auto 模式下「有待回答的问题」自动走推进任务，避免把答复误发进聊天。
   const idle = Boolean(detail?.goal) && status !== 'running' && !busy
   const chatActive = idle && (idleMode === 'chat' || (idleMode === 'auto' && pendingAsks.length === 0))
+  //: 任务在跑时消息只能走聊天通道；带附件时也只能走聊天。两种情况都只禁用「推进任务」。
+  const modeLocked = status === 'running' || busy
+  const modeLockedByAttachments = attachments.length > 0
+  const workDisabled = modeLocked || modeLockedByAttachments
+  const modeIsChat = modeLocked || chatActive || modeLockedByAttachments
   const runUsage = summarizeUsage([detail?.usage])
+  const usedTokens = rawUsageTotal(detail?.usage)
   // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
   const ticketCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -564,7 +639,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
         ))}
         {runs.length === 0 && (
           <p className="dim small" style={{ padding: '14px 8px', lineHeight: 1.6 }}>
-            还没有协作运行。先在「协作设置」里画一张编排图，再回来发起。
+            还没有协作运行。先在「智能体 → 协作组」里画一张编排图，再回来发起。
           </p>
         )}
       </aside>
@@ -622,9 +697,14 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                   </button>
                 ) : (
                   (status === 'waiting_user' || status === 'interrupted' || status === 'error') && (
-                    <button className="btn sm" disabled={chatBusy} onClick={() => void stream(`/api/collab/runs/${detail.id}/resume`, {})}>
-                      ▶ 继续
-                    </button>
+                    <>
+                      <button className="btn sm" onClick={openBudgetPatch} title="步数/工单/token 超限挂起后，调高上限再继续">
+                        ⤴ 提高预算
+                      </button>
+                      <button className="btn sm" disabled={chatBusy} onClick={() => void stream(`/api/collab/runs/${detail.id}/resume`, {})}>
+                        ▶ 继续
+                      </button>
+                    </>
                   )
                 )}
                 <button
@@ -676,14 +756,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               <div style={{ padding: '8px 22px 0' }}>
                 <div className="banner info">
                   本页的连接断了，正在自动重连订阅；协作仍在服务端继续推进，不会中断。
-                </div>
-              </div>
-            )}
-
-            {besideLeader && (
-              <div style={{ padding: '8px 22px 0' }}>
-                <div className="banner info">
-                  协作正在由「{besideLeader.agentName}」处理，可在「协作进度」按钮里点开查看实时输出。
                 </div>
               </div>
             )}
@@ -757,86 +829,107 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               </div>
             )}
 
-            <div className="composer">
-              <div className="composer-inner">
-                <div className="composer-box">
-                  <textarea
-                    ref={composerRef}
-                    rows={1}
-                    value={draft}
-                    placeholder={
-                      chatBusy
-                        ? 'CEO 正在回复…'
-                        : chatActive
-                          ? '和 CEO 聊聊：问进度、补要求、随便说两句…'
-                        : status === 'running'
-                          ? '随时问 CEO：细化要求、问进度、聊两句…'
-                        : detail.goal
-                          ? '推进任务：回答提问，或让 CEO 继续推进工单…'
-                          : '告诉领导者这次协作要做什么…'
-                    }
-                    onChange={(e) => {
-                      setDraft(e.target.value)
-                      const node = e.target
-                      node.style.height = 'auto'
-                      node.style.height = `${Math.min(node.scrollHeight, 200)}px`
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                        e.preventDefault()
-                        if (!chatBusy && draft.trim()) {
-                          const text = draft
-                          setDraft('')
-                          void sendMessage(text)
-                        }
-                      }
-                    }}
-                    disabled={chatBusy}
-                  />
-                  <button
-                    className="btn primary"
-                    disabled={chatBusy || !draft.trim()}
-                    onClick={() => {
-                      const text = draft
-                      setDraft('')
-                      void sendMessage(text)
-                    }}
-                  >
-                    {chatBusy ? '回复中…' : '发送 ↵'}
-                  </button>
-                </div>
-                <div className="composer-hint">
-                  <span className="row" style={{ gap: 8, alignItems: 'center' }}>
-                    {idle && (
-                      <button
-                        type="button"
-                        className={`btn sm${chatActive ? ' primary' : ' ghost'}`}
-                        onClick={() => setIdleMode(chatActive ? 'work' : 'chat')}
-                        title={
-                          chatActive
-                            ? '切到推进任务：发送后会继续跑工单'
-                            : '切到只聊天：不推进工单，只和 CEO 对话'
-                        }
-                      >
-                        {chatActive ? '💬 聊天中 · 点此推进任务' : '▶ 推进任务 · 点此只聊天'}
-                      </button>
-                    )}
-                    <span>
-                      {chatBusy
-                        ? 'CEO 正在整理回复…'
-                        : chatActive
-                          ? pendingAsks.length > 0
-                            ? '聊天模式：上方有待回答的问题；回答请点选项，或切到推进任务'
-                            : '聊天模式：不推进工单；明确补充的要求会在下一轮步骤生效'
-                          : status === 'running'
-                            ? 'CEO 在线：任务在跑也能随时问进度、补要求；内部输出在「协作进度」里查看'
-                            : detail.goal
-                              ? '推进模式：发送后会继续跑工单；想纯聊天点上面的按钮'
-                              : '主会话只展示你和领导者；内部智能体输出在「协作进度」里查看'}
-                    </span>
-                  </span>
-                  <span>工作目录：{detail.workspace_dir ?? '默认'}</span>
-                </div>
+            {/* 与普通对话共用同一个输入区组件与版式：圆角输入框、附件 / 语音 / 发送都在框里。 */}
+            <div className="chat-composer">
+              <div className="chat-composer-inner">
+                <Composer
+                  value={draft}
+                  onChange={setDraft}
+                  onSend={() => {
+                    const text = draft
+                    const files = attachments
+                    setDraft('')
+                    setAttachments([])
+                    void sendMessage(text, files)
+                  }}
+                  attachments={attachments}
+                  onAttachmentsChange={setAttachments}
+                  onUpload={detail ? uploadAttachment : undefined}
+                  disabled={chatBusy}
+                  submitOnEnter
+                  onNotice={setError}
+                  inputRef={composerRef}
+                  inputLabel="对入口智能体说点什么"
+                  header={
+                    detail.goal ? (
+                      <div className="composer-mode-row">
+                        <div
+                          className="collab-mode-switch"
+                          role="group"
+                          aria-label="发送模式"
+                          title={
+                            modeLockedByAttachments
+                              ? '附件只能随对话发送；去掉附件后可切到推进任务'
+                              : modeLocked
+                                ? '任务运行中：这一轮消息只走对话，推进任务空闲后可用'
+                                : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            className={modeIsChat ? '' : 'active'}
+                            aria-pressed={!modeIsChat}
+                            disabled={workDisabled}
+                            onClick={() => setIdleMode('work')}
+                            title={
+                              modeLockedByAttachments
+                                ? '附件只能随对话发送；去掉附件后可切到推进任务'
+                                : modeLocked
+                                  ? '任务运行中，等这一轮结束才能推进'
+                                  : '推进任务：发送后会继续跑工单'
+                            }
+                          >
+                            推进任务
+                          </button>
+                          <button
+                            type="button"
+                            className={modeIsChat ? 'active' : ''}
+                            aria-pressed={modeIsChat}
+                            onClick={() => setIdleMode('chat')}
+                            title="对话：只和入口智能体聊，不推进工单"
+                          >
+                            对话
+                          </button>
+                        </div>
+                      </div>
+                    ) : undefined
+                  }
+                  footer={
+                    runUsage.messages > 0 ? (
+                      <div className="usage-bar" title="本次协作累计消耗">
+                        <span className="usage-tag">本次协作消耗</span>
+                        <span className="usage-item">
+                          <span className="usage-label">读取</span>
+                          <span className="usage-value">{runUsage.input.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">输出</span>
+                          <span className="usage-value">{runUsage.output.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">总计</span>
+                          <span className="usage-value">{runUsage.total.toLocaleString()}</span>
+                          <span className="usage-unit">tok</span>
+                        </span>
+                        <span className="usage-item">
+                          <span className="usage-label">缓存命中</span>
+                          <span className="usage-value">
+                            {runUsage.cacheRatio === null ? '—' : `${Math.round(runUsage.cacheRatio * 100)}%`}
+                          </span>
+                        </span>
+                        {runUsage.cacheRead > 0 && (
+                          <span className="usage-item usage-muted">
+                            <span className="usage-label">命中缓存</span>
+                            <span className="usage-value">{runUsage.cacheRead.toLocaleString()}</span>
+                            <span className="usage-unit">tok</span>
+                          </span>
+                        )}
+                      </div>
+                    ) : undefined
+                  }
+                />
               </div>
             </div>
           </>
@@ -904,7 +997,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
           }
         >
           {teams.length === 0 ? (
-            <div className="banner info">还没有协作组。请先到「协作设置」页画一张编排图。</div>
+            <div className="banner info">还没有协作组。请先到「智能体 → 协作组」画一张编排图。</div>
           ) : (
             <div className="stack" style={{ gap: 12 }}>
               <label className="field">
@@ -948,6 +1041,89 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               </label>
             </div>
           )}
+        </Modal>
+      )}
+
+      {budgetOpen && detail && (
+        <Modal
+          title="提高预算"
+          onClose={() => setBudgetOpen(false)}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setBudgetOpen(false)}>
+                取消
+              </button>
+              <button
+                className="btn primary"
+                onClick={() => void saveBudgetPatch()}
+                disabled={
+                  budgetDraft.max_steps <= detail.steps_used ||
+                  budgetDraft.max_tickets <= detail.tickets_used ||
+                  (budgetDraft.max_tokens !== 0 && budgetDraft.max_tokens <= usedTokens) ||
+                  budgetDraft.timeout_seconds < 30
+                }
+              >
+                保存
+              </button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="banner info">
+              当前已用 {detail.steps_used} 步 / {detail.tickets_used} 张工单 / {usedTokens.toLocaleString()} tok。
+              新上限必须大于已用量（token 填 0 表示不限）；保存后点「继续」就能从中断处接着跑。
+            </div>
+            <label className="field">
+              <span className="field-label">步数上限（当前 {detail.budget.max_steps}）</span>
+              <input
+                className="input"
+                type="number"
+                min={detail.steps_used + 1}
+                value={budgetDraft.max_steps}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_steps: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">工单上限（当前 {detail.budget.max_tickets}）</span>
+              <input
+                className="input"
+                type="number"
+                min={detail.tickets_used + 1}
+                value={budgetDraft.max_tickets}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_tickets: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                token 上限（当前 {detail.budget.max_tokens ? detail.budget.max_tokens.toLocaleString() : '不限'}；0 = 不限）
+              </span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={budgetDraft.max_tokens}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, max_tokens: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">运行时限·秒（当前 {detail.budget.timeout_seconds}）</span>
+              <input
+                className="input"
+                type="number"
+                min={30}
+                value={budgetDraft.timeout_seconds}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, timeout_seconds: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+          </div>
         </Modal>
       )}
     </div>

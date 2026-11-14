@@ -20,6 +20,7 @@ from . import engine, execution, graph as graph_service, store
 from .schemas import (
     GraphSpec,
     RunAttachmentUpload,
+    RunBudgetPatch,
     RunCreate,
     RunDetail,
     RunMessage,
@@ -367,6 +368,64 @@ async def get_run_file(
         media_type=attachments.guess_media_type(target.name),
         headers={"Cache-Control": "private, max-age=30"},
     )
+
+
+@router.post("/runs/{run_id}/budget")
+async def patch_run_budget(
+    run_id: str, payload: RunBudgetPatch, session: AsyncSession = Depends(get_session)
+) -> RunRead:
+    """运行中调高预算：步数/工单数/token 超限挂起后，调高上限再点「继续」就能救回来。
+
+    只允许调大（新值必须大于当前已用量），不允许把预算压到已用之下——
+    那样改完立刻又挂起，没有意义还容易误操作。
+    """
+    if bus.is_running(run_id) or execution.is_running(run_id):
+        raise HTTPException(status_code=409, detail="这次协作正在推进中，请等它挂起或完成后再调预算")
+    try:
+        run = await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+    budget = graph_service.budget_from_storable(run.budget)
+    steps_used = run.steps_used or 0
+    tickets_used = run.tickets_used or 0
+    tokens_used = sum(
+        v for v in (run.usage or {}).values() if isinstance(v, (int, float))
+    )
+    if payload.max_steps is not None:
+        if payload.max_steps <= steps_used:
+            raise HTTPException(
+                status_code=409,
+                detail=f"步数上限只能调到大于当前已用步数（已用 {steps_used} 步）",
+            )
+        budget.max_steps = payload.max_steps
+    if payload.max_tickets is not None:
+        if payload.max_tickets <= tickets_used:
+            raise HTTPException(
+                status_code=409,
+                detail=f"工单上限只能调到大于当前已用工单数（已用 {tickets_used} 张）",
+            )
+        budget.max_tickets = payload.max_tickets
+    if payload.max_tokens is not None:
+        if payload.max_tokens and payload.max_tokens <= tokens_used:
+            raise HTTPException(
+                status_code=409,
+                detail=f"token 上限只能调到大于当前已用量（已用 {int(tokens_used)}）或设为 0（不限）",
+            )
+        budget.max_tokens = payload.max_tokens
+    if payload.timeout_seconds is not None:
+        budget.timeout_seconds = payload.timeout_seconds
+
+    run.budget = graph_service.budget_to_storable(budget)
+    # 预算超限的挂起原因已经不再成立，清掉它让「继续」按钮语义干净。
+    if run.status == "waiting_user" and run.error and (
+        "上限" in run.error or "运行时限" in run.error
+    ):
+        run.error = None
+    run.updated_at = utcnow()
+    session.add(run)
+    await session.commit()
+    return await store.run_read(session, run)
 
 
 @router.post("/runs/{run_id}/resume")
