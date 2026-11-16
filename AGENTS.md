@@ -551,8 +551,11 @@ curl -s http://127.0.0.1:8010/api/health
 - 发版：改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 →
   `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
   tag 必须与 `__version__` 一致（`v0.44` ↔ `V0.44`），脚本会校验。
-- Docker：`docker/Dockerfile` 只封装环境（python + curl），应用代码在 `/app` 卷里
-  （`docker/entrypoint.sh` 空卷首启自动装最新 Release，requirements 变化时自动重装依赖）。
+- Docker：`docker/Dockerfile` 封装「环境 + 内核」（Python 3.11、Node 20、Claude Code / Codex /
+  Gemini CLI / Hermes），前端在镜像构建阶段用 `frontend/` 源码现构建（仓库不存 `frontend/dist`）。
+  应用代码在 `/app` 卷里：`docker/entrypoint.sh` 空卷首启自动装最新 Release（sha256 校验、安全解压、
+  校验标志文件，失败不静默降级），网络不可达 / 没有 Release 时才用镜像自带的 `/image-app` 兜底；
+  requirements 变化时自动重装依赖。
   版本级更新走「设置 → 关于」：下载 Release → `releases/<版本>/` → 原子切 `current` →
   `os.execv` 原地重启（uvicorn 是 PID 1，容器不退出）。
 - 源码模式（仓库里直接跑）：关于页只提示新版本，不给一键更新按钮 —— 升级走 git。

@@ -570,7 +570,9 @@ GitHub Release ──/releases/latest──▶ app/selfupdate.check_latest()   �
 实现在 `app/selfupdate.py`（叶子模块：标准库 + httpx + settings，不碰数据库以外的层），
 路由在 `api/update.py`（`update.*` SSE 信封是本模块自有的，不属于适配器事件协议）。
 发布侧 `scripts/release.sh`；Docker 形态 `docker/Dockerfile` + `docker/entrypoint.sh`
-（镜像只封装环境，应用代码在 `/app` 卷里，空卷首启自动装最新 Release）。
+（镜像封装环境与内核，前端在构建阶段用 `frontend/` 源码现构建；应用代码在 `/app` 卷里，
+空卷首启自动装最新 Release —— sha256 校验、安全解压、标志文件校验与 `selfupdate.py`
+同一套，校验失败 / 包不安全时拒绝安装，仅在网络不可达 / 没有 Release 时用镜像自带代码兜底）。
 
 ## 9. 已知边界
 

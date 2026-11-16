@@ -43,6 +43,19 @@ cd ArkSwarm
 ./scripts/dev.sh              # → API :8000 + Web UI :5173
 ```
 
+### Docker 部署（自带内核 + 一键更新）
+
+镜像封装「环境 + 内核」（Python、Node.js、Claude Code / Codex / Gemini CLI / Hermes 已预装，前端在镜像构建时现构建），应用代码放 `/app` 卷由更新器管理 —— **版本更新不需要重建镜像**，界面「设置 → 关于 → 检测更新」下载 Release 后 `os.execv` 原地重启，容器不退出。
+
+```bash
+docker compose -f docker/docker-compose.yml up -d   # → http://<本机IP>:8010
+```
+
+- 首次启动 entrypoint 自动从 GitHub 下载最新 Release 装进 `arkswarm-app` 卷（sha256 校验 + 安全解压，校验失败拒绝安装）；
+- 离线 / 没有 Release 时用镜像自带的代码兜底，容器照样能起来；
+- `arkswarm-data` 卷独立存放 SQLite / 工作区 / 密钥，重建镜像不丢；
+- 代理 / 私有 fork / 内核凭据：改 `docker/docker-compose.yml` 里的 `environment`（完整变量见 [`backend/.env.example`](./backend/.env.example)）。
+
 **环境变量**（全部可选）：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）、`ARKSWARM_DATA_DIR`（数据目录）——完整清单见 [`backend/.env.example`](./backend/.env.example)。
 
 首次启动自动播种：为本机**已安装**的智能体类型各创建一条官方网关，并配套一个起始智能体。数据落在 `backend/data/`（SQLite + 每个对话独立的工作目录）。
