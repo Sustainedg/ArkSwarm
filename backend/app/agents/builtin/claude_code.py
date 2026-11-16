@@ -43,7 +43,7 @@ from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, 
 
 # Claude Code 拒绝以 root 身份使用 bypassPermissions（"cannot be used with root/sudo
 # privileges for security reasons"），除非进程声明自己处在一个「有意的沙箱」里 —— 这是内核
-# 自带、官方容器场景使用的逃生口 ``IS_SANDBOX=1``。本控制台由 PyPanel 以 root 托管，用户又是
+# 自带、官方容器场景使用的逃生口 ``IS_SANDBOX=1``。本控制台可能由面板/容器以 root 托管，用户又是
 # 显式勾了 bypassPermissions（无人值守），所以这里替它补上；没勾 bypassPermissions 的节点不受影响。
 
 

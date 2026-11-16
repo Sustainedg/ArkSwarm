@@ -18,7 +18,7 @@
 | 后端入口 | `backend/app/main.py`（`uvicorn app.main:app --app-dir backend`） |
 | API 前缀 | `/api`，路由聚合在 `backend/app/api/__init__.py` |
 | **唯一扩展点** | `backend/app/agents/builtin/`（新增一个模块 + `@register_agent` 即接入新智能体） |
-| 端口/部署 | 监听 `0.0.0.0:8010`，由 PyPanel 服务 `e0c0620a5786` 托管（`scripts/serve.sh`） |
+| 端口/部署 | 监听 `0.0.0.0:8010`（`scripts/serve.sh`） |
 | 移动端 | **物理独立的第二条链接 `/m/`**：入口 `frontend/m/index.html` + `frontend/src/mobile/`，PWA 资产在 `frontend/public/m/`（manifest + Service Worker） |
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
@@ -472,7 +472,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 改动 | 必须验证 |
 | --- | --- |
 | 后端逻辑/适配器 | `pytest`（新增能力要有新测试） |
-| 前端任意改动 | `tsc --noEmit` + `npm run build` + **重启 PyPanel 服务**后自测页面 |
+| 前端任意改动 | `tsc --noEmit` + `npm run build` + **重启服务**后自测页面 |
 | 移动端 / PWA 改动 | 同上，并额外自测 `/m/` 深链可刷新、断网后外壳仍能打开（`pytest tests/test_mobile_web.py`） |
 | 事件协议/持久化 | 端到端跑一次真实对话（SSE 事件齐全、消息落库正确） |
 | 数据库结构 | 用**现有** `backend/data/magenta.db` 启动验证旧数据可读，不得重置 |
@@ -480,11 +480,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 技能（编目/分配/物化） | `pytest` 覆盖解析与物化；端到端跑一次真实对话确认技能生效、未分配的不出现 |
 | MCP（编目/分配/物化） | `pytest` 覆盖解析、物化、密钥只回掩码；端到端跑一次真实对话确认分配到的服务器写进隔离配置、未分配的不出现 |
 
-重启托管服务：
-```bash
-curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
-  -H "X-API-Key: <PyPanel Key>"
-```
+重启服务（本地部署时用你的进程管理器，或直接重新执行 `scripts/serve.sh`）。
 
 ---
 
@@ -545,6 +541,7 @@ curl -X POST http://127.0.0.1:8899/api/services/e0c0620a5786/restart \
 
 - 生产：`bash scripts/serve.sh`（首次会自动建 venv、缺 `frontend/dist` 时自动构建），监听 `0.0.0.0:8010`。
 - 环境变量：`MAGENTA_HOST`（默认 `0.0.0.0`）、`MAGENTA_PORT`（默认 `8010`）；
-  PyPanel 注入的 `HOME` 会导致 `claude` 报 "Not logged in"，故服务显式设 `HOME=/root`。
+  注意：某些进程管理器给子进程注入自己的 `HOME`，会导致 `claude` 报 "Not logged in"，
+  此时在服务环境里显式设 `HOME` 为真实用户家目录。
 - 前后端分离开发：`bash scripts/dev.sh` → API `:8000` + Web `:5173`。
 - 数据目录：`backend/data/`（SQLite `magenta.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。

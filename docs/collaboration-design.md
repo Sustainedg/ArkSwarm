@@ -742,7 +742,7 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
 bash scripts/test.sh              # pytest 全绿 + 前端 tsc
 cd frontend && npm run build      # 前端改动必须
 curl -s http://127.0.0.1:8010/api/health
-# 前端改完需重启 PyPanel 服务再自测画布与协作页
+# 前端改完需重启服务再自测画布与协作页
 ```
 
 **手工验收清单**：导航出现「协作」；画布能拖节点/连线/存图/刷新后还原；
