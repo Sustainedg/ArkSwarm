@@ -10,6 +10,7 @@ import type {
   MarketInstallResult,
   MarketKernel,
   MarketSkillList,
+  MessagePart,
   SkillDetail,
   SkillRescanResult, TestResult,
   TitleSettings,
@@ -325,6 +326,14 @@ export const api = {
   createCollabRun: (body: { team_id: string; title?: string; workspace_dir?: string | null }) =>
     request<CollabRun>('/api/collab/runs', { method: 'POST', body: JSON.stringify(body) }),
   getCollabRun: (id: string) => request<CollabRunDetail>(`/api/collab/runs/${id}`),
+  /**
+   * 单个步骤的完整过程（工具调用/思考/结果）。详情接口只带 `parts_count`，
+   * 点开「过程」折叠块时才按需取这一步的 parts——长跑一次能积累几十 MB 的工具流水。
+   */
+  getCollabStepParts: (runId: string, stepId: string) =>
+    request<{ step_id: string; run_id: string; parts: MessagePart[] }>(
+      `/api/collab/runs/${runId}/steps/${stepId}/parts`,
+    ),
   /** 上传协作附件：落到这次协作的工作目录，发消息时随聊天通道带上（同对话附件） */
   uploadCollabAttachment: (runId: string, body: { name: string; content_base64: string }) =>
     request<AttachmentRef>(`/api/collab/runs/${runId}/attachments`, {

@@ -178,7 +178,7 @@ Team {
   entry_key,              # 唯一入口节点（唯一能和用户对话的智能体）
   workspace_dir,          # 团队默认工作路径；新建协作任务时可覆盖，留空则用团队默认
   graph: { nodes[], edges[] },        # 可视化编排结果，整图 JSON 存储
-  budget: { max_steps, max_tickets, max_rounds_per_ticket, max_tokens, timeout_seconds }
+  budget: { max_steps, max_tickets, max_rounds_per_ticket, max_tokens, timeout_seconds, step_timeout_seconds }
 }
 
 Node {
@@ -474,7 +474,11 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
   当前步骤落库为 `cancelled`，运行置 `cancelled`，未完成工单保留（便于查看与续跑）。
 - 超时：`budget.timeout_seconds` 是两次进展之间的空闲时限，不是从创建时间起累计的整轮上限；
   每次用户输入与步骤落库都会刷新 `run.updated_at`，因此 `waiting_user` 期间隔再久，用户回来继续时
-  也会获得新的推进窗口。单步超时仍沿用 `settings.run_timeout_seconds`。
+  也会获得新的推进窗口。**单步限时**走独立字段 `budget.step_timeout_seconds`（默认 36000 秒，
+  `0 = 不限`）：执行层在 `prepare_step` / `prepare_chat` 时把它转成
+  `handle.timeout_seconds`（预算的 0 转成 -1），再交给 `runtime.runner.stream_run()`；
+  runner 的语义是正数 = 限死、负数 = 不限、0 = 沿用全局 `settings.run_timeout_seconds`
+  （该哨兵只服务对话域的 `ActiveRun` 默认值，协作域不会把 0 传下去）。
 - 预算超限挂起：步数 / 工单 / token 任一达到上限都会挂起并给出可读原因；用户可以
   `POST /api/collab/runs/{id}/budget` **只调高**对应上限（`max_tokens=0` 表示不限），
   清掉挂起原因后再 `POST /resume` 从原处续跑。新上限必须大于当前已用量，避免“调完立刻又挂起”。
@@ -510,6 +514,7 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 | `GET` | `/api/collab/runs?team_id=` | 运行列表（左栏） |
 | `POST` | `/api/collab/runs` | 创建运行 `{team_id, title?}`；目标由第一条 `messages` 给出（保持"用户在跟入口智能体对话"的语义） |
 | `GET` | `/api/collab/runs/{id}` | 运行详情（工单 + 时间线 + 状态 + 预算消耗） |
+| `GET` | `/api/collab/runs/{id}/steps/{step_id}/parts` | 单个步骤的完整 `parts`（懒加载步骤流水：详情只带 `parts_count`，点开「过程」时才取） |
 | `POST` | `/api/collab/runs/{id}/messages` | **SSE**：用户对入口智能体说话 / 回复提问 |
 | `GET` | `/api/collab/runs/{id}/stream` | **SSE**：订阅一次运行的实时事件（断开后重连、或在另一台设备上围观） |
 | `POST` | `/api/collab/runs/{id}/cancel` | 停止 |
@@ -1028,13 +1033,13 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | --- | --- |
 | 存储 | 新增 `collab_messages`，与 `collab_steps` 分开。聊天不会进入工单时间线、不增加 `steps_used`、不参与「谁把活交给了谁」的交接链 |
 | 并发 | 新增 `chat_bus` 与 `execution.chat_registry`：聊天有独立后台任务和 SSE 缓冲区，主流程仍按原来的串行引擎推进，两者互不覆盖；`/cancel` 会同时停掉两条通道 |
-| 空闲时也能聊 | 运行中发送自动走聊天；流程空闲（等待、出错、已收尾）时**默认也走聊天**，想继续跑工单再切到「推进任务」。有待回答的问题时自动切回推进，避免把答复误发到聊天里；用户仍可手动切去聊天问进度 |
+| 单一通道 | **所有用户消息都走聊天**（V0.43）：不再区分「推进任务 / 只聊天」两种模式。是否推进由入口智能体判断 —— 它认为需要把活干起来时在回复末尾附一个 `chat_advance` JSON 块，引擎把它带进 `collab.chat.finished` 的 `advance` 字段并落库进 `meta.advance`，前端渲染「推进任务」决策卡，用户点选后才把 `order`（或所选选项的 value）发进 `/messages` 进入工单通道。用户的答复、新任务、闲聊都从同一个输入框发出，选错模式就「没反应」的那类事故从结构上消失 |
 | 记忆隔离 | 这是 C5 的**唯一例外**：聊天历史只回放给入口智能体本人。其他智能体的 prompt 仍然只由 `prompt.build_step_prompt()` 从工单结构化字段拼出，绝不读取 `collab_messages` |
 | 进度问答 | CEO 拿到的是引擎生成的工单快照：标题、状态、当前持有者、目标/需求/验收、最近结论、产出文件、当前正在执行的岗位；不包含其他智能体的对话原文 |
 | 细化要求 | 用户明确补充/修改要求时，CEO 在正常回复后附一个 `chat_update` JSON 块。引擎解析后**只追加**到根工单与所有未收尾工单的 `brief`（去重），从下一轮步骤开始生效；聊天本身不能直接改工单状态、派活或建子工单 |
 | 失败处理 | 聊天解析失败只产生可读告警，不影响这条回复；执行失败会落库为 `error` 并推 `collab.chat.finished`；服务重启/叫停会把残留的 `streaming` 回复收尾为 `interrupted` |
 | API | `POST /api/collab/runs/{id}/chat`（SSE）、`GET /api/collab/runs/{id}/chat`、`GET /api/collab/runs/{id}/chat/stream`；`GET /runs/{id}` 同时返回 `chat_messages` 供首屏恢复 |
-| 事件 | `collab.chat.started` / `collab.chat.event` / `collab.chat.finished`，与工单信封同属协作层，不扩展 `agents/events.py` |
+| 事件 | `collab.chat.started` / `collab.chat.event` / `collab.chat.finished`（`advance` 字段带决策卡数据），与工单信封同属协作层，不扩展 `agents/events.py` |
 
 | 文件 | 内容 |
 | --- | --- |
@@ -1072,7 +1077,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | 编辑器 | 桌面与移动端：非入口节点的 `ask_user` 选项禁用，并提示只有入口节点可用；历史脏数据在下次改动时自动清掉 |
 | 不再静默 | 用户发了消息但没有任何 ready 工单时，产出 `collab.notice` 说明卡在哪、去哪重试，而不是静静结束 |
 | 失败可见 | 刷新运行详情时，从落库步骤重建「失败步骤」错误卡，保留一键重试入口（`makeCollabTurn(run, tickets, steps)`） |
-| 空闲默认聊天 | 输入框默认先聊天（有待回答的问题时自动走推进）；按钮可切「推进任务 / 只聊天」 |
+| 空闲默认聊天 | ~~输入框默认先聊天（有待回答的问题时自动走推进）；按钮可切「推进任务 / 只聊天」~~ → V0.43 起模式切换整个移除：所有消息都走聊天，推进由 CEO 判断 + 决策卡确认 |
 
 | 文件 | 内容 |
 | --- | --- |
@@ -1315,3 +1320,34 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 验证：`bash scripts/test.sh` → **246 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过；
 在 390×844 的 headless Chromium 上核对：协作页深 / 浅两套主题（底部只有输入框且贴底、办公室铺满主区、
 浅色底图与浅色卡片正确）、点工牌开进度卡、点「查看实时对话」开只读岗位会话、带附件发消息落库含附件说明。
+
+### M16 单一聊天通道：是否推进由 CEO 判断 + 决策卡（V0.43）
+
+**关注点**：协作输入区的「推进任务 / 普通对话」模式切换，把「这句话该走哪条线」的判断压在了
+用户身上 —— 选错模式就是「发消息没反应」（M8 修过一次：空闲默认聊天 + 自动切回推进，但
+按钮还在，误切仍然存在）。真正该做判断的是入口智能体本身：用户所有的话都先到它那里，
+它来决定「聊一聊」还是「需要把活干起来」。
+
+| 关注点 | 做法 |
+| --- | --- |
+| 单一通道 | 所有用户消息统一走 `/chat`（可带附件）：闲聊、问进度、补要求、新任务、答复待决策问题都从同一个输入框发出。模式切换控件、`effectiveWork` 判定、「空内容 = 继续推进」的空发语义全部移除；挂起后的续跑仍走「继续 / 重试 / 提高预算」按钮 |
+| 判断协议 | CEO 聊天 prompt 的回答规则改为三分类：聊一聊 → 正常回复；补要求 → `chat_update`；需要推进 → 在回复末尾附 `chat_advance` JSON 块（`reason` 一句话理由 / `order` 建议发出的完整指令 / `options` 2-6 条可点备选）。有待回答的问题时 `order` 必须能作为对那个问题的答复直接发出 |
+| 解析容错 | `parse_chat_advance()` 与 `chat_update` 同一套三级容错：解析失败只告警不判死；漏给 `options` 时从 `order` 的编号/项目符号恢复，拆不出来就补「按建议推进 / 我再想想」两张兜底卡；只给 `options` 没给 `order` 时取第一条可点选项当默认指令。`extract_chat_body()` 同时剥掉两种协议块 |
+| 数据通路 | `engine.consume_chat()` 解析后把 advance 写进 `collab_messages.meta.advance` 并随 `collab.chat.finished` 的 `advance` 字段下发（`protocol.chat_finished`）；聊天本身仍是旁路 —— 卡片给出来了，但没有任何工单被推进，步数不动 |
+| 决策卡 | 前端 `collabChat.ts` 归约出 `advance`，聊天结束后渲染「推进任务」卡片（品牌青调，与紫色的「需要你决定」卡区分）：点普通选项 → 把 `order` / 选项 value 发进 `/messages` 进入工单通道；点 `freeform` → 预填建议指令聚焦输入框；点「×」→ 当纯聊天关掉。刷新后从最近一条 CEO 聊天的 `meta.advance` 恢复，新一轮聊天开始时清空 |
+| 首条消息 | 任务还没开始时同样先走聊天：CEO 判断这是任务描述并给出 `chat_advance`，用户点「按建议推进」才创建根工单 —— 开场也统一走「对话 → 判断 → 卡片确认」这一条路 |
+| 两端同步 | 桌面 `CollabRunsPanel` 与移动 `MobileCollabRunPage` 同步改造：删掉 `idleMode` / `sendMode` 与切换控件（连同 `.collab-mode-switch` / `.m-mode-toggle` 死样式），新增 `.collab-advance-card` / `.m-advance-card` 决策卡样式 |
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/collab/tickets.py` | `CHAT_ADVANCE_FENCE` / `ChatAdvance` / `parse_chat_advance()` / `_advance_options_from_order()`；`extract_chat_body()` 剥掉两种块 |
+| `backend/app/collab/prompt.py` | `build_chat_prompt()` 的回答规则重写为三分类 + `chat_advance` 协议说明与示例；开场说明改为「由你判断」 |
+| `backend/app/collab/engine.py` | `consume_chat()` 解析 advance、写 `meta.advance`、随 `chat_finished` 下发 |
+| `backend/app/collab/protocol.py` | `chat_finished(..., advance=...)` |
+| `frontend/src/lib/collabChat.ts` | `ChatTurnState.advance` / `chatAdvanceFrom()` / `dismissChatAdvance()`；`chat.finished` 归约出决策卡与提示 |
+| `frontend/src/lib/types.ts` | `CollabEvent.advance` 类型 |
+| `frontend/src/components/CollabRunsPanel.tsx` / `mobile/pages/MobileCollabRunPage.tsx` | 单一发送通道、推进决策卡渲染与点选、恢复/关闭；删模式切换 |
+| `frontend/src/index.css` / `mobile/mobile.css` | 删模式切换死样式；新增推进决策卡样式（品牌青调） |
+| `backend/tests/test_collab_tickets.py` / `test_collab_engine.py` / `test_mobile_web.py` / `test_office_env.py` | `chat_advance` 纯函数用例（可选/解析/兜底卡/容错）；端到端「CEO 判断 → 决策卡 → 用户确认 → 推进发生」「漏 options 自动补卡」「纯聊天不产出 advance」；移动端守卫改为「无模式切换、有决策卡」；外壳缓存 v78 → v79 |
+
+验证：`bash scripts/test.sh` → **471 passed, 1 skipped**；`tsc --noEmit` 干净；`npm run build` 通过。

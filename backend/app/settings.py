@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     secret_key: str | None = None
     workspace_dir: Path | None = None
     cors_origins: str = "*"
+    #: 一次运行的默认时限（秒）：协作域经团队预算的 step_timeout_seconds 覆盖（0 = 不限），
+    #: 对话域沿用这里的全局默认。
     run_timeout_seconds: int = 3600
     #: 安装/更新/卸载智能体运行时（CLI 内核）的单次上限；比一次对话更宽松。
     provision_timeout_seconds: int = 900

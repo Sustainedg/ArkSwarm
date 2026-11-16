@@ -4,7 +4,7 @@ import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { api, collabRunFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
 import { useComposerDraft } from '../../lib/composerDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
-import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
+import { applyChatEvent, chatAdvanceFrom, dismissChatAdvance, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
 import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
@@ -78,12 +78,10 @@ export function MobileCollabRunPage() {
   const [menuOpen, setMenuOpen] = useState(false)
   //: 「提高预算」面板：步数/工单/token 超限挂起后，调高上限再继续
   const [budgetOpen, setBudgetOpen] = useState(false)
-  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0 })
+  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0, step_timeout_seconds: 0 })
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
   /** 与入口智能体的对话界面：默认不显示，点动画里的人物才弹出来 */
   const [chatOpen, setChatOpen] = useState(false)
-  /** 发送模式：对话（只和入口智能体聊）还是推进任务（把这句话接到工单上接着跑） */
-  const [sendMode, setSendMode] = useState<'chat' | 'work'>('chat')
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string; attachments: string[] } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
 
@@ -159,8 +157,11 @@ export function MobileCollabRunPage() {
   }, [])
 
   // SSE 只负责本设备发起的增量；运行详情以落库结果为准，并定时对齐其他设备。
+  // 运行中 5s 对齐一次；挂起/完成后没有新东西，降到 20s——详情接口再瘦也经不起高频空转，
+  // 移动端流量尤其金贵。
+  const pollInterval = (turn?.status ?? detail?.status) === 'running' ? 5000 : 20000
   useAutoRefresh(() => (runId ? load(runId) : undefined), {
-    intervalMs: 4000,
+    intervalMs: pollInterval,
     enabled: Boolean(runId) && !busy,
   })
 
@@ -286,7 +287,6 @@ export function MobileCollabRunPage() {
     setSelectedNodeKey(null)
     setChatOpen(false)
     setAttachments([])
-    setSendMode('chat')
     setChatTurn(emptyChatTurn())
     void (async () => {
       const next = await load(runId)
@@ -314,59 +314,70 @@ export function MobileCollabRunPage() {
   )
 
   /**
-   * 发一条消息，走哪条线由输入区的「对话 / 推进任务」决定（见 `effectiveWork`）。
-   *
-   * - **对话**：交给入口智能体的聊天通道；带附件时一定走这条 —— 附件只落在聊天这条线上
-   *   （工单推进的输入是结构化工单，没有附件位），而入口智能体本来就能把新要求同步进工单；
-   * - **推进任务**：把这句话接到工单上接着跑（`/messages`）；正文为空就是让领导者继续推进
-   *   （`/resume`，不追加用户消息）。
+   * 发一条消息：**全部走入口智能体的聊天通道**（可带附件）。
+   * 是否推进任务由 CEO 判断 —— 它认为需要推进时会在回复末尾给出 chat_advance，
+   * 界面渲染「推进任务」决策卡，用户点选后才把指令发进工单通道（`/messages`）。
+   * 用户不再手动区分「聊天 / 推进」两条线。
    */
-  const sendMessage = async (
-    text: string,
-    files: AttachmentRef[] = [],
-    mode: 'chat' | 'work' = 'chat',
-  ) => {
+  const sendMessage = async (text: string, files: AttachmentRef[] = []) => {
     if (!detail) return
     if (!text.trim() && files.length === 0) return
-    if (mode !== 'work' || files.length > 0) {
-      const paths = files.map((item) => item.rel_path)
-      // 直接进对话界面：发出的内容与回复都要看得见。
-      setChatOpen(true)
-      const pending = {
-        id: `local-user-${Date.now()}`,
-        text: text.trim(),
-        attachments: paths,
-      }
-      setPendingUser(pending)
-      setError(null)
-      /** 第一个事件到达即代表消息已落库：此刻把待发附件从输入区收走，而不是等整轮聊天跑完。 */
-      let cleared = paths.length === 0
-      try {
-        await subscribeChat(detail.id, (onEvent, signal) =>
-          streamPost<RunEvent>(
-            `/api/collab/runs/${detail.id}/chat`,
-            { content: text, attachments: paths },
-            (event) => {
-              if (!cleared) {
-                cleared = true
-                setAttachments([])
-              }
-              onEvent(event)
-            },
-            signal,
-          ),
-        )
-      } finally {
-        setPendingUser(null)
-      }
+    const paths = files.map((item) => item.rel_path)
+    // 直接进对话界面：发出的内容与回复都要看得见。
+    setChatOpen(true)
+    const pending = {
+      id: `local-user-${Date.now()}`,
+      text: text.trim(),
+      attachments: paths,
+    }
+    setPendingUser(pending)
+    setError(null)
+    /** 第一个事件到达即代表消息已落库：此刻把待发附件从输入区收走，而不是等整轮聊天跑完。 */
+    let cleared = paths.length === 0
+    try {
+      await subscribeChat(detail.id, (onEvent, signal) =>
+        streamPost<RunEvent>(
+          `/api/collab/runs/${detail.id}/chat`,
+          { content: text, attachments: paths },
+          (event) => {
+            if (!cleared) {
+              cleared = true
+              setAttachments([])
+            }
+            onEvent(event)
+          },
+          signal,
+        ),
+      )
+    } finally {
+      setPendingUser(null)
+    }
+  }
+
+  /**
+   * 用户在「推进任务」决策卡上点了确认：把 CEO 给出的推进指令发进工单通道。
+   * 任务还没开始时这就是开场的任务描述。
+   */
+  const advanceRun = (text: string) => {
+    if (!detail || busy || chatBusy || !text.trim()) return
+    setChatTurn((prev) => dismissChatAdvance(prev))
+    void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
+  /**
+   * 点「推进任务」决策卡上的选项：自由填写（或选项没带可发内容）只预填 CEO 建议并聚焦输入框，
+   * 不发送。freeform 的 value 是空串，不能拿 label 兜底，否则「我再想想」会被当成指令发进工单通道。
+   * 建议从 `advanceAsk` 取（含刷新后从落库 meta 恢复的卡片），不能只看 `chatTurn.advance`。
+   */
+  const answerAdvance = (choice: CollabChoice) => {
+    if (!detail || busy || chatBusy) return
+    if (choice.freeform || !choice.value.trim()) {
+      const suggestion = advanceAsk?.options.find((item) => item.value.trim())?.value ?? ''
+      if (suggestion) setDraft(suggestion)
+      sheetComposerRef.current?.focus()
       return
     }
-    // 推进任务：不补充内容就是「让领导者继续推进」，走 resume。
-    if (!text.trim()) {
-      await stream(`/api/collab/runs/${detail.id}/resume`, {})
-      return
-    }
-    await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+    advanceRun(choice.value.trim())
   }
 
   /** 输入区（共享组件）把读好的 base64 交回来，这里只负责调接口。 */
@@ -375,11 +386,11 @@ export function MobileCollabRunPage() {
     return api.uploadCollabAttachment(detail.id, { name, content_base64: contentBase64 })
   }
 
-  /** 输入区发出来的内容：按当前模式交给 `sendMessage`，附件由它决定何时清空。 */
+  /** 输入区发出来的内容：交给聊天通道，附件由它决定何时清空。 */
   const submitDraft = () => {
     const text = draft
     setDraft('')
-    void sendMessage(text, attachments, effectiveWork ? 'work' : 'chat')
+    void sendMessage(text, attachments)
   }
 
   /** 点动画里的人物：入口智能体打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
@@ -417,6 +428,7 @@ export function MobileCollabRunPage() {
       max_tickets: bump(detail.budget.max_tickets),
       max_tokens: detail.budget.max_tokens ? bump(detail.budget.max_tokens) : 0,
       timeout_seconds: detail.budget.timeout_seconds,
+      step_timeout_seconds: detail.budget.step_timeout_seconds ?? 36000,
     })
     setBudgetOpen(true)
   }
@@ -430,6 +442,7 @@ export function MobileCollabRunPage() {
         max_tickets: budgetDraft.max_tickets,
         max_tokens: budgetDraft.max_tokens,
         timeout_seconds: budgetDraft.timeout_seconds,
+        step_timeout_seconds: budgetDraft.step_timeout_seconds,
       })
     } catch (e) {
       reportError(e)
@@ -501,6 +514,9 @@ export function MobileCollabRunPage() {
               status: step.status,
               error: step.error,
               usage: step.usage,
+              // 详情不再携带 parts 本体：点开「过程」折叠块时按需拉这一步的完整流水
+              loadParts: () => api.getCollabStepParts(step.run_id, step.id).then((r) => r.parts),
+              partsCount: step.parts_count ?? 0,
             },
           }
         })(),
@@ -651,64 +667,31 @@ export function MobileCollabRunPage() {
     [detail, status, turn?.tickets],
   )
   /**
-   * 协作有两条线，走哪条由输入区的「对话 / 推进任务」决定：
-   *
-   * - **对话**：只和入口智能体聊，不推进工单（问进度、补要求），新要求会在下一轮步骤生效；
-   * - **推进任务**：把这句话接到工单上接着跑。
-   *
-   * 有两处没法自由选，界面会直接把选择权接管过去（对应的那一档同时禁用）：
-   * 任务还没开始（第一句就是任务描述，只能走推进）、工单正在推进（推进接口会 409，只能问进度）、
-   * 带着附件（工单通道没有附件位，只能随对话发）、有待回答的问题（答复必须走推进，否则会被当闲聊）。
+   * 与入口智能体只有一条线：所有消息都进聊天通道（`/chat`，可带附件）。
+   * 是否推进任务由 CEO 判断 —— 需要
+   * 推进时它给出 chat_advance，界面渲染「推进任务」决策卡，用户点选后才把指令
+   * 发进工单通道（`/messages`）。想从挂起点直接续跑，仍用「运行操作」里的继续 / 重试。
    */
-  const taskStarted = Boolean(detail?.goal)
   const usedTokens = rawUsageTotal(detail?.usage)
   const advancing = status === 'running' || busy
-  const modeToggleVisible = taskStarted && !advancing
-  const modeLockedByAttachments = attachments.length > 0
-  const modeLockedByAsk = modeToggleVisible && pendingAsks.length > 0
-  const effectiveWork =
-    !advancing && !modeLockedByAttachments && (!taskStarted || modeLockedByAsk || sendMode === 'work')
-  const showComposerHeader = modeToggleVisible || pendingAsks.length > 0 || busy || remoteRunning
+  //: 刷新后从最近一条 CEO 聊天的 meta 里恢复「推进任务」决策卡（live 流里已由事件带出）。
+  const persistedAdvance = useMemo(
+    () => chatAdvanceFrom(chatMessages.at(-1)?.meta?.advance),
+    [chatMessages],
+  )
+  const advanceAsk = chatTurn.advance ?? (chatTurn.live ? null : persistedAdvance ?? null)
+  const showComposerHeader = pendingAsks.length > 0 || advancing
 
   /**
-   * 输入框上方的那一条：左侧一个按钮切换发送模式（点一下「推进任务」，再点回「普通对话」），
-   * 右侧一句当前模式的说明；需要拍板 / 正在推进这类状态挂在下面。平时不硬塞东西。
+   * 输入框上方的那一条：需要拍板 / 正在推进这类状态挂在上面；平时不硬塞东西。
    */
-  const modeHint = modeLockedByAttachments
-    ? '附件只能随普通对话发送'
-    : modeLockedByAsk
-      ? '有待回答的问题：发送后继续推进'
-      : effectiveWork
-        ? draft.trim()
-          ? '发送后接着跑工单'
-          : '发送即让领导者继续推进'
-        : '不推进工单，只和入口智能体聊'
+  const modeHint = advancing
+    ? '正在推进：发消息只和入口智能体聊，不打断工单'
+    : '消息先给入口智能体；要不要推进由它判断并给出卡片'
   const composerHeader = showComposerHeader ? (
     // 外层容器由共享的 Composer 渲染（`.composer-head`），这里只放内容，别再套一层。
     <>
-      {modeToggleVisible && (
-        <div className="m-mode-row">
-          <button
-            type="button"
-            className={`m-mode-toggle${effectiveWork ? ' on' : ''}`}
-            aria-pressed={effectiveWork}
-            disabled={modeLockedByAsk || modeLockedByAttachments}
-            onClick={() => setSendMode(effectiveWork ? 'chat' : 'work')}
-            title={
-              modeLockedByAttachments
-                ? '附件只能随普通对话发送；去掉附件后可以切到推进任务'
-                : modeLockedByAsk
-                  ? '有待回答的问题，发送后会继续推进'
-                  : effectiveWork
-                    ? '点一下切回普通对话（不推进工单）'
-                    : '点一下切到推进任务（发送后接着跑工单；空着发就是继续推进）'
-            }
-          >
-            {effectiveWork ? '推进任务' : '普通对话'}
-          </button>
-          <span className="m-mode-hint dim small">{modeHint}</span>
-        </div>
-      )}
+      <span className="dim small">{modeHint}</span>
       {pendingAsks.length > 0 && (
         <button className="m-run-ask" onClick={() => setChatOpen(true)}>
           <span className="pill warn">需要你决定</span>
@@ -737,14 +720,11 @@ export function MobileCollabRunPage() {
       onSend={submitDraft}
       attachments={attachments}
       onAttachmentsChange={setAttachments}
-      /* 任务还没开始时先不显示回形针：第一句是任务描述，那条线只认正文 */
-      onUpload={taskStarted ? uploadAttachment : undefined}
+      onUpload={uploadAttachment}
       onStop={() => void stop()}
       busy={busy || chatBusy}
       disabled={!detail}
       submitOnEnter
-      /* 推进任务模式下空着也能发：那就是「让领导者继续推进」（等价于 /resume） */
-      allowEmptySend={effectiveWork}
       onNotice={(text) => {
         // 输入区的自述性提示（语音识别失败之类）：不是可自愈的网络中断，别被下一次刷新顺手撤掉。
         networkErrorRef.current = false
@@ -763,7 +743,7 @@ export function MobileCollabRunPage() {
         <div className="m-empty">
           <div className="m-empty-icon">🤝</div>
           <p>和领导者开始对话</p>
-          <p className="dim small">先告诉领导者这次协作要完成什么。</p>
+          <p className="dim small">先说你想做什么，要不要推进由领导者判断并给你一张卡片。</p>
         </div>
       )}
       {timeline.map((entry) => (
@@ -772,6 +752,39 @@ export function MobileCollabRunPage() {
       {liveEntry && <MessageView message={liveEntry.message} avatar={liveEntry.avatar} label={liveEntry.label} />}
       {chatLiveEntry && (
         <MessageView message={chatLiveEntry.message} avatar={chatLiveEntry.avatar} label={chatLiveEntry.label} />
+      )}
+      {advanceAsk && !busy && !chatBusy && (
+        <div className="m-ask-card m-advance-card">
+          <div className="row" style={{ gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="pill brand">推进任务</span>
+            <span className="dim small">CEO 判断这条消息需要推进，点选后进入工单通道</span>
+          </div>
+          <div className="m-ask-question">{advanceAsk.question}</div>
+          <div className="m-ask-options">
+            {advanceAsk.options.map((choice, index) => (
+              <button
+                key={`advance-${index}-${choice.label}`}
+                className={`m-ask-option${choice.freeform ? ' freeform' : ''}`}
+                onClick={() => answerAdvance(choice)}
+              >
+                <span>{choice.label}</span>
+                {choice.description && <span className="dim small">{choice.description}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <span className="dim small" style={{ flex: 1 }}>
+              也可以直接在下方输入调整后的指令。
+            </span>
+            <button
+              className="banner-close"
+              aria-label="关掉这张决策卡"
+              onClick={() => setChatTurn((prev) => dismissChatAdvance(prev))}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       )}
       {pendingAsks.map((ask) => (
         <div key={ask.ticketId} className="m-ask-card">
@@ -1033,6 +1046,20 @@ export function MobileCollabRunPage() {
                 value={budgetDraft.timeout_seconds}
                 onChange={(event) =>
                   setBudgetDraft((prev) => ({ ...prev, timeout_seconds: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                单步限时·秒（当前 {detail.budget.step_timeout_seconds ?? 36000}；0 = 不限；从下一步起算）
+              </span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={budgetDraft.step_timeout_seconds}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, step_timeout_seconds: Number(event.target.value) || 0 }))
                 }
               />
             </label>

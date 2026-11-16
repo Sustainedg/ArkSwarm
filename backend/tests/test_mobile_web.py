@@ -592,27 +592,31 @@ def test_collab_run_is_the_office_with_the_chat_hidden_behind_a_tap():
 
 
 @needs_frontend
-def test_collab_composer_lets_the_user_pick_chat_or_advance():
-    """协作输入区有一个模式按钮：点一下「推进任务」、再点回「普通对话」，由用户说了算。
+def test_collab_composer_routes_every_message_through_the_leader():
+    """协作输入区没有「聊天 / 推进」模式切换：所有消息统一发进入口智能体的聊天通道。
 
-    两个模式各自接一条线（`/chat` 与 `/messages`）；推进模式下空着也能发，那就是「继续推进」（`/resume`）。
+    是否推进任务由 CEO 判断：它认为需要推进时输出 `chat_advance`，界面渲染「推进任务」
+    决策卡，用户点选后才把指令发进工单通道（`/messages`）。用户不再手动选线。
     """
     page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
-    assert "m-mode-toggle" in page, "输入框上方要有一个切换模式的按钮"
-    assert "setSendMode(effectiveWork ? 'chat' : 'work')" in page, "再点一次要切回普通对话"
-    assert "aria-pressed" in page, "按钮要能看出当前是哪一种模式"
-    assert "推进任务" in page and "普通对话" in page, "两种模式的名字要写清楚"
-    # 模式 → 通道：对话走 /chat（可带附件），推进走 /messages，空内容是 /resume。
+    # 模式切换控件彻底移除：不再有「普通对话 / 推进任务」按钮，也不再有 effectiveWork 判定。
+    assert "m-mode-toggle" not in page, "输入区不该再有切换模式的按钮（路由交给 CEO 判断）"
+    assert "setSendMode" not in page and "effectiveWork" not in page, "发送不再分两条线"
+    assert "allowEmptySend" not in page, "没有「空内容 = 继续推进」这回事了（继续走 /resume 按钮）"
+    # 单一通道：日常消息全部走 /chat（可带附件）；推进指令只在决策卡点选后走 /messages。
     for path in ("/chat`", "/messages`", "/resume`"):
-        assert path in page, f"协作输入区缺少 {path} 这条通道"
-    assert "effectiveWork" in page, "发哪条线要由当前模式判定（不要按状态猜）"
-    assert "allowEmptySend={effectiveWork}" in page, "推进模式下空内容也要能发（= 继续推进）"
+        assert path in page, f"协作页缺少 {path} 这条通道"
+    # CEO 判断 → 决策卡：advance 事件的还原 + 点选后进入工单通道。
+    assert "chatAdvanceFrom" in page, "要能从聊天事件/落库 meta 还原推进决策卡"
+    assert "advanceAsk" in page and "answerAdvance" in page, "要渲染决策卡并支持点选推进"
+    assert "m-advance-card" in page, "决策卡要有自己的样式类（与「需要你决定」卡区分）"
     assert "sheetComposerRef" in page and "inputRef={inputRef}" in page, (
         "自由答复要聚焦到当前可见的输入框（共享组件必须支持传入 textarea ref）"
     )
-    # 选中态在样式表里有对应的一档高亮。
+    # 模式切换的死样式一并清掉；决策卡的样式要在。
     css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
-    assert ".m-mode-toggle.on" in css, "mobile.css 缺少按钮的选中态"
+    assert ".m-mode-toggle" not in css, "模式切换按钮的死样式要删干净"
+    assert ".m-advance-card" in css, "mobile.css 缺少推进决策卡的样式"
 
 
 @needs_frontend

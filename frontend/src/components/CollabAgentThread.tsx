@@ -4,6 +4,7 @@
  * 装配成统一的 `ConversationThread` 条目，气泡外观与单聊、协作主对话完全一致。
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { api } from '../lib/api'
 import { ACTIONS, ticketStateMeta } from '../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../lib/collabStream'
 import { stepHasOutput, stepStatusHint, type CollabAgentProgress } from '../lib/collabProgress'
@@ -206,6 +207,9 @@ export function CollabAgentThread({
         status: step.status,
         error: step.error,
         usage: step.usage,
+        // 详情不再携带 parts 本体：点开「过程」折叠块时按需拉这一步的完整流水
+        loadParts: () => api.getCollabStepParts(step.run_id, step.id).then((r) => r.parts),
+        partsCount: step.parts_count ?? 0,
       },
       avatar: node.avatar,
       label: node.label,

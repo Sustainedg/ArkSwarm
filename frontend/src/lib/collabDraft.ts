@@ -93,6 +93,7 @@ export const DEFAULT_BUDGET: CollabBudget = {
   max_rounds_per_ticket: 3,
   max_tokens: 0,
   timeout_seconds: 3600,
+  step_timeout_seconds: 36000,
 }
 
 /** 后端 BudgetSpec 有 ge 约束：这里按同一套下限夹紧，避免保存时才 422 */
@@ -103,6 +104,7 @@ export function clampBudget(budget: CollabBudget): CollabBudget {
     max_rounds_per_ticket: Math.max(1, budget.max_rounds_per_ticket),
     max_tokens: Math.max(0, budget.max_tokens),
     timeout_seconds: Math.max(30, budget.timeout_seconds),
+    step_timeout_seconds: Math.max(0, budget.step_timeout_seconds ?? 36000),
   }
 }
 

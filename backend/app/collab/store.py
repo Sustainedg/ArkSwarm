@@ -466,17 +466,62 @@ async def run_read(session: AsyncSession, run: CollabRun) -> RunRead:
 
 
 async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
+    """运行详情：工单、步骤与聊天记录。
+
+    步骤只带**摘要**（``content`` / ``gist``）与 ``parts_count``，不带完整 ``parts``：
+    一次长跑的 ``parts``（每次工具调用的入参出参、思考）能到几十 MB，全量返回会让
+    「打开协作任务」慢到不可用。完整过程由 ``GET /runs/{id}/steps/{step_id}/parts``
+    按需加载（见 :func:`step_parts`）。
+    """
     team = await session.get(CollabTeam, run.team_id)
     tickets = (
         await session.execute(
             select(CollabTicket).where(CollabTicket.run_id == run.id).order_by(CollabTicket.created_at)
         )
     ).scalars().all()
+    # 步骤摘要列先单独取；parts 仍然要再读一遍（省的是 HTTP 传输体，不是读库）：
+    # parts_count / tool_names 必须从 parts 本体数出来，SQLite 里没有现成的统计列。
+    step_columns = (
+        CollabStep.id,
+        CollabStep.run_id,
+        CollabStep.ticket_id,
+        CollabStep.agent_profile_id,
+        CollabStep.role_key,
+        CollabStep.duty,
+        CollabStep.sequence,
+        CollabStep.action,
+        CollabStep.target_key,
+        CollabStep.status,
+        CollabStep.content,
+        CollabStep.gist,
+        CollabStep.usage,
+        CollabStep.error,
+        CollabStep.audit,
+        CollabStep.started_at,
+        CollabStep.finished_at,
+    )
     steps = (
         await session.execute(
-            select(CollabStep).where(CollabStep.run_id == run.id).order_by(CollabStep.sequence)
+            select(*step_columns).where(CollabStep.run_id == run.id).order_by(CollabStep.sequence)
         )
-    ).scalars().all()
+    ).all()
+    parts_rows = (
+        await session.execute(
+            select(CollabStep.id, CollabStep.parts).where(CollabStep.run_id == run.id)
+        )
+    ).all()
+    parts_counts: dict[str, int] = {}
+    tool_names: dict[str, list[str]] = {}
+    for step_id, parts in parts_rows:
+        parts_counts[step_id] = len(parts or [])
+        names: list[str] = []
+        for part in parts or []:
+            name = part.get("name")
+            if part.get("kind") == "tool_call" and name and name not in names:
+                names.append(name)
+                if len(names) >= 6:
+                    break
+        tool_names[step_id] = names
     profile_names = {
         profile.id: profile.name
         for profile in (await session.execute(select(AgentProfile))).scalars().all()
@@ -500,7 +545,9 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
                 status=step.status,
                 content=step.content,
                 gist=step.gist,
-                parts=step.parts or [],
+                parts=[],
+                parts_count=parts_counts.get(step.id) or 0,
+                tool_names=tool_names.get(step.id) or [],
                 usage=step.usage or {},
                 error=step.error,
                 audit=step.audit or {},
@@ -511,3 +558,15 @@ async def run_detail(session: AsyncSession, run: CollabRun) -> RunDetail:
         ],
         chat_messages=await list_chat_messages(session, run.id),
     )
+
+
+async def step_parts(session: AsyncSession, run_id: str, step_id: str) -> list[dict[str, Any]]:
+    """单个步骤的完整过程（懒加载）。步骤不存在或不属于这次运行时抛 :class:`RunNotFound`。"""
+    row = (
+        await session.execute(
+            select(CollabStep.parts).where(CollabStep.id == step_id, CollabStep.run_id == run_id)
+        )
+    ).first()
+    if row is None:
+        raise RunNotFound(f"找不到协作步骤：{step_id}")
+    return row[0] or []

@@ -20,6 +20,7 @@ from .db import SessionLocal, init_db
 from .runtime import availability as availability_service
 from .runtime import skills as skill_service
 from .settings import get_settings
+from .transport.gzip import SSEExemptGZipMiddleware
 
 logger = logging.getLogger("magenta")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -73,6 +74,12 @@ app = FastAPI(
 )
 
 _settings = get_settings()
+# gzip 放在 CORS 内侧：先压缩再补 CORS 头，浏览器才能正确解压跨域响应。
+# 压缩只对普通响应生效：大 JSON（协作详情等）从几十 MB 裸传降到约 1/3。
+# SSE（text/event-stream）由 SSEExemptGZipMiddleware 显式豁免：starlette 的
+# GZipResponder 用 zlib 的 Z_NO_FLUSH 写流，中间分块取不到数据，事件、心跳与
+# 打字机 delta 会被攒到响应收尾才下发；豁免后消息原样逐块透传，实时到达。
+app.add_middleware(SSEExemptGZipMiddleware, minimum_size=1024, compresslevel=6)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_origin_list,

@@ -268,15 +268,9 @@ function asArtifacts(value: unknown): { key: string; label: string }[] {
   return items
 }
 
-/** 一步里调用过的工具名（只取名字，去重、限量——看板不重复展示完整工具流水）。 */
+/** 一步里调用过的工具名（后端已从 parts 提取好、去重限量——看板不展示完整工具流水）。 */
 function toolNamesOf(step: CollabStep): string[] {
-  const names: string[] = []
-  for (const part of step.parts ?? []) {
-    if (part.kind !== 'tool_call' || !part.name) continue
-    if (!names.includes(part.name)) names.push(part.name)
-    if (names.length >= 6) break
-  }
-  return names
+  return step.tool_names ?? []
 }
 
 /* ------------------------------------------------------------------ *

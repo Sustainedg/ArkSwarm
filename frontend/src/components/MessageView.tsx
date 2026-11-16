@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import type { MessagePart } from '../lib/types'
 import { isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
 import { MarkdownView } from './MarkdownView'
@@ -13,6 +14,14 @@ export interface RenderMessage {
   usage?: Record<string, number>
   streaming?: boolean
   logs?: string[]
+  /**
+   * 历史消息的「过程」折叠块懒加载器：不传表示 parts 已在手上（流式消息、单聊）。
+   * 传了而 parts 为空时，点开折叠块才拉取这一步的完整工具流水——
+   * 协作详情接口不再携带 parts 本体（长跑一次几十 MB），按需取。
+   */
+  loadParts?: () => Promise<MessagePart[]>
+  /** 懒加载模式下这一步有多少过程片段（折叠行上显示「工具调用 N」）。 */
+  partsCount?: number
 }
 
 export function MessageView({ message, avatar, label }: { message: RenderMessage; avatar?: string; label?: string }) {
@@ -43,7 +52,8 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
 
   // 连续的「思考 / 工具调用 / 工具结果」收成一个可展开的「过程」块：
   // 默认折叠成一行，点开才按原顺序逐条查看；正文原样内联，整条时间线顺序不变。
-  const blocks = groupTimeline(timeline)
+  // 历史消息（parts 懒加载）点开时才去拉完整工具流水。
+  const blocks = groupTimeline(timeline, message)
 
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
@@ -66,7 +76,13 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
               <MarkdownView text={block.part.text ?? ''} />
             </div>
           ) : (
-            <ProcessFold key={`process-${block.items[0].index}`} items={block.items} />
+            <ProcessFold
+              key={`process-${block.items[0]?.index ?? 'lazy'}`}
+              items={block.items}
+              lazy={block.lazy}
+              loadParts={message.loadParts}
+              partsCount={message.partsCount}
+            />
           ),
         )}
 
@@ -94,10 +110,10 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
 type TimelineItem = { part: MessagePart; index: number }
 type TimelineBlock =
   | { kind: 'text'; part: MessagePart; index: number }
-  | { kind: 'process'; items: TimelineItem[] }
+  | { kind: 'process'; items: TimelineItem[]; lazy?: boolean }
 
 /** 把时间线切成「正文」与「连续的过程片段」两种块，只做归并、不改变先后顺序。 */
-function groupTimeline(timeline: MessagePart[]): TimelineBlock[] {
+function groupTimeline(timeline: MessagePart[], message: RenderMessage): TimelineBlock[] {
   const blocks: TimelineBlock[] = []
   timeline.forEach((part, index) => {
     if (part.kind === 'text') {
@@ -108,31 +124,85 @@ function groupTimeline(timeline: MessagePart[]): TimelineBlock[] {
     if (last && last.kind === 'process') last.items.push({ part, index })
     else blocks.push({ kind: 'process', items: [{ part, index }] })
   })
+  // 懒加载的历史消息：parts 为空、且时间线里没有任何过程类部件，但后端说这一步有过程
+  // （parts_count > 0）时，造一个占位过程块，让折叠行可见（「工具调用 N」），点开时才拉取真实内容。
+  // 判据不能用 timeline.length === 0 —— 正文会合成一个 text 段，协作历史步骤的 content 通常非空，
+  // 那样占位块永远不会出现，parts_count 指向的工具流水界面就不可达。
+  if (message.loadParts && !timeline.some((part) => part.kind !== 'text') && (message.partsCount ?? 0) > 0) {
+    blocks.push({ kind: 'process', items: [], lazy: true })
+  }
   return blocks
 }
 
 /**
  * 一段连续的「思考 / 工具调用 / 工具结果」：默认收成一行，点标题栏展开后按原顺序列出每一步，
  * 每一步还能再单独点开看详情。这样一轮几十次工具调用也只是一行，不再「每次调用都占一条」。
+ *
+ * 历史消息（协作步骤）的 parts 是懒加载的：折叠行只显示数量，第一次点开才拉完整流水，
+ * 拉过的缓存在组件里，收起再展开不重复请求。
  */
-function ProcessFold({ items }: { items: TimelineItem[] }) {
-  const thinking = items.filter((item) => item.part.kind === 'thinking').length
-  const tools = items.length - thinking
-  const summary = [thinking > 0 ? `思考 ${thinking}` : '', tools > 0 ? `工具调用 ${tools}` : '']
+function ProcessFold({ items, lazy, loadParts, partsCount }: {
+  items: TimelineItem[]
+  lazy?: boolean
+  loadParts?: () => Promise<MessagePart[]>
+  partsCount?: number
+}) {
+  const [loaded, setLoaded] = useState<MessagePart[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const load = useMemo(
+    () => async () => {
+      if (!loadParts || loaded || loading) return
+      setLoading(true)
+      setFailed(false)
+      try {
+        setLoaded(await loadParts())
+      } catch {
+        setFailed(true)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [loadParts, loaded, loading],
+  )
+  const show = lazy ? (loaded ?? []) : items.map((item) => item.part)
+  const thinking = show.filter((part) => part.kind === 'thinking').length
+  const tools = show.length - thinking
+  const summary = [
+    thinking > 0 ? `思考 ${thinking}` : '',
+    tools > 0 ? `工具调用 ${tools}` : '',
+  ]
     .filter(Boolean)
     .join(' · ')
   return (
-    <details className="tool-card process-fold">
+    <details
+      className="tool-card process-fold"
+      onToggle={(event) => {
+        if ((event.target as HTMLDetailsElement).open) void load()
+      }}
+    >
       <summary>
         <DisclosureCaret />
         <span className="tool-chip">过程</span>
-        <span className="dim">{summary}</span>
+        <span className="dim">
+          {lazy
+            ? loading
+              ? '加载中…'
+              : failed
+                ? '加载失败，点开重试'
+                : loaded
+                  ? summary || '（没有过程片段）'
+                  : `工具调用 ${partsCount ?? '…'}`
+            : summary}
+        </span>
         <span className="dim small process-fold-hint">点击展开</span>
       </summary>
       <div className="process-fold-body">
-        {items.map(({ part, index }) => (
+        {show.map((part, index) => (
           <TimelinePart key={`${part.kind}-${index}`} part={part} cursor={false} />
         ))}
+        {lazy && loading && <div className="dim" style={{ padding: '6px 2px' }}>正在拉取这一步的完整过程…</div>}
+        {lazy && failed && <div className="banner err" style={{ margin: 0 }}>拉取过程失败，请重试。</div>}
       </div>
     </details>
   )

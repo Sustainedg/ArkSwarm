@@ -315,17 +315,25 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   样式必须完全一致（样式仍是两端各一份：共享段逐字一致，有守卫测试
   `tests/test_mobile_web.py::test_composer_styles_are_identical_on_both_ends`）。
   附件与语音的提示通过 `onNotice` 回给页面，输入框不自己弹东西。页面自己的
-  语义（协作的模式切换按钮、状态条）走 `header` 插槽传进去；要允许空发送就开
+  语义（协作的状态提示、「需要你决定」入口、推进中的停止条）走 `header` 插槽传进去；要允许空发送就开
   `allowEmptySend`（别为这类差异复制一份输入区，也别把页面语义塞进组件）。
   **回复期间继续输入**：开 `queueWhenBusy`，框里有内容时右侧按钮从「停止」变成「排队发送」，
   发送只是交给页面入队（队列状态与「本轮结束自动发出」的 effect 在页面里，组件不持有队列），
   两个按钮不并存 —— 别为此再写一套输入框。
 - **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，
   时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口智能体工牌**才出来
-  （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。输入区上方有一个**模式按钮**（不是两档
-  选项框）：点一下切「推进任务」，再点回「普通对话」。推进模式下空内容直接发 = 让领导者继续推进
-  （`/resume`）；工单正在推进（接口 409）、带着附件（工单通道没有附件位）、有待回答的问题时，
-  界面直接接管模式并把按钮置灰；任务还没开始时先不显示按钮（第一句就是任务描述）。
+  （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。
+- **协作运行页只有一条聊天通道，没有「模式」可选**：所有消息统一发进入口智能体的聊天通道
+  （`POST /api/collab/runs/{id}/chat`，可带附件），**不要**再加「普通对话 / 推进任务」模式按钮
+  或两档选项框 —— 用户手动选错模式就是「发消息没反应」，这正是它被删掉的原因。是否推进任务由
+  **CEO（入口智能体）判断**：它认为需要推进时在回复末尾输出 `chat_advance` 块，系统解析后渲染
+  一张「推进任务」决策卡（`reason` / `order` / `options`；桌面 `collab-advance-card`、移动
+  `m-advance-card`）；**用户点选后**才把 `order`（或所选选项的 `value`）作为消息发进工单通道
+  （`POST /api/collab/runs/{id}/messages`）。任务还没开始时，这第一条指令就是开场的任务描述。
+  `freeform` 选项**只把建议指令预填进输入框并聚焦，不直接发送**。决策卡数据来自
+  `collab.chat.finished` 的 `advance` 字段，刷新后从落库 meta 的 `advance` 恢复；点选 / 关掉 /
+  下一轮聊天开始即清空，`busy` / `chatBusy` 期间不显示。**空内容不能发送**；从挂起点续跑仍走
+  「继续」（`/resume`），不做「空发送 = 继续推进」的特例。
 - **附件能力下沉在 `backend/app/attachments.py`**：校验 / 落盘 / 拼提示词只有一份，对话
   （`POST /api/conversations/{id}/attachments`）与协作（`POST /api/collab/runs/{id}/attachments`）
   都调用它，别再各写一份 base64 解码与目录穿越校验。

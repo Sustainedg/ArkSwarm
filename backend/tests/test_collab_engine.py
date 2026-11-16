@@ -22,9 +22,10 @@ from sqlmodel import select
 
 from app.collab.bus import bus
 from app.collab.schemas import Duty, EdgeKind, EdgeSpec, GraphSpec, NodeSpec
+from app.collab import execution as execution_service
 from app.collab import graph as graph_service
 from app.collab.store import recover_interrupted
-from app.collab.tables import CollabRun, CollabStep, CollabTicket
+from app.collab.tables import CollabRun, CollabStep, CollabTeam, CollabTicket
 from app.db import SessionLocal
 from app.models import AgentProfile, Gateway, utcnow
 from helpers import collab_options
@@ -700,6 +701,58 @@ async def test_resume_after_created_at_exceeds_timeout(client: httpx.AsyncClient
     assert [s["role_key"] for s in final["steps"]][:5] == ["user", "ceo", "user", "ceo", "user"]
 
 
+async def test_zero_step_timeout_reaches_runner_as_unlimited(
+    client: httpx.AsyncClient, tmp_path: Path, monkeypatch
+):
+    """预算单步限时 0 = 不限：执行层必须转成负数交给 runner，而不是落回全局默认。
+
+    ``BudgetSpec.step_timeout_seconds`` 只允许非负数，用户能表达「不限」的唯一写法就是 0；
+    而 runner 沿用的哨兵是「0 = 全局默认、负数 = 不限」。两者之间必须显式翻译，
+    否则界面写着「不限」，实际却在 ``settings.run_timeout_seconds`` 到点时被掐断。
+    """
+    scenario = await make_scenario({"ceo": [{"action": "done", "remark": "完成"}]}, tmp_path)
+    body = team_body(scenario["agent_profiles"])
+    body["budget"] = {
+        "max_steps": 10,
+        "max_tickets": 5,
+        "max_rounds_per_ticket": 2,
+        "max_tokens": 0,
+        "timeout_seconds": 600,
+        "step_timeout_seconds": 0,
+    }
+    created = await client.post("/api/collab/teams", json=body)
+    assert created.status_code == 201, created.text
+    run = await client.post("/api/collab/runs", json={"team_id": created.json()["id"]})
+    assert run.status_code == 201, run.text
+
+    captured: list[int] = []
+
+    async def fake_stream_run(definition, ctx, handle):
+        captured.append(handle.timeout_seconds)
+        for _ in ():  # 只关心传下去的时限，不必真的产出事件
+            yield
+
+    monkeypatch.setattr(execution_service, "stream_run", fake_stream_run)
+
+    async with SessionLocal() as session:
+        run_row = await session.get(CollabRun, run.json()["id"])
+        assert run_row is not None
+        team = await session.get(CollabTeam, run_row.team_id)
+        assert team is not None
+        node = graph_service.entry_node(graph_service.from_storable(team.graph), team.entry_key)
+        assert node is not None
+
+        prepared = await execution_service.prepare_chat(
+            session, run=run_row, node=node, prompt="先聊两句"
+        )
+        assert prepared.step_timeout_seconds == -1
+        handle = execution_service.registry.register(run_row.id, "step-unlimited", "CEO")
+        _ = [event async for event in execution_service.stream_step(prepared, handle)]
+        assert handle.timeout_seconds == -1
+
+    assert captured == [-1]
+
+
 async def test_done_run_can_be_reopened_by_user_follow_up(client: httpx.AsyncClient, tmp_path: Path):
     """运行完成后，用户继续找入口智能体时应重新打开根工单，而不是只落一条无人响应的消息。"""
     script = {
@@ -1070,6 +1123,121 @@ async def test_chat_stays_available_after_the_run_is_done(
 
     chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
     assert chat_prompts and "运行状态：done" in chat_prompts[0]
+
+
+async def test_chat_advance_renders_decision_card_then_user_confirms(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """单一聊天通道：CEO 判断「需要推进」时给出 chat_advance，用户确认后才进工单通道。
+
+    流程：任务已收尾 → 用户说「再加一个导出按钮」→ CEO 判断要推进并附 chat_advance →
+    chat.finished 事件带 advance、落库 meta 带 advance（刷新后卡片可恢复）→
+    用户点选后把 order 发进 /messages → 根工单重新打开、推进发生。
+    """
+    chat_reply = (
+        "这个需要真正改代码，我建议直接派下去。\n"
+        "```chat_advance\n"
+        "{\n"
+        '  "reason": "新功能要动手实现，聊天里做不了",\n'
+        '  "order": "再加一个导出按钮：登录页右上角，点击导出当前配置",\n'
+        '  "options": [\n'
+        '    {"label": "按建议推进", "value": "再加一个导出按钮：登录页右上角，点击导出当前配置"},\n'
+        '    {"label": "我来补充", "value": "", "freeform": true}\n'
+        "  ]\n"
+        "}\n"
+        "```\n"
+    )
+    reopen = {"action": "done", "remark": "已按新要求交付"}
+    script = {**FULL_SCRIPT, "ceo:chat": [chat_reply], "ceo": [HANDOFF, CLOSING, reopen]}
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
+    before = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert before["status"] == "done"
+    steps_before = before["steps_used"]
+
+    response = await client.post(
+        f"/api/collab/runs/{run_id}/chat", json={"content": "再加一个导出按钮"}
+    )
+    assert response.status_code == 200, response.text
+    events = await read_sse(response)
+    finished = next(event for event in events if event["type"] == "collab.chat.finished")
+    assert finished["status"] == "complete"
+    # 事件里带决策卡数据：前端据此渲染「推进任务」卡片。
+    advance = finished["advance"]
+    assert advance and advance["reason"] == "新功能要动手实现，聊天里做不了"
+    assert "导出按钮" in advance["order"]
+    assert [item["label"] for item in advance["options"]] == ["按建议推进", "我来补充"]
+    assert advance["options"][1]["freeform"] is True
+    # 聊天本身仍是旁路：卡片给出来了，但还没有推进任何工单。
+    idle = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert idle["status"] == "done"
+    assert idle["steps_used"] == steps_before
+    # 落库 meta 里有同样的 advance：刷新后前端能恢复这张卡。
+    leader = idle["chat_messages"][-1]
+    assert leader["meta"]["advance"] == advance
+    # 协议块不进正文：用户看到的只是 CEO 的人话。
+    assert "chat_advance" not in leader["content"]
+    assert "我建议直接派下去" in leader["content"]
+
+    # 用户点「按建议推进」→ order 原样发进工单通道 → 根工单重新打开并推进。
+    confirm = await client.post(
+        f"/api/collab/runs/{run_id}/messages", json={"content": advance["order"]}
+    )
+    assert confirm.status_code == 200, confirm.text
+    await read_sse(confirm)
+
+    final = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert final["status"] == "done"
+    assert final["steps_used"] > steps_before
+    user_steps = [step for step in final["steps"] if step["role_key"] == "user"]
+    assert any("导出按钮" in step["content"] for step in user_steps)
+
+    # 聊天 prompt 教过 CEO 这套判断规则。
+    chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
+    assert chat_prompts and "chat_advance" in chat_prompts[0]
+    # 聊天里只属于 CEO 的回复原文不会传给任何工单智能体（用户的推进指令是工单的
+    # 合法输入，当然会出现；CEO 的人话不该出现）。
+    work_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" not in text]
+    assert all("我建议直接派下去" not in text for text in work_prompts)
+
+
+async def test_chat_advance_without_options_is_salvaged(
+    client: httpx.AsyncClient, tmp_path: Path
+):
+    """CEO 只给 order 没给 options 时自动补兜底卡；纯聊天不产出 advance。"""
+    reply = (
+        "这活我来安排。\n"
+        "```chat_advance\n"
+        '{"reason": "需要改代码", "order": "把导出按钮加到登录页右上角"}\n'
+        "```\n"
+    )
+    script = {**FULL_SCRIPT, "ceo:chat": [reply, "只是聊两句，不用动工单。"]}
+    scenario = await make_scenario(script, tmp_path)
+    run_id, _ = await start_run(client, scenario["agent_profiles"], "把登录页改成暗色主题")
+
+    first = await client.post(
+        f"/api/collab/runs/{run_id}/chat", json={"content": "加个导出按钮"}
+    )
+    assert first.status_code == 200, first.text
+    events = await read_sse(first)
+    finished = next(event for event in events if event["type"] == "collab.chat.finished")
+    advance = finished["advance"]
+    assert advance and advance["order"] == "把导出按钮加到登录页右上角"
+    # 漏给 options：自动补出「按建议推进 / 我再想想」，卡片永远可点。
+    labels = [item["label"] for item in advance["options"]]
+    assert labels == ["按建议推进", "我再想想"]
+    assert advance["options"][1]["freeform"] is True
+
+    # 纯聊天（问进度 / 闲聊）：不带 advance，什么都不渲染。
+    second = await client.post(
+        f"/api/collab/runs/{run_id}/chat", json={"content": "辛苦了，聊两句"}
+    )
+    assert second.status_code == 200, second.text
+    events = await read_sse(second)
+    finished = next(event for event in events if event["type"] == "collab.chat.finished")
+    assert finished["advance"] is None
+    detail = (await client.get(f"/api/collab/runs/{run_id}")).json()
+    assert "advance" not in detail["chat_messages"][-1]["meta"]
 
 
 async def test_chat_attachment_lands_in_workspace_and_reaches_the_prompt(

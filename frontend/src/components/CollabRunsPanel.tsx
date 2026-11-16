@@ -14,7 +14,7 @@ import { Modal } from './Modal'
 import { api, ApiError, streamGet, streamPost } from '../lib/api'
 import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
-import { applyChatEvent, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
+import { applyChatEvent, chatAdvanceFrom, dismissChatAdvance, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
 import { composeWithAttachments } from '../lib/media'
 import { useComposerDraft } from '../lib/composerDraft'
 import {
@@ -64,8 +64,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(runId)
   const [busy, setBusy] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
-  //: 空闲时的发送模式：auto = 有待回答的问题就走工单、否则只聊天；chat/work 是用户手动指定。
-  const [idleMode, setIdleMode] = useState<'auto' | 'chat' | 'work'>('auto')
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [startTeamId, setStartTeamId] = useState('')
@@ -79,7 +77,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const [reconnecting, setReconnecting] = useState(false)
   //: 「提高预算」弹窗：步数/工单/token 超限挂起后，调高上限再继续
   const [budgetOpen, setBudgetOpen] = useState(false)
-  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0 })
+  const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0, step_timeout_seconds: 0 })
 
   const abortRef = useRef<AbortController | null>(null)
   const chatAbortRef = useRef<AbortController | null>(null)
@@ -106,6 +104,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   )
   const chatMessages = detail?.chat_messages ?? []
   const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
+  const status = turn?.status ?? detail?.status ?? 'waiting_user'
 
   const loadRuns = useCallback(async () => {
     try {
@@ -143,11 +142,14 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   }, [])
 
   // 两台设备看同一次协作时，以落库详情为准定时对齐；本机 SSE 推进期间暂停轮询。
+  // 运行中 5s 对齐一次（另一台设备发起的动作要能尽快出现）；挂起/完成后没有新东西，
+  // 降到 20s——详情接口再瘦也经不起 3s 一次的空转，尤其远程访问时。
+  const pollInterval = status === 'running' ? 5000 : 20000
   useAutoRefresh(() => (runId ? loadDetail(runId) : undefined), {
-    intervalMs: 3000,
+    intervalMs: pollInterval,
     enabled: Boolean(runId) && !busy,
   })
-  useAutoRefresh(loadRuns, { intervalMs: 8000 })
+  useAutoRefresh(loadRuns, { intervalMs: 15000 })
 
   useEffect(() => {
     const node = scrollRef.current
@@ -283,7 +285,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     setDetail(null)
     setTurn(null)
     setChatTurn(emptyChatTurn())
-    setIdleMode('auto')
     setError(null)
     void (async () => {
       const next = await loadDetail(runId)
@@ -308,39 +309,62 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   }
 
   /**
-   * 把一句话发给入口智能体：主流程在跑、选了对话模式、或带附件时走独立聊天通道；
-   * 否则接到工单上继续推进。附件只落聊天线（工单推进的输入是结构化单据，没有附件位）。
+   * 把一句话发给入口智能体：**全部走独立聊天通道**（可带附件）。
+   * 是否推进任务由 CEO 判断：它认为需要推进时会在回复末尾给出 chat_advance，
+   * 界面渲染「推进任务」决策卡，用户点选后才把指令发进工单通道（`/messages`）。
+   * 用户不再手动区分「聊天 / 推进」两条线。
    */
   const sendMessage = async (text: string, files: AttachmentRef[] = []) => {
     if (!detail || (!text.trim() && files.length === 0)) return
-    if (status === 'running' || busy || chatActive || files.length > 0) {
-      const paths = files.map((item) => item.rel_path)
-      const pending = { id: `local-user-${Date.now()}`, text: text.trim(), attachments: paths }
-      setPendingUser(pending)
-      setError(null)
-      // 第一个事件到达即代表消息已落库：此刻把附件从输入区收走，而不是等整轮聊天跑完。
-      let cleared = paths.length === 0
-      try {
-        await subscribeChat(detail.id, (onEvent, signal) =>
-          streamPost<RunEvent>(
-            `/api/collab/runs/${detail.id}/chat`,
-            { content: text, attachments: paths },
-            (event) => {
-              if (!cleared) {
-                cleared = true
-                setAttachments([])
-              }
-              onEvent(event)
-            },
-            signal,
-          ),
-        )
-      } finally {
-        setPendingUser(null)
-      }
+    const paths = files.map((item) => item.rel_path)
+    const pending = { id: `local-user-${Date.now()}`, text: text.trim(), attachments: paths }
+    setPendingUser(pending)
+    setError(null)
+    // 第一个事件到达即代表消息已落库：此刻把附件从输入区收走，而不是等整轮聊天跑完。
+    let cleared = paths.length === 0
+    try {
+      await subscribeChat(detail.id, (onEvent, signal) =>
+        streamPost<RunEvent>(
+          `/api/collab/runs/${detail.id}/chat`,
+          { content: text, attachments: paths },
+          (event) => {
+            if (!cleared) {
+              cleared = true
+              setAttachments([])
+            }
+            onEvent(event)
+          },
+          signal,
+        ),
+      )
+    } finally {
+      setPendingUser(null)
+    }
+  }
+
+  /**
+   * 用户在「推进任务」决策卡上点了确认（或直接发自由指令）：把 CEO 给出的推进
+   * 指令发进工单通道。任务还没开始时这就是开场的任务描述。
+   */
+  const advanceRun = (text: string) => {
+    if (!detail || busy || chatBusy || !text.trim()) return
+    setChatTurn((prev) => dismissChatAdvance(prev))
+    void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+  }
+
+  /**
+   * 点决策卡上的选项：自由填写（或选项没带可发内容）只预填 CEO 建议并聚焦输入框，不发送。
+   * freeform 的 value 是空串，不能拿 label 兜底 —— 否则「我再想想」这四个字会被当成指令发进工单通道。
+   */
+  const answerAdvance = (choice: CollabChoice) => {
+    if (!detail || busy || chatBusy) return
+    if (choice.freeform || !choice.value.trim()) {
+      const suggestion = advanceAsk?.options.find((item) => item.value.trim())?.value ?? ''
+      if (suggestion) setDraft(suggestion)
+      composerRef.current?.focus()
       return
     }
-    await stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
+    advanceRun(choice.value.trim())
   }
 
   /** 上传待发附件：走协作运行自己的附件目录，与移动端共用同一个接口。 */
@@ -405,6 +429,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       max_tickets: bump(detail.budget.max_tickets),
       max_tokens: detail.budget.max_tokens ? bump(detail.budget.max_tokens) : 0,
       timeout_seconds: detail.budget.timeout_seconds,
+      step_timeout_seconds: detail.budget.step_timeout_seconds ?? 36000,
     })
     setBudgetOpen(true)
   }
@@ -418,6 +443,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
         max_tickets: budgetDraft.max_tickets,
         max_tokens: budgetDraft.max_tokens,
         timeout_seconds: budgetDraft.timeout_seconds,
+        step_timeout_seconds: budgetDraft.step_timeout_seconds,
       })
     } catch (e) {
       setError(describe(e))
@@ -466,6 +492,9 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               status: step.status,
               error: step.error,
               usage: step.usage,
+              // 详情不再携带 parts 本体：点开「过程」折叠块时按需拉这一步的完整流水
+              loadParts: () => api.getCollabStepParts(step.run_id, step.id).then((r) => r.parts),
+              partsCount: step.parts_count ?? 0,
             },
       })),
       ...chatMessages.map((row) => ({
@@ -557,7 +586,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       : []),
   ]
 
-  const status = turn?.status ?? detail?.status ?? 'waiting_user'
   // 详情轮询发现运行又推进起来了（例如另一台设备点了继续），而本页已经退订：
   // 自动补一次订阅，让「协作进度 / 岗位实时对话」重新有逐字输出可看。
   useEffect(() => {
@@ -596,15 +624,12 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
         : [],
     [detail, status, turn?.tickets],
   )
-  //: 任务开始后、主流程空闲时，默认先聊天：问进度/补要求不会白跑一步工单。
-  //: auto 模式下「有待回答的问题」自动走推进任务，避免把答复误发进聊天。
-  const idle = Boolean(detail?.goal) && status !== 'running' && !busy
-  const chatActive = idle && (idleMode === 'chat' || (idleMode === 'auto' && pendingAsks.length === 0))
-  //: 任务在跑时消息只能走聊天通道；带附件时也只能走聊天。两种情况都只禁用「推进任务」。
-  const modeLocked = status === 'running' || busy
-  const modeLockedByAttachments = attachments.length > 0
-  const workDisabled = modeLocked || modeLockedByAttachments
-  const modeIsChat = modeLocked || chatActive || modeLockedByAttachments
+  //: 刷新后从最近一条 CEO 聊天的 meta 里恢复「推进任务」决策卡（live 流里已由事件带出）。
+  const persistedAdvance = useMemo(
+    () => chatAdvanceFrom(chatMessages.at(-1)?.meta?.advance),
+    [chatMessages],
+  )
+  const advanceAsk = chatTurn.advance ?? (chatTurn.live ? null : persistedAdvance ?? null)
   const runUsage = summarizeUsage([detail?.usage])
   const usedTokens = rawUsageTotal(detail?.usage)
   // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
@@ -776,6 +801,45 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               />
             </div>
 
+            {advanceAsk && !busy && !chatBusy && (
+              <div className="collab-ask-stack">
+                <div className="collab-ask-card collab-advance-card">
+                  <div className="collab-ask-head">
+                    <span className="pill brand">推进任务</span>
+                    <span className="dim small">CEO 判断这条消息需要推进，点选后进入工单通道</span>
+                  </div>
+                  <div className="collab-ask-question">{advanceAsk.question}</div>
+                  <div className="collab-ask-options">
+                    {advanceAsk.options.map((choice, index) => (
+                      <button
+                        key={`advance-${index}-${choice.label}`}
+                        className={`collab-ask-option${choice.freeform ? ' freeform' : ''}`}
+                        onClick={() => answerAdvance(choice)}
+                      >
+                        <span className="collab-ask-option-label">{choice.label}</span>
+                        {choice.description && (
+                          <span className="collab-ask-option-desc">{choice.description}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                    <span className="dim small" style={{ flex: 1 }}>
+                      也可以直接在下方输入调整后的指令。
+                    </span>
+                    <button
+                      className="banner-close"
+                      aria-label="关掉这张决策卡"
+                      title="不推进：只把它当聊天"
+                      onClick={() => setChatTurn((prev) => dismissChatAdvance(prev))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {pendingAsks.length > 0 && (
               <div className="collab-ask-stack">
                 {pendingAsks.map((ask) => (
@@ -849,50 +913,10 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                   submitOnEnter
                   onNotice={setError}
                   inputRef={composerRef}
-                  inputLabel="对入口智能体说点什么"
-                  header={
-                    detail.goal ? (
-                      <div className="composer-mode-row">
-                        <div
-                          className="collab-mode-switch"
-                          role="group"
-                          aria-label="发送模式"
-                          title={
-                            modeLockedByAttachments
-                              ? '附件只能随对话发送；去掉附件后可切到推进任务'
-                              : modeLocked
-                                ? '任务运行中：这一轮消息只走对话，推进任务空闲后可用'
-                                : undefined
-                          }
-                        >
-                          <button
-                            type="button"
-                            className={modeIsChat ? '' : 'active'}
-                            aria-pressed={!modeIsChat}
-                            disabled={workDisabled}
-                            onClick={() => setIdleMode('work')}
-                            title={
-                              modeLockedByAttachments
-                                ? '附件只能随对话发送；去掉附件后可切到推进任务'
-                                : modeLocked
-                                  ? '任务运行中，等这一轮结束才能推进'
-                                  : '推进任务：发送后会继续跑工单'
-                            }
-                          >
-                            推进任务
-                          </button>
-                          <button
-                            type="button"
-                            className={modeIsChat ? 'active' : ''}
-                            aria-pressed={modeIsChat}
-                            onClick={() => setIdleMode('chat')}
-                            title="对话：只和入口智能体聊，不推进工单"
-                          >
-                            对话
-                          </button>
-                        </div>
-                      </div>
-                    ) : undefined
+                  inputLabel={
+                    detail.goal
+                      ? '对入口智能体说点什么'
+                      : '告诉入口智能体你想做什么'
                   }
                   footer={
                     runUsage.messages > 0 ? (
@@ -1120,6 +1144,20 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                 value={budgetDraft.timeout_seconds}
                 onChange={(event) =>
                   setBudgetDraft((prev) => ({ ...prev, timeout_seconds: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">
+                单步限时·秒（当前 {detail.budget.step_timeout_seconds ?? 36000}；0 = 不限；对正在跑的那步不生效，从下一步起算）
+              </span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={budgetDraft.step_timeout_seconds}
+                onChange={(event) =>
+                  setBudgetDraft((prev) => ({ ...prev, step_timeout_seconds: Number(event.target.value) || 0 }))
                 }
               />
             </label>

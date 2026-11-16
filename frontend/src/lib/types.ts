@@ -742,6 +742,8 @@ export interface CollabBudget {
   max_rounds_per_ticket: number
   max_tokens: number
   timeout_seconds: number
+  /** 单步限时（秒，0 = 不限）：一个工单步骤 / 聊天回复的执行上限 */
+  step_timeout_seconds?: number
 }
 
 /**
@@ -753,6 +755,7 @@ export interface CollabBudgetPatch {
   max_tickets?: number
   max_tokens?: number
   timeout_seconds?: number
+  step_timeout_seconds?: number
 }
 
 export interface CollabIssue {
@@ -861,7 +864,15 @@ export interface CollabStep {
   content: string
   /** 引擎派生的结构化摘要（下游看到的是它，而不是 content） */
   gist: string
+  /**
+   * 详情接口不再携带完整过程（长跑一次能积累几十 MB 的工具流水）：
+   * `parts` 恒为空数组，`parts_count` 说明这一步有多少过程片段；
+   * 点开「过程」折叠块时用 `api.getCollabStepParts` 按需加载。
+   */
   parts: MessagePart[]
+  parts_count?: number
+  /** 这一步调用过的工具名（后端从 parts 提取、去重限量；看板/进度展示用） */
+  tool_names?: string[]
   usage: Record<string, number>
   error?: string | null
   audit: Record<string, unknown>
@@ -986,4 +997,10 @@ export interface CollabEvent {
     fields?: string[]
     update?: Record<string, unknown>
   }
+  /** CEO 判断这条消息需要推进任务时携带的决策卡数据（chat_finished） */
+  advance?: {
+    reason?: string
+    order?: string
+    options?: CollabChoice[]
+  } | null
 }

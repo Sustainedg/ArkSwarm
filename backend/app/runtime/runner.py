@@ -124,18 +124,22 @@ async def stream_run(
     ctx: AgentContext,
     run: ActiveRun,
 ) -> AsyncIterator[AgentEvent]:
-    """按 runtime 分发到 CLI 或 API 的执行路径。"""
+    """按 runtime 分发到 CLI 或 API 的执行路径。
+
+    ``run.timeout_seconds``（协作域的「单步限时」）为正时覆盖全局 ``run_timeout_seconds``；
+    0 表示沿用全局默认，负数表示本次不限时。
+    """
     yield run_started(run.id)
+    limit = run.timeout_seconds if run.timeout_seconds else get_settings().run_timeout_seconds
+    deadline = None if limit < 0 else asyncio.get_event_loop().time() + limit
     if definition.runtime is Runtime.API:
-        settings = get_settings()
-        deadline = asyncio.get_event_loop().time() + settings.run_timeout_seconds
         timed_out = False
         async for event in definition.stream(ctx):
             if run.cancel_event.is_set():
                 break
-            if asyncio.get_event_loop().time() > deadline:
+            if deadline is not None and asyncio.get_event_loop().time() > deadline:
                 timed_out = True
-                yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
+                yield error(f"运行已超过 {limit} 秒上限，被强制终止")
                 break
             yield scrub_event(event, _run_secrets(ctx))
         if timed_out:
@@ -143,7 +147,7 @@ async def stream_run(
         else:
             yield run_finished("cancelled" if run.cancel_event.is_set() else "ok")
         return
-    async for event in stream_cli_run(definition, ctx, run):
+    async for event in stream_cli_run(definition, ctx, run, timeout_seconds=limit):
         yield event
 
 
@@ -151,7 +155,20 @@ async def stream_cli_run(
     definition: AgentDefinition,
     ctx: AgentContext,
     run: ActiveRun,
+    *,
+    timeout_seconds: int | None = None,
 ) -> AsyncIterator[AgentEvent]:
+    """执行一次 CLI 内核运行。
+
+    ``timeout_seconds`` 为正时按它限死这次运行；0 / None 表示沿用全局
+    ``run_timeout_seconds``；负数表示本次不限时（协作预算把单步限时设为「不限」）。
+    """
+    if not timeout_seconds:
+        timeout_seconds = get_settings().run_timeout_seconds
+    #: None 表示不限时
+    deadline: float | None = (
+        None if timeout_seconds < 0 else asyncio.get_event_loop().time() + timeout_seconds
+    )
     agent_run: AgentRun = definition.create_run(ctx)
     try:
         invocation = agent_run.build_invocation()
@@ -253,8 +270,6 @@ async def stream_cli_run(
             stderr_chunks.append(line.decode("utf-8", "replace") + "\n")
 
     stderr_task = asyncio.create_task(drain_stderr())
-    settings = get_settings()
-    deadline = asyncio.get_event_loop().time() + settings.run_timeout_seconds
     cancelled = False
 
     try:
@@ -266,9 +281,9 @@ async def stream_cli_run(
                 cancelled = True
                 process.kill()
                 break
-            if asyncio.get_event_loop().time() > deadline:
+            if deadline is not None and asyncio.get_event_loop().time() > deadline:
                 process.kill()
-                yield error(f"运行已超过 {settings.run_timeout_seconds} 秒上限，被强制终止")
+                yield error(f"运行已超过 {timeout_seconds} 秒上限，被强制终止")
                 break
             try:
                 # 进程已退出就缩短轮询间隔，尽快确认残余读完、别把收尾拖成整秒级。

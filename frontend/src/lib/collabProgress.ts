@@ -235,8 +235,13 @@ function snippet(text: string | null | undefined, limit = 72): string {
 }
 
 /** 已落库的一步是否已经有可展示的产出（正文或结构化部件）。 */
-export function stepHasOutput(step: { content?: string | null; parts?: unknown[] | null }): boolean {
-  return Boolean((step.content ?? '').trim()) || (step.parts?.length ?? 0) > 0
+export function stepHasOutput(step: {
+  content?: string | null
+  parts?: unknown[] | null
+  parts_count?: number
+}): boolean {
+  // 详情接口不再携带 parts 本体（懒加载），因此「有没有过程」要看 parts_count。
+  return Boolean((step.content ?? '').trim()) || (step.parts?.length ?? 0) > 0 || (step.parts_count ?? 0) > 0
 }
 
 /**

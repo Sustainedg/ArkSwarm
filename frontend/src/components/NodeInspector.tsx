@@ -405,6 +405,7 @@ function TeamPanel({
           <NumberField label="单工单返工上限" value={draft.budget.max_rounds_per_ticket} onChange={(v) => setBudget({ max_rounds_per_ticket: v })} />
           <NumberField label="token 上限（0=不限）" value={draft.budget.max_tokens} onChange={(v) => setBudget({ max_tokens: v })} />
           <NumberField label="运行时限（秒）" value={draft.budget.timeout_seconds} onChange={(v) => setBudget({ timeout_seconds: v })} />
+          <NumberField label="单步限时·秒（0=不限）" value={draft.budget.step_timeout_seconds ?? 36000} onChange={(v) => setBudget({ step_timeout_seconds: v })} />
         </div>
         <span className="field-help">任何一项超限都会挂起并明确提示，不会静默烧钱。</span>
       </Section>

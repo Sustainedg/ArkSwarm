@@ -11,10 +11,17 @@
  *   底图那把转椅上，跟着底图一起缩放；在干活就一直敲键盘、冒气泡，闲置就趴着睡。
  * - **工牌**：挂在人头顶，写着这是谁（CEO / CTO / 程序员…）与她的职责；缩得太小就只剩头像气泡。
  * - **挂钟**：钟面画在底图里，指针由 `OfficeClock` 按真实时间转——秒针一秒一跳。
+ *
+ * 拟人化 v2（`docs/architecture.md` §11）：本组件是**唯一持有 tick 与媒体查询的容器**——
+ * 一个 5 秒的定时器推进 `tick`，`useMemo` 调 `lib/collabEnv.ts` 的纯函数派生「工位 key → 环境行为」，
+ * 再把结果贴成 `.office-worker` 上的 `--seed / --env-x / --env-y / data-seat-key` 与
+ * `.collab-station-scene` 上的 `env-* / fidget-*` 类名。派生结果与上一格完全一致就不 `setState`，
+ * 免得每 5 秒白渲染一次整张地图。
  */
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { DUTIES } from '../lib/collabDraft'
 import { useThemeMode } from '../lib/theme'
+import { ENV_TICK_MS, envScheduleFor, workerSeed, type EnvState } from '../lib/collabEnv'
 import {
   OFFICE_HEIGHT, OFFICE_STATUS_TONE, OFFICE_WIDTH, OFFICE_ZOOM, clampOffice, fitOffice, focusOffice,
   officeChairPoint, officeToViewport, panOffice, seatFlowRows, zoomOffice, zoomOfficeAt,
@@ -57,6 +64,21 @@ function pointerSpread(points: { x: number; y: number }[]): number {
   return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
 }
 
+/** 相邻两格的派生结果是否完全一样（一样就不必重渲染整张地图）。 */
+function sameSchedule(
+  next: Record<string, EnvState>,
+  previous: Record<string, EnvState> | null,
+): boolean {
+  if (!previous) return false
+  const keys = Object.keys(next)
+  if (keys.length !== Object.keys(previous).length) return false
+  return keys.every((key) => {
+    const a = next[key]
+    const b = previous[key]
+    return !!b && a.env === b.env && a.fidget === b.fidget && a.dx === b.dx && a.dy === b.dy
+  })
+}
+
 export function CollabOfficeMap({ nodes, edges, onOpenNode, initialView = 'whole' }: Props) {
   const { theme } = useThemeMode()
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -75,6 +97,44 @@ export function CollabOfficeMap({ nodes, edges, onOpenNode, initialView = 'whole
 
   const seats = useMemo(() => seatFlowRows(buildFlowRows(nodes, edges)), [nodes, edges])
   const focused = seats.find((seat) => seat.node.key === focusedKey) ?? null
+
+  // —— 拟人化 v2 的调度：tick + 无障碍媒体查询 → 每个工位这一格的环境行为（§11.2 / §11.5）——
+  const [tick, setTick] = useState(0)
+  const [reducedMotion, setReducedMotion] = useState(false)
+  const tickRef = useRef(0)
+  const seatsRef = useRef(seats)
+  const reducedRef = useRef(reducedMotion)
+  seatsRef.current = seats
+  reducedRef.current = reducedMotion
+
+  const schedule = useMemo(
+    () => envScheduleFor(seats, tick, reducedMotion),
+    [seats, tick, reducedMotion],
+  )
+  /** 当前已经贴到 DOM 上的那一格：下一格派生结果与它相同就不 `setState`。 */
+  const appliedRef = useRef<Record<string, EnvState> | null>(null)
+  useEffect(() => {
+    appliedRef.current = schedule
+  }, [schedule])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const next = tickRef.current + 1
+      tickRef.current = next
+      const candidate = envScheduleFor(seatsRef.current, next, reducedRef.current)
+      if (sameSchedule(candidate, appliedRef.current)) return
+      setTick(next)
+    }, ENV_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const sync = () => setReducedMotion(query.matches)
+    sync()
+    query.addEventListener('change', sync)
+    return () => query.removeEventListener('change', sync)
+  }, [])
 
   // 画布尺寸变了（打开对话侧栏、转屏…）：没动过就重新铺满居中，动过就只把视角收回合法范围。
   useEffect(() => {
@@ -205,10 +265,24 @@ export function CollabOfficeMap({ nodes, edges, onOpenNode, initialView = 'whole
         <div className="office-map-people" aria-hidden="true">
           {seats.map((seat) => {
             const chair = officeChairPoint(seat.desk)
+            const seed = workerSeed(seat.node.key)
+            const env = schedule[seat.node.key]
             return (
-              <span key={seat.node.key} className="office-worker" style={{ left: chair.x, top: chair.y }}>
-                <span className={`collab-station-scene state-${seat.node.state}${seat.node.isLive ? ' live' : ''}`}>
-                  <CollabWorker state={seat.node.state} />
+              <span
+                key={seat.node.key}
+                className="office-worker"
+                data-seat-key={seat.node.key}
+                style={{
+                  left: chair.x,
+                  top: chair.y,
+                  '--seed': seed,
+                  // 走位以**画布像素**挂在父层上（自定义属性会继承），身体层再按 --office-scale 换算。
+                  '--env-x': `${env?.dx ?? 0}px`,
+                  '--env-y': `${env?.dy ?? 0}px`,
+                } as CSSProperties}
+              >
+                <span className={`collab-station-scene state-${seat.node.state}${seat.node.isLive ? ' live' : ''}${env?.env ? ` env-${env.env}` : ''}${env?.fidget ? ` fidget-${env.fidget}` : ''}`}>
+                  <CollabWorker state={seat.node.state} env={env?.env ?? null} seed={seed} />
                 </span>
               </span>
             )

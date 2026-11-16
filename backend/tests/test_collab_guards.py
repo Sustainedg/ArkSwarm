@@ -272,6 +272,7 @@ async def test_run_detail_reports_budget(client: httpx.AsyncClient, tmp_path: Pa
         "max_rounds_per_ticket": 2,
         "max_tokens": 0,
         "timeout_seconds": 600,
+        "step_timeout_seconds": 36000,
     }
     team = await create_team(client, linear_graph(env["agent_profiles"]), budget=budget)
     run_id, _ = await start_run(client, team["id"], "把登录页改成暗色主题")

@@ -58,6 +58,7 @@ from .tickets import (
     ensure_ask_options,
     extract_body,
     merge_chat_update,
+    parse_chat_advance,
     parse_chat_update,
     parse_work_order,
     resolve_order_targets,
@@ -608,6 +609,7 @@ async def consume_chat(
     warning: str | None = None
     applied: dict[str, Any] = {}
     meta: dict[str, Any] = {}
+    advance_payload: dict[str, Any] | None = None
 
     if status == "complete" and error_text is None:
         if not raw_text.strip():
@@ -622,6 +624,12 @@ async def consume_chat(
             if applied:
                 meta["update"] = update.to_dict()
                 meta["applied"] = applied
+        advance, advance_warning = parse_chat_advance(raw_text)
+        if advance_warning:
+            warning = f"{warning}；{advance_warning}" if warning else advance_warning
+        if advance is not None:
+            advance_payload = advance.to_dict()
+            meta["advance"] = advance_payload
         if warning:
             meta["warning"] = warning
 
@@ -648,6 +656,7 @@ async def consume_chat(
         error=error_text,
         warning=warning,
         applied=applied,
+        advance=advance_payload,
     )
 
 

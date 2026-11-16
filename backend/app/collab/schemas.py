@@ -161,6 +161,10 @@ class BudgetSpec(BaseModel):
     #: 0 表示不限制 token
     max_tokens: int = Field(default=0, ge=0)
     timeout_seconds: int = Field(default=3600, ge=30)
+    #: 单步限时（秒）：一个工单步骤 / 聊天回复的执行上限；**0 表示不限**。
+    #: 执行层用它覆盖全局 run_timeout_seconds——重活（大仓库构建、长测试）经常跑过一小时；
+    #: 0 在这里是「不限」而不是「用默认」，执行层会把它转成 runner 认识的 -1。
+    step_timeout_seconds: int = Field(default=36000, ge=0)
 
 
 class GraphIssue(BaseModel):
@@ -283,6 +287,8 @@ class RunBudgetPatch(BaseModel):
     max_tokens: int | None = Field(default=None, ge=0)
     #: 新的运行时限（秒）；为空表示不改。
     timeout_seconds: int | None = Field(default=None, ge=30)
+    #: 新的单步限时（秒，0 = 不限）；为空表示不改。对正在跑的那一步不生效，从下一步起算。
+    step_timeout_seconds: int | None = Field(default=None, ge=0)
 
 
 class RunAttachmentUpload(BaseModel):
@@ -333,12 +339,27 @@ class StepRead(BaseModel):
     content: str = ""
     #: 引擎派生的结构化摘要（交接给下游的就是它，而不是 content）
     gist: str = ""
+    #: 详情接口**不再**携带完整过程（工具调用/思考可能上 MB，一次运行几十步就是几十 MB）；
+    #: 这里只给「有没有、有多少」的元信息，正文气泡照常渲染，点开「过程」折叠块时
+    #: 再按 ``GET /runs/{run_id}/steps/{step_id}/parts`` 懒加载。
     parts: list[dict[str, Any]] = Field(default_factory=list)
+    parts_count: int = 0
+    #: 这一步调用过的工具名（去重、限量）：看板/进度页要展示「用过哪些工具」，
+    #: 但不需要完整流水——从 parts 里提取一次放在这里，前端不用为它拉懒加载接口。
+    tool_names: list[str] = Field(default_factory=list)
     usage: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     audit: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime
     finished_at: datetime | None = None
+
+
+class StepPartsRead(BaseModel):
+    """单个步骤的完整过程（``parts``）——懒加载接口的响应体。"""
+
+    step_id: str
+    run_id: str
+    parts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatMessageRead(BaseModel):

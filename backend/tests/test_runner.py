@@ -265,3 +265,73 @@ async def test_cli_run_does_not_hang_when_the_kernel_stops_reading_stdin(monkeyp
     assert [event.type.value for event in events][-1] == "run.finished"
     assert elapsed < 15, f"写 stdin 卡住后整轮运行没有收尾：{elapsed:.1f} 秒"
     assert any(event.text == "start" for event in events)
+
+
+FAKE_SLEEP_AGENT = str(Path(__file__).parent / "fakes" / "fake_sleep_agent.py")
+
+
+class _SleepProbeAgent(AgentDefinition):
+    """跑得足够久的 CLI 内核，用来验证「单步限时」的掐表。"""
+
+    id = "probe-sleep"
+    name = "长跑探针"
+    runtime = Runtime.CLI
+    executable = sys.executable
+    #: 内核要跑的秒数（负数用例改短，免得整轮测试拖太久）
+    seconds = "30"
+
+    def build_invocation(self, ctx: AgentContext) -> Invocation:
+        return Invocation(argv=[sys.executable, FAKE_SLEEP_AGENT, self.seconds])
+
+    def parse_line(self, line: str, run):
+        payload = json.loads(line)
+        if payload.get("delta"):
+            yield text_delta(payload["delta"])
+
+
+async def test_stream_run_honors_per_run_timeout_override(monkeypatch):
+    """handle.timeout_seconds（协作域的单步限时）必须覆盖全局默认并掐死长跑内核。"""
+    monkeypatch.setattr(runner, "_STREAM_POLL_SECONDS", 0.2)
+
+    definition = _SleepProbeAgent()
+    context = AgentContext(agent_id="a1", agent_name="sleep", prompt="慢慢干")
+    active = registry.register("conversation-sleep", "sleep")
+    active.timeout_seconds = 2  # 内核要跑 30 秒，这里 2 秒掐死
+    started = time.monotonic()
+    try:
+        events = await asyncio.wait_for(
+            _drain(runner.stream_run(definition, context, active)), timeout=30
+        )
+    finally:
+        registry.finish(active, "ok")
+    elapsed = time.monotonic() - started
+
+    kinds = [event.type.value for event in events]
+    assert kinds[-1] == "run.finished"
+    assert any(
+        event.type.value == "error" and "2 秒上限" in (event.text or "")
+        for event in events
+    ), [event.type.value for event in events]
+    assert elapsed < 20, f"单步限时没有掐死长跑内核：{elapsed:.1f} 秒"
+
+
+async def test_stream_run_per_run_timeout_negative_means_no_limit(monkeypatch):
+    """单步限时设为「不限」（负数）时，超时路径必须整体失效。"""
+    monkeypatch.setattr(runner, "_STREAM_POLL_SECONDS", 0.2)
+
+    definition = _SleepProbeAgent()
+    definition.seconds = "4"  # 不限时：内核自己跑完收工
+    context = AgentContext(agent_id="a1", agent_name="sleep", prompt="慢慢干")
+    active = registry.register("conversation-sleep-neg", "sleep")
+    active.timeout_seconds = -1  # 不限
+    try:
+        events = await asyncio.wait_for(
+            _drain(runner.stream_run(definition, context, active)), timeout=30
+        )
+    finally:
+        registry.finish(active, "ok")
+
+    kinds = [event.type.value for event in events]
+    assert kinds[-1] == "run.finished"
+    assert not [event for event in events if event.type.value == "error"], kinds
+

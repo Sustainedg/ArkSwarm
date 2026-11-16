@@ -117,7 +117,13 @@ def chat_finished(
     error: str | None = None,
     warning: str | None = None,
     applied: dict[str, Any] | None = None,
+    advance: dict[str, Any] | None = None,
 ) -> CollabEvent:
+    """聊天收尾；``advance`` 非 None 表示 CEO 判断这条消息需要推进任务。
+
+    它是给用户渲染「推进任务决策卡」的数据：{reason, order, options}；
+    用户点选后由前端把 order（或所选选项的 value）作为消息发进工单通道。
+    """
     return CollabEvent(
         CollabEventType.CHAT_FINISHED,
         {
@@ -127,5 +133,6 @@ def chat_finished(
             "error": error,
             "warning": warning,
             "applied": applied or {},
+            "advance": advance,
         },
     )

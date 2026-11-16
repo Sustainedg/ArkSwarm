@@ -25,6 +25,7 @@ from .schemas import (
     RunDetail,
     RunMessage,
     RunRead,
+    StepPartsRead,
     TeamCreate,
     TeamRead,
     TeamUpdate,
@@ -174,6 +175,23 @@ async def get_run(run_id: str, session: AsyncSession = Depends(get_session)) -> 
     detail = await store.run_detail(session, run)
     detail.chat_active = chat_bus.is_running(run_id) or execution.is_chat_running(run_id)
     return detail
+
+
+@router.get("/runs/{run_id}/steps/{step_id}/parts")
+async def get_step_parts(
+    run_id: str, step_id: str, session: AsyncSession = Depends(get_session)
+) -> StepPartsRead:
+    """单个步骤的完整过程（工具调用 / 思考 / 结果）。
+
+    详情接口只带 ``parts_count``，不携带 ``parts`` 本体——长跑一次能积累几十 MB 的
+    工具流水，全量返回会让打开详情慢到不可用。前端在用户点开「过程」折叠块时
+    才调这里，按需取这一步的 ``parts``。
+    """
+    try:
+        parts = await store.step_parts(session, run_id, step_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return StepPartsRead(step_id=step_id, run_id=run_id, parts=parts)
 
 
 @router.delete("/runs/{run_id}", status_code=204)
@@ -415,6 +433,8 @@ async def patch_run_budget(
         budget.max_tokens = payload.max_tokens
     if payload.timeout_seconds is not None:
         budget.timeout_seconds = payload.timeout_seconds
+    if payload.step_timeout_seconds is not None:
+        budget.step_timeout_seconds = payload.step_timeout_seconds
 
     run.budget = graph_service.budget_to_storable(budget)
     # 预算超限的挂起原因已经不再成立，清掉它让「继续」按钮语义干净。

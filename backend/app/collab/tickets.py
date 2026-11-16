@@ -26,6 +26,9 @@ from .schemas import VERDICT_CHANGES, VERDICT_PASS, VERDICTS, DeliveryMode, Duty
 FENCE = "work_order"
 #: 入口智能体聊天里可选的「需求细化」围栏标记
 CHAT_FENCE = "chat_update"
+#: 入口智能体聊天里可选的「推进判断」围栏标记：CEO 判断这条消息需要推进任务时输出，
+#: 系统据此给用户渲染一张决策卡，用户点选后才把指令发进工单通道
+CHAT_ADVANCE_FENCE = "chat_advance"
 
 #: 允许的 JSON 对象扫描体积上限（避免畸形输出把解析拖死）
 MAX_SCAN_CHARS = 200_000
@@ -51,6 +54,10 @@ _FENCE_RE = re.compile(
 )
 _CHAT_FENCE_RE = re.compile(
     r"```[ \t]*" + CHAT_FENCE + r"[ \t]*\r?\n?(.*?)(?:```|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+_CHAT_ADVANCE_FENCE_RE = re.compile(
+    r"```[ \t]*" + CHAT_ADVANCE_FENCE + r"[ \t]*\r?\n?(.*?)(?:```|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 _COERCE = {
@@ -203,6 +210,37 @@ class ChatUpdate:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         return {key: value for key, value in data.items() if value not in ("", [])}
+
+
+@dataclass(slots=True)
+class ChatAdvance:
+    """CEO 在聊天里做出的「是否推进任务」判断（普通对话不输出这个块）。
+
+    用户不再手动区分「聊天 / 推进」：所有消息都先进聊天通道，由入口智能体判断。
+    判断需要推进时输出这个块，系统给用户渲染一张决策卡，用户点选后才把指令
+    发进工单通道（`/messages`）—— 单一入口，路由交给 CEO。
+    """
+
+    #: 为什么判断要推进（卡片上给用户看的一句话理由）
+    reason: str = ""
+    #: 建议发给工单通道的完整指令：决策卡点选后原样作为用户消息发出
+    order: str = ""
+    #: 卡片上可点的备选方案（与 ask_user 的 options 同构；缺省时用 order 补一张）
+    options: list[AskOption] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.reason and not self.order and not self.options
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        if self.reason:
+            data["reason"] = self.reason
+        if self.order:
+            data["order"] = self.order
+        if self.options:
+            data["options"] = [option.to_dict() for option in self.options]
+        return data
 
 
 @dataclass(slots=True)
@@ -826,9 +864,71 @@ def parse_chat_update(text: str) -> tuple[ChatUpdate | None, str | None]:
     return update, warning
 
 
+def _advance_options_from_order(order: str) -> list[AskOption]:
+    """CEO 只给了 order 没给 options 时，从指令正文的编号/项目符号里恢复可点选项。
+
+    与 ``_options_from_question`` 同一套朴素规则：能拆出 ≥2 条就用拆出来的；
+    拆不出来就给「按 CEO 的建议推进」+「我再想想」两张兜底卡，保证卡片永远可点。
+    """
+    options: list[AskOption] = []
+    for line in order.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        cleaned = _strip_option_bullet(raw)
+        if cleaned and cleaned != raw:
+            options.append(AskOption(label=cleaned, value=cleaned))
+    if len(options) >= 2:
+        return options[:MAX_ASK_OPTIONS]
+    return [
+        AskOption(
+            label="按建议推进",
+            value=order,
+            description="把 CEO 给出的推进指令原样交给工单通道。",
+        ),
+        AskOption(label="我再想想", value="", freeform=True),
+    ]
+
+
+def parse_chat_advance(text: str) -> tuple[ChatAdvance | None, str | None]:
+    """解析聊天末尾可选的 ``chat_advance`` 块（CEO 判断这条消息需要推进任务）。
+
+    没有这个块是完全正常的（纯聊天 / 问进度 / 只是补充说明）；解析失败只返回
+    告警，不把整条回复判死 —— 与 ``chat_update`` 同一套容错策略。
+    """
+    bodies = [match.group(1) for match in _CHAT_ADVANCE_FENCE_RE.finditer(text or "")]
+    if not bodies:
+        return None, None
+    warning = None
+    if len(bodies) > 1:
+        warning = f"检测到 {len(bodies)} 个 {CHAT_ADVANCE_FENCE} 代码块，已按最后一个处理"
+    obj, error = _extract_chat_object(bodies[-1])
+    if obj is None:
+        return None, error
+
+    order = _text(obj.get("order") or obj.get("instruction") or obj.get("message"))
+    reason = _text(obj.get("reason") or obj.get("why"))
+    options = _ask_options(
+        next(
+            (obj[key] for key in ("options", "choices", "suggestions", "alternatives") if key in obj),
+            None,
+        )
+    )[:MAX_ASK_OPTIONS]
+    if not options and order:
+        options = _advance_options_from_order(order)
+    if not order and options:
+        # 只给了选项没给指令：第一条可点选项的答复就是默认指令
+        order = next((option.value for option in options if not option.freeform and option.value), "")
+    advance = ChatAdvance(reason=reason, order=order, options=options)
+    if advance.is_empty:
+        return None, warning or f"{CHAT_ADVANCE_FENCE} 里既没有 order 也没有 options"
+    return advance, warning
+
+
 def extract_chat_body(text: str) -> str:
-    """去掉 ``chat_update`` 块后剩下的聊天正文。"""
-    return _CHAT_FENCE_RE.sub("", text or "").strip()
+    """去掉 ``chat_update`` / ``chat_advance`` 块后剩下的聊天正文。"""
+    cleaned = _CHAT_ADVANCE_FENCE_RE.sub("", _CHAT_FENCE_RE.sub("", text or ""))
+    return cleaned.strip()
 
 
 def merge_chat_update(brief: dict[str, Any], update: ChatUpdate) -> tuple[dict[str, Any], list[str]]:

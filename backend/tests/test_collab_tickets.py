@@ -14,6 +14,7 @@ from app.collab.tickets import (
     extract_chat_body,
     merge_chat_update,
     normalize_title,
+    parse_chat_advance,
     parse_chat_update,
     parse_work_order,
     render_protocol_guide,
@@ -638,3 +639,95 @@ def test_malformed_chat_update_warns_but_does_not_raise():
     update, warning = parse_chat_update("```chat_update\n{不是 JSON}\n```")
     assert update is None
     assert warning and "不是合法 JSON" in warning
+
+
+# --- 入口智能体聊天里的「推进判断」块 --------------------------------------------
+
+
+def test_chat_advance_is_optional_and_stripped_from_display_text():
+    text = "进度正常，这事先不用动。"
+    advance, warning = parse_chat_advance(text)
+    assert advance is None and warning is None
+    assert extract_chat_body(text) == text
+
+
+def test_chat_advance_parses_reason_order_and_options():
+    text = (
+        "这需要真正改代码，我建议直接推进。\n"
+        "```chat_advance\n"
+        "{\n"
+        '  "reason": "新功能要动手实现",\n'
+        '  "order": "加一个导出按钮",\n'
+        '  "options": [\n'
+        '    {"label": "按建议推进", "value": "加一个导出按钮"},\n'
+        '    {"label": "我来补充", "value": "", "freeform": true}\n'
+        "  ]\n"
+        "}\n"
+        "```\n"
+    )
+    advance, warning = parse_chat_advance(text)
+    assert warning is None
+    assert advance is not None
+    assert advance.reason == "新功能要动手实现"
+    assert advance.order == "加一个导出按钮"
+    assert [option.label for option in advance.options] == ["按建议推进", "我来补充"]
+    assert advance.options[1].freeform is True
+    assert advance.to_dict()["options"][0] == {
+        "label": "按建议推进",
+        "value": "加一个导出按钮",
+        "freeform": False,
+    }
+    # 协议块不进聊天正文。
+    assert extract_chat_body(text) == "这需要真正改代码，我建议直接推进。"
+
+
+def test_chat_advance_without_options_gets_fallback_card():
+    text = (
+        "我来安排。\n"
+        "```chat_advance\n"
+        '{"reason": "需要改代码", "order": "把导出按钮加到登录页右上角"}\n'
+        "```\n"
+    )
+    advance, _ = parse_chat_advance(text)
+    assert advance is not None
+    labels = [option.label for option in advance.options]
+    assert labels == ["按建议推进", "我再想想"]
+    assert advance.options[0].value == "把导出按钮加到登录页右上角"
+    assert advance.options[1].freeform is True
+
+
+def test_chat_advance_recovers_options_from_bulleted_order():
+    text = (
+        "按这两条来：\n"
+        "```chat_advance\n"
+        '{"reason": "分两步做", "order": "1) 先加导出按钮\\n2) 再加导入按钮"}\n'
+        "```\n"
+    )
+    advance, _ = parse_chat_advance(text)
+    assert advance is not None
+    labels = [option.label for option in advance.options]
+    assert labels == ["先加导出按钮", "再加导入按钮"]
+
+
+def test_chat_advance_shares_body_with_chat_update_and_survives_bad_json():
+    both = (
+        "补一条要求，然后直接推进。\n"
+        "```chat_update\n"
+        '{"requirements_add": ["导出为 CSV"]}\n'
+        "```\n"
+        "```chat_advance\n"
+        '{"reason": "要动手实现", "order": "支持导出 CSV"}\n'
+        "```\n"
+    )
+    advance, warning = parse_chat_advance(both)
+    assert advance is not None and warning is None
+    # 两种块都会从正文里剥掉，用户只看到人话。
+    assert extract_chat_body(both) == "补一条要求，然后直接推进。"
+    # 解析失败只告警、不判死（与 chat_update 同一套容错策略）。
+    broken, warning = parse_chat_advance("```chat_advance\n{不是 JSON}\n```")
+    assert broken is None
+    assert warning and "不是合法 JSON" in warning
+    # 空块也只告警。
+    empty, warning = parse_chat_advance("```chat_advance\n{}\n```")
+    assert empty is None
+    assert warning and "chat_advance" in warning

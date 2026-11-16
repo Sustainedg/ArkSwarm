@@ -30,7 +30,7 @@ from ..runtime.mcp import prepare_mcp_home
 from ..runtime.runner import stream_run
 from ..runtime.skills import prepare_skill_home
 from ..settings import get_settings
-from .graph import effective_workspace_scope
+from .graph import budget_from_storable, effective_workspace_scope
 from .schemas import NodeSpec, WorkspaceScope
 from .tables import CollabRun
 
@@ -50,6 +50,10 @@ class PreparedStep:
     ctx: AgentContext
     workspace: str
     scope: WorkspaceScope
+    #: 本次步骤的单步限时（秒）：负数 = 不限，正数 = 按该秒数限死。
+    #: 预算里的 0 表示「不限」，在 prepare_step / prepare_chat 时已转成 -1，不会落到
+    #: runner 的「0 = 全局默认」哨兵上（见 :func:`_runner_step_timeout`）。
+    step_timeout_seconds: int = 0
     #: 需要以 notice 暴露给用户的说明（技能 / MCP 物化过程中的告警与提示）
     warnings: list[str] = field(default_factory=list)
     #: 共享工作目录在运行前的指纹（只读节点才做）
@@ -321,6 +325,16 @@ async def _build_context(
     return ctx, warnings
 
 
+def _runner_step_timeout(budget_value: int) -> int:
+    """把预算里的单步限时翻译成 runner 的语义。
+
+    预算对用户承诺「0 = 不限」（``BudgetSpec.step_timeout_seconds`` 的 ``ge=0`` 只允许非负数），
+    而 ``runner.stream_run`` 的入参沿用对话域的哨兵：0 = 用全局默认、负数 = 不限。
+    因此 0 必须在这里转成 -1；否则用户看到「不限」，实际却静默落到全局 ``run_timeout_seconds``。
+    """
+    return -1 if budget_value == 0 else budget_value
+
+
 async def prepare_step(
     session: AsyncSession,
     *,
@@ -344,6 +358,9 @@ async def prepare_step(
         ctx=ctx,
         workspace=resolved.cwd,
         scope=resolved.scope,
+        step_timeout_seconds=_runner_step_timeout(
+            budget_from_storable(run.budget).step_timeout_seconds
+        ),
         warnings=warnings,
     )
     if resolved.scope is not WorkspaceScope.WRITE:
@@ -378,12 +395,20 @@ async def prepare_chat(
         ctx=ctx,
         workspace=resolved.cwd,
         scope=resolved.scope,
+        step_timeout_seconds=_runner_step_timeout(
+            budget_from_storable(run.budget).step_timeout_seconds
+        ),
         warnings=warnings,
     )
 
 
 async def stream_step(prepared: PreparedStep, handle: ActiveRun) -> AsyncIterator[AgentEvent]:
-    """把一次步骤变成规范化事件流（取消/超时/脱敏都由执行层负责）。"""
+    """把一次步骤变成规范化事件流（取消/超时/脱敏都由执行层负责）。
+
+    单步限时在这一刻落到 handle 上：运行中调预算改的是**下一步**的时限，
+    正在跑的这一步按它开跑时的值算。
+    """
+    handle.timeout_seconds = prepared.step_timeout_seconds
     async for event in stream_run(prepared.definition, prepared.ctx, handle):
         yield event
 

@@ -370,6 +370,11 @@ export function MobileCollabTeamPage() {
                       value={draft.budget.timeout_seconds}
                       onChange={(value) => patch({ budget: { ...draft.budget, timeout_seconds: value } })}
                     />
+                    <NumberField
+                      label="单步限时·秒（0=不限）"
+                      value={draft.budget.step_timeout_seconds ?? 36000}
+                      onChange={(value) => patch({ budget: { ...draft.budget, step_timeout_seconds: value } })}
+                    />
                   </div>
                   <span className="field-help">任何一项超限都会挂起并明确提示，不会静默烧钱。</span>
                 </div>
