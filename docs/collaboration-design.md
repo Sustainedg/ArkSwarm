@@ -703,7 +703,7 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
   （打 `deleted_at`，从可选列表消失、历史照旧可读），协作表的外键不会被打断；
   删除"运行"是显式操作，级联清理工单与步骤（等价于"删对话必须清消息"的既有惯例）。
 - **`parent_ticket_id` 用 `SET NULL`**：父工单被拒绝/删除时不连带毁掉子工单记录。
-- **零迁移风险**：全部是新增表，`create_all` 会自动建；现有 `data/magenta.db` 直接启动即可（铁律 9）。
+- **零迁移风险**：全部是新增表，`create_all` 会自动建；现有 `data/arkswarm.db` 直接启动即可（铁律 9）。
 - **后加的可选列怎么补**：SQLite 的 `create_all` **不会给已存在的表加列**。因此协作域把"后加的可选列"
   登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（对话域登记在 `models.py` 的同名常量），
   由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐 —— 旧行原样保留，不重建库。
@@ -896,7 +896,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 | `frontend/src/components/CollabSettingsPanel.tsx` | 载入旧图时把缺失的 `max_rounds` 补 0（前端不依赖后端一定回传新字段） |
 | `frontend/src/index.css` | 抽屉样式（右侧滑出 + 两栏，窄屏降为单栏） |
 
-验证：`npm run build`（`tsc -b` + vite）通过。另起一个临时后端（`MAGENTA_DATA_DIR` 指向临时目录，
+验证：`npm run build`（`tsc -b` + vite）通过。另起一个临时后端（`ARKSWARM_DATA_DIR` 指向临时目录，
 没碰真实库）真跑了一次协作（`done`，7 步、2 张工单、`rework` 边上限 1 生效、子工单 `round=1/1`），
 把 `GET /api/collab/runs/{id}` 的**真实 JSON** 直接喂给抽屉用 `react-dom/server` 渲染，11 项断言全过：
 默认选中、孤儿子工单兜底、`brief` 各字段、审查意见、`返工 1 / 1 轮`、产出文件、本工单步骤与审计结论、

@@ -15,7 +15,7 @@ export type ThemeMode = 'dark' | 'light' | 'auto'
 export type ResolvedTheme = 'dark' | 'light'
 
 /** 存储键与深/浅两套主题色（与入口 HTML 内联脚本保持一致）。 */
-export const THEME_STORAGE_KEY = 'magenta.theme'
+export const THEME_STORAGE_KEY = 'arkswarm.theme'
 export const THEME_COLORS: Record<ResolvedTheme, string> = { dark: '#0b0a12', light: '#f4f3fa' }
 
 /** 设置页里的三个选项（两端共用同一份文案）。 */

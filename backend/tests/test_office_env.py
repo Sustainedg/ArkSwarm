@@ -366,10 +366,10 @@ def test_office_env_adds_no_runtime_dependency():
 def test_mobile_shell_cache_version_is_bumped():
     """§11.5：`mobile.css` 属外壳样式表，外壳缓存名必须 +1，否则已装到主屏的应用换不到新样式。"""
     source = SW_JS.read_text(encoding="utf-8")
-    assert "magenta-m-shell-v79" in source
-    assert "magenta-m-assets-v79" in source
-    assert "magenta-m-shell-v78" not in source
-    assert "magenta-m-assets-v78" not in source
+    assert "arkswarm-m-shell-v79" in source
+    assert "arkswarm-m-assets-v79" in source
+    assert "arkswarm-m-shell-v78" not in source
+    assert "arkswarm-m-assets-v78" not in source
 
 
 # --- 2. 叶子纯函数：没有随机源，种子由 key 派生 ---------------------------------------

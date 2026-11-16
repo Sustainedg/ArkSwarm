@@ -123,7 +123,7 @@
   - `--office-scale: 0.72` 从 `.office-worker > .collab-station-scene` 的 `scale()` 里提出来，
     只此一处定义；`.collab-worker-body` 的位移按 `calc(var(--env-x) / var(--office-scale))` 换算。
   - 共享块内新增 reduced-motion 覆盖：新增关键帧全部 `animation: none`，静态姿态保留。
-  - `sw.js` 缓存名版本 +1（`magenta-m-shell-v78` → `v79`、`magenta-m-assets-v78` → `v79`）。
+  - `sw.js` 缓存名版本 +1（`arkswarm-m-shell-v78` → `v79`、`arkswarm-m-assets-v78` → `v79`）。
 - **验收标准**：
   1. `python3 -m pytest backend/tests/test_mobile_web.py -q` 全绿（含双端共享段逐字一致）。
   2. 4 类环境行为形态可辨识（给出每类的观察描述 + 复现步骤：什么状态、什么 tick、看到什么）。

@@ -1,7 +1,7 @@
 /**
  * 朗读（语音合成）：把智能体的输出念出来。
  *
- * 只有一份实现 —— 开关存在 localStorage 的 `magenta.tts` 上，**默认关闭**（用户没主动开过就不出声）。
+ * 只有一份实现 —— 开关存在 localStorage 的 `arkswarm.tts` 上，**默认关闭**（用户没主动开过就不出声）。
  * 使用时先经 `toSpeechText()` 把 Markdown 还原成能听的纯文本：`**加粗**`、代码围栏、
  * 表格分隔线这些念出来只有噪音。一次只念一条：新输出进来会打断上一条。
  *
@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 /** 存储键（值只写 `'on'`；没这个键就是关闭）。 */
-export const SPEECH_STORAGE_KEY = 'magenta.tts'
+export const SPEECH_STORAGE_KEY = 'arkswarm.tts'
 
 /** 浏览器是否支持语音合成（iOS Safari / Chrome 都支持，个别裁剪过的内核对不上）。 */
 export function speechSupported(): boolean {

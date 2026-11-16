@@ -219,7 +219,7 @@ async def test_npm_install_moves_a_foreign_bin_aside(tmp_path, monkeypatch):
     assert events[-1]["ok"] is True
     assert "挪到" in _texts(events)
     assert os.readlink(prefix / "bin/claude") == "../lib/node_modules/pkg/cli.js"
-    assert os.readlink(prefix / "bin/.claude.magenta-bak") == str(foreign)
+    assert os.readlink(prefix / "bin/.claude.arkswarm-bak") == str(foreign)
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_npm_install_restores_the_foreign_bin_when_npm_fails(tmp_path, mon
     assert events[-1]["ok"] is False and events[-1]["exit_code"] == 7
     assert "放回原位" in _texts(events)
     assert os.readlink(prefix / "bin/claude") == str(foreign)
-    assert not (prefix / "bin/.claude.magenta-bak").exists()
+    assert not (prefix / "bin/.claude.arkswarm-bak").exists()
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_npm_install_keeps_a_link_that_is_already_ours(tmp_path, monkeypat
 
     assert events[-1]["ok"] is True
     assert "挪到" not in _texts(events)
-    assert not (prefix / "bin/.claude.magenta-bak").exists()
+    assert not (prefix / "bin/.claude.arkswarm-bak").exists()
 
 
 @pytest.mark.asyncio
@@ -294,7 +294,7 @@ async def test_missing_prepare_command_is_only_a_warning():
     definition.provisioner = RuntimeProvisioner(
         manager="test",
         install_argv=["sh", "-c", "echo 安装完成"],
-        prepare_argv=["magenta-does-not-exist"],
+        prepare_argv=["arkswarm-does-not-exist"],
     )
     events = await _collect(definition, "install")
     output = _texts(events)

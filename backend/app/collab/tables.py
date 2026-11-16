@@ -21,7 +21,7 @@ from ..models import new_id, utcnow
 
 
 #: 协作域**后来新增的可选列**：SQLite 的 ``create_all`` 只建新表、**不会给已存在的表补列**，
-#: 而本地库（``backend/data/magenta.db``）含真实数据，禁止删库重建 —— 所以在这里登记一次，
+#: 而本地库（``backend/data/arkswarm.db``）含真实数据，禁止删库重建 —— 所以在这里登记一次，
 #: 由 ``db.init_db`` 幂等补齐（见 ``db._add_missing_columns``）。
 #: 只允许追加「带默认值、旧行可以留空」的列；加新列时必须同时登记在这里，否则旧库启动后会报
 #: "no such column"。

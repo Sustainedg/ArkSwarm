@@ -724,7 +724,7 @@ export function MobileChatPage() {
       <div className="m-page">
       <MobileTopBar
         centered
-        title={active ? active.title : resolving ? '正在加载…' : 'Magenta Agents'}
+        title={active ? active.title : resolving ? '正在加载…' : 'ArkSwarm'}
         actions={
           <>
             <button

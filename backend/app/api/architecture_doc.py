@@ -232,7 +232,7 @@ def _wrap_page(body_html: str, updated_at: str) -> str:
     return (
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"/>"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>"
-        "<title>系统架构 · Magenta Agents</title>"
+        "<title>系统架构 · ArkSwarm</title>"
         f"<style>{_PAGE_STYLE}</style></head><body><main>"
         f"<div class=\"doc-meta\">{_escape(DOC_RELATIVE)} · 更新于 {_escape(updated_at)}</div>"
         f"{body_html}</main></body></html>"

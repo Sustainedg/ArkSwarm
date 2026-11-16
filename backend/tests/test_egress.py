@@ -32,7 +32,7 @@ SECRET = "ghp-super-secret-value-9911"
 
 
 def test_off_mode_does_not_restrict(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "off")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "off")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -42,7 +42,7 @@ def test_off_mode_does_not_restrict(monkeypatch):
 
 
 def test_block_mode_rejects_all_hosts(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "block")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "block")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -55,8 +55,8 @@ def test_block_mode_rejects_all_hosts(monkeypatch):
 
 
 def test_allowlist_mode_lets_whitelisted_hosts_through(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "allowlist")
-    monkeypatch.setenv("MAGENTA_EGRESS_ALLOWED_HOSTS", "api.openai.com,github.com")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "allowlist")
+    monkeypatch.setenv("ARKSWARM_EGRESS_ALLOWED_HOSTS", "api.openai.com,github.com")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -66,8 +66,8 @@ def test_allowlist_mode_lets_whitelisted_hosts_through(monkeypatch):
 
 
 def test_allowlist_always_lets_localhost_through(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "allowlist")
-    monkeypatch.setenv("MAGENTA_EGRESS_ALLOWED_HOSTS", "")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "allowlist")
+    monkeypatch.setenv("ARKSWARM_EGRESS_ALLOWED_HOSTS", "")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -76,7 +76,7 @@ def test_allowlist_always_lets_localhost_through(monkeypatch):
 
 
 def test_blocked_message_is_user_facing(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "block")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "block")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -88,7 +88,7 @@ def test_blocked_message_is_user_facing(monkeypatch):
 
 
 async def test_egress_transport_blocks_non_whitelisted(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "block")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "block")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -101,7 +101,7 @@ async def test_egress_transport_blocks_non_whitelisted(monkeypatch):
 
 
 async def test_egress_transport_off_mode_passes_through(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "off")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "off")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -114,7 +114,7 @@ async def test_egress_transport_off_mode_passes_through(monkeypatch):
 
 
 async def test_wrap_client_off_mode_returns_unchanged(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "off")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "off")
     from app.settings import get_settings
 
     get_settings.cache_clear()
@@ -123,7 +123,7 @@ async def test_wrap_client_off_mode_returns_unchanged(monkeypatch):
 
 
 async def test_wrap_client_block_mode_wraps_transport(monkeypatch):
-    monkeypatch.setenv("MAGENTA_EGRESS_MODE", "block")
+    monkeypatch.setenv("ARKSWARM_EGRESS_MODE", "block")
     from app.settings import get_settings
 
     get_settings.cache_clear()

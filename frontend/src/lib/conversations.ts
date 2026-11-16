@@ -6,7 +6,7 @@
  */
 import { useEffect } from 'react'
 
-const EVENT = 'magenta:conversations-changed'
+const EVENT = 'arkswarm:conversations-changed'
 
 /** 广播一次「对话列表变了」。 */
 export function notifyConversationsChanged(): void {

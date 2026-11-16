@@ -23,7 +23,7 @@ const NAV = [
 ]
 
 /** 侧边栏是否折叠存在 localStorage：折叠是这台设备的个人偏好，跟主题一样只影响本机。 */
-const SIDEBAR_KEY = 'magenta.sidebar'
+const SIDEBAR_KEY = 'arkswarm.sidebar'
 
 function readSidebarCollapsed(): boolean {
   try {
@@ -82,7 +82,7 @@ export default function App() {
           <div className="brand-mark">✦</div>
           <div className="brand-text">
             <div className="brand-name">
-              Magenta
+              ArkSwarm
               {version && <span className="brand-version">{version}</span>}
             </div>
             <div className="brand-sub">多智能体控制台</div>

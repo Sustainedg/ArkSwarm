@@ -16,7 +16,7 @@ export interface ComposerDraft {
   attachments: AttachmentRef[]
 }
 
-const STORAGE_KEY = 'magenta.composer.drafts'
+const STORAGE_KEY = 'arkswarm.composer.drafts'
 /** 最多记住多少段草稿：超出的按写入先后淘汰，避免本地存储无限膨胀。 */
 const MAX_DRAFTS = 50
 

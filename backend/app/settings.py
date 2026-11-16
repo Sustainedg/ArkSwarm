@@ -10,9 +10,9 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MAGENTA_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ARKSWARM_", env_file=".env", extra="ignore")
 
-    app_name: str = "Magenta Agents"
+    app_name: str = "ArkSwarm"
     data_dir: Path = BACKEND_ROOT / "data"
     database_url: str | None = None
     secret_key: str | None = None
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     def sqlalchemy_url(self) -> str:
         if self.database_url:
             return self.database_url
-        return f"sqlite+aiosqlite:///{self.data_dir / 'magenta.db'}"
+        return f"sqlite+aiosqlite:///{self.data_dir / 'arkswarm.db'}"
 
     @property
     def workspaces_root(self) -> Path:

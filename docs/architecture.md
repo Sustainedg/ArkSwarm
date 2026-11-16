@@ -196,7 +196,7 @@ uninstall_argv=…, latest_argv=…, prepare_argv=…)`，框架（`runtime/prov
   **指向自己安装目录**的链接，否则整个动作直接失败在 `EEXIST`（连包都不装）。所以 npm 内核的
   `install_argv` / `update_argv` 由 `builtin/util.py:npm_install_argv()` 生成：先判断那个占位
   是不是自己的（解析后落在 npm 全局目录里就不动它），不是就挪到一个隐藏备份名
-  （`.<命令>.magenta-bak`）让出位置，npm 失败再把备份放回原位 —— 不留「命令没了、包也没装上」
+  （`.<命令>.arkswarm-bak`）让出位置，npm 失败再把备份放回原位 —— 不留「命令没了、包也没装上」
   的半截状态。包装命令顺带负责调用 npm，所以它天然只挂在安装 / 更新上；卸载不建链接，
   `uninstall_argv` 保持原样，确认框里显示的就是它。
 
@@ -258,8 +258,8 @@ OpenAI 兼容内核）原则上能读到注入的凭据值。平台做了多层�
 
 **网络出口过滤**（新增）：
 
-- 设置项 `MAGENTA_EGRESS_MODE`（`off` / `block` / `allowlist`，默认 `off`）与
-  `MAGENTA_EGRESS_ALLOWED_HOSTS`（逗号分隔域名白名单）。
+- 设置项 `ARKSWARM_EGRESS_MODE`（`off` / `block` / `allowlist`，默认 `off`）与
+  `ARKSWARM_EGRESS_ALLOWED_HOSTS`（逗号分隔域名白名单）。
 - `off`：不限制（默认，保持向后兼容）。
 - `block`：禁止所有出站网络——子进程注入 blackhole 代理环境变量
   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 指向不可达端口；API 内核的 httpx 客户端用
@@ -512,7 +512,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 - **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以"后加的可选列"
   登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）与 `collab/tables.py` 的
   `ADDITIVE_COLUMNS`（协作域），由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
-  幂等补齐：现有 `magenta.db` 启动后自动对齐，不重建、不丢数据。
+  幂等补齐：现有 `arkswarm.db` 启动后自动对齐，不重建、不丢数据。
 - **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
@@ -540,7 +540,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   平台会退化为 transcript 回放。
 - `codex exec` 与 `codex exec resume` 认的旗标不一样：`-s/--sandbox`、`-C/--cd` 只挂在 `exec` 上，新版 `exec` 也去掉了 `--full-auto`。适配器按子命令分别表达 —— 沙箱在 `exec` 上用 `-s`、恢复会话时走 `-c sandbox_mode=…`；全自动走 `-c approval_policy=never`。`resume` 这一子命令形式在不同 Codex 版本间也有差异，所以做成了可选策略（app-server 模式下对应 `thread/resume`）。
 - 新版 Codex 不再读 `OPENAI_BASE_URL`（内置 provider 拿着它也会直奔 api.openai.com），所以自定义网关
-  一律经一个具名 `model_provider` 注入（名字取「自定义供应商名称」，留空用内置名 `magenta`）；
+  一律经一个具名 `model_provider` 注入（名字取「自定义供应商名称」，留空用内置名 `arkswarm`）；
   没走网关时（官方默认 / 本机登录态）不注入任何 provider。`wire_api` 也不再由平台下发 ——
   0.4x 起只剩 `responses`、更早的版本默认 `chat`，写死任何一边都会在另一边直接报错。
 - Codex 默认走「接口模式 = app-server」：`codex app-server --listen stdio://` 是 Codex 自己的
@@ -609,10 +609,10 @@ frontend/
   `public/m/sw.js`（安装期预缓存入口 HTML 与其引用的构建产物；导航网络优先、离线回落外壳）。
   Service Worker 的作用域只在 `/m/`，且 `/api/`（含 SSE 长连接）永不缓存、一律直连后端——
   离线只保证「界面能打开」，对话仍需联网。
-- **改了外壳就要 bump 缓存版本**：`sw.js` 的缓存名带版本号（`magenta-m-shell-v2`…），
+- **改了外壳就要 bump 缓存版本**：`sw.js` 的缓存名带版本号（`arkswarm-m-shell-v2`…），
   动过入口 HTML / 样式表 / 构建产物就 +1 —— 已安装的独立应用才会在下次打开时换掉旧外壳。
   独立应用没有地址栏也没有刷新按钮，因此设置页提供了「更新到最新版本」（`pwa.ts:refreshShell()`：
-  注销 SW、清掉 `magenta-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
+  注销 SW、清掉 `arkswarm-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
 - **移动端没有底部 Tab，只有左侧抽屉**：打开就是聊天界面（`/chat` 自动进入最近一次对话，
   一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
   （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 智能体 / 协作组 / 技能 / MCP /
@@ -626,7 +626,7 @@ frontend/
   它只把路由 state（`openActions`）交给聊天页，由聊天页弹面板 —— 那几件事要用到消息与会话状态。
 - **朗读（语音合成）**：开关在对话页顶栏右上角（原有「⋯ 更多操作」的位置），**默认关闭**，
   开启后新回复会被念出来（`lib/tts.ts`：Markdown 先转纯文本，长文按句读切段排队，新输出打断旧的
-  一条；开关存 `localStorage['magenta.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
+  一条；开关存 `localStorage['arkswarm.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
   `messages` 的效果里，所以另一台设备写入、由 `useAutoRefresh` 拉回来的回复同样会念；iOS 两个坑
   一起处理：首次发声在点开关的手势里 `unlockSpeech()` 解锁，打断旧的一条时 `cancel()` 与 `speak()`
   分开两轮执行。
@@ -696,7 +696,7 @@ frontend/
   换算），`CollabOfficeMap` 按当前主题选；工牌 / 图例 / 工具按钮 / 信息卡颜色走 `--office-*`
   变量，浅色下整间办公室一起变浅。
 - **外观（深色 / 浅色 / 跟随系统）**：两端共用 `lib/theme.ts` —— 模式存在 localStorage 的
-  `magenta.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
+  `arkswarm.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
   `meta[name=theme-color]`（状态栏 / Android 系统导航条这些「原生外壳」跟着换色）与 iOS 独立应用的
   状态栏样式。两个入口 HTML 各有一段等价的内联脚本，在首屏渲染前就把主题定下来（否则浅色用户每次
   打开都会先闪一下深色外壳）。两份样式表各自的 `:root` 仍是深色默认，浅色只是
@@ -852,7 +852,7 @@ CollabProgressBoard.tsx（桌面端） · mobile/components/MobileCollabProgress
 - **信息卡缩略图**（`WorkerAtDesk`）不参与环境行为：它只画真实状态姿势（不传 `env` / `seed`），
   保持「一眼看清这个岗位在忙什么」。
 - **PWA**：`mobile.css` 属于外壳样式表，按既有约定必须把 `frontend/public/m/sw.js` 的
-  `magenta-m-shell-v<n>` / `magenta-m-assets-v<n>` **版本号 +1**，否则已加到主屏的独立应用
+  `arkswarm-m-shell-v<n>` / `arkswarm-m-assets-v<n>` **版本号 +1**，否则已加到主屏的独立应用
   永远换不到新样式（守卫 `test_mobile_shell_has_a_self_service_refresh` 守着这条约定）。
 
 ### 11.6 部件分工与性能

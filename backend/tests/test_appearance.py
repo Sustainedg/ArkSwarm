@@ -49,16 +49,16 @@ def test_both_entries_apply_the_theme_before_first_paint():
     """两个入口都要：内联脚本（head 里、无依赖）+ 渲染前调用 initTheme()。"""
     for entry, main in (("index.html", "main.tsx"), ("m/index.html", "mobile/main.tsx")):
         html = (FRONTEND / entry).read_text(encoding="utf-8")
-        assert "magenta.theme" in html, f"{entry} 缺少首屏防闪的内联脚本"
+        assert "arkswarm.theme" in html, f"{entry} 缺少首屏防闪的内联脚本"
         assert "dataset.theme" in html, f"{entry} 的内联脚本要写 <html data-theme>"
-        assert html.index("magenta.theme") < html.index("</head>"), f"{entry} 的内联脚本要在 head 里"
+        assert html.index("arkswarm.theme") < html.index("</head>"), f"{entry} 的内联脚本要在 head 里"
 
         entry_main = (SRC / main).read_text(encoding="utf-8")
         assert "initTheme()" in entry_main, f"{main} 要在渲染前调用 initTheme()"
 
     # 内联脚本与模块里的存储键、主题色、判定规则必须是同一套。
     theme = (SRC / "lib" / "theme.ts").read_text(encoding="utf-8")
-    for token in ("magenta.theme", "#0b0a12", "#f4f3fa", "prefers-color-scheme: light"):
+    for token in ("arkswarm.theme", "#0b0a12", "#f4f3fa", "prefers-color-scheme: light"):
         assert token in theme, f"lib/theme.ts 与内联脚本对不上：缺少 {token}"
 
 

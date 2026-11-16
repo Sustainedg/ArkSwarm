@@ -22,7 +22,7 @@ from .runtime import skills as skill_service
 from .settings import get_settings
 from .transport.gzip import SSEExemptGZipMiddleware
 
-logger = logging.getLogger("magenta")
+logger = logging.getLogger("arkswarm")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Magenta Agents 多智能体控制台",
+    title="ArkSwarm 多智能体控制台",
     version=__version__,
     description="多智能体对话控制台：把 Claude Code、Codex、Gemini CLI 等 "
                 "内核配成智能体，给它们挑选网关、模型与人格后进行对话。",

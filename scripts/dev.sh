@@ -2,7 +2,7 @@
 # 同时启动 API（自动重载）与 Vite 开发服务器。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT="${MAGENTA_PORT:-8000}"
+PORT="${ARKSWARM_PORT:-8000}"
 
 if [ ! -d "$ROOT/backend/.venv" ]; then
   echo "→ 创建 Python 虚拟环境"
@@ -24,5 +24,5 @@ echo "→ API      http://127.0.0.1:$PORT"
 if [ "${1:-}" = "--api-only" ]; then exit 0; fi
 
 echo "→ Web UI   http://127.0.0.1:5173  （将 /api 反向代理到 :$PORT）"
-export MAGENTA_BACKEND="http://127.0.0.1:$PORT"
+export ARKSWARM_BACKEND="http://127.0.0.1:$PORT"
 cd "$ROOT/frontend" && exec npm run dev

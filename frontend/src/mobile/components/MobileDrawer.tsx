@@ -125,7 +125,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {  const navigat
           <span className="m-brand-mark">✦</span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div className="m-drawer-title">
-              Magenta Agents
+              ArkSwarm
               {version && <span className="m-badge">{version}</span>}
             </div>
             <div className="m-drawer-sub">多智能体控制台</div>

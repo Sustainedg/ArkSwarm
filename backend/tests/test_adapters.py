@@ -86,7 +86,7 @@ def test_codex_gateway_goes_through_a_named_provider():
     """自定义网关必须落到具名 model_provider 上 —— 新版 Codex 已不再读 ``OPENAI_BASE_URL``。
 
     同时不下发 ``wire_api``：新版只剩 responses、旧版默认 chat，写死任何一边都会在另一边
-    直接报错；``provider_name`` 留空时用内置名 ``magenta``。
+    直接报错；``provider_name`` 留空时用内置名 ``arkswarm``。
     """
     definition = get_agent("codex")
     # 存量智能体里由旧默认值写下的 wire_api=chat 必须被忽略，否则新版 Codex 会拒绝启动。
@@ -94,9 +94,9 @@ def test_codex_gateway_goes_through_a_named_provider():
         ctx(options={"transport": "exec", "wire_api": "chat"})
     )
     joined = " ".join(invocation.argv)
-    assert "model_provider=magenta" in joined
-    assert 'model_providers.magenta.base_url="https://gateway.example/v1"' in joined
-    assert 'model_providers.magenta.env_key="OPENAI_API_KEY"' in joined
+    assert "model_provider=arkswarm" in joined
+    assert 'model_providers.arkswarm.base_url="https://gateway.example/v1"' in joined
+    assert 'model_providers.arkswarm.env_key="OPENAI_API_KEY"' in joined
     assert "wire_api" not in joined
 
     # 没走网关（官方默认 / 本机登录态）时不注入任何 provider，交给 Codex 自己的配置。
@@ -159,8 +159,8 @@ def test_gemini_invocation_writes_system_file():
     definition = get_agent("gemini-cli")
     invocation = definition.build_invocation(ctx(session_id="sess-9"))
     assert "--resume" in invocation.argv and "sess-9" in invocation.argv
-    assert invocation.files[".magenta/system.md"] == "You are a tester."
-    assert invocation.env["GEMINI_SYSTEM_MD"] == "{{RUN_DIR}}/.magenta/system.md"
+    assert invocation.files[".arkswarm/system.md"] == "You are a tester."
+    assert invocation.env["GEMINI_SYSTEM_MD"] == "{{RUN_DIR}}/.arkswarm/system.md"
     assert invocation.env["GEMINI_API_KEY"] == "sk-secret"
 
 
@@ -311,7 +311,7 @@ def test_codex_app_server_invocation_speaks_json_rpc_over_stdio():
     assert "--json" not in invocation.argv
     frame = json.loads(invocation.stdin)
     assert frame["method"] == "initialize" and frame["id"] == 1
-    assert frame["params"]["clientInfo"]["name"] == "magenta-agents"
+    assert frame["params"]["clientInfo"]["name"] == "arkswarm"
 
     # 逐字流式来自 app-server；exec 仍是可选的老路径（写完 stdin 就关）。
     legacy = definition.build_invocation(ctx(options={"transport": "exec"}))

@@ -153,7 +153,7 @@ async def test_official_gateway_cannot_be_deleted(client: httpx.AsyncClient):
 async def test_bootstrap_seeds_official_gateways_and_starters(
     client: httpx.AsyncClient, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("MAGENTA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARKSWARM_DATA_DIR", str(tmp_path))
     get_settings.cache_clear()
     try:
         async with SessionLocal() as session:

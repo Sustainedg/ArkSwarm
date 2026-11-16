@@ -1,7 +1,7 @@
 {
   "id": "/m/",
-  "name": "Magenta Agents 多智能体控制台",
-  "short_name": "Magenta",
+  "name": "ArkSwarm 多智能体控制台",
+  "short_name": "ArkSwarm",
   "description": "多智能体对话控制台移动端：在手机上查看智能体、网关与对话。",
   "lang": "zh-CN",
   "dir": "ltr",

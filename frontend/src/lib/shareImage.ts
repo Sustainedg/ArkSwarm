@@ -223,7 +223,7 @@ export async function renderConversationImage(input: ShareImageInput): Promise<B
       ctx.fillStyle = colors.dim
       ctx.font = fontFor(13)
       ctx.textBaseline = 'top'
-      ctx.fillText('由 Magenta Agents 生成', PAD, y + 18)
+      ctx.fillText('由 ArkSwarm 生成', PAD, y + 18)
       const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
       ctx.fillText(stamp, WIDTH - PAD - ctx.measureText(stamp).width, y + 18)
     },
@@ -269,7 +269,7 @@ export type ShareOutcome = 'shared' | 'downloaded' | 'cancelled'
  */
 export async function shareConversationImage(input: ShareImageInput): Promise<ShareOutcome> {
   const blob = await renderConversationImage(input)
-  const filename = `magenta-${input.title.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)}.png`
+  const filename = `arkswarm-${input.title.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)}.png`
   const file = new File([blob], filename, { type: 'image/png' })
 
   if (navigator.canShare?.({ files: [file] }) && navigator.share) {

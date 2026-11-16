@@ -37,7 +37,7 @@ from ..settings import get_settings
 from ..skillhub import extract_skill_archive
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
-logger = logging.getLogger("magenta")
+logger = logging.getLogger("arkswarm")
 
 #: 技能来源的中文标签
 SOURCE_LABELS = {

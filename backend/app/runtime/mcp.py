@@ -32,7 +32,7 @@ from ..models import AgentMcpServer, AgentProfile, McpServer
 from ..security import decrypt, encrypt, mask
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
-logger = logging.getLogger("magenta")
+logger = logging.getLogger("arkswarm")
 
 #: MCP 来源的中文标签
 SOURCE_LABELS = {

@@ -4,7 +4,7 @@
 平台做了多层防护（加密落库 → 只以环境变量注入 → 事件流擦除 → 命令回显脱敏 → 接口只回掩码），
 但无法阻止一个有 shell + 网络的 AI 把信息间接传出去。网络出口过滤是堵住外泄通道的关键一层。
 
-三种模式（由 ``MAGENTA_EGRESS_MODE`` 设置）：
+三种模式（由 ``ARKSWARM_EGRESS_MODE`` 设置）：
 
 * ``off``（默认）：不限制，保持向后兼容；
 * ``block``：禁止所有出站网络 —— 子进程注入 blackhole 代理环境变量，
@@ -91,9 +91,9 @@ def blocked_message(url: str) -> str:
     """给用户看的「被出口策略拦截」提示。"""
     mode = egress_mode()
     if mode == "block":
-        return "网络出口已设为全部阻断（MAGENTA_EGRESS_MODE=block），不允许任何出站连接"
+        return "网络出口已设为全部阻断（ARKSWARM_EGRESS_MODE=block），不允许任何出站连接"
     host = urlparse(url).hostname or url
-    return f"网络出口白名单不包含 {host}（MAGENTA_EGRESS_ALLOWED_HOSTS），连接被拒绝"
+    return f"网络出口白名单不包含 {host}（ARKSWARM_EGRESS_ALLOWED_HOSTS），连接被拒绝"
 
 
 class EgressTransport(httpx.AsyncBaseTransport):

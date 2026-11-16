@@ -1,6 +1,6 @@
 <div align="center">
 
-# Magenta Agents
+# ArkSwarm
 
 **多智能体对话控制台** —— 把 Claude Code、Codex、Gemini CLI 等 AI 内核配置成「智能体」，像聊天一样使用它们。
 
@@ -17,7 +17,7 @@
 
 ---
 
-## ✨ 为什么是 Magenta Agents
+## ✨ 为什么是 ArkSwarm
 
 | | |
 | --- | --- |
@@ -43,7 +43,7 @@ cd ArkSwarm
 ./scripts/dev.sh              # → API :8000 + Web UI :5173
 ```
 
-**环境变量**（全部可选）：`MAGENTA_HOST`（默认 `0.0.0.0`）、`MAGENTA_PORT`（默认 `8010`）、`MAGENTA_DATA_DIR`（数据目录）——完整清单见 [`backend/.env.example`](./backend/.env.example)。
+**环境变量**（全部可选）：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）、`ARKSWARM_DATA_DIR`（数据目录）——完整清单见 [`backend/.env.example`](./backend/.env.example)。
 
 首次启动自动播种：为本机**已安装**的智能体类型各创建一条官方网关，并配套一个起始智能体。数据落在 `backend/data/`（SQLite + 每个对话独立的工作目录）。
 
@@ -187,7 +187,7 @@ class AcmeAgent(AgentDefinition):
 
 ## 🔐 安全
 
-- **密钥加密**：API 密钥与凭据使用 Fernet 加密落库，接口只回掩码（`sk-a…9f2c`）；密钥来自 `MAGENTA_SECRET_KEY`，未设置时自动生成 `data/secret.key`（0600）
+- **密钥加密**：API 密钥与凭据使用 Fernet 加密落库，接口只回掩码（`sk-a…9f2c`）；密钥来自 `ARKSWARM_SECRET_KEY`，未设置时自动生成 `data/secret.key`（0600）
 - **凭据只以环境变量注入**：模型只知道变量名（如 `$GITHUB_TOKEN`），值不进提示词、日志与接口响应；运行层逐条事件擦除凭据值
 - **日志自动脱敏**所有出现在 env 中的凭据
 - **路径护栏**：`Runtime.API` 型智能体的工具被限制在工作目录内，`../` 逃逸会被拒绝

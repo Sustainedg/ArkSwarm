@@ -417,7 +417,7 @@ VERSION_HISTORY: tuple[dict[str, object], ...] = (
             "现在三个 npm 内核动身前先清掉自己的中转残留（适配器声明 `prepare_argv`，框架照常执行、回显）",
             "修掉「本机已有一份同名命令时更新失败（EEXIST）」：`<npm 前缀>/bin/<命令>` 若被别的安装占着"
             "（系统里另一份 node 装的同一内核、手写的垫片），npm 只肯覆盖指向自己安装目录的链接；"
-            "现在安装 / 更新会先把这种占位挪到隐藏备份名 `.<命令>.magenta-bak` 让出位置，"
+            "现在安装 / 更新会先把这种占位挪到隐藏备份名 `.<命令>.arkswarm-bak` 让出位置，"
             "npm 失败再放回原位 —— 不留「命令没了、包也没装上」的半截状态",
             "Codex 适配器跟上新版 CLI：`codex exec` 不再有 `--full-auto`（全自动改走 `approval_policy=never`），"
             "`codex exec resume` 也不认 `-s/-C`（沙箱改走配置覆盖），修掉「一发消息就报错」",

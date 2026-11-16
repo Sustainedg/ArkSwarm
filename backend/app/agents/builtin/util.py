@@ -82,7 +82,7 @@ def npm_install_argv(package: str, *, bin_name: str, latest: bool = False) -> li
     spec = f"{package}@latest" if latest else package
     script = f'''bin="$(npm prefix -g)/bin"
 link="$bin/{bin_name}"
-bak="$bin/.{bin_name}.magenta-bak"
+bak="$bin/.{bin_name}.arkswarm-bak"
 root="$(npm root -g)"
 moved=0
 if [ -e "$link" ] || [ -L "$link" ]; then

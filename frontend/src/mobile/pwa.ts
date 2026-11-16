@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 /** 离线缓存的前缀（与 `public/m/sw.js` 里的缓存名保持一致）。 */
-const CACHE_PREFIX = 'magenta-m-'
+const CACHE_PREFIX = 'arkswarm-m-'
 
 /** 正在走「更新到最新版本」：它自己会清缓存再重载，别让 controllerchange 抢跑成白载。 */
 let selfRefresh = false

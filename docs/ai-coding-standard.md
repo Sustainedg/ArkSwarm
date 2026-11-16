@@ -207,7 +207,7 @@ POST /api/conversations/{id}/messages
 **schema 变更规则**（本地库有真实数据）：
 1. 只做**加列/加表**这类向后兼容变更，新列必须有默认值或可空。
 2. 不允许"删库重建"；如需数据迁移，写一次性脚本并说明如何回滚。
-3. 变更后在**现有** `backend/data/magenta.db` 上启动一次，确认历史对话仍可读、可继续对话。
+3. 变更后在**现有** `backend/data/arkswarm.db` 上启动一次，确认历史对话仍可读、可继续对话。
 4. 生产环境当前用 `create_all`（无迁移框架）。若将来要频繁演进 schema，**先引入 Alembic**，
    而不是在 `init_db` 里堆手写 DDL。
 

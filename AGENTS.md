@@ -1,4 +1,4 @@
-# AGENTS.md · Magenta Agents 工程约定
+# AGENTS.md · ArkSwarm 工程约定
 
 本文件对**所有在本仓库工作的 AI 编码代理**具有约束力。只要在这个仓库里改代码，就必须遵守。
 动手之前请先读完本文件；需要背景与理由，再读 `docs/ai-coding-standard.md` 与 `docs/architecture.md`。
@@ -12,7 +12,7 @@
 
 | 项 | 事实 |
 | --- | --- |
-| 产品 | Magenta Agents —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体，为它们配置网关、模型与人格 |
+| 产品 | ArkSwarm —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体，为它们配置网关、模型与人格 |
 | 后端 | Python 3.11 · FastAPI 0.115 · SQLModel + SQLite(aiosqlite) · Pydantic v2 · httpx（依赖见 `backend/requirements.txt`） |
 | 前端 | React 18 + TypeScript + Vite 6 · react-router · **无 UI 框架，手写 CSS**（`frontend/src/index.css`） |
 | 后端入口 | `backend/app/main.py`（`uvicorn app.main:app --app-dir backend`） |
@@ -342,7 +342,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   180°」换算（不要把实时 `filter` 加到手机上的大图上），`CollabOfficeMap` 按 `lib/theme.ts` 的当前
   主题选。办公室里的工牌 / 图例 / 工具按钮 / 信息卡颜色一律走 `--office-*` 变量（两端样式表各一份，
   浅色只在 `[data-theme='light']` 覆盖），**不要**写死深色。
-- **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `magenta.tts`，
+- **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `arkswarm.tts`，
   **默认关闭**；开启后新回复会被念出来，Markdown 先转成纯文本）。两个 iOS 坑必须一起处理：
   ① 首次发声要在**用户手势里**解锁（点开关时 `unlockSpeech()`）；② 打断上一条时 `cancel()` 与
   `speak()` 不能在同一轮里（iOS 会吞掉），要丢到下一个任务。对话页顶栏右上角只有「分享 + 朗读」
@@ -475,7 +475,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 前端任意改动 | `tsc --noEmit` + `npm run build` + **重启服务**后自测页面 |
 | 移动端 / PWA 改动 | 同上，并额外自测 `/m/` 深链可刷新、断网后外壳仍能打开（`pytest tests/test_mobile_web.py`） |
 | 事件协议/持久化 | 端到端跑一次真实对话（SSE 事件齐全、消息落库正确） |
-| 数据库结构 | 用**现有** `backend/data/magenta.db` 启动验证旧数据可读，不得重置 |
+| 数据库结构 | 用**现有** `backend/data/arkswarm.db` 启动验证旧数据可读，不得重置 |
 | 新增适配器 | `/api/agent-types` 能看到、表单可渲染、连通性测试可用 |
 | 技能（编目/分配/物化） | `pytest` 覆盖解析与物化；端到端跑一次真实对话确认技能生效、未分配的不出现 |
 | MCP（编目/分配/物化） | `pytest` 覆盖解析、物化、密钥只回掩码；端到端跑一次真实对话确认分配到的服务器写进隔离配置、未分配的不出现 |
@@ -540,8 +540,8 @@ curl -s http://127.0.0.1:8010/api/health
 ## 11. 部署速查
 
 - 生产：`bash scripts/serve.sh`（首次会自动建 venv、缺 `frontend/dist` 时自动构建），监听 `0.0.0.0:8010`。
-- 环境变量：`MAGENTA_HOST`（默认 `0.0.0.0`）、`MAGENTA_PORT`（默认 `8010`）；
+- 环境变量：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）；
   注意：某些进程管理器给子进程注入自己的 `HOME`，会导致 `claude` 报 "Not logged in"，
   此时在服务环境里显式设 `HOME` 为真实用户家目录。
 - 前后端分离开发：`bash scripts/dev.sh` → API `:8000` + Web `:5173`。
-- 数据目录：`backend/data/`（SQLite `magenta.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。
+- 数据目录：`backend/data/`（SQLite `arkswarm.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。
