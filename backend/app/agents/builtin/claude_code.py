@@ -38,7 +38,14 @@ from ..skills import (
     SkillSpec,
     scan_skill_roots,
 )
-from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, truthy
+from .util import (
+    as_list,
+    flatten_content,
+    npm_install_argv,
+    npm_prepare_argv,
+    truthy,
+    workspace_only,
+)
 
 
 # Claude Code 拒绝以 root 身份使用 bypassPermissions（"cannot be used with root/sudo
@@ -189,6 +196,25 @@ class ClaudeCodeAgent(AgentDefinition):
             ),
         ),
         ConfigField(
+            "file_access_scope",
+            "文件访问范围",
+            FieldType.SELECT,
+            default="unrestricted",
+            options=[
+                {"value": "unrestricted", "label": "不限制 · 可访问本机任意路径"},
+                {
+                    "value": "workspace_only",
+                    "label": "仅工作目录 · 文件工具不可越界读写",
+                },
+            ],
+            help=(
+                "「仅工作目录」把 Read/Grep/Glob/Edit/Write 锁定在对话的工作目录内"
+                "（每次运行注入权限设置，智能体无法在工作目录里自写配置来解除）。"
+                "注意：这是内核应用层约束，Bash 命令仍可能经 shell 访问其他路径；"
+                "需要强保证时请在容器等环境级隔离中运行。"
+            ),
+        ),
+        ConfigField(
             "system_prompt_mode",
             "人格注入方式",
             FieldType.SELECT,
@@ -274,16 +300,25 @@ class ClaudeCodeAgent(AgentDefinition):
                     f"工作目录自带的 {extra} 会被内核额外加载，这些技能不在智能体分配范围内"
                 )
         root = config_dir()
+        settings_patch: dict[str, Any] = {
+            "enabledPlugins": {plugin_id: False for plugin_id in _BUILTIN_PLUGIN_IDS},
+            "disableBundledSkills": True,
+            "skillOverrides": {slug: "off" for slug in _RESIDUAL_BUNDLED_SKILLS},
+        }
+        if workspace_only(ctx):
+            # 「仅工作目录」：文件工具的读写都锁在对话工作目录内。
+            # 这三个设置从 user 级配置读入后，工作目录里的 project settings 无法放宽
+            # （内核只认 user/--settings/managed 来源，且任一来源为 true 即生效）。
+            settings_patch["permissions"] = {
+                "blockReadsOutsideWorkingDirectories": True,
+                "blockFileToolReadsOutsideWorkingDirectories": True,
+                "blockWritesOutsideWorkingDirectories": True,
+            }
+            notes.append("已限制文件访问范围：文件工具只能读写本对话的工作目录")
         return SkillMount(
             home_name="claude-home",
             carry=[(str(root / name), name) for name in _SYSTEM_SETTINGS_FILES],
-            patch={
-                "settings.json": {
-                    "enabledPlugins": {plugin_id: False for plugin_id in _BUILTIN_PLUGIN_IDS},
-                    "disableBundledSkills": True,
-                    "skillOverrides": {slug: "off" for slug in _RESIDUAL_BUNDLED_SKILLS},
-                }
-            },
+            patch={"settings.json": settings_patch},
             notes=notes,
         )
 

@@ -37,7 +37,14 @@ from ..skills import (
     SkillSpec,
     scan_skill_roots,
 )
-from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, truthy
+from .util import (
+    as_list,
+    flatten_content,
+    npm_install_argv,
+    npm_prepare_argv,
+    truthy,
+    workspace_only,
+)
 
 
 #: Codex 的登录态与配置文件名；隔离运行时要一并带过去，否则会丢登录或丢自定义供应商。
@@ -139,6 +146,23 @@ class CodexAgent(AgentDefinition):
                 {"value": "workspace-write", "label": "workspace-write · 可写工作区"},
                 {"value": "danger-full-access", "label": "danger-full-access · 完全访问（危险）"},
             ],
+        ),
+        ConfigField(
+            "file_access_scope",
+            "文件访问范围",
+            FieldType.SELECT,
+            default="unrestricted",
+            options=[
+                {"value": "unrestricted", "label": "不限制 · 可访问本机任意路径"},
+                {
+                    "value": "workspace_only",
+                    "label": "仅工作目录 · 强制 workspace-write 沙箱",
+                },
+            ],
+            help=(
+                "「仅工作目录」把沙箱强制为 workspace-write（OS 级 landlock+seccomp），"
+                "读写都限定在对话的工作目录内，且会覆盖上面单独选择的沙箱模式。"
+            ),
         ),
         ConfigField(
             "full_auto",
@@ -273,7 +297,7 @@ class CodexAgent(AgentDefinition):
         # `codex exec` 与 `codex exec resume` 认的旗标不一样：`-s/--sandbox` 与 `-C/--cd`
         # 只挂在 `exec` 上，resume 只认配置覆盖 —— 所以恢复会话时把沙箱写成配置项
         # （工作目录本来就是进程 cwd，由 runner 设好，不必再传）。
-        sandbox = options.get("sandbox_mode")
+        sandbox = self._effective_sandbox(ctx)
         if sandbox:
             if resuming:
                 argv += ["-c", f'sandbox_mode="{sandbox}"']
@@ -592,10 +616,21 @@ class CodexAgent(AgentDefinition):
             params["cwd"] = ctx.workspace_dir
         if ctx.model:
             params["model"] = ctx.model
-        sandbox = ctx.option("sandbox_mode")
+        sandbox = CodexAgent._effective_sandbox(ctx)
         if sandbox:
             params["sandbox"] = sandbox
         return params
+
+    @staticmethod
+    def _effective_sandbox(ctx: AgentContext) -> str | None:
+        """本次运行生效的沙箱模式：「仅工作目录」覆盖用户单独选择的沙箱模式。
+
+        workspace-write 由内核用 OS 级隔离（Linux 上是 landlock+seccomp）保证
+        读写都出不了工作目录，比应用层约束更强，所以直接以它为准。
+        """
+        if workspace_only(ctx):
+            return "workspace-write"
+        return ctx.option("sandbox_mode") or None
 
     @staticmethod
     def _turn_params(run: AgentRun, thread_id: str) -> dict[str, Any]:

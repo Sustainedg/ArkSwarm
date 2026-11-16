@@ -781,3 +781,62 @@ def test_hermes_agent_surfaces_nonzero_exit():
     kinds = [e.type.value for e in events]
     assert "error" in kinds
     assert run.state.get("is_error") is True
+
+
+# --- 文件访问范围（file_access_scope）-----------------------------------------
+
+
+def test_claude_code_workspace_only_injects_permission_blocks():
+    """「仅工作目录」：物化 settings.json 时注入目录级读写封锁。"""
+    definition = get_agent("claude-code")
+    context = ctx(options={"file_access_scope": "workspace_only"})
+    mount = definition.skill_mount(context)
+    permissions = mount.patch["settings.json"]["permissions"]
+    assert permissions["blockReadsOutsideWorkingDirectories"] is True
+    assert permissions["blockFileToolReadsOutsideWorkingDirectories"] is True
+    assert permissions["blockWritesOutsideWorkingDirectories"] is True
+    assert any("仅工作目录" in note or "工作目录" in note for note in mount.notes)
+
+
+def test_claude_code_unrestricted_keeps_settings_clean():
+    """「不限制」是默认值：不注入任何目录封锁。"""
+    definition = get_agent("claude-code")
+    mount = definition.skill_mount(ctx())
+    assert "permissions" not in mount.patch["settings.json"]
+    assert not any("文件访问范围" in note for note in mount.notes)
+
+
+def test_codex_workspace_only_overrides_sandbox_mode():
+    """「仅工作目录」覆盖用户单独选的沙箱模式，强制 workspace-write。"""
+    definition = get_agent("codex")
+    options = {
+        "transport": "exec",
+        "file_access_scope": "workspace_only",
+        "sandbox_mode": "danger-full-access",  # 用户选了危险档，也要被压回
+    }
+    fresh = definition.build_invocation(ctx(options=options))
+    assert fresh.argv[fresh.argv.index("-s") + 1] == "workspace-write"
+
+    resumed = definition.build_invocation(ctx(options=options, session_id="tid-1"))
+    assert 'sandbox_mode="workspace-write"' in resumed.argv
+    assert 'sandbox_mode="danger-full-access"' not in resumed.argv
+
+
+def test_codex_unrestricted_respects_user_sandbox_choice():
+    definition = get_agent("codex")
+    options = {"transport": "exec", "sandbox_mode": "read-only"}
+    fresh = definition.build_invocation(ctx(options=options))
+    assert fresh.argv[fresh.argv.index("-s") + 1] == "read-only"
+
+
+def test_gemini_workspace_only_forces_sandbox_flag():
+    """「仅工作目录」时 Gemini 强制带 --sandbox（未单独勾选沙箱也要带）。"""
+    definition = get_agent("gemini-cli")
+    argv = definition.build_invocation(ctx(options={"file_access_scope": "workspace_only"})).argv
+    assert "--sandbox" in argv
+
+
+def test_gemini_unrestricted_skips_sandbox_flag():
+    definition = get_agent("gemini-cli")
+    argv = definition.build_invocation(ctx()).argv
+    assert "--sandbox" not in argv

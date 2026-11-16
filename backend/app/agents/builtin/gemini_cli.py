@@ -28,7 +28,7 @@ from ..events import (
 )
 from ..mcp import McpMount, McpServerSpec, parse_json_servers, to_json_servers
 from ..registry import register_agent
-from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv
+from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, workspace_only
 
 
 #: Gemini CLI 的 MCP 配置只认用户级 / 项目级 ``settings.json``（没有独立的配置目录开关）。
@@ -99,7 +99,32 @@ class GeminiCliAgent(AgentDefinition):
                 {"value": "prepend", "label": "拼接到提示词最前面"},
             ],
         ),
-        ConfigField("sandbox", "启用沙箱", FieldType.BOOLEAN, default=False, advanced=True),
+        ConfigField(
+            "sandbox",
+            "启用沙箱",
+            FieldType.BOOLEAN,
+            default=False,
+            advanced=True,
+            help="用容器后端（docker/podman）隔离执行；需要本机装好并配置好对应后端。",
+        ),
+        ConfigField(
+            "file_access_scope",
+            "文件访问范围",
+            FieldType.SELECT,
+            default="unrestricted",
+            options=[
+                {"value": "unrestricted", "label": "不限制 · 可访问本机任意路径"},
+                {
+                    "value": "workspace_only",
+                    "label": "仅工作目录 · 强制启用沙箱（需 docker/podman）",
+                },
+            ],
+            help=(
+                "「仅工作目录」会强制启用沙箱，把文件访问限定在对话的工作目录内。"
+                "Gemini CLI 的沙箱依赖容器后端（docker 或 podman），未安装时内核会启动失败；"
+                "没有容器后端时请保持「不限制」。"
+            ),
+        ),
         ConfigField(
             "extensions",
             "扩展插件",
@@ -156,7 +181,8 @@ class GeminiCliAgent(AgentDefinition):
             argv += ["--resume", ctx.session_id]
         elif ctx.session_id is not None:
             argv += ["--session-summary", ctx.session_id]
-        if options.get("sandbox"):
+        # 「仅工作目录」强制启用沙箱（未单独勾选沙箱也要带）。
+        if options.get("sandbox") or workspace_only(ctx):
             argv.append("--sandbox")
         for ext in as_list(options.get("extensions") or []):
             argv += ["--extensions", ext]
