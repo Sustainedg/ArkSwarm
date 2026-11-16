@@ -4,7 +4,7 @@ import type {
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, CollabBudgetPatch, Conversation,
   ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
-  McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeLatest, Skill,
+  McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeLatest, Skill, UpdateEvent, UpdateStatus,
   ProvisionJobInfo,
   MarketInstallInput,
   MarketInstallResult,
@@ -114,6 +114,9 @@ export const api = {
     return request<UsageOverview>(`/api/usage/overview${suffix}`)
   },
   architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
+  /** 「设置 → 关于」的版本更新：检测（GitHub Release）、本地状态。 */
+  updateCheck: () => request<UpdateStatus>('/api/update/check'),
+  updateStatus: () => request<UpdateStatus>('/api/update/status'),
   getProxy: () => request<{ proxy_url: string | null }>('/api/system/proxy'),
   setProxy: (proxyUrl: string | null) =>
     request<{ proxy_url: string | null }>('/api/system/proxy', {
@@ -437,6 +440,18 @@ export function streamPost<T = AgentEvent>(
     onEvent,
     signal,
   )
+}
+
+/**
+ * 一键更新 / 回滚：POST SSE，不需要请求体。
+ * 事件信封是 `update.*`（自有信封，见 `api/update.py`）；流结束时进程会原地重启，
+ * 这里拿到全部事件后 resolve —— 之后的「等后端回来」由调用方轮询 health。
+ */
+export function updateStream(
+  path: '/api/update/install' | '/api/update/rollback',
+  onEvent: (event: UpdateEvent) => void,
+): Promise<void> {
+  return streamRequest<UpdateEvent>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, onEvent)
 }
 
 /** 订阅一条 GET SSE（用于断开后重连协作运行、或在另一台设备上实时围观）。 */

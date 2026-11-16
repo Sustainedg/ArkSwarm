@@ -5,6 +5,7 @@ import { GatewayManager } from '../components/GatewayManager'
 import { KernelManager } from '../components/KernelManager'
 import { ProxySettings } from '../components/ProxySettings'
 import { TitleSettingsSection } from '../components/TitleSettings'
+import { UpdatePanel } from '../components/UpdatePanel'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
@@ -162,6 +163,7 @@ export function SettingsPage() {
 
         {tab === 'about' && (
           <>
+            <UpdatePanel currentVersion={overview?.version ?? '…'} />
             <section className="stack">
               <div className="row" style={{ gap: 8 }}>
                 <h2 className="card-section-title" style={{ flex: 1 }}>

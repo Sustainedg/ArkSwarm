@@ -533,6 +533,34 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 | 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
+| 发布一个新版本 | 改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 → `bash scripts/release.sh`（构建前端、打 tar.gz、`gh release create`）；运行端在「设置 → 关于」一键更新 |
+
+### 8.1 平台自更新（版本级 · GitHub Release）
+
+「设置 → 关于」的检测更新吃的是 **GitHub Release**，不是 main 分支 —— 版本级发布才构成
+一次更新，日常 commit 不算。两种部署形态：
+
+- **托管模式**（Docker / 任意进程管理器）：`releases/` 下按版本各占一个子目录，
+  `current` 软链指向正在运行的版本。更新 = 下载 Release 产物包（`arkswarm.tar.gz`，
+  含预构建 `frontend/dist`）→ 校验 SHA256 → 安全解压成新子目录 → 原子切指针 →
+  `os.execv` 原地重启进程。**同 PID 自替换**：容器里 uvicorn 是 PID 1，容器不退出、
+  不需要 docker.sock；进程管理器（PyPanel 等）完全无感知。回滚 = 指针切回旧目录 +
+  同样重启；`releases/` 保留最近 3 个版本。
+- **源码模式**（仓库里直接跑，无 `current` 链）：只检测、不安装 —— 升级动的是正在
+  运行的代码本身，开发机上由 git 管。
+
+```
+GitHub Release ──/releases/latest──▶ app/selfupdate.check_latest()   （代理走 platform_settings.proxy_url）
+        │
+        └─/arkswarm.tar.gz（+.sha256）─▶ install_release()：下载 → 校验 → 安全解压（防穿越/跳链接）
+                                            → releases/<版本>/ → 原子切 current → os.execv 重启
+界面（关于页 UpdatePanel）：SSE 收 update.* 事件 → 轮询 /api/health 等版本号变化 → 整页重载
+```
+
+实现在 `app/selfupdate.py`（叶子模块：标准库 + httpx + settings，不碰数据库以外的层），
+路由在 `api/update.py`（`update.*` SSE 信封是本模块自有的，不属于适配器事件协议）。
+发布侧 `scripts/release.sh`；Docker 形态 `docker/Dockerfile` + `docker/entrypoint.sh`
+（镜像只封装环境，应用代码在 `/app` 卷里，空卷首启自动装最新 Release）。
 
 ## 9. 已知边界
 

@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     egress_mode: str = "off"
     #: 出口白名单（逗号分隔域名），allowlist 模式下生效；网关地址运行时自动加入
     egress_allowed_hosts: str = ""
+    #: 自更新来源仓库（owner/repo）；默认官方仓库，私有部署可指到自己的 fork
+    update_repo: str | None = None
+    #: GitHub API 基址；GitHub Enterprise 部署可换自己的域名
+    update_github_api: str | None = None
 
     @property
     def sqlalchemy_url(self) -> str:

@@ -545,3 +545,15 @@ curl -s http://127.0.0.1:8010/api/health
   此时在服务环境里显式设 `HOME` 为真实用户家目录。
 - 前后端分离开发：`bash scripts/dev.sh` → API `:8000` + Web `:5173`。
 - 数据目录：`backend/data/`（SQLite `arkswarm.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。
+
+### 版本发布与更新（版本级 · GitHub Release）
+
+- 发版：改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 →
+  `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
+  tag 必须与 `__version__` 一致（`v0.44` ↔ `V0.44`），脚本会校验。
+- Docker：`docker/Dockerfile` 只封装环境（python + curl），应用代码在 `/app` 卷里
+  （`docker/entrypoint.sh` 空卷首启自动装最新 Release，requirements 变化时自动重装依赖）。
+  版本级更新走「设置 → 关于」：下载 Release → `releases/<版本>/` → 原子切 `current` →
+  `os.execv` 原地重启（uvicorn 是 PID 1，容器不退出）。
+- 源码模式（仓库里直接跑）：关于页只提示新版本，不给一键更新按钮 —— 升级走 git。
+- 仓库与 API 可用 `ARKSWARM_UPDATE_REPO` / `ARKSWARM_UPDATE_GITHUB_API` 覆盖（fork / GHE 部署）。

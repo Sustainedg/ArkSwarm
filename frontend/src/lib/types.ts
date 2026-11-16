@@ -673,6 +673,37 @@ export interface ArchitectureDoc {
   updated_at: string
 }
 
+/** 「设置 → 关于 → 检测更新」的状态（GET /api/update/check 与 /api/update/status 同形）。 */
+export interface UpdateStatus {
+  /** 部署形态：managed（托管，可一键更新）/ source（源码模式，只能提示走 git） */
+  mode: 'managed' | 'source'
+  current_version: string
+  /** GitHub 最新 Release（检测失败 / 没有 Release 时为 null） */
+  latest: {
+    tag: string
+    version: string
+    title: string
+    notes: string
+    published_at: string
+    asset_size: number
+  } | null
+  update_available: boolean
+  /** 托管模式才允许安装；源码模式界面只提示「用 git 更新」 */
+  can_install: boolean
+  /** releases/ 里已装好的版本（降序） */
+  installed_versions: string[]
+  rollback_available: boolean
+  /** 上一次「更新 / 回滚 → 重启」的记录（重启完成后读一次，用于展示结果横幅） */
+  pending_restart: { action: string; version: string; from_version: string; at: number } | null
+}
+
+/** 一键更新 / 回滚的 SSE 事件（`update.*` 信封，见 `api/update.py`）。 */
+export type UpdateEvent =
+  | { type: 'update.started'; current: string }
+  | { type: 'update.downloading'; version: string; size: number; published_at: string; notes: string }
+  | { type: 'update.restarting'; action: 'update' | 'rollback'; version: string; restarting: boolean }
+  | { type: 'update.error'; message: string }
+
 export interface TestResult {
   ok: boolean
   message: string

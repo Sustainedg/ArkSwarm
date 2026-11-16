@@ -10,6 +10,7 @@ from . import (
     mcp,
     runtimes,
     runs,
+    update,
     skillhub,
     skills,
     system,
@@ -29,6 +30,7 @@ api_router.include_router(runtimes.router)
 api_router.include_router(conversations.router)
 api_router.include_router(runs.router)
 api_router.include_router(usage.router)
+api_router.include_router(update.router)
 api_router.include_router(collab_router)
 
 __all__ = ["api_router"]
