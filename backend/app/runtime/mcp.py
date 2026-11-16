@@ -138,13 +138,20 @@ def _normalize_connection(transport: str, command: Any, url: Any) -> tuple[str |
     return None, url
 
 
-async def _slug_conflict(session: AsyncSession, slug: str, *, keep_id: str | None = None) -> bool:
-    """平台通用服务器之间不允许标识重名（重名写进内核配置会互相覆盖）。"""
+async def _slug_conflict(
+    session: AsyncSession, slug: str, *, keep_id: str | None = None, owner_id: str | None = None
+) -> bool:
+    """平台通用服务器之间不允许标识重名（重名写进内核配置会互相覆盖）。
+
+    多用户下重名检查在「同一用户」范围内：不同用户各自叫 ``github`` 的服务器互不冲突。
+    """
     statement = select(McpServer.id).where(
         McpServer.type_id.is_(None),
         McpServer.slug == slug,
         McpServer.deleted_at.is_(None),
     )
+    if owner_id is not None:
+        statement = statement.where(McpServer.owner_id == owner_id)
     for (mcp_id,) in (await session.execute(statement)).all():
         if mcp_id != keep_id:
             return True
@@ -170,11 +177,11 @@ def discover_catalog() -> dict[str, McpServerSpec]:
     return catalog
 
 
-async def rescan(session: AsyncSession) -> dict[str, int]:
+async def rescan(session: AsyncSession, owner_id: str | None = None) -> dict[str, int]:
     """重新扫描各内核的 MCP 配置，并同步到统一目录。
 
     配置里不再存在的服务器只标记 ``available=False``，不删除记录，避免智能体分配断链。
-    平台新建的服务器（``type_id`` 为空）不参与重扫。
+    平台新建的服务器（``type_id`` 为空）不参与重扫。扫描到的服务器归属到发起扫描的用户。
     """
     discovered = discover_catalog()
     rows = {
@@ -208,6 +215,7 @@ async def rescan(session: AsyncSession) -> dict[str, int]:
                     available=True,
                     discovered_at=now,
                     updated_at=now,
+                    owner_id=owner_id,
                 )
             )
             added += 1
@@ -261,6 +269,7 @@ async def create_row(
     env: Mapping[str, str] | None = None,
     headers: Mapping[str, str] | None = None,
     enabled: bool = True,
+    owner_id: str | None = None,
 ) -> McpServer:
     """新建一个「平台通用」的 MCP 服务器（可分配给任意内核的智能体）。"""
     label = (name or "").strip()
@@ -269,7 +278,7 @@ async def create_row(
     key = safe_slug(slug or label)
     if key is None:
         raise McpError("服务器标识不合法：请使用字母、数字、下划线、点或连字符")
-    if await _slug_conflict(session, key):
+    if await _slug_conflict(session, key, owner_id=owner_id):
         raise McpError(f"已经有一个叫「{key}」的 MCP 服务器了，请换一个名字", status_code=409)
     normalized_transport = _normalize_transport(transport)
     normalized_command, normalized_url = _normalize_connection(normalized_transport, command, url)
@@ -291,6 +300,7 @@ async def create_row(
         available=True,
         discovered_at=now,
         updated_at=now,
+        owner_id=owner_id,
     )
     session.add(row)
     await session.commit()
@@ -312,6 +322,7 @@ async def update_row(
     env: Mapping[str, str] | None = None,
     headers: Mapping[str, str] | None = None,
     enabled: bool | None = None,
+    owner_id: str | None = None,
 ) -> McpServer:
     """更新一个平台通用的 MCP 服务器（扫描来的服务器不可改，调用方先拦）。"""
     _ensure_editable(row)
@@ -321,7 +332,7 @@ async def update_row(
     key = safe_slug(slug or label)
     if key is None:
         raise McpError("服务器标识不合法：请使用字母、数字、下划线、点或连字符")
-    if await _slug_conflict(session, key, keep_id=row.id):
+    if await _slug_conflict(session, key, keep_id=row.id, owner_id=owner_id):
         raise McpError(f"已经有一个叫「{key}」的 MCP 服务器了，请换一个名字", status_code=409)
     normalized_transport = _normalize_transport(transport if transport is not None else row.transport)
     normalized_command, normalized_url = _normalize_connection(
@@ -383,12 +394,22 @@ async def list_rows(
     source_kind: str | None = None,
     available: bool | None = None,
     query: str | None = None,
+    owner_id: str | None = None,
+    include_shared: bool = True,
 ) -> list[McpServer]:
     statement = (
         select(McpServer)
         .where(McpServer.deleted_at.is_(None))
         .order_by(McpServer.type_id, McpServer.name)
     )
+    if owner_id is not None:
+        if include_shared:
+            # 自己的 + 扫描来的（type_id 非空，内核配置里的共享服务器）
+            statement = statement.where(
+                (McpServer.owner_id == owner_id) | (McpServer.type_id.is_not(None))
+            )
+        else:
+            statement = statement.where(McpServer.owner_id == owner_id)
     if type_id:
         statement = statement.where(McpServer.type_id == type_id)
     if source_kind:
@@ -415,15 +436,19 @@ async def get_row(session: AsyncSession, mcp_id: str) -> McpServer | None:
     return row
 
 
-async def usage_counts(session: AsyncSession) -> dict[str, int]:
-    """每个 MCP 服务器被多少个**未删除**的智能体使用。"""
-    rows = (
-        await session.execute(
-            select(AgentMcpServer.mcp_server_id)
-            .join(AgentProfile, AgentProfile.id == AgentMcpServer.agent_profile_id)
-            .where(AgentProfile.deleted_at.is_(None))
-        )
-    ).scalars().all()
+async def usage_counts(session: AsyncSession, owner_id: str | None = None) -> dict[str, int]:
+    """每个 MCP 服务器被多少个**未删除**的智能体使用。
+
+    ``owner_id`` 非空时只统计该用户的智能体（成员看自己的用量，管理员传 ``None`` 看全局）。
+    """
+    statement = (
+        select(AgentMcpServer.mcp_server_id)
+        .join(AgentProfile, AgentProfile.id == AgentMcpServer.agent_profile_id)
+        .where(AgentProfile.deleted_at.is_(None))
+    )
+    if owner_id is not None:
+        statement = statement.where(AgentProfile.owner_id == owner_id)
+    rows = (await session.execute(statement)).scalars().all()
     counts: dict[str, int] = {}
     for mcp_id in rows:
         counts[mcp_id] = counts.get(mcp_id, 0) + 1
@@ -455,7 +480,11 @@ async def agent_mcp_ids(session: AsyncSession, profile_id: str) -> list[str]:
 
 
 async def set_agent_mcp_servers(
-    session: AsyncSession, profile: AgentProfile, mcp_ids: list[str]
+    session: AsyncSession,
+    profile: AgentProfile,
+    mcp_ids: list[str],
+    *,
+    owner_id: str | None = None,
 ) -> list[str]:
     """整表替换智能体的 MCP 分配；返回实际写入的 id 列表。
 
@@ -467,6 +496,9 @@ async def set_agent_mcp_servers(
         row = await get_row(session, mcp_id)
         if row is None:
             raise ValueError(f"MCP 服务器不存在：{mcp_id}")
+        # 平台通用服务器只能分配自己的；扫描来的（type_id 非空）是各内核配置的共享目录。
+        if owner_id is not None and row.type_id is None and row.owner_id != owner_id:
+            raise ValueError(f"MCP 服务器不存在或无权使用：{mcp_id}")
         if row.type_id is not None and row.type_id != profile.type_id:
             raise ValueError(
                 f"MCP 服务器「{row.name}」来自 {row.type_id} 内核的配置，"

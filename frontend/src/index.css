@@ -341,9 +341,44 @@ code, pre, .mono { font-family: var(--mono); }
 .sidebar-picker { display: flex; flex-direction: column; gap: calc(4px * var(--sbs)); }
 
 .sidebar-footer {
-  margin-top: auto; padding: calc(12px * var(--sbs)) calc(8px * var(--sbs)) calc(4px * var(--sbs));
-  border-top: 1px solid var(--border); font-size: calc(11px * var(--sbs)); color: var(--text-dim);
+  margin-top: auto; padding: calc(8px * var(--sbs)) 0 calc(2px * var(--sbs));
+  border-top: 1px solid var(--border);
 }
+/* 左下角账号：平时只有头像 + 用户名，点开才出现「设置 / 退出登录」。 */
+.sidebar-user-wrap { position: relative; }
+.sidebar-user-btn {
+  display: flex; align-items: center; gap: calc(9px * var(--sbs)); width: 100%;
+  padding: calc(7px * var(--sbs)); border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.sidebar-user-btn:hover,
+.sidebar-user-btn[aria-expanded='true'] {
+  background: var(--bg-hover); border-color: var(--border);
+}
+.sidebar-user-avatar {
+  width: calc(28px * var(--sbs)); height: calc(28px * var(--sbs)); flex: none;
+  display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  color: #fff; font-size: calc(12px * var(--sbs)); font-weight: 700; line-height: 1;
+}
+.sidebar-user-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: calc(12px * var(--sbs)); color: var(--text); font-weight: 600;
+}
+.sidebar-user-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 60;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-panel); box-shadow: 0 16px 40px rgb(0 0 0 / 35%);
+}
+.sidebar-user-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 9px; border: none; border-radius: 8px; background: transparent;
+  color: var(--text); font-size: calc(12px * var(--sbs)); text-align: left; cursor: pointer;
+}
+.sidebar-user-menu button:hover { background: var(--bg-hover); }
+.sidebar-user-menu-icon { width: 16px; text-align: center; font-size: 13px; line-height: 1; }
 
 /* 折叠按钮：点一下在「图标 + 文字」与「只有图标」之间切换（宽度跟着侧边栏走，状态记在本机） */
 .sidebar-toggle {
@@ -2447,7 +2482,6 @@ code, pre, .mono { font-family: var(--mono); }
 .zoomable.md-image img { max-width: 100%; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .md-image-missing { color: var(--text-dim); font-size: 12px; }
 
-
 /* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
 .office-map {
   position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
@@ -2773,3 +2807,56 @@ code, pre, .mono { font-family: var(--mono); }
   .office-worker .collab-station-scene.fidget-leg .collab-worker-leg,
   .office-worker .collab-station-scene.fidget-glance .collab-worker-head { animation: none; }
 }
+
+/* ================= 登录 / 注册（两端共用表单组件，样式各写一份）================= */
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 10%, var(--brand-soft), transparent 45%),
+    radial-gradient(circle at 80% 90%, var(--accent-soft, transparent), transparent 45%),
+    var(--bg);
+}
+.auth-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-panel);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 28%);
+}
+.auth-brand { display: flex; align-items: center; gap: 12px; }
+.auth-mark {
+  width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 13px; background: var(--brand); color: #fff; font-size: 22px;
+}
+.auth-title { font-size: 19px; font-weight: 700; letter-spacing: 0.3px; }
+.auth-sub { font-size: 12px; color: var(--text-dim); }
+.auth-heading h1 { font-size: 21px; margin-bottom: 6px; }
+.auth-form { gap: 14px; }
+.auth-submit { width: 100%; justify-content: center; }
+.auth-switch { text-align: center; }
+.auth-loading { color: var(--text-muted); font-size: 13px; }
+.link-btn {
+  border: none; background: none; color: var(--brand);
+  font-size: 12.5px; cursor: pointer; padding: 2px 4px;
+}
+.link-btn:hover { text-decoration: underline; }
+
+/* 账号 / 用户管理（组件两端共用） */
+.account-card { display: flex; flex-direction: column; gap: 14px; }
+.account-user-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-soft, var(--bg-hover));
+}
+.account-user-main { flex: 1; min-width: 180px; }
+.account-user-name { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; }
+.account-user-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.account-reset-row { display: flex; gap: 8px; width: 100%; }
+.account-reset-row .input { flex: 1; }

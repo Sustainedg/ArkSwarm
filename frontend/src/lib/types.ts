@@ -1035,3 +1035,31 @@ export interface CollabEvent {
     options?: CollabChoice[]
   } | null
 }
+
+
+/* ---------- 多用户系统（后端 app/api/auth.py）---------- */
+
+/** 当前登录用户（不含口令哈希；接口从不回密钥）。 */
+export interface AuthUser {
+  id: string
+  username: string
+  display_name?: string | null
+  email?: string | null
+  role: 'admin' | 'member'
+  is_active: boolean
+  created_at: string
+}
+
+/** 登录 / 注册成功的响应。 */
+export interface AuthSession {
+  access_token: string
+  token_type: string
+  user: AuthUser
+}
+
+/** 登录页需要的公开配置（不需要令牌）。 */
+export interface AuthConfig {
+  auth_enabled: boolean
+  registration_open: boolean
+  has_users: boolean
+}

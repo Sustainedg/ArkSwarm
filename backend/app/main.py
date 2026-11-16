@@ -15,7 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, collab
 from .agents import all_agents
 from .api import api_router
-from .bootstrap import ensure_default_agent, seed_if_empty
+from .bootstrap import (
+    active_admin,
+    backfill_ownership,
+    ensure_default_agent,
+    seed_if_empty,
+    seed_initial_admin,
+)
 from .db import SessionLocal, init_db
 from .runtime import availability as availability_service
 from .runtime import skills as skill_service
@@ -49,6 +55,11 @@ async def lifespan(app: FastAPI):
         await seed_if_empty(session, all_agents())
         # 老库升级上来时可能一颗星都没有：补一次，保证「新建对话」直接可用
         await ensure_default_agent(session)
+        # 多用户系统：首启按环境变量建首任管理员，并把老库无归属的存量数据回填给它。
+        # 已有用户 / 已有管理员时也要检查一次：鉴权关闭期间创建的行可能是无归属的。
+        admin = await seed_initial_admin(session) or await active_admin(session)
+        if admin is not None:
+            await backfill_ownership(session, admin)
         await _scan_skills(session)
         recovered = await collab.recover_interrupted(session)
         if recovered:

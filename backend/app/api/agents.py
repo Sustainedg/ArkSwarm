@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import update
@@ -23,9 +24,11 @@ from ..models import (
     AgentProfile,
     AgentSkill,
     Conversation,
+    Credential,
     Gateway,
     McpServer,
     Skill,
+    User,
 )
 from ..runtime import availability as availability_service
 from ..runtime import credentials as credential_service
@@ -43,6 +46,7 @@ from ..schemas import (
     AgentSkillsUpdate,
     AgentTestResult,
 )
+from .auth import current_user, owner_id_for, require_owned
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -178,34 +182,34 @@ async def _to_read(
     )
 
 
-async def _has_default(session: AsyncSession) -> bool:
-    row = (
-        await session.execute(
-            select(AgentProfile.id)
-            .where(AgentProfile.is_default == True, AgentProfile.deleted_at.is_(None))  # noqa: E712
-            .limit(1)
-        )
-    ).first()
-    return row is not None
-
-
-async def _clear_other_defaults(keep_id: str, session: AsyncSession) -> None:
-    """五角星全局只有一颗：点亮自己的同时把别人的摘掉。"""
-    await session.execute(
-        update(AgentProfile).where(AgentProfile.id != keep_id).values(is_default=False)
+async def _has_default(session: AsyncSession, owner_id: str | None) -> bool:
+    stmt = select(AgentProfile.id).where(
+        AgentProfile.is_default == True,  # noqa: E712
+        AgentProfile.deleted_at.is_(None),
     )
+    if owner_id is not None:
+        stmt = stmt.where(AgentProfile.owner_id == owner_id)
+    return (await session.execute(stmt.limit(1))).first() is not None
 
 
-async def _promote_default(session: AsyncSession) -> None:
-    """默认智能体被删掉后补一颗星，免得「新建对话」突然没得用。"""
-    if await _has_default(session):
+async def _clear_other_defaults(keep_id: str, session: AsyncSession, owner_id: str | None) -> None:
+    """每个用户各自只有一颗五角星：点亮自己的同时把同一用户其它智能体的星摘掉。"""
+    stmt = update(AgentProfile).where(AgentProfile.id != keep_id)
+    if owner_id is not None:
+        stmt = stmt.where(AgentProfile.owner_id == owner_id)
+    await session.execute(stmt.values(is_default=False))
+
+
+async def _promote_default(session: AsyncSession, owner_id: str | None) -> None:
+    """默认智能体被删掉后补一颗星，免得「新建对话」突然没得用（按用户分别补）。"""
+    if await _has_default(session, owner_id):
         return
+    stmt = select(AgentProfile).where(AgentProfile.deleted_at.is_(None))
+    if owner_id is not None:
+        stmt = stmt.where(AgentProfile.owner_id == owner_id)
     nxt = (
         await session.execute(
-            select(AgentProfile)
-            .where(AgentProfile.deleted_at.is_(None))
-            .order_by(AgentProfile.enabled.desc(), AgentProfile.created_at)
-            .limit(1)
+            stmt.order_by(AgentProfile.enabled.desc(), AgentProfile.created_at).limit(1)
         )
     ).scalars().first()
     if nxt is None:
@@ -222,22 +226,40 @@ async def _active_profile(profile_id: str, session: AsyncSession) -> AgentProfil
     return profile
 
 
-async def _require_gateway(gateway_id: str | None, session: AsyncSession) -> Gateway | None:
+async def _require_gateway(
+    gateway_id: str | None, session: AsyncSession, user: User
+) -> Gateway | None:
+    """智能体引用的网关必须可用：官方链路所有人可选，自定义网关只能是自己的（管理员不限）。"""
     if not gateway_id:
         return None
     gateway = await session.get(Gateway, gateway_id)
     if gateway is None or gateway.deleted_at is not None:
         raise HTTPException(status_code=422, detail="指定的网关不存在")
+    if user.role != "admin" and gateway.kind != "official" and gateway.owner_id != user.id:
+        raise HTTPException(status_code=422, detail="指定的网关不存在")
     return gateway
 
 
+def _owned_query(stmt, user: User):
+    """列表只看自己的智能体；管理员看全部。"""
+    if user.role == "admin":
+        return stmt
+    return stmt.where(AgentProfile.owner_id == user.id)
+
+
 @router.get("")
-async def list_agents(session: AsyncSession = Depends(get_session)) -> dict:
+async def list_agents(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     rows = (
         await session.execute(
-            select(AgentProfile)
-            .where(AgentProfile.deleted_at.is_(None))
-            .order_by(AgentProfile.created_at)
+            _owned_query(
+                select(AgentProfile)
+                .where(AgentProfile.deleted_at.is_(None))
+                .order_by(AgentProfile.created_at),
+                user,
+            )
         )
     ).scalars().all()
     # 可用性按 type_id 批量取一次，避免「每行都探测一遍」。
@@ -246,12 +268,17 @@ async def list_agents(session: AsyncSession = Depends(get_session)) -> dict:
 
 
 @router.post("", status_code=201)
-async def create_agent(payload: AgentProfileCreate, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_agent(
+    payload: AgentProfileCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     try:
         definition = get_definition(payload.type_id)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    await _require_gateway(payload.gateway_id, session)
+    await _require_gateway(payload.gateway_id, session, user)
+    target_owner = owner_id_for(user)
     profile = AgentProfile(
         name=payload.name,
         type_id=payload.type_id,
@@ -263,18 +290,21 @@ async def create_agent(payload: AgentProfileCreate, session: AsyncSession = Depe
         model=payload.model,
         options=definition.coerce_options(payload.options or {}),
         enabled=payload.enabled,
-        # 第一个智能体自动戴上五角星（新建对话就能直接聊）；显式声明时以显式声明为准
-        is_default=bool(payload.is_default) or not await _has_default(session),
+        # 每个用户的第一个智能体自动戴上五角星（新建对话就能直接聊）；显式声明时以显式声明为准
+        is_default=bool(payload.is_default) or not await _has_default(session, target_owner),
         group_name=(payload.group_name or "").strip()[:60],
+        owner_id=target_owner,
     )
     session.add(profile)
     if profile.is_default:
-        await _clear_other_defaults(profile.id, session)
+        await _clear_other_defaults(profile.id, session, target_owner)
     await session.commit()
     await session.refresh(profile)
     if payload.credentials:
         try:
-            await credential_service.set_agent_credentials(session, profile, payload.credentials)
+            await credential_service.set_agent_credentials(
+                session, profile, payload.credentials, owner_id=owner_id_for(user)
+            )
         except CredentialError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
     statuses = await availability_service.for_types([profile.type_id])
@@ -282,17 +312,26 @@ async def create_agent(payload: AgentProfileCreate, session: AsyncSession = Depe
 
 
 @router.get("/{profile_id}")
-async def get_agent(profile_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_agent(
+    profile_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     statuses = await availability_service.for_types([profile.type_id])
     return (await _to_read(profile, session, statuses.get(profile.type_id))).model_dump()
 
 
 @router.patch("/{profile_id}")
 async def update_agent(
-    profile_id: str, payload: AgentProfileUpdate, session: AsyncSession = Depends(get_session)
+    profile_id: str,
+    payload: AgentProfileUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     data = payload.model_dump(exclude_unset=True)
     if data.get("type_id"):
         try:
@@ -300,14 +339,14 @@ async def update_agent(
         except KeyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
     if "gateway_id" in data:
-        await _require_gateway(data["gateway_id"], session)
+        await _require_gateway(data["gateway_id"], session, user)
     credentials: list = data.pop("credentials", None) or []
     if data.get("is_default") is not None:
         # 点星 / 取消星：点亮时把别人的摘掉（全局唯一）
         flag = bool(data.pop("is_default"))
         profile.is_default = flag
         if flag:
-            await _clear_other_defaults(profile.id, session)
+            await _clear_other_defaults(profile.id, session, profile.owner_id)
     if "options" in data and data["options"] is not None:
         type_id = data.get("type_id") or profile.type_id
         try:
@@ -326,7 +365,9 @@ async def update_agent(
     await session.commit()
     if "credentials" in payload.model_fields_set:
         try:
-            await credential_service.set_agent_credentials(session, profile, credentials)
+            await credential_service.set_agent_credentials(
+                session, profile, credentials, owner_id=profile.owner_id or user.id
+            )
         except CredentialError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
     await session.refresh(profile)
@@ -335,7 +376,11 @@ async def update_agent(
 
 
 @router.delete("/{profile_id}", status_code=204)
-async def delete_agent(profile_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_agent(
+    profile_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
     """删除智能体（软删除）。
 
     智能体常被历史引用（对话外键是 ``RESTRICT``），硬删会连历史一起打断。
@@ -343,12 +388,13 @@ async def delete_agent(profile_id: str, session: AsyncSession = Depends(get_sess
     名字与头像、也仍可继续对话。
     """
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     profile.deleted_at = datetime.now(timezone.utc)
     profile.updated_at = profile.deleted_at
     profile.is_default = False
     session.add(profile)
-    # 删掉的正是那颗星时，从剩下的里补一颗（还有智能体就永远有一颗）
-    await _promote_default(session)
+    # 删掉的正是那颗星时，从该用户剩下的智能体里补一颗（还有智能体就永远有一颗）
+    await _promote_default(session, profile.owner_id)
     await session.commit()
     return Response(status_code=204)
 
@@ -380,12 +426,21 @@ async def _drop_incompatible_mcp_servers(profile: AgentProfile, session: AsyncSe
 
 @router.put("/{profile_id}/mcp-servers")
 async def set_agent_mcp_servers(
-    profile_id: str, payload: AgentMcpUpdate, session: AsyncSession = Depends(get_session)
+    profile_id: str,
+    payload: AgentMcpUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """整表替换智能体挂着的 MCP 服务器（界面已禁止选错内核，这里是服务端兜底）。"""
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     try:
-        await mcp_service.set_agent_mcp_servers(session, profile, payload.mcp_ids)
+        await mcp_service.set_agent_mcp_servers(
+            session,
+            profile,
+            payload.mcp_ids,
+            owner_id=None if user.role == "admin" else (profile.owner_id or user.id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     statuses = await availability_service.for_types([profile.type_id])
@@ -394,10 +449,14 @@ async def set_agent_mcp_servers(
 
 @router.put("/{profile_id}/skills")
 async def set_agent_skills(
-    profile_id: str, payload: AgentSkillsUpdate, session: AsyncSession = Depends(get_session)
+    profile_id: str,
+    payload: AgentSkillsUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """整表替换智能体分配到的技能（界面已禁止选错类型，这里是服务端兜底）。"""
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     try:
         await skill_service.set_agent_skills(session, profile, payload.skill_ids)
     except ValueError as exc:
@@ -407,8 +466,23 @@ async def set_agent_skills(
 
 
 @router.post("/{profile_id}/duplicate", status_code=201)
-async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def duplicate_agent(
+    profile_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
+    # 复制出的智能体归当前用户：引用的私有网关 / 凭据若不属于他，就不要带过去。
+    gateway_id = profile.gateway_id
+    if gateway_id:
+        gateway = await session.get(Gateway, gateway_id)
+        if (
+            gateway is None
+            or gateway.deleted_at is not None
+            or (gateway.kind != "official" and gateway.owner_id != user.id)
+        ):
+            gateway_id = None
     clone = AgentProfile(
         name=f"{profile.name} 副本",
         type_id=profile.type_id,
@@ -416,11 +490,12 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
         tagline=profile.tagline,
         description=profile.description,
         system_prompt=profile.system_prompt,
-        gateway_id=profile.gateway_id,
+        gateway_id=gateway_id,
         model=profile.model,
         options=dict(profile.options or {}),
         enabled=profile.enabled,
         group_name=profile.group_name or "",
+        owner_id=owner_id_for(user),
     )
     session.add(clone)
     await session.commit()
@@ -443,6 +518,11 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
             .order_by(AgentMcpServer.position)
         )
     ).scalars().all():
+        server = await session.get(McpServer, link.mcp_server_id)
+        if server is None or server.deleted_at is not None:
+            continue
+        if server.type_id is None and server.owner_id != owner_id_for(user):
+            continue
         session.add(
             AgentMcpServer(
                 agent_profile_id=clone.id, mcp_server_id=link.mcp_server_id, position=link.position
@@ -455,6 +535,13 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
             .order_by(AgentCredential.position)
         )
     ).scalars().all():
+        credential = await session.get(Credential, link.credential_id)
+        if (
+            credential is None
+            or credential.deleted_at is not None
+            or credential.owner_id != owner_id_for(user)
+        ):
+            continue
         session.add(
             AgentCredential(
                 agent_profile_id=clone.id, credential_id=link.credential_id, position=link.position
@@ -466,9 +553,14 @@ async def duplicate_agent(profile_id: str, session: AsyncSession = Depends(get_s
 
 
 @router.post("/{profile_id}/test")
-async def test_agent(profile_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def test_agent(
+    profile_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """连通性测试：实时探测运行环境与网关（用户主动触发，走线程池，不冻住事件循环）。"""
     profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
     try:
         definition = get_definition(profile.type_id)
     except KeyError as exc:

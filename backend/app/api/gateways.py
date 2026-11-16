@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from sqlmodel import func, select
 
 from ..agents import get_agent
 from ..db import get_session
-from ..models import AgentProfile, Gateway
+from ..models import AgentProfile, Gateway, User
 from ..runtime.gateway_probe import AUTH_STYLES, PROTOCOLS, ProbeError, probe_models
 from ..schemas import (
     GatewayCreate,
@@ -23,6 +24,7 @@ from ..schemas import (
     GatewayUpdate,
 )
 from ..security import decrypt, encrypt, mask
+from .auth import current_user, owner_id_for, require_owned
 
 router = APIRouter(prefix="/gateways", tags=["gateways"])
 
@@ -75,11 +77,27 @@ async def _active_gateway(gateway_id: str, session: AsyncSession) -> Gateway:
     return gateway
 
 
+def _owned_query(stmt, user: User):
+    """列表只看自己的网关；管理员看全部。官方链路（kind=official）所有用户都能选用，
+    因此对非管理员是「自己的 + 官方的」。"""
+    if user.role == "admin":
+        return stmt
+    return stmt.where((Gateway.owner_id == user.id) | (Gateway.kind == "official"))
+
+
 @router.get("")
-async def list_gateways(session: AsyncSession = Depends(get_session)) -> dict:
+async def list_gateways(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     rows = (
         await session.execute(
-            select(Gateway).where(Gateway.deleted_at.is_(None)).order_by(Gateway.kind, Gateway.created_at)
+            _owned_query(
+                select(Gateway).where(Gateway.deleted_at.is_(None)).order_by(
+                    Gateway.kind, Gateway.created_at
+                ),
+                user,
+            )
         )
     ).scalars().all()
     counts = await _usage_counts(session)
@@ -103,7 +121,11 @@ def _auth_options() -> list[tuple[str, str]]:
 
 
 @router.post("", status_code=201)
-async def create_gateway(payload: GatewayCreate, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_gateway(
+    payload: GatewayCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     if payload.protocol not in PROTOCOLS:
         raise HTTPException(status_code=422, detail=f"未知的网关协议：{payload.protocol}")
     if payload.auth_style not in AUTH_STYLES:
@@ -123,6 +145,7 @@ async def create_gateway(payload: GatewayCreate, session: AsyncSession = Depends
         model_catalog=models,
         extra_headers=dict(payload.extra_headers or {}),
         enabled=payload.enabled,
+        owner_id=owner_id_for(user),
     )
     session.add(gateway)
     await session.commit()
@@ -131,17 +154,28 @@ async def create_gateway(payload: GatewayCreate, session: AsyncSession = Depends
 
 
 @router.get("/{gateway_id}")
-async def get_gateway(gateway_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_gateway(
+    gateway_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     gateway = await _active_gateway(gateway_id, session)
+    # 官方链路对所有人可读（列表里也能看到）；自定义网关按归属隔离。
+    if gateway.kind != "official":
+        require_owned(gateway, user)
     counts = await _usage_counts(session)
     return to_read(gateway, counts.get(gateway.id, 0)).model_dump()
 
 
 @router.patch("/{gateway_id}")
 async def update_gateway(
-    gateway_id: str, payload: GatewayUpdate, session: AsyncSession = Depends(get_session)
+    gateway_id: str,
+    payload: GatewayUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     gateway = await _active_gateway(gateway_id, session)
+    require_owned(gateway, user)
     data = payload.model_dump(exclude_unset=True)
     if "api_key" in data:
         secret = data.pop("api_key")
@@ -169,9 +203,14 @@ async def update_gateway(
 
 
 @router.delete("/{gateway_id}", status_code=204)
-async def delete_gateway(gateway_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_gateway(
+    gateway_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
     """删除网关：官方链路不可删；仍被**未删除**的智能体引用时返回 409。"""
     gateway = await _active_gateway(gateway_id, session)
+    require_owned(gateway, user)
     if gateway.kind == "official":
         raise HTTPException(status_code=409, detail="官方链路由内核提供，不能删除")
     in_use = (
@@ -191,15 +230,21 @@ async def delete_gateway(gateway_id: str, session: AsyncSession = Depends(get_se
 
 
 @router.post("/probe")
-async def probe(payload: GatewayProbeRequest, session: AsyncSession = Depends(get_session)) -> dict:
+async def probe(
+    payload: GatewayProbeRequest,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """「获取模型」：探测一次并返回模型清单（不落库）。
 
-    密钥留空且带 ``gateway_id`` 时复用已存密钥（重新探测已保存的网关）。
+    密钥留空且带 ``gateway_id`` 时复用已存密钥（重新探测已保存的网关）；复用的网关
+    必须是当前用户有权访问的，否则任何人都能拿别人的密钥去探测。
     """
     api_key = payload.api_key
     if not api_key and payload.gateway_id:
         stored = await session.get(Gateway, payload.gateway_id)
         if stored is not None:
+            require_owned(stored, user)
             api_key = decrypt(stored.api_key_encrypted)
     try:
         models = await probe_models(
@@ -217,9 +262,14 @@ async def probe(payload: GatewayProbeRequest, session: AsyncSession = Depends(ge
 
 
 @router.post("/{gateway_id}/refresh-models")
-async def refresh_models(gateway_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def refresh_models(
+    gateway_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """用已存的配置重新拉一次模型，更新 ``model_catalog``（不动白名单）。"""
     gateway = await _active_gateway(gateway_id, session)
+    require_owned(gateway, user)
     try:
         models = await probe_models(
             base_url=gateway.base_url,

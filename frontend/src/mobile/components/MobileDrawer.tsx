@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { useAuth } from '../../components/AuthGate'
 import { formatListTime } from '../../lib/datetime'
 import type { Conversation, AgentProfile } from '../../lib/types'
 import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
@@ -14,7 +15,6 @@ const NAV = [
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/mcp', icon: '🔌', label: 'MCP' },
   { to: '/usage', icon: '📊', label: '用量' },
-  { to: '/settings', icon: '⚙️', label: '设置' },
 ]
 
 interface Props {
@@ -35,7 +35,9 @@ interface Props {
  * 对话行只留文字（标题 + 智能体/条数 + 时间）与那个「⋯」：一行一行的头像在这里只是噪音，
  * 去掉之后列表更紧凑，字号也比其它列表小一档（见 mobile.css 的 `.m-conv-row`）。
  */
-export function MobileDrawer({ open, onClose, version }: Props) {  const navigate = useNavigate()
+export function MobileDrawer({ open, onClose, version }: Props) {
+  const { user, authEnabled, logout } = useAuth()
+  const navigate = useNavigate()
   const { pathname } = useLocation()
 
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -52,6 +54,8 @@ export function MobileDrawer({ open, onClose, version }: Props) {  const navigat
    * 只有还没设过默认（且可选智能体不止一个）时才退回来让用户挑一个。
    */
   const [pickerOpen, setPickerOpen] = useState(false)
+  /** 左下角账号菜单：平时只有头像 + 用户名，点开才有「设置 / 退出登录」 */
+  const [accountOpen, setAccountOpen] = useState(false)
 
   const activeId = /^\/chat\/([^/]+)/.exec(pathname)?.[1] ?? null
 
@@ -79,9 +83,12 @@ export function MobileDrawer({ open, onClose, version }: Props) {  const navigat
   // 抽屉开着时保持最新：另一台设备新发的消息会让标题、条数与时间自己变。
   useAutoRefresh(load, { intervalMs: 8000, enabled: open })
 
-  // 收起后回到对话列表，下次打开不会停在上次的「选智能体」那一步。
+  // 收起后回到对话列表，下次打开不会停在上次的「选智能体」那一步；账号菜单也一并收起。
   useEffect(() => {
-    if (!open) setPickerOpen(false)
+    if (!open) {
+      setPickerOpen(false)
+      setAccountOpen(false)
+    }
   }, [open])
 
   useEffect(() => {
@@ -117,6 +124,10 @@ export function MobileDrawer({ open, onClose, version }: Props) {  const navigat
   }
 
   if (!open) return null
+
+  const canLogout = authEnabled && user && user.id !== '__system__'
+  const displayName = user?.display_name || user?.username || '系统'
+  const initial = displayName.trim().slice(0, 1).toUpperCase() || '👤'
 
   return (
     <div className="m-drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -278,6 +289,50 @@ export function MobileDrawer({ open, onClose, version }: Props) {  const navigat
               </div>
             </>
           )}
+        </div>
+
+        <div className="m-drawer-account">
+          <div className="m-drawer-account-wrap">
+            {accountOpen && (
+              <div className="m-drawer-account-menu" role="menu" aria-label="账号菜单">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAccountOpen(false)
+                    onClose()
+                    navigate('/settings')
+                  }}
+                >
+                  <span className="m-drawer-account-menu-icon">⚙️</span>
+                  设置
+                </button>
+                {canLogout && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAccountOpen(false)
+                      logout()
+                    }}
+                  >
+                    <span className="m-drawer-account-menu-icon">⏻</span>
+                    退出登录
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="m-drawer-account-btn"
+              onClick={() => setAccountOpen((openMenu) => !openMenu)}
+              aria-haspopup="menu"
+              aria-expanded={accountOpen}
+            >
+              <span className="m-drawer-account-avatar">{initial}</span>
+              <span className="m-drawer-account-name">{displayName}</span>
+            </button>
+          </div>
         </div>
       </aside>
     </div>

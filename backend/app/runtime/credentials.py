@@ -41,12 +41,11 @@ async def get_row(session: AsyncSession, credential_id: str) -> Credential | Non
     return row
 
 
-async def find_by_name(session: AsyncSession, name: str) -> Credential | None:
-    return (
-        await session.execute(
-            select(Credential).where(Credential.name == name, Credential.deleted_at.is_(None))
-        )
-    ).scalars().first()
+async def find_by_name(session: AsyncSession, name: str, owner_id: str | None = None) -> Credential | None:
+    stmt = select(Credential).where(Credential.name == name, Credential.deleted_at.is_(None))
+    if owner_id is not None:
+        stmt = stmt.where(Credential.owner_id == owner_id)
+    return (await session.execute(stmt)).scalars().first()
 
 
 async def usage_counts(session: AsyncSession) -> dict[str, int]:
@@ -110,8 +109,14 @@ def _field(item: Any, key: str) -> Any:
     return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
 
 
-async def _resolve_one(session: AsyncSession, item: Any) -> Credential:
-    """把界面提交的一项（可能是「已存在的 id / 同名凭据 / 新名字 + 值」）解析成一条凭据行。"""
+async def _resolve_one(
+    session: AsyncSession, item: Any, owner_id: str | None = None
+) -> Credential:
+    """把界面提交的一项（可能是「已存在的 id / 同名凭据 / 新名字 + 值」）解析成一条凭据行。
+
+    多用户下按 ``owner_id`` 隔离：不能引用别人的凭据（否则运行时会把别人的密钥注入自己的
+    智能体），同名判断也只在同一用户范围内。
+    """
     credential_id = _field(item, "id")
     value = _field(item, "value")
     description = clean_description(_field(item, "description"))
@@ -121,14 +126,21 @@ async def _resolve_one(session: AsyncSession, item: Any) -> Credential:
         row = await get_row(session, str(credential_id))
         if row is None:
             raise CredentialError("选择的凭据已经被删除了，请刷新后重试")
+        if owner_id is not None and row.owner_id != owner_id:
+            raise CredentialError("选择的凭据不存在或无权使用")
     name = validate_name(str(_field(item, "name") or (row.name if row else "")))
     if row is None:
-        row = await find_by_name(session, name)
+        row = await find_by_name(session, name, owner_id)
     if row is None:
         # 新名字：必须带值，否则存进去也是一条空凭据
         if not value:
             raise CredentialError(f"凭据「{name}」还没有填值")
-        row = Credential(name=name, description=description, value_encrypted=encrypt(value))
+        row = Credential(
+            name=name,
+            description=description,
+            value_encrypted=encrypt(value),
+            owner_id=owner_id,
+        )
         session.add(row)
         await session.flush()
         return row
@@ -147,13 +159,20 @@ async def _resolve_one(session: AsyncSession, item: Any) -> Credential:
 
 
 async def set_agent_credentials(
-    session: AsyncSession, profile: AgentProfile, items: Sequence[Any]
+    session: AsyncSession,
+    profile: AgentProfile,
+    items: Sequence[Any],
+    *,
+    owner_id: str | None = None,
 ) -> list[str]:
-    """整表替换智能体引用的凭据；返回实际关联的 credential_id 列表。"""
+    """整表替换智能体引用的凭据；返回实际关联的 credential_id 列表。
+
+    ``owner_id`` 是凭据必须归属的用户；管理员替别人配置时传对方的 owner_id。
+    """
     resolved: list[Credential] = []
     seen: set[str] = set()
     for item in items:
-        row = await _resolve_one(session, item)
+        row = await _resolve_one(session, item, owner_id)
         if row.id in seen:
             raise CredentialError(f"凭据「{row.name}」重复了，请改成不同的名字")
         seen.add(row.id)
@@ -176,16 +195,24 @@ async def set_agent_credentials(
 
 
 async def create_row(
-    session: AsyncSession, *, name: str, description: Any = None, value: Any = None
+    session: AsyncSession,
+    *,
+    name: str,
+    description: Any = None,
+    value: Any = None,
+    owner_id: str | None = None,
 ) -> Credential:
-    """凭据库页里新建一条（名字必须唯一、必须带值）。"""
+    """凭据库页里新建一条（名字在当前用户范围内唯一、必须带值）。"""
     clean_name = validate_name(name)
-    if await find_by_name(session, clean_name) is not None:
+    if await find_by_name(session, clean_name, owner_id) is not None:
         raise CredentialError(f"凭据「{clean_name}」已经存在了")
     if not value:
         raise CredentialError(f"凭据「{clean_name}」还没有填值")
     row = Credential(
-        name=clean_name, description=clean_description(description), value_encrypted=encrypt(value)
+        name=clean_name,
+        description=clean_description(description),
+        value_encrypted=encrypt(value),
+        owner_id=owner_id,
     )
     session.add(row)
     await session.commit()
@@ -200,11 +227,12 @@ async def update_row(
     name: Any = None,
     description: Any = None,
     value: Any = None,
+    owner_id: str | None = None,
 ) -> Credential:
     """改名 / 改说明 / 换值（``None`` 表示这一项不改）。"""
     if name is not None:
         clean_name = validate_name(str(name))
-        conflict = await find_by_name(session, clean_name)
+        conflict = await find_by_name(session, clean_name, owner_id)
         if conflict is not None and conflict.id != row.id:
             raise CredentialError(f"凭据「{clean_name}」已经存在了")
         row.name = clean_name

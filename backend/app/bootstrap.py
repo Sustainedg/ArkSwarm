@@ -1,12 +1,22 @@
-"""首次启动播种：为每个可用内核建一条官方网关 + 一个默认智能体，避免界面空空如也。"""
+"""首次启动播种：为每个可用内核建一条官方网关 + 一个默认智能体，避免界面空空如也。
+
+多用户系统启用时，这里还负责：
+
+* :func:`seed_initial_admin` —— 按环境变量建首任管理员；
+* :func:`active_admin` —— 取当前启用中的管理员（老库已有用户时回填用）；
+* :func:`backfill_ownership` —— 把老库（原本单用户、所有数据无归属）的存量行
+  ``owner_id`` 回填给管理员，用 ``.ownership_backfilled`` 标记防重复。
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from .models import AgentProfile, Gateway
+from .auth import hash_password
+from .models import AgentProfile, Conversation, Credential, Gateway, McpServer, User
 from .security import encrypt
 from .settings import get_settings
 
@@ -134,3 +144,73 @@ async def ensure_default_agent(session: AsyncSession) -> None:
     rows[0].is_default = True
     session.add(rows[0])
     await session.commit()
+
+
+async def seed_initial_admin(session: AsyncSession) -> User | None:
+    """按环境变量建首任管理员；已存在任意用户时不生效。
+
+    返回建出的管理员，或 ``None``（未配置环境变量 / 已有用户）。
+    不写标记文件：判断依据是「表里有没有用户」，比文件标记更可靠。
+    """
+    settings = get_settings()
+    if not settings.admin_username or not settings.admin_password:
+        return None
+    has_any = (await session.execute(select(User.id).limit(1))).first()
+    if has_any is not None:
+        return None
+    user = User(
+        username=settings.admin_username,
+        display_name=settings.admin_username,
+        password_hash=hash_password(settings.admin_password),
+        role="admin",
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def active_admin(session: AsyncSession) -> User | None:
+    """取一个启用中的管理员；老库回填需要在「已有用户、但还没回填」时也能找到它。"""
+    return (
+        await session.execute(
+            select(User)
+            .where(User.role == "admin", User.is_active == True)  # noqa: E712
+            .order_by(User.created_at)
+            .limit(1)
+        )
+    ).scalars().first()
+
+
+async def backfill_ownership(session: AsyncSession, admin: User) -> None:
+    """把老库存量行的 ``owner_id`` 回填给管理员。
+
+    用 ``.ownership_backfilled`` 标记防重复；回填 ``owner_id IS NULL``（老库）与
+    ``owner_id = '__system__'``（鉴权关闭期间以虚拟管理员身份创建）的行，已有真实归属
+    （新创建的）不动。幂等。
+    """
+    settings = get_settings()
+    marker = settings.data_dir / ".ownership_backfilled"
+    if marker.exists():
+        return
+    owner_id = admin.id
+    # 逐表回填无归属（NULL）与虚拟管理员名下（__system__）的行。用原生 UPDATE 避免整行加载进 ORM。
+    for model in (Gateway, AgentProfile, Conversation, Credential, McpServer):
+        table_name = model.__tablename__  # type: ignore[attr-defined]
+        await session.execute(
+            # SQLModel 的表名稳定，这里用 text 走原生 SQL 最直接。
+            text(
+                f"UPDATE {table_name} SET owner_id = :owner "
+                "WHERE owner_id IS NULL OR owner_id = '__system__'"
+            ).bindparams(owner=owner_id)
+        )
+    # 协作域表
+    for table_name in ("collab_teams", "collab_runs"):
+        await session.execute(
+            text(
+                f"UPDATE {table_name} SET owner_id = :owner "
+                "WHERE owner_id IS NULL OR owner_id = '__system__'"
+            ).bindparams(owner=owner_id)
+        )
+    await session.commit()
+    marker.write_text("done\n", encoding="utf-8")

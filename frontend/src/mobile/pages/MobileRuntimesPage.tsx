@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
+import { useAuth } from '../../components/AuthGate'
 import type { AgentRuntime, ProvisionEvent, ProvisionJobInfo, RuntimeAction, RuntimeLatest } from '../../lib/types'
 import { RefreshIcon } from '../../components/Icons'
 import { KernelLogo } from '../../components/KernelLogo'
@@ -34,6 +35,7 @@ interface Job {
  * 日志在弹层里滚动，可随时中止。
  */
 export function MobileRuntimesPage() {
+  const { isAdmin } = useAuth()
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -96,8 +98,11 @@ export function MobileRuntimesPage() {
       setRuntimes(items)
       setError(null)
       // 「检查更新」是每个内核一次远端查询，不能挡住首屏：卡片先出来，结果到了再补。
+      // 该接口仅管理员可用，成员不要自动触发。
       setLoading(false)
-      await Promise.all(items.map((item) => checkLatest(item)))
+      if (isAdmin) {
+        await Promise.all(items.map((item) => checkLatest(item)))
+      }
       try {
         const jobs = await api.listProvisionJobs()
         setProvisionJobs(Object.fromEntries(jobs.map((j) => [j.runtime_id, j])))
@@ -237,7 +242,7 @@ export function MobileRuntimesPage() {
               const provisioning = runtime.provisioning
               const managed = provisioning.supported
               const remote = latest[runtime.id]?.latest ?? null
-              const canCheck = Boolean(provisioning.commands?.latest?.length)
+              const canCheck = isAdmin && Boolean(provisioning.commands?.latest?.length)
               const current = provisioning.version ? versionCore(provisioning.version) : null
               // 查到更高版本才提示「更新到 X」；已经是最新版就不给更新入口。
               // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
@@ -245,6 +250,7 @@ export function MobileRuntimesPage() {
               // 远端最新版本与本机一致时，在版本号旁边挂一个「已是最新」。
               const upToDate = Boolean(remote && current && versionCore(remote) === current)
               const showUpdate =
+                isAdmin &&
                 managed &&
                 provisioning.installed &&
                 Boolean(provisioning.commands?.update?.length) &&
@@ -263,15 +269,17 @@ export function MobileRuntimesPage() {
                       <div className="dim small">{detectedLabel(provisioning.checked_at)}</div>
                     </div>
                     {/* 「重新检测」收成右上角一个小图标（状态本来就带缓存，偶尔点一次） */}
-                    <button
-                      className="m-icon-btn"
-                      onClick={() => void refreshStatus(runtime)}
-                      disabled={Boolean(refreshing[runtime.id]) || busy}
-                      aria-label="重新检测"
-                      title="重新检测安装状态与版本"
-                    >
-                      <RefreshIcon size={17} className={refreshing[runtime.id] ? 'm-spin' : undefined} />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        className="m-icon-btn"
+                        onClick={() => void refreshStatus(runtime)}
+                        disabled={Boolean(refreshing[runtime.id]) || busy}
+                        aria-label="重新检测"
+                        title="重新检测安装状态与版本"
+                      >
+                        <RefreshIcon size={17} className={refreshing[runtime.id] ? 'm-spin' : undefined} />
+                      </button>
+                    )}
                   </div>
 
                   {managed && provisioning.note && <div className="banner warn">{provisioning.note}</div>}
@@ -297,7 +305,7 @@ export function MobileRuntimesPage() {
                         {checking[runtime.id] ? '查询中…' : '检查更新'}
                       </button>
                     )}
-                    {managed && !provisioning.installed && provisioning.commands?.install?.length ? (
+                    {isAdmin && managed && !provisioning.installed && provisioning.commands?.install?.length ? (
                       <button className="btn sm primary" onClick={() => void start(runtime, 'install')} disabled={busy}>
                         安装
                       </button>
@@ -307,7 +315,7 @@ export function MobileRuntimesPage() {
                         {updateTarget ? `更新到 ${updateTarget}` : '更新'}
                       </button>
                     ) : null}
-                    {managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
+                    {isAdmin && managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
                       <button className="btn sm danger" onClick={() => void start(runtime, 'uninstall')} disabled={busy}>
                         卸载
                       </button>

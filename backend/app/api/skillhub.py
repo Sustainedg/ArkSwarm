@@ -20,8 +20,10 @@ from ..skillhub import SkillHubError
 from ..skillhub import download_skill as fetch_skill_archive
 from ..skillhub import get_skill as fetch_skill_detail
 from ..skillhub import list_skills as fetch_skill_list
+from .auth import current_user, require_admin
 
-router = APIRouter(prefix="/skillhub", tags=["skillhub"])
+#: 整个路由器都要求登录：技能市场是平台级操作。
+router = APIRouter(prefix="/skillhub", tags=["skillhub"], dependencies=[Depends(current_user)])
 
 
 @router.get("/skills")
@@ -74,7 +76,7 @@ async def market_skill_detail(slug: str) -> dict:
         raise HTTPException(status_code=status, detail=str(exc)) from None
 
 
-@router.post("/install")
+@router.post("/install", dependencies=[Depends(require_admin)])
 async def install_market_skill(
     payload: SkillHubInstallIn, session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -120,7 +122,7 @@ async def install_market_skill(
     }
 
 
-@router.post("/uninstall")
+@router.post("/uninstall", dependencies=[Depends(require_admin)])
 async def uninstall_market_skill(
     payload: SkillHubUninstallIn, session: AsyncSession = Depends(get_session)
 ) -> dict:

@@ -1,3 +1,4 @@
+import { getAccessToken, notifyUnauthorized } from './auth'
 import type {
   ActiveCollabRun,
   AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
@@ -15,6 +16,9 @@ import type {
   SkillRescanResult, TestResult,
   TitleSettings,
   UsageOverview,
+  AuthUser,
+  AuthSession,
+  AuthConfig,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -46,13 +50,25 @@ export function isNetworkError(error: unknown): boolean {
   return error instanceof TypeError && NETWORK_FAILURE.test(error.message)
 }
 
+/** 统一附加 Bearer 令牌；没有令牌时保持匿名（登录 / 注册 / 鉴权关闭时用）。 */
+function authHeaders(): Record<string, string> {
+  const token = getAccessToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** 登录接口本身返回 401 是「口令不对」，不该触发全局登出。 */
+function isLoginAttempt(path: string): boolean {
+  return path === '/api/auth/login' || path === '/api/auth/register'
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init?.headers ?? {}) },
   })
   const body = await readBody(response)
   if (!response.ok) {
+    if (response.status === 401 && !isLoginAttempt(path)) notifyUnauthorized()
     throw new ApiError(response.status, describeBody(response, body))
   }
   if (response.status === 204 || !body.text.trim()) return undefined as T
@@ -103,6 +119,38 @@ function describeBody(response: Response, body: ResponseBody): string {
 export const api = {
   /** 最轻的探活接口：只回状态与版本号（首屏拿版本号用它，不必汇总系统信息）。 */
   health: () => request<{ status: string; version: string }>('/api/health'),
+
+  // --- 多用户系统 -----------------------------------------------------------
+  /** 登录页的公开配置：是否开鉴权 / 是否允许注册 / 是否已有用户。 */
+  authConfig: () => request<AuthConfig>('/api/auth/config'),
+  me: () => request<AuthUser>('/api/auth/me'),
+  login: (body: { username: string; password: string }) =>
+    request<AuthSession>('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+  register: (body: { username: string; password: string; display_name?: string; email?: string }) =>
+    request<AuthSession>('/api/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+  updateMe: (body: { display_name?: string | null; email?: string | null }) =>
+    request<AuthUser>('/api/auth/me', { method: 'PUT', body: JSON.stringify(body) }),
+  changePassword: (body: { old_password: string; new_password: string }) =>
+    request<{ ok: boolean; access_token: string }>('/api/auth/me/password', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  listUsers: () => request<{ items: AuthUser[] }>('/api/auth/users').then((r) => r.items),
+  createUser: (body: { username: string; password: string; display_name?: string; email?: string }) =>
+    request<AuthUser>('/api/auth/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateUser: (id: string, body: { display_name?: string | null; email?: string | null; role?: string; is_active?: boolean }) =>
+    request<AuthUser>(`/api/auth/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  resetUserPassword: (id: string, newPassword: string) =>
+    request<{ ok: boolean; access_token?: string }>(
+      `/api/auth/users/${encodeURIComponent(id)}/reset-password`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ old_password: '-', new_password: newPassword }),
+      },
+    ),
   overview: () => request<Overview>('/api/system/overview'),
   /** 用量页：token 消耗与技能调用汇总；可传时间范围（见 `lib/usage.ts:usageRangeQuery`）。 */
   usageOverview: (params?: { start?: string; end?: string; tz_offset?: number }) => {
@@ -366,7 +414,11 @@ function fileUrl(prefix: string, id: string, relPath: string): string {
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/')
-  return `${BASE}/api/${prefix}/${encodeURIComponent(id)}/files/${encoded}`
+  const token = getAccessToken()
+  // <img src> 没法带 Authorization 头，只能把会话令牌放进查询参数；后端 current_user
+  // 只在没有 Bearer 头时才读它（见 app/auth_deps.py）。
+  const suffix = token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return `${BASE}/api/${prefix}/${encodeURIComponent(id)}/files/${encoded}${suffix}`
 }
 
 /** 对话工作目录里的文件地址（附件预览 / 智能体产出的图片）。 */
@@ -393,10 +445,11 @@ async function streamRequest<T>(
 ): Promise<void> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { Accept: 'text/event-stream', ...(init.headers ?? {}) },
+    headers: { Accept: 'text/event-stream', ...authHeaders(), ...(init.headers ?? {}) },
     signal,
   })
   if (!response.ok || !response.body) {
+    if (response.status === 401) notifyUnauthorized()
     throw new ApiError(response.status, describeBody(response, await readBody(response)))
   }
 

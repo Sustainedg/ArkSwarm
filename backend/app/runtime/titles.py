@@ -183,7 +183,12 @@ async def generate(conversation_id: str, base_title: str, user_text: str) -> Non
             settings = await read_settings(session)
             if not settings.enabled:
                 return
-            resolved = await _resolve(session, settings)
+            # 标题用谁起的必须是这条对话的主人的智能体：公共设置里指定的那颗星若不是
+            # 他的，就在他自己名下退回默认智能体（否则会把别人的密钥带进这次运行）。
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation is None:
+                return
+            resolved = await _resolve(session, settings, conversation.owner_id)
             if resolved is None:
                 return
             profile, gateway, model = resolved
@@ -220,7 +225,7 @@ async def generate(conversation_id: str, base_title: str, user_text: str) -> Non
 
 
 async def _resolve(
-    session: AsyncSession, settings: TitleSettings
+    session: AsyncSession, settings: TitleSettings, owner_id: str | None = None
 ) -> tuple[AgentProfile, Gateway | None, str | None] | None:
     """挑出这次用来起标题的智能体 / 网关 / 模型。
 
@@ -231,10 +236,15 @@ async def _resolve(
     profile: AgentProfile | None = None
     if settings.agent_profile_id:
         candidate = await session.get(AgentProfile, settings.agent_profile_id)
-        if candidate is not None and candidate.deleted_at is None and candidate.enabled:
+        if (
+            candidate is not None
+            and candidate.deleted_at is None
+            and candidate.enabled
+            and (owner_id is None or candidate.owner_id == owner_id)
+        ):
             profile = candidate
     if profile is None:
-        profile = await pick_default_profile(session)
+        profile = await pick_default_profile(session, owner_id)
     if profile is None:
         return None
     gateway = await session.get(Gateway, profile.gateway_id) if profile.gateway_id else None

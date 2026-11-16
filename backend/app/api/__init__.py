@@ -4,6 +4,7 @@ from ..collab.api import router as collab_router
 from . import (
     agents,
     agent_types,
+    auth,
     conversations,
     credentials,
     gateways,
@@ -18,6 +19,7 @@ from . import (
 )
 
 api_router = APIRouter(prefix="/api")
+api_router.include_router(auth.router)
 api_router.include_router(system.router)
 api_router.include_router(agent_types.router)
 api_router.include_router(agents.router)

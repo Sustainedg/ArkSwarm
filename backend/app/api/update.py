@@ -15,15 +15,17 @@ import json
 import logging
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .. import __version__, selfupdate
 from ..selfupdate import SelfUpdateError
+from .auth import require_admin
 
 logger = logging.getLogger("arkswarm.selfupdate")
 
-router = APIRouter(prefix="/update", tags=["update"])
+#: 整个路由器都要求登录：自更新是平台级操作。
+router = APIRouter(prefix="/update", tags=["update"], dependencies=[Depends(require_admin)])
 
 
 def _event(kind: str, **payload: Any) -> dict[str, Any]:

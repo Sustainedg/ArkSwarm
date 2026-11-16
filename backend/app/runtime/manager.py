@@ -14,6 +14,8 @@ class ActiveRun:
     id: str
     conversation_id: str
     agent_name: str
+    #: 发起这次运行的对话所属用户；``None`` 是鉴权关闭 / 历史数据，视为管理员可见。
+    owner_id: str | None = None
     started_at: float = field(default_factory=time.time)
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: Any = None
@@ -90,8 +92,15 @@ class RunRegistry:
     def __init__(self) -> None:
         self._runs: dict[str, ActiveRun] = {}
 
-    def register(self, conversation_id: str, agent_name: str) -> ActiveRun:
-        run = ActiveRun(id=uuid.uuid4().hex[:12], conversation_id=conversation_id, agent_name=agent_name)
+    def register(
+        self, conversation_id: str, agent_name: str, owner_id: str | None = None
+    ) -> ActiveRun:
+        run = ActiveRun(
+            id=uuid.uuid4().hex[:12],
+            conversation_id=conversation_id,
+            agent_name=agent_name,
+            owner_id=owner_id,
+        )
         self._runs[run.id] = run
         return run
 
@@ -126,8 +135,13 @@ class RunRegistry:
         run = self.active_for(conversation_id)
         return self.cancel(run.id) if run else False
 
-    def list(self) -> list[dict[str, Any]]:
-        return [r.snapshot() for r in self._runs.values()]
+    def list(self, owner_id: str | None = None) -> list[dict[str, Any]]:
+        """列出运行；``owner_id`` 非空时只列该用户的（管理员传 None 看全部）。"""
+        return [
+            r.snapshot()
+            for r in self._runs.values()
+            if owner_id is None or r.owner_id in (None, owner_id)
+        ]
 
 
 registry = RunRegistry()

@@ -120,6 +120,10 @@ TABS_STYLE_BANNER = (
     "/* ================= 标签页：胶囊分段控件（设置 / 技能 / 用量 / 协作导航共用，两端共用这一份）================= */"
 )
 MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
+#: 桌面端在办公室共享段之后还有登录 / 账号样式；它不是办公室的一部分，比对时在此截断。
+AUTH_STYLE_BANNER = (
+    "/* ================= 登录 / 注册（两端共用表单组件，样式各写一份）================= */"
+)
 DESKTOP_COMPOSER_TUNING = "/* ---------- 桌面端：输入区寄在会话栏底部"
 MOBILE_COMPOSER_TUNING = "/* ---------- 移动端：输入区贴着屏幕最下边"
 
@@ -147,11 +151,33 @@ def test_office_styles_are_identical_on_both_ends():
     改了一边忘了另一边，手机上就会走样：小人不在工位上、工牌错位、挂钟指针飞出去。
     移动端自己那几条微调规则写在这一段之后，不参与比对。
     """
-    desktop = _shared_style_block(FRONTEND / "src" / "index.css", OFFICE_STYLE_BANNER)
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", OFFICE_STYLE_BANNER, AUTH_STYLE_BANNER
+    )
     mobile = _shared_style_block(MOBILE_SRC / "mobile.css", OFFICE_STYLE_BANNER, MOBILE_OFFICE_TUNING)
     assert desktop == mobile, (
         "index.css 与 mobile.css 的协作办公室样式不一致：改了一边记得把另一边同步（两端各一份）"
     )
+
+
+@needs_frontend
+def test_account_styles_exist_on_both_ends():
+    """账号 / 用户管理组件两端共用，桌面端与移动端样式表都必须有这组 class。
+
+    移动端不加载 index.css；漏写时页面能打开，但用户行、操作区会全部失去排版。
+    """
+    desktop = (FRONTEND / "src" / "index.css").read_text(encoding="utf-8")
+    mobile = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    for name in (
+        "account-card",
+        "account-user-row",
+        "account-user-main",
+        "account-user-name",
+        "account-user-actions",
+        "account-reset-row",
+    ):
+        assert f".{name}" in desktop, f"index.css 缺少 .{name}"
+        assert f".{name}" in mobile, f"mobile.css 缺少 .{name}"
 
 
 @needs_frontend

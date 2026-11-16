@@ -6,12 +6,14 @@
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agents import get_agent
 from ..db import get_session
-from ..models import McpServer
+from ..models import McpServer, User
 from ..runtime import mcp as mcp_service
 from ..schemas import (
     McpRescanResult,
@@ -20,6 +22,7 @@ from ..schemas import (
     McpServerRead,
     McpServerUpdate,
 )
+from .auth import current_user, owner_id_for, require_owned
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp"])
 
@@ -48,6 +51,16 @@ async def _active_row(mcp_id: str, session: AsyncSession) -> McpServer:
     return row
 
 
+def _require_visible(row: McpServer, user: User) -> None:
+    """列表里能看到的行，详情 / 编辑入口也要能进。
+
+    扫描来的服务器（``type_id`` 非空）是各内核配置的共享目录，所有登录用户可读；
+    平台通用服务器按 ``owner_id`` 隔离。写操作仍由 ``_ensure_editable`` 拒绝扫描项。
+    """
+    if row.type_id is None:
+        require_owned(row, user)
+
+
 @router.get("")
 async def list_mcp_servers(
     type_id: str | None = None,
@@ -55,12 +68,22 @@ async def list_mcp_servers(
     available: bool | None = None,
     q: str | None = None,
     session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    """列出统一目录里的 MCP 服务器（可按来源内核 / 来源 / 可用性 / 关键词过滤）。"""
+    """列出统一目录里的 MCP 服务器（可按来源内核 / 来源 / 可用性 / 关键词过滤）。
+
+    非管理员只看到自己的平台通用服务器 + 各内核配置扫来的共享服务器；管理员看全部。
+    """
+    owner_id = None if user.role == "admin" else user.id
     rows = await mcp_service.list_rows(
-        session, type_id=type_id, source_kind=source_kind, available=available, query=q
+        session,
+        type_id=type_id,
+        source_kind=source_kind,
+        available=available,
+        query=q,
+        owner_id=owner_id,
     )
-    counts = await mcp_service.usage_counts(session)
+    counts = await mcp_service.usage_counts(session, owner_id)
     return {
         "items": [_describe(row, counts).model_dump() for row in rows],
         "source_labels": mcp_service.SOURCE_LABELS,
@@ -69,7 +92,9 @@ async def list_mcp_servers(
 
 @router.post("", status_code=201)
 async def create_mcp_server(
-    payload: McpServerCreate, session: AsyncSession = Depends(get_session)
+    payload: McpServerCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """新建一个「平台通用」的 MCP 服务器（可分配给任意内核的智能体）。"""
     try:
@@ -85,6 +110,7 @@ async def create_mcp_server(
             env=payload.env,
             headers=payload.headers,
             enabled=payload.enabled,
+            owner_id=owner_id_for(user),
         )
     except mcp_service.McpError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
@@ -92,21 +118,35 @@ async def create_mcp_server(
 
 
 @router.post("/rescan")
-async def rescan_mcp_servers(session: AsyncSession = Depends(get_session)) -> dict:
+async def rescan_mcp_servers(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """重新扫描各内核配置里的 MCP 服务器，并同步到统一目录。"""
-    result = await mcp_service.rescan(session)
+    result = await mcp_service.rescan(session, owner_id=owner_id_for(user))
     return McpRescanResult(**result).model_dump()
 
 
 @router.get("/{mcp_id}")
-async def get_mcp_server(mcp_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_mcp_server(
+    mcp_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     row = await _active_row(mcp_id, session)
-    counts = await mcp_service.usage_counts(session)
+    _require_visible(row, user)
+    counts = await mcp_service.usage_counts(
+        session, None if user.role == "admin" else user.id
+    )
+    agents = await mcp_service.agents_using(session, mcp_id)
+    if user.role != "admin":
+        # 共享的扫描项对所有登录用户可见，但「谁在用」只该列出自己的智能体。
+        agents = [profile for profile in agents if profile.owner_id == user.id]
     detail = McpServerDetail(
         **_describe(row, counts).model_dump(),
         agents=[
             {"id": profile.id, "name": profile.name, "avatar": profile.avatar}
-            for profile in await mcp_service.agents_using(session, mcp_id)
+            for profile in agents
         ],
     )
     return detail.model_dump()
@@ -114,10 +154,14 @@ async def get_mcp_server(mcp_id: str, session: AsyncSession = Depends(get_sessio
 
 @router.patch("/{mcp_id}")
 async def update_mcp_server(
-    mcp_id: str, payload: McpServerUpdate, session: AsyncSession = Depends(get_session)
+    mcp_id: str,
+    payload: McpServerUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """更新一个平台通用的 MCP 服务器（扫描来的由内核配置说了算，改不了）。"""
     row = await _active_row(mcp_id, session)
+    _require_visible(row, user)
     try:
         row = await mcp_service.update_row(
             session,
@@ -132,23 +176,31 @@ async def update_mcp_server(
             env=payload.env,
             headers=payload.headers,
             enabled=payload.enabled,
+            owner_id=row.owner_id,
         )
     except mcp_service.McpError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
-    counts = await mcp_service.usage_counts(session)
+    counts = await mcp_service.usage_counts(
+        session, None if user.role == "admin" else user.id
+    )
     return _describe(row, counts).model_dump()
 
 
 @router.delete("/{mcp_id}", status_code=204)
 async def delete_mcp_server(
-    mcp_id: str, session: AsyncSession = Depends(get_session)
+    mcp_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> Response:
     """删除一个平台通用的 MCP 服务器（软删除）。
 
     仍被**未删除**的智能体引用时返回 409：先解除分配，避免那些智能体运行时悄悄少了一组工具。
     """
     row = await _active_row(mcp_id, session)
+    _require_visible(row, user)
     used = await mcp_service.agents_using(session, row.id)
+    if user.role != "admin":
+        used = [profile for profile in used if profile.owner_id == user.id]
     if used:
         names = "、".join(profile.name for profile in used[:5])
         raise HTTPException(

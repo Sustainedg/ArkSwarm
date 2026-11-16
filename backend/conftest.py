@@ -11,3 +11,6 @@ _DATA_DIR = Path(tempfile.mkdtemp(prefix="arkswarm-tests-"))
 os.environ.setdefault("ARKSWARM_DATA_DIR", str(_DATA_DIR))
 os.environ.setdefault("ARKSWARM_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("ARKSWARM_WORKSPACE_DIR", str(_DATA_DIR / "workspaces"))
+#: 既有业务测试在「鉴权关闭」形态下跑：它们验的是归属无关的 CRUD / 流式 / 协作逻辑，
+#: 鉴权与归属过滤由专门的 ``test_auth.py`` / ``test_ownership.py`` 在开启鉴权时验证。
+os.environ.setdefault("ARKSWARM_AUTH_ENABLED", "false")

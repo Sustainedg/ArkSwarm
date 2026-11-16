@@ -673,12 +673,12 @@ UI 提供「继续」按钮（从就绪队列重新推进）。不删数据、�
 
 ```
 collab_teams(id PK, name, description, entry_key, workspace_dir,
-             graph JSON, budget JSON, created_at, updated_at)
+             graph JSON, budget JSON, owner_id, created_at, updated_at)
 
 collab_runs(id PK, team_id → collab_teams RESTRICT, title, goal, status,
             entry_key, workspace_dir, budget JSON, usage JSON,
-            steps_used, tickets_used, error, created_at, updated_at)
-            idx(team_id), idx(status)
+            steps_used, tickets_used, error, owner_id, created_at, updated_at)
+            idx(team_id), idx(status), idx(owner_id)
 
 collab_tickets(id PK, run_id → collab_runs CASCADE, parent_ticket_id → collab_tickets SET NULL,
                from_agent_profile_id → agent_profiles RESTRICT (可空，用户发起时为空),
@@ -704,6 +704,10 @@ collab_steps(id PK, run_id → collab_runs CASCADE, ticket_id → collab_tickets
   删除"运行"是显式操作，级联清理工单与步骤（等价于"删对话必须清消息"的既有惯例）。
 - **`parent_ticket_id` 用 `SET NULL`**：父工单被拒绝/删除时不连带毁掉子工单记录。
 - **零迁移风险**：全部是新增表，`create_all` 会自动建；现有 `data/arkswarm.db` 直接启动即可（铁律 9）。
+- **多用户归属**：`collab_teams.owner_id` 与 `collab_runs.owner_id` 都是后加的可空列（旧库由
+  `bootstrap.backfill_ownership` 回填给首任管理员）。协作组、运行、工单与步骤的读写接口按
+  `owner_id` 隔离；协作图节点只能引用当前用户自己的智能体（管理员除外），否则运行时会用到
+  对方的网关密钥 / 凭据。
 - **后加的可选列怎么补**：SQLite 的 `create_all` **不会给已存在的表加列**。因此协作域把"后加的可选列"
   登记在 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（对话域登记在 `models.py` 的同名常量），
   由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）幂等补齐 —— 旧行原样保留，不重建库。

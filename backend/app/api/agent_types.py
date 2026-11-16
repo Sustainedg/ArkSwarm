@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..agents import AgentDefinition, all_agents, get_agent
 from ..agents.base import Availability
+from ..models import User
 from ..runtime import availability as availability_service
 from ..security import mask
+from .auth import current_user
 
 router = APIRouter(tags=["agent-types"])
 
@@ -30,14 +34,18 @@ def _describe(definition: AgentDefinition, availability: Availability) -> dict:
 
 
 @router.get("/agent-types")
-async def list_agent_types() -> dict:
+async def list_agent_types(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     definitions = all_agents()
     statuses = await availability_service.statuses(definitions)
     return {"items": [_describe(definition, statuses[definition.id]) for definition in definitions]}
 
 
 @router.get("/agent-types/{type_id}")
-async def get_agent_type(type_id: str) -> dict:
+async def get_agent_type(
+    type_id: str, user: Annotated[User, Depends(current_user)] = None
+) -> dict:
     try:
         definition = get_agent(type_id)
     except KeyError as exc:

@@ -12,7 +12,7 @@ OpenAI 兼容端点用 ``prompt_tokens`` / ``cached_tokens`` —— 这里按与
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +20,9 @@ from sqlmodel import select
 
 from ..agents import get_agent
 from ..db import get_session
-from ..models import AgentProfile, Conversation, Message, Skill
+from ..models import AgentProfile, Conversation, Message, Skill, User
 from ..runtime import skills as skill_service
+from .auth import current_user
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -180,17 +181,22 @@ async def usage_overview(
     end: str | None = None,
     tz_offset: int = 0,
     session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """汇总 token 消耗与技能调用（「用量」页的数据源）。
 
     ``start`` / ``end`` 是 ISO 8601 时间点（``end`` 为开区间），只统计这个窗口内的消息；
     都不传则统计全部历史。``tz_offset`` 是「按天」分桶用的本地时区偏移（分钟，东为正）——
     过滤用绝对时刻，分桶按用户所在时区，两者才不会在跨零点的日子里打架。
+    非管理员只统计自己的对话；管理员统计全部。
     """
     lower = _parse_instant(start, "开始时间")
     upper = _parse_instant(end, "结束时间")
     group_tz = timezone(timedelta(minutes=tz_offset))
 
+    conv_stmt = select(Conversation)
+    if user.role != "admin":
+        conv_stmt = conv_stmt.where(Conversation.owner_id == user.id)
     rows = (
         await session.execute(
             select(
@@ -199,7 +205,7 @@ async def usage_overview(
         )
     ).all()
     conversations = {
-        row.id: row for row in (await session.execute(select(Conversation))).scalars().all()
+        row.id: row for row in (await session.execute(conv_stmt)).scalars().all()
     }
     profiles = {
         row.id: row for row in (await session.execute(select(AgentProfile))).scalars().all()
@@ -212,6 +218,10 @@ async def usage_overview(
     skill_calls: dict[str, int] = {}
 
     for conversation_id, usage, created_at, parts in rows:
+        # 非管理员的会话集合已按 owner_id 过滤过；不在集合里的消息一律跳过
+        # （包括已删除的对话：管理员也不把它们的 token 计入别人的榜单）。
+        if conversation_id not in conversations:
+            continue
         instant = _instant(created_at)
         if instant is not None:
             if lower is not None and instant < lower:

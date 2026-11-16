@@ -456,15 +456,17 @@ http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给�
 ## 7. 数据模型
 
 ```
+users(id, username UNIQUE, display_name, email, password_hash, token_version, role(admin|member),
+      is_active, created_at, updated_at)                  ← 口令只存 PBKDF2 哈希；token_version 用于吊销旧令牌
 gateways(id, name, kind(official|custom), type_id, protocol, auth_style, base_url,
          api_key_encrypted, selected_models JSON, model_catalog JSON, extra_headers JSON,
-         enabled, last_probed_at, deleted_at)                ← API 密钥的唯一来源
+         enabled, last_probed_at, deleted_at, owner_id)   ← API 密钥的唯一来源
 agent_profiles(id, name, avatar, tagline, description, system_prompt, type_id,
-               gateway_id→gateways, model, options JSON, enabled, deleted_at)
-credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at)
+               gateway_id→gateways, model, options JSON, enabled, deleted_at, owner_id)
+credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at, owner_id)
 agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
 conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived,
-              last_read_at)   # last_read_at 为空 = 升级前的旧对话，一律当已读
+              last_read_at, owner_id)   # last_read_at 为空 = 升级前的旧对话，一律当已读
 messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
@@ -472,13 +474,14 @@ skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, pat
 agent_skills(agent_profile_id→agent_profiles, skill_id→skills，复合主键 + position)
 mcp_servers(id, name, slug, description, type_id(空=平台通用), source_kind(manual|user),
             transport(stdio|http|sse), command, args JSON, url, env_encrypted JSON,
-            headers_encrypted JSON, enabled, available, note, discovered_at, updated_at, deleted_at)
+            headers_encrypted JSON, enabled, available, note, discovered_at, updated_at, deleted_at,
+            owner_id)
 agent_mcp_servers(agent_profile_id→agent_profiles, mcp_server_id→mcp_servers，复合主键 + position)
 
 -- 协作域（独立于对话域，见 docs/collaboration-design.md）
-collab_teams(id, name, description, entry_key, workspace_dir, graph JSON, budget JSON)
+collab_teams(id, name, description, entry_key, workspace_dir, graph JSON, budget JSON, owner_id)
 collab_runs(id, team_id→collab_teams, title, goal, status, entry_key, workspace_dir, budget, usage,
-            steps_used, tickets_used, error)
+            steps_used, tickets_used, error, owner_id)
 collab_tickets(id, run_id→collab_runs, parent_ticket_id→collab_tickets,
                from_agent_profile_id→agent_profiles, to_agent_profile_id→agent_profiles,
                owner_key, holder_key, submitter_key, title, brief JSON, state,
@@ -493,9 +496,10 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 设计取舍：
 
 - **对话快照 `agent_profile_id`**：之后即便智能体改了内核 / 网关 / 模型，历史对话仍可复现。
-- **默认智能体全局只有一颗星**：`agent_profiles.is_default`（至多一个，点亮时会摘掉别人的星，
-  删掉带星的那颗会自动补一颗）；新建对话不传 `agent_profile_id` 时回落到它 —— 还没有星时
-  先用「唯一启用的那个」，一个可用的都没有才报 422。老库启动时由 `ensure_default_agent` 补星。
+- **默认智能体按用户各有一颗星**：`agent_profiles.is_default`（同一 `owner_id` 下至多一个，
+  点亮时会摘掉同一用户其它智能体的星，删掉带星的那颗会自动补一颗）；新建对话不传
+  `agent_profile_id` 时回落到当前用户的星 —— 还没有星时先用他自己「唯一启用的那个」，
+  一个可用的都没有才报 422。老库启动时由 `ensure_default_agent` 补星。
 - **`parts` 用 JSON**：工具调用/结果/推理的形态随智能体变化，无需为每种智能体建表；
   它是按真实发生顺序排列的时间线（`thinking` / `text` / `tool_call` / `tool_result`），
   前端据此按**真实顺序**渲染，只把**连续**出现的「思考 / 工具调用 / 工具结果」收进一个默认折叠的
@@ -525,6 +529,33 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   幂等补齐：现有 `arkswarm.db` 启动后自动对齐，不重建、不丢数据。
 - **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
+
+### 7.1 多用户与鉴权
+
+- **会话**：登录 / 注册返回无状态 JWT（HS256，7 天），签名密钥由 `security._load_key()`
+  再派生一层（密钥来自 `ARKSWARM_SECRET_KEY`，未配置时用 `data/secret.key`）。前端存
+  localStorage，`lib/api.ts` 统一附加 `Authorization: Bearer`；`<img src>` 这类不能带请求头
+  的资源允许 `?access_token=`（只有 `app/auth_deps.py` 在没有 Bearer 头时才读它）。
+  令牌带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令会 +1，旧令牌立即失效。
+  改自己的口令时响应会返回一份新令牌，前端保存后当前设备不必重新登录。
+- **口令**：`auth.py` 用 PBKDF2-HMAC-SHA256（600k 次、16 字节盐）存
+  `pbkdf2$<迭代>$<盐>$<哈希>`；明文口令永不入库 / 进日志 / 进响应。哈希 / 校验在接口里
+  放线程池执行，避免阻塞事件循环。
+- **归属**：`owner_id` 覆盖网关、智能体、凭据、对话、MCP 服务器、协作组与协作运行。
+  非管理员的列表只回自己的行：网关额外包含官方链路，扫描来的 MCP 是只读共享目录；
+  按 id 读取别人的行返回 404（官方网关与扫描来的 MCP 保持与列表一致）。跨用户引用
+  （网关 / 凭据 / 平台通用 MCP / 协作图节点上的智能体）在写入或启动运行前拒绝。
+  用量与运行表也按归属过滤。
+- **管理员**：可看全部用户资产、管理用户（改角色 / 禁用 / 重置口令）；不能降级或禁用
+  当前登录的自己，系统至少保留一名启用中的管理员。
+- **开关**：`ARKSWARM_AUTH_ENABLED` 默认关闭，单用户部署升级后行为不变；开启后
+  `current_user` 校验令牌，未登录返回 401。`ARKSWARM_REGISTRATION_OPEN=false` 关闭自助注册，
+  只能由管理员建用户。首任管理员可由 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD`
+  在空库首启时创建；老库的存量行由 `bootstrap.backfill_ownership` 回填给管理员
+  （`.ownership_backfilled` 防重）。
+- **前端**：`components/AuthGate.tsx` 是唯一入口 —— 未登录显示 `LoginScreen`，登录后
+  桌面侧边栏 / 移动抽屉显示当前账号；个人资料与用户管理两端共用
+  `AccountPanel` / `UserAdminPanel`。
 
 ## 8. 扩展点
 

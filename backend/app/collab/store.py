@@ -90,10 +90,13 @@ def to_read(team: CollabTeam, known_agent_profile_ids: set[str] | None = None) -
     )
 
 
-async def list_teams(session: AsyncSession) -> list[CollabTeam]:
-    return list(
-        (await session.execute(select(CollabTeam).order_by(CollabTeam.updated_at.desc()))).scalars().all()
-    )
+async def list_teams(
+    session: AsyncSession, owner_id: str | None = None
+) -> list[CollabTeam]:
+    stmt = select(CollabTeam).order_by(CollabTeam.updated_at.desc())
+    if owner_id is not None:
+        stmt = stmt.where(CollabTeam.owner_id == owner_id)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_team(session: AsyncSession, team_id: str) -> CollabTeam:
@@ -103,7 +106,9 @@ async def get_team(session: AsyncSession, team_id: str) -> CollabTeam:
     return team
 
 
-async def create_team(session: AsyncSession, payload: TeamCreate) -> CollabTeam:
+async def create_team(
+    session: AsyncSession, payload: TeamCreate, owner_id: str | None = None
+) -> CollabTeam:
     team = CollabTeam(
         name=payload.name.strip(),
         description=payload.description,
@@ -111,6 +116,7 @@ async def create_team(session: AsyncSession, payload: TeamCreate) -> CollabTeam:
         workspace_dir=payload.workspace_dir,
         graph=graph_service.to_storable(payload.graph),
         budget=graph_service.budget_to_storable(payload.budget),
+        owner_id=owner_id,
     )
     session.add(team)
     await session.commit()
@@ -118,7 +124,7 @@ async def create_team(session: AsyncSession, payload: TeamCreate) -> CollabTeam:
     return team
 
 
-async def _copy_team(source: CollabTeam, name: str) -> CollabTeam:
+async def _copy_team(source: CollabTeam, name: str, owner_id: str | None = None) -> CollabTeam:
     return CollabTeam(
         name=name,
         description=source.description,
@@ -126,6 +132,7 @@ async def _copy_team(source: CollabTeam, name: str) -> CollabTeam:
         workspace_dir=source.workspace_dir,
         graph=dict(source.graph or {}),
         budget=dict(source.budget or {}),
+        owner_id=owner_id,
     )
 
 
@@ -250,9 +257,11 @@ async def save_team(session: AsyncSession, team_id: str, payload: TeamUpdate) ->
     return team
 
 
-async def duplicate_team(session: AsyncSession, team_id: str) -> CollabTeam:
+async def duplicate_team(
+    session: AsyncSession, team_id: str, owner_id: str | None = None
+) -> CollabTeam:
     source = await get_team(session, team_id)
-    copy = await _copy_team(source, f"{source.name}（副本）"[:120])
+    copy = await _copy_team(source, f"{source.name}（副本）"[:120], owner_id=owner_id)
     session.add(copy)
     await session.commit()
     await session.refresh(copy)
@@ -329,7 +338,9 @@ async def list_chat_messages(session: AsyncSession, run_id: str) -> list[ChatMes
     return [_chat_read(row) for row in rows]
 
 
-async def create_run(session: AsyncSession, payload: RunCreate) -> CollabRun:
+async def create_run(
+    session: AsyncSession, payload: RunCreate, owner_id: str | None = None
+) -> CollabRun:
     team = await get_team(session, payload.team_id)
     run_id = new_id()
     # 优先级：本次任务显式指定 > 协作组默认 > 按运行 ID 自动分配
@@ -348,6 +359,7 @@ async def create_run(session: AsyncSession, payload: RunCreate) -> CollabRun:
         entry_key=team.entry_key,
         workspace_dir=workspace,
         budget=dict(team.budget or {}),
+        owner_id=owner_id,
     )
     session.add(run)
     await session.commit()
@@ -362,10 +374,17 @@ async def get_run(session: AsyncSession, run_id: str) -> CollabRun:
     return run
 
 
-async def list_runs(session: AsyncSession, team_id: str | None = None, limit: int = 100) -> list[CollabRun]:
+async def list_runs(
+    session: AsyncSession,
+    team_id: str | None = None,
+    limit: int = 100,
+    owner_id: str | None = None,
+) -> list[CollabRun]:
     query = select(CollabRun).order_by(CollabRun.updated_at.desc()).limit(limit)
     if team_id:
         query = query.where(CollabRun.team_id == team_id)
+    if owner_id is not None:
+        query = query.where(CollabRun.owner_id == owner_id)
     return list((await session.execute(query)).scalars().all())
 
 

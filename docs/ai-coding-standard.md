@@ -47,6 +47,7 @@ agents/mcp.py       MCP 契约（McpServerSpec / McpMount + JSON / TOML 解析�
 agents/builtin/*    ★ 各智能体的实现（唯一的扩展点）
         │
 models.py db.py schemas.py settings.py security.py bootstrap.py   存储 / 契约 / 配置 / 密钥
+auth.py auth_deps.py                                               口令 / 令牌 / 当前用户 / 归属校验
 ```
 
 ### 2.2 每条依赖规则背后的理由
@@ -195,6 +196,11 @@ POST /api/conversations/{id}/messages
 - 关系链：`Gateway → AgentProfile → Conversation → Message`；技能经 `AgentSkill`、凭据经
   `AgentCredential`、MCP 服务器经 `AgentMcpServer` 挂到智能体上（三者都是「编目 / 全局一份 +
   智能体引用」：技能与各内核配置里的 MCP 来自扫描，平台通用 MCP 与凭据来自界面新建）。
+- **多用户归属**：`users` 表存账号（口令只存 PBKDF2 哈希，`token_version` 用于吊销旧 JWT）；
+  网关、智能体、凭据、对话、
+  MCP 服务器、协作组与协作运行都有可空 `owner_id`。非管理员列表只回自己的行（网关额外包含
+  官方链路、扫描来的 MCP 是只读共享目录），按 id 读取别人的行返回 404；跨用户引用必须在
+  写入或启动运行前拒绝。管理员可看全部。鉴权开关默认关闭，多用户部署显式开启。
 - **Conversation 快照 `agent_profile_id`**：历史对话必须可复现，即使智能体之后改了内核 / 网关 / 模型。
 - 外键 `ON DELETE RESTRICT`：仍被**未删除**的智能体引用的网关删除返回 409（避免历史断裂）；
   智能体与自定义网关本身用 `deleted_at` 软删除 —— 被历史引用时只打标记，从可选列表消失但不打断历史。
@@ -359,8 +365,10 @@ class AcmeHarness(OpenAIHarnessBase):
   有自己的路由（`MobileApp.tsx`）、样式表（`mobile.css`）、左侧抽屉与底部弹层。桌面端页面 / 入口 /
   样式表与移动端**互不引用**（守卫见 `backend/tests/test_mobile_web.py`）；两端只共享 `lib/*` 与
   `DynamicForm` / `MessageView` / `MarkdownView` / `ConversationThread` / `CollabAgentThread` /
-  `TicketBoardKit` / `Composer` / `Icons` / `McpPicker` / `McpServerForm` / `McpAssignPanel`
-  等纯展示组件，以及 `lib/agentStream` 里的事件归约。
+  `TicketBoardKit` / `Composer` / `Icons` / `McpPicker` / `McpServerForm` / `McpAssignPanel` /
+  `AuthGate` / `LoginScreen` / `AccountPanel` / `UserAdminPanel`
+  等纯展示组件，以及 `lib/agentStream` 里的事件归约。共享组件的样式必须两端样式表各写一份
+  （`account-*` / `auth-*` 就是例子）。
 - 移动端原语沿用既有类名（`btn` / `pill` / `banner` / `field` / `input` / `card` / `grid` /
   `card-section-title`…——定义在 `mobile.css`，因为移动端不加载 `index.css`）；只有移动端专有结构才用
   `m-` 前缀（`m-drawer` / `m-sheet` / `m-item` / `m-thread`…）。
@@ -425,6 +433,11 @@ class AcmeHarness(OpenAIHarnessBase):
 - [ ] 凭据有没有可能进入日志 / SSE / 接口响应？命令行回显是否被 `_redact` 覆盖？
 - [ ] 新增的智能体密钥是不是放在了 `credentials`（工具用）而不是网关（模型用）？值是否只经
       `security`、只以环境变量注入、事件是否过了 `scrub_event`？
+- [ ] 多用户相关改动：列表 / 详情 / 写入 / 运行前是否都做了 `owner_id` 校验？共享目录
+      （官方网关、扫描来的 MCP）是否在列表与详情里口径一致？
+- [ ] 口令 / 令牌：改口令或管理员重置口令的入口是否递增 `users.token_version`（旧 JWT 必须立即失效）？
+      令牌是否只含 `sub/role/ver/iat/exp`，明文口令是否从不入库 / 进日志 / 进响应？
+- [ ] 收紧为管理员接口后，前端是否同步隐藏/禁用入口，且没有在页面加载时自动调用？
 - [ ] 错误是否显式暴露（HTTPException 或 `error` 事件），而不是被吞掉？
 - [ ] 长任务是否响应取消与超时？
 - [ ] 中文规范：界面文案、注释、docstring 是否都是中文？专有名词是否保留？

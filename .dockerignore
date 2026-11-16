@@ -1,0 +1,14 @@
+# 构建上下文需要 entrypoint + 当前代码兜底（/image-app）+ frontend/dist；
+# 下面这些是运行期数据 / 缓存 / 依赖，
+# 送进 Docker daemon 只会拖慢构建（backend/data 里是真实对话数据库，绝不能进镜像）。
+.git
+backend/data
+backend/.venv
+backend/__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+frontend/node_modules
+frontend/.vite
+attachments
+generated-images

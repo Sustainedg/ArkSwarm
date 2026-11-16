@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
+import { useAuth } from '../components/AuthGate'
 import { CollapsibleGroup } from '../components/CollapsibleGroup'
 import { useExpandMap } from '../lib/collapse'
 import type { Skill, SkillDetail } from '../lib/types'
@@ -241,6 +242,7 @@ function SkillDetailPane({
   deleting: boolean
   onDelete: () => void
 }) {
+  const { isAdmin } = useAuth()
   const kernel = skill.type_name ?? skill.type_id
   return (
     <div className="skill-detail">
@@ -267,7 +269,7 @@ function SkillDetailPane({
             </a>
           )}
         </div>
-        {skill.deletable && (
+        {isAdmin && skill.deletable && (
           <div className="skill-detail-actions">
             <button className="btn danger" onClick={onDelete} disabled={deleting}>
               {deleting ? '删除中…' : '删除技能'}

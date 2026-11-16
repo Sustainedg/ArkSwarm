@@ -20,8 +20,10 @@ from ..runtime import availability as availability_service
 from ..runtime import provisioning
 from ..schemas import RuntimeAction
 from ..transport.sse import sse_stream
+from .auth import current_user, require_admin
 
-router = APIRouter(prefix="/runtimes", tags=["runtimes"])
+#: 整个路由器都要求登录：运行时是平台级操作，任何登录用户都可查看 / 安装。
+router = APIRouter(prefix="/runtimes", tags=["runtimes"], dependencies=[Depends(current_user)])
 
 
 def _describe(definition: AgentDefinition, agents: int, availability: Availability) -> dict:
@@ -61,7 +63,7 @@ async def list_runtimes(session: AsyncSession = Depends(get_session)) -> dict:
     }
 
 
-@router.post("/{type_id}/refresh")
+@router.post("/{type_id}/refresh", dependencies=[Depends(require_admin)])
 async def refresh_runtime(type_id: str) -> dict:
     """强制重测一次安装状态与版本（卡片上的「重新检测」按钮）。
 
@@ -97,24 +99,24 @@ async def _provision_stream(type_id: str, action: provisioning.Action) -> Stream
     )
 
 
-@router.post("/{type_id}/install")
+@router.post("/{type_id}/install", dependencies=[Depends(require_admin)])
 async def install_runtime(type_id: str) -> StreamingResponse:
     return await _provision_stream(type_id, "install")
 
 
-@router.post("/{type_id}/update")
+@router.post("/{type_id}/update", dependencies=[Depends(require_admin)])
 async def update_runtime(type_id: str) -> StreamingResponse:
     return await _provision_stream(type_id, "update")
 
 
-@router.post("/{type_id}/uninstall")
+@router.post("/{type_id}/uninstall", dependencies=[Depends(require_admin)])
 async def uninstall_runtime(type_id: str, payload: RuntimeAction) -> StreamingResponse:
     if not payload.confirm:
         raise HTTPException(status_code=422, detail="卸载属于破坏性操作，需要显式确认（confirm=true）")
     return await _provision_stream(type_id, "uninstall")
 
 
-@router.post("/{type_id}/check")
+@router.post("/{type_id}/check", dependencies=[Depends(require_admin)])
 async def check_runtime(type_id: str) -> dict:
     """查询该运行时的最新可用版本（给界面「检查更新」按钮用）。"""
     try:

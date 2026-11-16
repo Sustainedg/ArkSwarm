@@ -2173,3 +2173,94 @@ code, pre, .mono { font-family: var(--mono); }
   font-size: 10.5px; line-height: 1.6; color: var(--text-dim);
 }
 .m-usage-empty-line { padding: 8px; font-size: 12px; color: var(--text-dim); }
+
+/* ================= 登录 / 注册（移动端外壳）================= */
+.auth-screen.auth-mobile {
+  position: fixed; inset: 0;
+  display: grid; place-items: center;
+  padding: calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 15% 5%, var(--brand-soft), transparent 50%),
+    var(--bg);
+  overflow: auto;
+}
+.auth-screen.auth-mobile .auth-card {
+  width: 100%; max-width: 420px;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 22px; border: 1px solid var(--border); border-radius: 18px;
+  background: var(--bg-panel);
+}
+.auth-screen.auth-mobile .auth-brand { display: flex; align-items: center; gap: 12px; }
+.auth-screen.auth-mobile .auth-mark {
+  width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 13px; background: var(--brand); color: #fff; font-size: 22px;
+}
+.auth-screen.auth-mobile .auth-title { font-size: 19px; font-weight: 700; }
+.auth-screen.auth-mobile .auth-sub { font-size: 12px; color: var(--text-dim); }
+.auth-screen.auth-mobile .auth-heading h1 { font-size: 20px; margin-bottom: 6px; }
+.auth-screen.auth-mobile .auth-form { gap: 14px; }
+.auth-screen.auth-mobile .auth-form .input { min-height: 44px; font-size: 16px; }
+.auth-screen.auth-mobile .auth-submit { width: 100%; justify-content: center; min-height: 44px; }
+.auth-screen.auth-mobile .auth-switch { text-align: center; }
+.auth-screen.auth-mobile .auth-loading { color: var(--text-muted); font-size: 13px; }
+.auth-screen.auth-mobile .link-btn {
+  border: none; background: none; color: var(--brand); font-size: 13px; padding: 4px;
+}
+
+/* 抽屉底部：当前账号 + 退出 */
+.m-drawer-account {
+  padding: 10px calc(12px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom))
+    calc(12px + env(safe-area-inset-left));
+  border-top: 1px solid var(--border);
+}
+/* 左下角账号：平时只有头像 + 用户名，点开才出现「设置 / 退出登录」（与桌面端侧边栏同构）。 */
+.m-drawer-account-wrap { position: relative; }
+.m-drawer-account-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.m-drawer-account-btn:hover,
+.m-drawer-account-btn[aria-expanded='true'] {
+  background: var(--bg-hover); border-color: var(--border);
+}
+.m-drawer-account-avatar {
+  width: 28px; height: 28px; flex: none;
+  display: grid; place-items: center; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  color: #fff; font-size: 12px; font-weight: 700; line-height: 1;
+}
+.m-drawer-account-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 600;
+}
+.m-drawer-account-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 60;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-panel); box-shadow: 0 16px 40px rgb(0 0 0 / 35%);
+}
+.m-drawer-account-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 9px; border: none; border-radius: 8px; background: transparent;
+  color: var(--text); font-size: 12px; text-align: left; cursor: pointer;
+}
+.m-drawer-account-menu button:hover { background: var(--bg-hover); }
+.m-drawer-account-menu-icon { width: 16px; text-align: center; font-size: 13px; line-height: 1; }
+
+/* 账号 / 用户管理（组件两端共用）：桌面端同一组样式在 index.css，修改时两边同步。 */
+.account-card { display: flex; flex-direction: column; gap: 14px; }
+.account-user-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-soft, var(--bg-hover));
+}
+.account-user-main { flex: 1; min-width: 180px; }
+.account-user-name { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; }
+.account-user-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.account-reset-row { display: flex; gap: 8px; width: 100%; }
+.account-reset-row .input { flex: 1; }
+
+/* 账号页的字段在手机上单列排布（复用 .grid 时默认是两列，三字段会挤） */
+.m-page .account-card .grid { grid-template-columns: 1fr; }

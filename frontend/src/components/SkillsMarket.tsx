@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { useAuth } from './AuthGate'
 import type { MarketKernel, MarketSkill, MarketSkillList } from '../lib/types'
 
 /** 排序方式：与后端 `sort_by` 对齐。 */
@@ -25,6 +26,7 @@ export function SkillsMarket({
   onInstalled?: (message: string) => void | Promise<void>
   variant?: 'desktop' | 'mobile'
 }) {
+  const { isAdmin } = useAuth()
   const [data, setData] = useState<MarketSkillList | null>(null)
   const [kernels, setKernels] = useState<MarketKernel[]>([])
   const [kernel, setKernel] = useState('')
@@ -216,7 +218,9 @@ export function SkillsMarket({
                   <div className="card-sub">{skill.author ? `作者 ${skill.author}` : skill.owner ?? ''}</div>
                 </div>
                 <div className="card-actions">
-                  {installed[installKey(kernel, skill.slug)] ? (
+                  {!isAdmin ? (
+                    <span className="dim small">仅管理员可安装 / 卸载</span>
+                  ) : installed[installKey(kernel, skill.slug)] ? (
                     <button
                       className="btn danger"
                       disabled={installing === skill.slug}

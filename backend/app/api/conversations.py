@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -13,7 +14,7 @@ from sqlmodel import select
 from .. import attachments
 from ..agents import get_agent
 from ..db import get_session
-from ..models import AgentProfile, Conversation, Gateway, Message
+from ..models import AgentProfile, Conversation, Gateway, Message, User
 from ..runtime import registry
 from ..runtime import skills as skill_service
 from ..runtime import titles
@@ -35,6 +36,7 @@ from ..schemas import (
     SendMessage,
 )
 from ..transport.sse import sse_stream
+from .auth import current_user, owner_id_for, require_owned
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -92,11 +94,29 @@ def _is_unread(conversation: Conversation, last: Message | None) -> bool:
     return _as_utc(last.created_at) > _as_utc(conversation.last_read_at)
 
 
+async def _owned_conversation(conversation_id: str, session: AsyncSession, user: User) -> Conversation:
+    """取一条对话并校验归属；不存在或无权一律 404。"""
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    require_owned(conversation, user)
+    return conversation
+
+
+def _owned_query(stmt, user: User):
+    """列表只看自己的对话；管理员看全部。"""
+    if user.role == "admin":
+        return stmt
+    return stmt.where(Conversation.owner_id == user.id)
+
+
 @router.get("")
 async def list_conversations(
-    include_archived: bool = False, session: AsyncSession = Depends(get_session)
+    include_archived: bool = False,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    query = select(Conversation).order_by(Conversation.updated_at.desc())
+    query = _owned_query(select(Conversation).order_by(Conversation.updated_at.desc()), user)
     if not include_archived:
         query = query.where(Conversation.archived == False)  # noqa: E712
     rows = (await session.execute(query)).scalars().all()
@@ -146,15 +166,15 @@ async def list_conversations(
 
 @router.post("/{conversation_id}/read", status_code=204)
 async def mark_conversation_read(
-    conversation_id: str, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> Response:
     """把这条对话标记为已读（打开 / 正在看时由前端调用）。
 
     只改 ``last_read_at``，**不动** ``updated_at``：标已读不该让对话跳到列表最前面。
     """
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation = await _owned_conversation(conversation_id, session, user)
     conversation.last_read_at = datetime.now(timezone.utc)
     session.add(conversation)
     await session.commit()
@@ -163,7 +183,9 @@ async def mark_conversation_read(
 
 @router.post("", status_code=201)
 async def create_conversation(
-    payload: ConversationCreate, session: AsyncSession = Depends(get_session)
+    payload: ConversationCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """新建对话：不指定智能体就用「默认智能体」（卡片右上角那颗五角星）。
 
@@ -174,14 +196,21 @@ async def create_conversation(
         profile = await session.get(AgentProfile, payload.agent_profile_id)
         if profile is None or profile.deleted_at is not None:
             raise HTTPException(status_code=422, detail="指定的智能体不存在")
+        # 不能用别人的智能体建对话
+        require_owned(profile, user)
     else:
-        profile = await pick_default_profile(session)
+        profile = await pick_default_profile(
+            session, None if user.role == "admin" else user.id
+        )
         if profile is None:
             raise HTTPException(
                 status_code=422,
                 detail="还没有可用的智能体：先到「智能体」页创建，并点卡片右上角的五角星设为默认",
             )
+        # 非管理员只能用自己设为默认的智能体；若默认智能体不归他，报错引导去创建
+        require_owned(profile, user)
     conversation = new_conversation(profile, payload.title, payload.workspace_dir)
+    conversation.owner_id = owner_id_for(user)
     session.add(conversation)
     await session.commit()
     await session.refresh(conversation)
@@ -189,10 +218,12 @@ async def create_conversation(
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(conversation_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+async def get_conversation(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    conversation = await _owned_conversation(conversation_id, session, user)
     messages = (
         await session.execute(
             select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at)
@@ -208,11 +239,12 @@ async def get_conversation(conversation_id: str, session: AsyncSession = Depends
 
 @router.patch("/{conversation_id}")
 async def update_conversation(
-    conversation_id: str, payload: ConversationUpdate, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    payload: ConversationUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation = await _owned_conversation(conversation_id, session, user)
     data = payload.model_dump(exclude_unset=True)
 
     # 换智能体 / 换工作目录都要让会话记忆重来：内核的 session 是绑在「智能体 + 工作目录」
@@ -223,6 +255,7 @@ async def update_conversation(
         profile = await session.get(AgentProfile, data.pop("agent_profile_id"))
         if profile is None or profile.deleted_at is not None:
             raise HTTPException(status_code=422, detail="指定的智能体不存在")
+        require_owned(profile, user)
         conversation.agent_profile_id = profile.id
         scope_changed = True
         agent_changed = True
@@ -265,10 +298,12 @@ async def update_conversation(
 
 
 @router.delete("/{conversation_id}", status_code=204)
-async def delete_conversation(conversation_id: str, session: AsyncSession = Depends(get_session)) -> Response:
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+async def delete_conversation(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
+    conversation = await _owned_conversation(conversation_id, session, user)
     registry.cancel_for_conversation(conversation_id)
     # 用单条 DELETE 显式清空消息（保留「删对话必须清消息」的不变量），比逐行
     # session.delete 少一层往返，也避开 SQLite 驱动对 executemany 行数统计为 0 的误导性告警。
@@ -281,10 +316,12 @@ async def delete_conversation(conversation_id: str, session: AsyncSession = Depe
 
 
 @router.post("/{conversation_id}/session/reset")
-async def reset_session(conversation_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+async def reset_session(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    conversation = await _owned_conversation(conversation_id, session, user)
     conversation.session_id = None
     session.add(conversation)
     await session.commit()
@@ -293,16 +330,17 @@ async def reset_session(conversation_id: str, session: AsyncSession = Depends(ge
 
 @router.post("/{conversation_id}/attachments", status_code=201)
 async def upload_attachment(
-    conversation_id: str, payload: AttachmentUpload, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    payload: AttachmentUpload,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """把附件存进对话的工作目录（`<工作目录>/attachments/`）。
 
     附件不经过适配器：智能体本来就能读工作目录里的文件，发消息时把相对路径写进提示词即可
     （见 `runtime/service.compose_user_content`），因此每个内核都自动支持。
     """
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation = await _owned_conversation(conversation_id, session, user)
     profile = await session.get(AgentProfile, conversation.agent_profile_id)
     if profile is None:
         raise HTTPException(status_code=409, detail="对话绑定的智能体已不存在，无法保存附件")
@@ -319,7 +357,10 @@ async def upload_attachment(
 
 @router.get("/{conversation_id}/files/{rel_path:path}")
 async def get_conversation_file(
-    conversation_id: str, rel_path: str, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    rel_path: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> FileResponse:
     """把工作目录里的一个文件回给浏览器看（附件点开预览、智能体产出的图片等）。
 
@@ -327,9 +368,7 @@ async def get_conversation_file(
     工作目录里的普通文件，所以「预览我上传的图」与「看智能体生成的图」共用这一个出口 ——
     这也是聊天里嵌图能真正显示出来的前提（浏览器取不到工作目录里的本地路径）。
     """
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation = await _owned_conversation(conversation_id, session, user)
     try:
         workspace = Path(resolve_workspace(conversation))
         target = attachments.resolve_workspace_file(rel_path, workspace)
@@ -369,8 +408,13 @@ def _stream_prepared(prepared) -> StreamingResponse:
 
 
 @router.get("/{conversation_id}/stream")
-async def stream_active_run(conversation_id: str) -> StreamingResponse:
+async def stream_active_run(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> StreamingResponse:
     """订阅一条对话当前正在运行的那一轮（刷新 / 另一台设备实时围观用）。"""
+    await _owned_conversation(conversation_id, session, user)
     run = registry.active_for(conversation_id)
     if run is None:
         raise HTTPException(status_code=404, detail="这条对话当前没有正在运行的任务")
@@ -384,16 +428,16 @@ async def stream_active_run(conversation_id: str) -> StreamingResponse:
 
 @router.get("/{conversation_id}/models")
 async def conversation_models(
-    conversation_id: str, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """这条对话可选的模型清单。
 
     有自定义网关时只能用网关白名单里的模型；官方默认时返回空清单，由前端
     允许直接填写模型名（与「智能体」页的默认模型输入一致）。
     """
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在")
+    conversation = await _owned_conversation(conversation_id, session, user)
     profile = await session.get(AgentProfile, conversation.agent_profile_id)
     gateway = (
         await session.get(Gateway, profile.gateway_id)
@@ -416,8 +460,12 @@ async def conversation_models(
 
 @router.post("/{conversation_id}/messages")
 async def send_message(
-    conversation_id: str, payload: SendMessage, session: AsyncSession = Depends(get_session)
+    conversation_id: str,
+    payload: SendMessage,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> StreamingResponse:
+    await _owned_conversation(conversation_id, session, user)
     try:
         prepared = await prepare_run(session, conversation_id, payload)
     except ConfigurationError as exc:
@@ -431,7 +479,12 @@ async def send_message(
 
 
 @router.post("/{conversation_id}/regenerate")
-async def regenerate(conversation_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+async def regenerate(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> StreamingResponse:
+    await _owned_conversation(conversation_id, session, user)
     try:
         prepared = await regenerate_last(session, conversation_id)
     except ConfigurationError as exc:
@@ -441,6 +494,11 @@ async def regenerate(conversation_id: str, session: AsyncSession = Depends(get_s
 
 
 @router.post("/{conversation_id}/cancel")
-async def cancel_run(conversation_id: str) -> dict:
+async def cancel_run(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    await _owned_conversation(conversation_id, session, user)
     cancelled = registry.cancel_for_conversation(conversation_id)
     return {"ok": cancelled}

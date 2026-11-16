@@ -23,6 +23,7 @@
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
+| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认关闭，开启后按 `owner_id` 隔离，口令只存 PBKDF2 哈希 |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
 | MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
@@ -84,13 +85,15 @@
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
  │                 registry(注册) · skills(技能契约) · mcp(MCP 契约) · builtin/*(实现) │
  ├───────────────────────────────────────────────────────────────────┤
- │ models/db · schemas · settings · security · attachments · bootstrap│
- └───────────────────────────────────────────────────────────────────┘
+ │ models/db · schemas · settings · security · auth/auth_deps · attachments · bootstrap│
+ └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 依赖方向**只能自上而下**：`api → runtime → agents`；`api/runtime` 可依赖
-`models/db/settings/security/attachments`；
+`models/db/settings/security/auth/auth_deps/attachments`；
 **`agents` 不得反向依赖任何上层**。跨层共享的数据结构定义在叶子层（如 `agents/base.py` 的 `AgentContext`）。
+`auth.py`（口令哈希 / 令牌）与 `auth_deps.py`（当前用户 / 管理员 / 归属校验）放在顶层叶子层，
+因为协作域有架构守卫禁止依赖 `app.api.*`，但协作路由同样需要鉴权。
 
 协作域 `collab/` 是**旁路功能**，不在主干上：`api` 只把它当一条子路由挂上去，它在内部经**唯一边界**
 `collab/execution.py` 调用 `runtime.runner`。硬约束（有守卫测试 `tests/test_collab_architecture.py`）：
@@ -456,6 +459,17 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 - 新增会把凭据放进 env/argv 的适配器时，确认 `runner._redact` 能覆盖（env 键名含 KEY/TOKEN/SECRET/PASSWORD）。
 - `Runtime.API` 型智能体的文件/命令工具必须限制在工作目录内（见 `builtin/harness_tools.py` 的 `_resolve`）。
 - `bypassPermissions` / `danger-full-access` 这类无人值守选项只应出现在显式配置里，不要设为默认值。
+- **多用户归属**：网关、智能体、凭据、对话、MCP 服务器、协作组与协作运行都有 `owner_id`。
+  接口按 `current_user` 过滤：非管理员列表只回自己的行（网关额外包含官方链路、扫描来的 MCP
+  是只读共享目录），按 id 读取别人的行返回 404；跨用户引用（网关 / 凭据 / 平台通用 MCP /
+  协作图节点上的智能体）必须在写入或启动运行前拒绝。管理员可看全部，但凭据仍只能以
+  环境变量注入、事件仍要脱敏。
+- **鉴权开关**：`ARKSWARM_AUTH_ENABLED` 默认关闭，保证单用户部署升级后行为不变；多用户部署
+  显式开启，并配置 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD` 或关闭自助注册。
+  `ARKSWARM_ADMIN_*`、`ARKSWARM_REGISTRATION_OPEN` 与 `ARKSWARM_AUTH_ENABLED` 的说明见
+  `backend/.env.example`。口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
+- **令牌吊销**：JWT 带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令必须
+  把 `token_version` +1，让旧令牌立即失效。新增会改口令的入口时不要漏掉这一步。
 
 ---
 
@@ -496,6 +510,8 @@ curl -s http://127.0.0.1:8010/api/health
 | `runtime/mcp.py` · `api/mcp.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端 MCP 页（两端）与智能体弹窗 |
 | `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
+| `auth.py` / `auth_deps.py` / `api/auth.py` | 登录 / 注册 / 用户管理、`current_user` 依赖、`owner_id` 过滤、管理员入口、前端 `AuthGate` / `AccountPanel` / `UserAdminPanel` 与 `lib/auth.ts` |
+| 任一资产表新增 `owner_id` 或新的共享目录 | 对应 `ADDITIVE_COLUMNS`、`bootstrap.backfill_ownership`、列表/详情/写入三处的归属过滤、成员端应隐藏的管理员按钮 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
 | `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封、超时、取消、脱敏 |
 | 新增「运行时可由平台安装 / 更新」 | 适配器的 `provisioner`（`RuntimeProvisioner`）+ `docs/architecture.md` §4.1 |
@@ -531,6 +547,9 @@ curl -s http://127.0.0.1:8010/api/health
 - ❌ 把 MCP 的 `env` / `headers` 明文写进日志、SSE 事件或接口响应（只能加密落库 + 只回掩码）。
 - ❌ 在网关之外另存 API 密钥（或让智能体直填密钥）——密钥只经网关、只经 `security`。
 - ❌ 把凭据值写进提示词 / 日志 / 事件 / 接口响应（只能以环境变量注入，值一律掩码或擦除）。
+- ❌ 允许协作图 / 对话 / 智能体引用不属于当前用户的资产（网关、凭据、平台通用 MCP、智能体），
+  或让列表能看到的共享行在详情接口又变成 404。
+- ❌ 管理员接口收紧后，前端仍向普通成员显示按钮或自动调用（成员只会拿到 403）。
 - ❌ 前端改完不 build、不重启就宣称完成。
 - ❌ 静默吞异常，或把错误只打到 stdout 不产出 `error` 事件。
 - ❌ 引入 UI 框架/状态管理库/新依赖来解决一个 CSS 或几行状态能解决的问题。

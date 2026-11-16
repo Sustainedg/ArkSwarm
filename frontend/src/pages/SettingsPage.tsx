@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { AccountPanel } from '../components/AccountPanel'
+import { UserAdminPanel } from '../components/UserAdminPanel'
 import { CredentialVault } from '../components/CredentialVault'
 import { GatewayManager } from '../components/GatewayManager'
 import { KernelManager } from '../components/KernelManager'
@@ -8,6 +10,7 @@ import { TitleSettingsSection } from '../components/TitleSettings'
 import { UpdatePanel } from '../components/UpdatePanel'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
+import { useAuth } from '../components/AuthGate'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
 import type { ActiveCollabRun, ArchitectureDoc, Overview } from '../lib/types'
 
@@ -18,8 +21,10 @@ import type { ActiveCollabRun, ArchitectureDoc, Overview } from '../lib/types'
  * 「内核管理」管各 CLI 内核本身（装没装 / 什么版本 / 安装 · 更新 · 卸载）。
  * 顺序按「日常会动的在前」排：外观 / 对话最常改，内核管理与关于基本只看。
  */
-const TABS = [
+const ALL_TABS = [
   { id: 'appearance', label: '外观' },
+  { id: 'account', label: '账号' },
+  { id: 'users', label: '用户' },
   { id: 'chat', label: '对话' },
   { id: 'gateways', label: '网关' },
   { id: 'credentials', label: '凭据' },
@@ -28,10 +33,13 @@ const TABS = [
   { id: 'about', label: '关于' },
 ] as const
 
-type SettingsTab = (typeof TABS)[number]['id']
+//: 标签页定义的旧名字（守卫测试按这个名字找）；实际显示时会按角色过滤掉「用户」。
+const TABS = ALL_TABS
+
+type SettingsTab = (typeof ALL_TABS)[number]['id']
 
 function isSettingsTab(value: string | null): value is SettingsTab {
-  return TABS.some((item) => item.id === value)
+  return ALL_TABS.some((item) => item.id === value)
 }
 
 /**
@@ -43,10 +51,14 @@ function isSettingsTab(value: string | null): value is SettingsTab {
  */
 export function SettingsPage() {
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
   const { mode, theme, setMode } = useThemeMode()
   const [params, setParams] = useSearchParams()
   const current = params.get('tab')
-  const tab: SettingsTab = isSettingsTab(current) ? current : 'appearance'
+  const requested: SettingsTab = isSettingsTab(current) ? current : 'appearance'
+  // 「用户」只有管理员能看；非管理员直接落到外观，避免链接能打开一个空页。
+  const tab: SettingsTab = requested === 'users' && !isAdmin ? 'appearance' : requested
+  const tabs = TABS.filter((item) => item.id !== 'users' || isAdmin)
   const [overview, setOverview] = useState<Overview | null>(null)
   /** 协作里的运行是另一张登记表（`/api/collab/active-runs`），不在 overview.active_runs 里 */
   const [collabRuns, setCollabRuns] = useState<ActiveCollabRun[]>([])
@@ -101,14 +113,16 @@ export function SettingsPage() {
       <header className="page-header settings-head">
         <div>
           <h1 className="page-title">设置</h1>
-          <p className="page-desc">按类型分页：外观 · 对话 · 网关 · 凭据 · 网络 · 内核管理 · 关于。</p>
+          <p className="page-desc">
+            按类型分页：外观 · 账号{isAdmin ? ' · 用户' : ''} · 对话 · 网关 · 凭据 · 网络 · 内核管理 · 关于。
+          </p>
         </div>
       </header>
 
       {/* 标签栏独占一行：7 个标签，塞在页头右侧会被挤成一团（标签样式见 .tabs / .tab）。 */}
       <div className="settings-tabbar">
         <div className="tabs">
-          {TABS.map((item) => (
+          {tabs.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -151,19 +165,40 @@ export function SettingsPage() {
           </section>
         )}
 
-        {tab === 'chat' && <TitleSettingsSection />}
+        {tab === 'account' && <AccountPanel />}
+
+        {tab === 'users' && isAdmin && <UserAdminPanel />}
+
+        {/* 「对话」与「网络」是平台级设置（后端只允许管理员写入）：成员看得到说明，不给编辑入口。 */}
+        {tab === 'chat' &&
+          (isAdmin ? (
+            <TitleSettingsSection />
+          ) : (
+            <section className="card">
+              <div className="card-title">自动起标题由管理员配置</div>
+              <p className="dim small">这一项影响全平台，只有管理员能修改。</p>
+            </section>
+          ))}
 
         {tab === 'gateways' && <GatewayManager />}
 
         {tab === 'credentials' && <CredentialVault />}
 
-        {tab === 'network' && <ProxySettings />}
+        {tab === 'network' &&
+          (isAdmin ? (
+            <ProxySettings />
+          ) : (
+            <section className="card">
+              <div className="card-title">网络代理由管理员配置</div>
+              <p className="dim small">这一项影响全平台的安装 / 更新，只有管理员能修改。</p>
+            </section>
+          ))}
 
         {tab === 'kernels' && <KernelManager />}
 
         {tab === 'about' && (
           <>
-            <UpdatePanel currentVersion={overview?.version ?? '…'} />
+            {isAdmin && <UpdatePanel currentVersion={overview?.version ?? '…'} />}
             <section className="stack">
               <div className="row" style={{ gap: 8 }}>
                 <h2 className="card-section-title" style={{ flex: 1 }}>

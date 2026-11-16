@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
+import { useAuth } from '../../components/AuthGate'
 import { CollapsibleGroup } from '../../components/CollapsibleGroup'
 import { useExpandMap } from '../../lib/collapse'
 import type { Skill, SkillDetail } from '../../lib/types'
@@ -48,6 +49,7 @@ export function MobileSkillsPage() {
 
 /** 本地技能：各内核自带技能的统一编目视图（原来的实现）。 */
 function MobileSkillsLocal() {
+  const { isAdmin } = useAuth()
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [sourceKind, setSourceKind] = useState('')
@@ -210,7 +212,7 @@ function MobileSkillsLocal() {
           title="技能详情"
           onClose={() => setSelected(null)}
           footer={
-            selected.deletable ? (
+            isAdmin && selected.deletable ? (
               <button
                 className="btn danger block"
                 onClick={() => void deleteSelected()}

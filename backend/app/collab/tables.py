@@ -40,6 +40,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         # 这一步把活派给了哪个节点（delegate 用）；用来在岗位会话里还原「谁把活交给了谁」
         "target_key": "VARCHAR(64) NOT NULL DEFAULT ''",
     },
+    # ---- 多用户系统：协作组与协作运行按 owner_id 归属。工单和步骤经 run_id 间接归属，不加。
+    "collab_teams": {"owner_id": "VARCHAR(64)"},
+    "collab_runs": {"owner_id": "VARCHAR(64)"},
 }
 
 
@@ -68,6 +71,8 @@ class CollabTeam(SQLModel, table=True):
     )
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class CollabRun(SQLModel, table=True):
@@ -99,6 +104,8 @@ class CollabRun(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；与所属协作组一致，冗余存一份是为了列表查询不必先 join team。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class CollabTicket(SQLModel, table=True):

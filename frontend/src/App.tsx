@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
+import { useAuth } from './components/AuthGate'
 import { ChatPage } from './pages/ChatPage'
 import { CollabPage } from './pages/CollabPage'
 import { AgentsPage } from './pages/AgentsPage'
@@ -19,7 +20,6 @@ const NAV = [
   { to: '/skills', icon: '🧩', label: '技能' },
   { to: '/mcp', icon: '🔌', label: 'MCP' },
   { to: '/usage', icon: '📊', label: '用量' },
-  { to: '/settings', icon: '⚙️', label: '设置' },
 ]
 
 /** 侧边栏是否折叠存在 localStorage：折叠是这台设备的个人偏好，跟主题一样只影响本机。 */
@@ -53,8 +53,32 @@ function CollabSettingsRedirect() {
  * 「内核管理」「自定义网关」不在主导航里，收在「设置」页的标签页里（与移动端一致）。
  */
 export default function App() {
+  const { user, authEnabled, logout } = useAuth()
+  const navigate = useNavigate()
   const [version, setVersion] = useState('')
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement | null>(null)
+
+  // 账号菜单：点外面或按 Esc 收起（侧栏底部只剩头像 + 用户名，设置与退出都收进这个菜单）。
+  useEffect(() => {
+    if (!userMenuOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) setUserMenuOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setUserMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [userMenuOpen])
+
+  const displayName = user?.display_name || user?.username || '系统'
+  const avatarText = displayName.trim().slice(0, 1).toUpperCase() || '👤'
 
   const toggleSidebar = () =>
     setCollapsed((current) => {
@@ -116,8 +140,47 @@ export default function App() {
         </nav>
         <ConversationList />
         <div className="sidebar-footer">
-          配置网关与智能体 → 对话 / 协作
-          {version && <div style={{ marginTop: 4 }}>版本 {version}</div>}
+          <div className="sidebar-user-wrap" ref={userMenuRef}>
+            {userMenuOpen && (
+              <div className="sidebar-user-menu" role="menu" aria-label="账号菜单">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    navigate('/settings')
+                  }}
+                >
+                  <span className="sidebar-user-menu-icon">⚙️</span>
+                  设置
+                </button>
+                {authEnabled && user && user.id !== '__system__' && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setUserMenuOpen(false)
+                      logout()
+                    }}
+                  >
+                    <span className="sidebar-user-menu-icon">⏻</span>
+                    退出登录
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="sidebar-user-btn"
+              onClick={() => setUserMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={userMenuOpen}
+              title={user?.role === 'admin' ? '管理员' : undefined}
+            >
+              <span className="sidebar-user-avatar">{avatarText}</span>
+              <span className="sidebar-user-name">{displayName}</span>
+            </button>
+          </div>
         </div>
       </aside>
       <main className="main">

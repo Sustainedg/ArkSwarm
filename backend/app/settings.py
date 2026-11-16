@@ -35,6 +35,17 @@ class Settings(BaseSettings):
     #: ``http://192.168.2.168:3050``。命中前缀的图片会在助手消息落库前下载到
     #: ``generated-images/`` 并改写为相对路径，让对话历史自包含。
     image_ingest_prefixes: str = ""
+    # ---- 多用户系统 -------------------------------------------------------
+    #: 是否开启鉴权。默认关闭，保证从单用户版本升级上来的部署行为不变（开箱即用）；
+    #: 多用户部署请显式设为 true，并配置首任管理员或关闭自助注册。关闭时所有接口视为
+    #: 「管理员」调用，不校验令牌。
+    auth_enabled: bool = False
+    #: 是否开放注册。默认开放；设为 false 时注册接口返回 403，只能由管理员建用户。
+    registration_open: bool = True
+    #: 首任管理员的登录名（首启建初始管理员用；已存在用户时不生效）
+    admin_username: str | None = None
+    #: 首任管理员的口令（首启建初始管理员用；已存在用户时不生效）
+    admin_password: str | None = None
 
     @property
     def sqlalchemy_url(self) -> str:

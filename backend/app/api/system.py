@@ -1,22 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 from sqlmodel import select
 
 from datetime import datetime, timezone
+from typing import Annotated
 
 from .. import VERSION_HISTORY, __version__
 from ..agents import all_agents
 from ..db import SessionLocal
-from ..models import AgentProfile, PlatformSetting
+from ..models import AgentProfile, PlatformSetting, User
 from ..runtime import availability as availability_service
 from ..runtime import registry
 from ..runtime import titles
 from ..runtime.service import pick_default_profile
 from ..settings import get_settings
 from .architecture_doc import build_architecture_page
+from .auth import current_user, require_admin
 
 router = APIRouter(tags=["system"])
 
@@ -39,14 +41,19 @@ async def get_proxy_url() -> str | None:
 
 
 @router.get("/system/proxy")
-async def get_proxy() -> dict:
+async def get_proxy(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """获取当前代理设置。"""
     url = await get_proxy_url()
     return {"proxy_url": url}
 
 
 @router.put("/system/proxy")
-async def set_proxy(payload: ProxySettings) -> dict:
+async def set_proxy(
+    payload: ProxySettings,
+    admin: Annotated[User, Depends(require_admin)] = None,
+) -> dict:
     """保存代理设置。空字符串视为清除。"""
     value = (payload.proxy_url or "").strip() or None
     async with SessionLocal() as session:
@@ -73,7 +80,7 @@ class TitleSettings(BaseModel):
     model: str | None = None
 
 
-async def _title_settings_view(session) -> dict:
+async def _title_settings_view(session, user: User | None = None) -> dict:
     """把标题设置连同解析后的名字一起回给界面（界面只回名字，不必自己再查一遍）。
 
     另附上一次自动起标题的失败原因：起标题是后台增强，失败只在日志里，用户看不到；
@@ -81,12 +88,17 @@ async def _title_settings_view(session) -> dict:
     """
     settings = await titles.read_settings(session)
     diagnostics = await titles.read_diagnostics(session)
+    owner_id = None if user is None or user.role == "admin" else user.id
     chosen = None
     if settings.agent_profile_id:
         candidate = await session.get(AgentProfile, settings.agent_profile_id)
-        if candidate is not None and candidate.deleted_at is None:
+        if (
+            candidate is not None
+            and candidate.deleted_at is None
+            and (owner_id is None or candidate.owner_id == owner_id)
+        ):
             chosen = candidate
-    fallback = await pick_default_profile(session)
+    fallback = await pick_default_profile(session, owner_id)
     effective = chosen or fallback
     return {
         "enabled": settings.enabled,
@@ -102,15 +114,20 @@ async def _title_settings_view(session) -> dict:
 
 
 @router.get("/system/title")
-async def get_title_settings() -> dict:
+async def get_title_settings(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """读取「自动生成对话标题」的设置。"""
     async with SessionLocal() as session:
-        return await _title_settings_view(session)
+        return await _title_settings_view(session, user)
 
 
 @router.put("/system/title")
-async def set_title_settings(payload: TitleSettings) -> dict:
-    """保存标题设置。指定的智能体必须存在且未删除；留空表示跟随默认智能体。"""
+async def set_title_settings(
+    payload: TitleSettings,
+    admin: Annotated[User, Depends(require_admin)] = None,
+) -> dict:
+    """保存标题设置（平台级设置，仅管理员）。指定智能体必须存在且未删除；留空 = 跟随默认。"""
     agent_id = (payload.agent_profile_id or "").strip() or None
     async with SessionLocal() as session:
         if agent_id is not None:
@@ -118,7 +135,7 @@ async def set_title_settings(payload: TitleSettings) -> dict:
             if profile is None or profile.deleted_at is not None:
                 raise HTTPException(status_code=422, detail="指定的智能体不存在")
         await titles.write_settings(session, payload.enabled, agent_id, payload.model)
-        return await _title_settings_view(session)
+        return await _title_settings_view(session, admin)
 
 
 @router.get("/health")
@@ -126,30 +143,41 @@ async def health() -> dict:
     return {"status": "ok", "version": __version__}
 
 @router.get("/system/overview")
-async def overview() -> dict:
+async def overview(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     settings = get_settings()
     agents = all_agents()
     # 可用性读缓存（缺行只查 PATH）：这里绝不能实时探测，否则每次打开页面都冻住几秒。
     statuses = await availability_service.statuses(agents)
+    owner_id = None if user.role == "admin" else user.id
+    # 绝对路径是服务器内部信息：非管理员只看「由管理员配置」，不暴露部署目录。
     return {
         "version": __version__,
         "version_history": [dict(item) for item in VERSION_HISTORY],
         "app_name": settings.app_name,
-        "data_dir": str(settings.data_dir),
-        "workspaces_root": str(settings.workspaces_root),
+        "data_dir": str(settings.data_dir) if user.role == "admin" else "（仅管理员可见）",
+        "workspaces_root": (
+            str(settings.workspaces_root) if user.role == "admin" else "（仅管理员可见）"
+        ),
         "agent_types": len(agents),
         "installed_types": sum(1 for a in agents if statuses[a.id].installed),
-        "active_runs": registry.list(),
+        "active_runs": registry.list(owner_id=owner_id),
     }
 
 
 @router.get("/system/runs")
-async def active_runs() -> dict:
-    return {"runs": registry.list()}
+async def active_runs(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    owner_id = None if user.role == "admin" else user.id
+    return {"runs": registry.list(owner_id=owner_id)}
 
 
 @router.get("/system/architecture")
-async def architecture() -> dict:
+async def architecture(
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """把 ``docs/architecture.md`` 实时渲染成 HTML，供界面「系统架构」按钮展示。
 
     每次请求都重新读取文档，因此本地更新文档后无需重启或重新构建即可同步。

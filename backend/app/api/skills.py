@@ -5,14 +5,17 @@
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agents import get_agent
 from ..db import get_session
-from ..models import Skill
+from ..models import Skill, User
 from ..runtime import skills as skill_service
 from ..schemas import SkillDetail, SkillRead, SkillRescanResult
+from .auth import current_user, require_admin
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -55,8 +58,12 @@ async def list_skills(
     available: bool | None = None,
     q: str | None = None,
     session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    """列出所有内核的技能（可按智能体类型 / 来源 / 可用性 / 关键词过滤）。"""
+    """列出所有内核的技能（可按智能体类型 / 来源 / 可用性 / 关键词过滤）。
+
+    技能是平台级共享数据（从各内核扫描得出），所有登录用户都能看到。
+    """
     rows = await skill_service.list_rows(
         session, type_id=type_id, source_kind=source_kind, available=available, query=q
     )
@@ -68,14 +75,21 @@ async def list_skills(
 
 
 @router.post("/rescan")
-async def rescan_skills(session: AsyncSession = Depends(get_session)) -> dict:
+async def rescan_skills(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """重新扫描各内核的技能目录，并同步到统一目录。"""
     result = await skill_service.rescan(session)
     return SkillRescanResult(**result).model_dump()
 
 
 @router.get("/{skill_id}")
-async def get_skill(skill_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_skill(
+    skill_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     row = await skill_service.get_row(session, skill_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"技能不存在：{skill_id}")
@@ -98,8 +112,12 @@ async def get_skill(skill_id: str, session: AsyncSession = Depends(get_session))
     return detail.model_dump()
 
 
-@router.delete("/{skill_id}")
-async def delete_skill(skill_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+@router.delete("/{skill_id}", dependencies=[Depends(require_admin)])
+async def delete_skill(
+    skill_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """删除技能：内核自带（system）之外的技能都允许删，同时断开智能体分配。"""
     try:
         name = await skill_service.delete_skill(session, skill_id)

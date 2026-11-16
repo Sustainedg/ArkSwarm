@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -30,17 +30,27 @@ from sqlmodel import Field, SQLModel
 ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # 「默认智能体」这一列是后加的：老行一律按「不是默认」补上，由 bootstrap 在启动时补一颗星
     # 「分组名」也是后加的：老行一律按空串补上（智能体页把空串归到「未分组」）
+    # owner_id 是多用户系统后加的：老行留空，由 bootstrap 回填给首任管理员
     "agent_profiles": {
         "is_default": "BOOLEAN NOT NULL DEFAULT 0",
         "group_name": "VARCHAR(60) NOT NULL DEFAULT ''",
+        "owner_id": "VARCHAR(64)",
     },
-    "gateways": {},
     # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）
     "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
     # 「这条对话单独指定的模型」是后加的；为空表示跟随智能体的默认模型。
     # 老行留空即可，不需要回填。
     # 「最后已读时间」是后加的；为空表示升级前的旧对话，一律当已读（否则升级后满屏未读）。
-    "conversations": {"model": "VARCHAR(160)", "last_read_at": "DATETIME"},
+    # owner_id 是多用户系统后加的：老行留空，由 bootstrap 回填给首任管理员
+    "conversations": {"model": "VARCHAR(160)", "last_read_at": "DATETIME", "owner_id": "VARCHAR(64)"},
+    # 会话令牌版本：改口令 / 管理员重置口令时 +1，让旧令牌立即失效（无状态 JWT 的吊销机制）。
+    "users": {"token_version": "INTEGER NOT NULL DEFAULT 0"},
+    # ---- 多用户系统：每张「用户资产」表加 owner_id（可空，老库由 bootstrap 回填给首任管理员）。
+    # 技能（skills）、运行时状态（runtime_status）、平台设置（platform_settings）是平台级
+    # 共享数据，不加 owner_id。网关含 API 密钥，按用户私有；管理员可看全部。
+    "gateways": {"owner_id": "VARCHAR(64)"},
+    "credentials": {"owner_id": "VARCHAR(64)"},
+    "mcp_servers": {"owner_id": "VARCHAR(64)"},
 }
 
 
@@ -91,6 +101,9 @@ class Gateway(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     #: 软删除时间戳：仍被未删除的智能体引用时只打标记；历史对话照旧可解析到它。
     deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；老库由 bootstrap 回填给首任管理员。官方网关（kind=official）也归属到
+    #: 创建它的那次播种的用户，但所有用户都能选用官方链路（见 api/gateways 的过滤）。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class AgentProfile(SQLModel, table=True):
@@ -130,6 +143,8 @@ class AgentProfile(SQLModel, table=True):
     #: 软删除时间戳：删除智能体时只打标记（历史对话仍引用它）。打了标记的智能体从所有
     #: 可选列表里消失，但历史对话仍能显示当时的名字与头像、也仍可继续。
     deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class Skill(SQLModel, table=True):
@@ -240,6 +255,8 @@ class McpServer(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     #: 软删除时间戳：仅平台新建的服务器可删；历史对话与协作历史照旧可读
     deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；扫描来的（source_kind=user）也归属到那次扫描的用户。老库回填给首任管理员。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class AgentMcpServer(SQLModel, table=True):
@@ -281,6 +298,8 @@ class Credential(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     #: 软删除：仍被未删除的智能体引用时只打标记（历史运行照旧可解析）
     deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class AgentCredential(SQLModel, table=True):
@@ -322,6 +341,8 @@ class Conversation(SQLModel, table=True):
     #: 用户最后一次看这条对话的时间；列表据此判断「AI 回复完了但还没读」。
     #: 为空表示升级前的旧对话 —— 一律当已读，避免升级后所有历史对话都亮未读。
     last_read_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class Message(SQLModel, table=True):
@@ -370,4 +391,36 @@ class PlatformSetting(SQLModel, table=True):
 
     key: str = Field(sa_column=Column(String(64), primary_key=True))
     value: str | None = Field(default=None, sa_column=Column(Text))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+
+
+class User(SQLModel, table=True):
+    """一个注册用户。
+
+    多用户系统的核心实体：智能体、对话、网关、凭据、MCP 服务器、协作组都按 ``owner_id``
+    归属到某个用户。口令只存哈希（见 :mod:`app.auth`），永不存明文。
+
+    首任管理员由 ``bootstrap.seed_initial_admin`` 在启动时按环境变量
+    ``ARKSWARM_ADMIN_USERNAME`` / ``ARKSWARM_ADMIN_PASSWORD`` 创建；老库（原本单用户、
+    所有数据无归属）升级时，存量数据会被回填给这个首任管理员。
+    """
+
+    __tablename__ = "users"
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    #: 登录名，唯一（大小写敏感，注册时校验唯一性）
+    username: str = Field(sa_column=Column(String(60), nullable=False, unique=True, index=True))
+    #: 显示名（给界面用）；为空时回退到 username
+    display_name: str | None = Field(default=None, sa_column=Column(String(120)))
+    #: 邮箱（可选，预留：将来发通知 / 找回口令用）
+    email: str | None = Field(default=None, sa_column=Column(String(200)))
+    #: 口令哈希（``pbkdf2$<迭代>$<盐>$<哈希>``，见 :mod:`app.auth`）；永不存明文
+    password_hash: str = Field(sa_column=Column(String(200), nullable=False))
+    #: 会话令牌版本：改口令 / 重置口令时 +1，旧 JWT 立即失效（无状态会话的吊销机制）
+    token_version: int = Field(default=0, sa_column=Column(Integer, nullable=False, default=0))
+    #: 角色：admin（可管理用户、可看全部用户的网关）/ member（只能看自己的）
+    role: str = Field(default="member", sa_column=Column(String(16), nullable=False))
+    #: 是否启用；禁用的用户无法登录、其历史数据照旧可读
+    is_active: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, default=True))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))

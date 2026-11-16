@@ -1,0 +1,56 @@
+# ArkSwarm 的 Docker 部署编排。
+#
+# 构建并启动（首次或改了 Dockerfile 时需要 --build；版本级更新不需要重建镜像）：
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# 两个数据卷：
+#   arkswarm-app   /app        应用版本目录 + venv（容器重建不丢）
+#   arkswarm-data  /app/data   SQLite / 工作区 / 密钥 / 内核 HOME（容器重建不丢）
+#
+# 如需让容器里的智能体直接读写宿主机项目，取消 volumes 里被注释的那一行并设置
+# HOST_PROJECT_DIR（容器内外使用同一路径，避免工作目录对不上）：
+#   HOST_PROJECT_DIR=/path/to/projects docker compose -f docker/docker-compose.yml up -d
+#
+# 内核（Claude Code / Codex / Gemini / Hermes）装在 /app/data/home，不需要重建镜像；
+# 首次启动会尝试联网补装，网络不通时设 ARKSWARM_SKIP_KERNEL_INSTALL=1（默认已设）。
+name: arkswarm
+
+services:
+  arkswarm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: arkswarm:latest
+    container_name: arkswarm
+    restart: unless-stopped
+    ports:
+      - "${ARKSWARM_HTTP_PORT:-8010}:8010"
+    volumes:
+      - arkswarm-app:/app
+      - arkswarm-data:/app/data
+      # 让容器里的智能体直接读写宿主机项目：两侧必须用**同一个路径**，
+      # 否则对话里记录的工作目录在容器内不存在。用法：
+      #   HOST_PROJECT_DIR=/path/to/projects docker compose up -d
+      # - ${HOST_PROJECT_DIR:?请设置 HOST_PROJECT_DIR}:${HOST_PROJECT_DIR}
+    environment:
+      ARKSWARM_HOST: "0.0.0.0"
+      ARKSWARM_PORT: "8010"
+      ARKSWARM_UPDATE_REPO: "Sustainedg/ArkSwarm"
+      # 多用户部署：开启鉴权并配置首任管理员，或关闭自助注册。
+      ARKSWARM_AUTH_ENABLED: "${ARKSWARM_AUTH_ENABLED:-false}"
+      ARKSWARM_REGISTRATION_OPEN: "${ARKSWARM_REGISTRATION_OPEN:-true}"
+      # ARKSWARM_ADMIN_USERNAME: "admin"
+      # ARKSWARM_ADMIN_PASSWORD: "change-me-please"
+      # HOME 跟着数据卷走：npm 全局包、~/.claude、~/.codex、~/.hermes、~/.gemini
+      # 都落在 /app/data/home，容器重建后不需要重新安装 / 登录。
+      HOME: "/app/data/home"
+      NPM_CONFIG_PREFIX: "/app/data/home/.local"
+      # 内核已放在 /app/data/home/.local；跳过启动期自动补装，避免网络不通时阻塞启动。
+      # 需要容器每次启动自动补回被卸载的内核时，把这里改成 "0"。
+      ARKSWARM_SKIP_KERNEL_INSTALL: "1"
+
+volumes:
+  arkswarm-app:
+    name: arkswarm-app
+  arkswarm-data:
+    name: arkswarm-data

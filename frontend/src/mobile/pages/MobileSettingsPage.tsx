@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { useAuth } from '../../components/AuthGate'
 import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../../lib/theme'
 import type { ArchitectureDoc } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
@@ -18,6 +19,7 @@ import { describeError } from '../util'
  */
 export function MobileSettingsPage({ version }: { version: string }) {
   const navigate = useNavigate()
+  const { user, authEnabled, logout } = useAuth()
   const install = useInstallController()
   const { mode, theme, setMode } = useThemeMode()
 
@@ -46,6 +48,27 @@ export function MobileSettingsPage({ version }: { version: string }) {
 
       <div className="m-page-body">
         <div className="stack">
+          {authEnabled && user && user.id !== '__system__' && (
+            <div className="stack" style={{ gap: 8 }}>
+              <div className="card-section-title">账号</div>
+              <button className="m-item" onClick={() => navigate('/account')}>
+                <span style={{ fontSize: 18 }}>👤</span>
+                <span className="m-item-main">
+                  <span className="m-item-title">{user.display_name || user.username}</span>
+                  <span className="m-item-sub">
+                    {user.role === 'admin' ? '管理员' : '成员'} · 资料 / 口令 / 退出登录
+                  </span>
+                </span>
+                <span className="m-item-chevron">›</span>
+              </button>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button className="btn sm" onClick={logout}>
+                  退出登录
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="stack" style={{ gap: 8 }}>
             <div className="card-section-title">外观</div>
             <div className="theme-picker">

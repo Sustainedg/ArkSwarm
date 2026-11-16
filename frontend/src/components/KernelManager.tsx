@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { RefreshIcon } from './Icons'
 import { KernelLogo } from './KernelLogo'
 import { Modal } from './Modal'
+import { useAuth } from './AuthGate'
 import { api, ApiError } from '../lib/api'
 import { formatListTime } from '../lib/datetime'
 import type {
@@ -42,6 +43,7 @@ interface Job {
  * 与动作 —— 动作按钮与安装日志都收在详情里，卡片本身保持干净（一处实现，桌面端设置页用）。
  */
 export function KernelManager() {
+  const { isAdmin } = useAuth()
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -107,9 +109,11 @@ export function KernelManager() {
       setRuntimes(items)
       setError(null)
       // 「检查更新」是每个内核一次远端查询（npm view 之类），不能挡住首屏：
-      // 卡片先出来，查到结果再逐个补上。
+      // 卡片先出来，查到结果再逐个补上。该接口仅管理员可用，成员不要自动触发。
       setLoading(false)
-      await Promise.all(items.map((item) => checkLatest(item)))
+      if (isAdmin) {
+        await Promise.all(items.map((item) => checkLatest(item)))
+      }
       try {
         const jobs = await api.listProvisionJobs()
         setProvisionJobs(Object.fromEntries(jobs.map((j) => [j.runtime_id, j])))
@@ -394,10 +398,11 @@ function KernelDetail({
   onRun: (action: RuntimeAction) => void
   onCancel: () => void
 }) {
+  const { isAdmin } = useAuth()
   const provisioning = runtime.provisioning
   const managed = provisioning.supported
   const remote = latest?.latest ?? null
-  const canCheck = Boolean(provisioning.commands?.latest?.length)
+  const canCheck = isAdmin && Boolean(provisioning.commands?.latest?.length)
   const current = provisioning.version ? versionCore(provisioning.version) : null
   const busy = job?.status === 'running'
   // 查到比本机更高的版本才提示「更新到 X」；已经是最新版就不给更新入口。
@@ -405,6 +410,7 @@ function KernelDetail({
   const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
   const upToDate = Boolean(remote && current && versionCore(remote) === current)
   const showUpdate =
+    isAdmin &&
     managed &&
     provisioning.installed &&
     Boolean(provisioning.commands?.update?.length) &&
@@ -446,7 +452,7 @@ function KernelDetail({
       </dl>
 
       <div className="row wrap" style={{ gap: 8 }}>
-        {managed && !provisioning.installed && provisioning.commands?.install?.length ? (
+        {isAdmin && managed && !provisioning.installed && provisioning.commands?.install?.length ? (
           <button className="btn sm primary" onClick={() => onRun('install')} disabled={busy}>
             安装
           </button>
@@ -456,7 +462,7 @@ function KernelDetail({
             {updateTarget ? `更新到 ${updateTarget}` : '更新'}
           </button>
         ) : null}
-        {managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
+        {isAdmin && managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
           <button className="btn sm danger" onClick={() => onRun('uninstall')} disabled={busy}>
             卸载
           </button>
@@ -466,10 +472,12 @@ function KernelDetail({
             {checking ? '查询中…' : '检查更新'}
           </button>
         )}
-        <button className="btn sm" onClick={onRefresh} disabled={refreshing || busy}>
-          <RefreshIcon size={14} className={refreshing ? 'spin' : undefined} />
-          重新检测
-        </button>
+        {isAdmin && (
+          <button className="btn sm" onClick={onRefresh} disabled={refreshing || busy}>
+            <RefreshIcon size={14} className={refreshing ? 'spin' : undefined} />
+            重新检测
+          </button>
+        )}
         {runtime.docs_url && (
           <a className="btn sm ghost" href={runtime.docs_url} target="_blank" rel="noreferrer">
             文档 ↗

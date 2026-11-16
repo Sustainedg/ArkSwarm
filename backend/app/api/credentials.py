@@ -6,14 +6,18 @@
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from ..credentials import CredentialError, reads
 from ..db import get_session
-from ..models import Credential
+from ..models import Credential, User
 from ..runtime import credentials as credential_service
 from ..schemas import CredentialCreate, CredentialRead, CredentialUpdate
+from .auth import current_user, owner_id_for, require_owned
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -30,21 +34,45 @@ async def _active_row(credential_id: str, session: AsyncSession) -> Credential:
     return row
 
 
+def _owned_query(stmt, user: User):
+    if user.role == "admin":
+        return stmt
+    return stmt.where(Credential.owner_id == user.id)
+
+
 @router.get("")
-async def list_credentials(session: AsyncSession = Depends(get_session)) -> dict:
+async def list_credentials(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """列出凭据库里的全部凭据（只回名字、说明与掩码）。"""
     counts = await credential_service.usage_counts(session)
-    rows = await credential_service.list_rows(session)
+    rows = (
+        await session.execute(
+            _owned_query(
+                select(Credential)
+                .where(Credential.deleted_at.is_(None))
+                .order_by(Credential.name),
+                user,
+            )
+        )
+    ).scalars().all()
     return {"items": [_to_read(row, counts.get(row.id, 0)).model_dump() for row in rows]}
 
 
 @router.post("", status_code=201)
 async def create_credential(
-    payload: CredentialCreate, session: AsyncSession = Depends(get_session)
+    payload: CredentialCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     try:
         row = await credential_service.create_row(
-            session, name=payload.name, description=payload.description, value=payload.value
+            session,
+            name=payload.name,
+            description=payload.description,
+            value=payload.value,
+            owner_id=owner_id_for(user),
         )
     except CredentialError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
@@ -53,14 +81,23 @@ async def create_credential(
 
 @router.patch("/{credential_id}")
 async def update_credential(
-    credential_id: str, payload: CredentialUpdate, session: AsyncSession = Depends(get_session)
+    credential_id: str,
+    payload: CredentialUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     row = await _active_row(credential_id, session)
+    require_owned(row, user)
     # 值留空＝不换值（界面回显的是掩码，不能把掩码当新值写回去）。
     value = payload.value or None
     try:
         row = await credential_service.update_row(
-            session, row, name=payload.name, description=payload.description, value=value
+            session,
+            row,
+            name=payload.name,
+            description=payload.description,
+            value=value,
+            owner_id=row.owner_id,
         )
     except CredentialError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
@@ -69,13 +106,18 @@ async def update_credential(
 
 
 @router.delete("/{credential_id}", status_code=204)
-async def delete_credential(credential_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_credential(
+    credential_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
     """删除凭据（软删除）。
 
     仍被**未删除**的智能体引用时返回 409：先让那些智能体解除引用，避免它们运行时
     悄悄少了一组环境变量。删掉后历史对话照旧可读（凭据本来就不进对话记录）。
     """
     row = await _active_row(credential_id, session)
+    require_owned(row, user)
     used = await credential_service.referencing_profiles(session, row.id)
     if used:
         names = "、".join(profile.name for profile in used[:5])

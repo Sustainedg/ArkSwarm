@@ -199,20 +199,24 @@ async def load_profile(
     return profile, gateway, definition
 
 
-async def pick_default_profile(session: AsyncSession) -> AgentProfile | None:
+async def pick_default_profile(
+    session: AsyncSession, owner_id: str | None = None
+) -> AgentProfile | None:
     """新建对话时「不问就用它」的智能体，按顺序挑第一个命中的：
 
     1. 点过五角星的默认智能体（`is_default`）；
-    2. 全场只有一个启用的智能体时，就是它（刚装好、还没点过星的那会儿）；
+    2. 该用户只有一个启用的智能体时，就是它（刚装好、还没点过星的那会儿）；
     3. 都没有 → None，由调用方给出「去智能体页点个星」的中文提示。
+
+    ``owner_id`` 非空时只在那个用户的智能体里挑；管理员传 None 才看全场。
     """
-    active = (
-        await session.execute(
-            select(AgentProfile)
-            .where(AgentProfile.deleted_at.is_(None), AgentProfile.enabled == True)  # noqa: E712
-            .order_by(AgentProfile.created_at)
-        )
-    ).scalars().all()
+    stmt = select(AgentProfile).where(
+        AgentProfile.deleted_at.is_(None),
+        AgentProfile.enabled == True,  # noqa: E712
+    )
+    if owner_id is not None:
+        stmt = stmt.where(AgentProfile.owner_id == owner_id)
+    active = (await session.execute(stmt.order_by(AgentProfile.created_at))).scalars().all()
     for profile in active:
         if profile.is_default:
             return profile
@@ -267,7 +271,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     await session.refresh(user_message)
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, profile.name)
+    run = registry.register(conversation.id, profile.name, conversation.owner_id)
     run.user_message_id = user_message.id
     run.assistant_message_id = assistant_message.id
     return PreparedRun(
@@ -495,7 +499,7 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     await session.commit()
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, profile.name)
+    run = registry.register(conversation.id, profile.name, conversation.owner_id)
     run.user_message_id = last_user.id
     run.assistant_message_id = assistant_message.id
     return PreparedRun(

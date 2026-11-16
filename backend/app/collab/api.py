@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -12,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from .. import attachments
+from ..auth_deps import current_user, owner_id_for, require_owned
 from ..db import SessionLocal, get_session
-from ..models import AgentProfile, utcnow
+from ..models import AgentProfile, User, utcnow
 from ..transport.sse import sse_stream
 from .bus import bus, chat_bus
 from . import engine, execution, graph as graph_service, store
@@ -40,56 +42,115 @@ def _conflict(exc: store.TeamInUse | store.TeamKeyInUse) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
-async def _known_agent_profile_ids(session: AsyncSession) -> set[str]:
-    """把「智能体是否还存在」这类事实注入纯函数，校验层不碰数据库。"""
-    rows = (await session.execute(select(AgentProfile.id))).all()
+async def _known_agent_profile_ids(session: AsyncSession, user: User | None = None) -> set[str]:
+    """把「智能体是否还存在 / 是否归当前用户」这类事实注入纯函数。
+
+    非管理员只返回自己的智能体：图里引用了别人的节点会被校验标成「不存在 / 无权」，
+    保存与运行时同样会拦截（见 :func:`_assert_graph_agents_owned`）。
+    """
+    stmt = select(AgentProfile.id)
+    if user is not None and user.role != "admin":
+        stmt = stmt.where(AgentProfile.owner_id == user.id)
+    rows = (await session.execute(stmt)).all()
     return {row[0] for row in rows}
 
 
-@router.get("/teams")
-async def list_teams(session: AsyncSession = Depends(get_session)) -> dict:
-    rows = await store.list_teams(session)
-    known = await _known_agent_profile_ids(session)
-    return {"items": [store.to_read(row, known) for row in rows]}
+async def _assert_graph_agents_owned(
+    session: AsyncSession, user: User, graph: GraphSpec
+) -> None:
+    """拒绝让协作图引用别人的智能体：否则运行时会用到对方的网关密钥 / 凭据。"""
+    if user.role == "admin":
+        return
+    owned = await _known_agent_profile_ids(session, user)
+    for node in graph.nodes:
+        if node.agent_profile_id not in owned:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"节点「{node.label or node.key}」引用了不属于你的智能体，"
+                    "请重新选择自己的智能体"
+                ),
+            )
 
 
-@router.post("/teams", status_code=201)
-async def create_team(payload: TeamCreate, session: AsyncSession = Depends(get_session)) -> TeamRead:
-    team = await store.create_team(session, payload)
-    return store.to_read(team, await _known_agent_profile_ids(session))
-
-
-@router.get("/teams/{team_id}")
-async def get_team(team_id: str, session: AsyncSession = Depends(get_session)) -> TeamRead:
+async def _owned_team(team_id: str, session: AsyncSession, user: User):
     try:
         team = await store.get_team(session, team_id)
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_agent_profile_ids(session))
+    require_owned(team, user)
+    return team
+
+
+async def _owned_run(run_id: str, session: AsyncSession, user: User):
+    try:
+        run = await store.get_run(session, run_id)
+    except store.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    require_owned(run, user)
+    return run
+
+
+@router.get("/teams")
+async def list_teams(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    owner_id = None if user.role == "admin" else user.id
+    rows = await store.list_teams(session, owner_id=owner_id)
+    known = await _known_agent_profile_ids(session, user)
+    return {"items": [store.to_read(row, known) for row in rows]}
+
+
+@router.post("/teams", status_code=201)
+async def create_team(
+    payload: TeamCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> TeamRead:
+    await _assert_graph_agents_owned(session, user, payload.graph)
+    team = await store.create_team(session, payload, owner_id=owner_id_for(user))
+    return store.to_read(team, await _known_agent_profile_ids(session, user))
+
+
+@router.get("/teams/{team_id}")
+async def get_team(
+    team_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> TeamRead:
+    team = await _owned_team(team_id, session, user)
+    return store.to_read(team, await _known_agent_profile_ids(session, user))
 
 
 @router.put("/teams/{team_id}")
 async def save_team(
-    team_id: str, payload: TeamUpdate, session: AsyncSession = Depends(get_session)
+    team_id: str,
+    payload: TeamUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> TeamRead:
+    await _owned_team(team_id, session, user)
+    if payload.graph is not None:
+        await _assert_graph_agents_owned(session, user, payload.graph)
     try:
         team = await store.save_team(session, team_id, payload)
     except store.TeamKeyInUse as exc:
         raise _conflict(exc) from None
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_agent_profile_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session, user))
 
 
 @router.post("/teams/{team_id}/validate")
 async def validate_team(
-    team_id: str, payload: TeamValidateIn | None = None, session: AsyncSession = Depends(get_session)
+    team_id: str,
+    payload: TeamValidateIn | None = None,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """只校验不保存：编辑器每改一笔就调一次，用来就地提示问题。"""
-    try:
-        team = await store.get_team(session, team_id)
-    except store.TeamNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    team = await _owned_team(team_id, session, user)
 
     body = payload or TeamValidateIn()
     if body.graph is not None:
@@ -100,21 +161,31 @@ async def validate_team(
         except ValueError:
             spec = GraphSpec()
     entry_key = body.entry_key if body.entry_key is not None else team.entry_key
-    known = await _known_agent_profile_ids(session)
+    known = await _known_agent_profile_ids(session, user)
     return graph_service.validate_graph(spec, entry_key, known).model_dump()
 
 
 @router.post("/teams/{team_id}/duplicate", status_code=201)
-async def duplicate_team(team_id: str, session: AsyncSession = Depends(get_session)) -> TeamRead:
+async def duplicate_team(
+    team_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> TeamRead:
+    await _owned_team(team_id, session, user)
     try:
-        team = await store.duplicate_team(session, team_id)
+        team = await store.duplicate_team(session, team_id, owner_id=owner_id_for(user))
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    return store.to_read(team, await _known_agent_profile_ids(session))
+    return store.to_read(team, await _known_agent_profile_ids(session, user))
 
 
 @router.delete("/teams/{team_id}", status_code=204)
-async def delete_team(team_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_team(
+    team_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
+    await _owned_team(team_id, session, user)
     try:
         await store.delete_team(session, team_id)
     except store.TeamNotFound as exc:
@@ -127,18 +198,28 @@ async def delete_team(team_id: str, session: AsyncSession = Depends(get_session)
 # --- 运行 -------------------------------------------------------------------
 
 
-async def _list_run_reads(session: AsyncSession, team_id: str | None) -> list[RunRead]:
-    rows = await store.list_runs(session, team_id)
+async def _list_run_reads(
+    session: AsyncSession, team_id: str | None, owner_id: str | None
+) -> list[RunRead]:
+    rows = await store.list_runs(session, team_id, owner_id=owner_id)
     return [await store.run_read(session, row) for row in rows]
 
 
 @router.get("/runs")
-async def list_runs(team_id: str | None = None, session: AsyncSession = Depends(get_session)) -> dict:
-    return {"items": [item.model_dump() for item in await _list_run_reads(session, team_id)]}
+async def list_runs(
+    team_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    owner_id = None if user.role == "admin" else user.id
+    return {"items": [item.model_dump() for item in await _list_run_reads(session, team_id, owner_id)]}
 
 
 @router.get("/active-runs")
-async def active_runs(session: AsyncSession = Depends(get_session)) -> dict:
+async def active_runs(
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
     """本进程里正在跑的协作智能体（工单步骤 + 入口智能体的对话回复）。
 
     设置页的「正在运行的智能体」要一并显示它们：协作的运行登记在协作域自己这里，
@@ -148,9 +229,14 @@ async def active_runs(session: AsyncSession = Depends(get_session)) -> dict:
     items = execution.active_runs()
     if items:
         ids = {item["run_id"] for item in items}
-        rows = (
-            await session.execute(select(CollabRun).where(CollabRun.id.in_(ids)))
-        ).scalars().all()
+        stmt = select(CollabRun).where(CollabRun.id.in_(ids))
+        if user.role != "admin":
+            stmt = stmt.where(CollabRun.owner_id == user.id)
+        rows = (await session.execute(stmt)).scalars().all()
+        allowed = {row.id for row in rows}
+        if user.role != "admin":
+            # 非管理员只看自己的运行；否则会把别人的岗位名 / 运行 id 也列出来。
+            items = [item for item in items if item["run_id"] in allowed]
         titles = {row.id: row.title for row in rows}
         for item in items:
             item["title"] = titles.get(item["run_id"])
@@ -158,20 +244,33 @@ async def active_runs(session: AsyncSession = Depends(get_session)) -> dict:
 
 
 @router.post("/runs", status_code=201)
-async def create_run(payload: RunCreate, session: AsyncSession = Depends(get_session)) -> RunRead:
+async def create_run(
+    payload: RunCreate,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> RunRead:
+    # 校验协作组归属：不能用别人的协作组建运行
+    team = await _owned_team(payload.team_id, session, user)
     try:
-        run = await store.create_run(session, payload)
+        graph = graph_service.from_storable(team.graph)
+    except ValueError:
+        graph = GraphSpec()
+    # 老库 / 管理员建的图里也可能残留别人的智能体，运行前再拦一次。
+    await _assert_graph_agents_owned(session, user, graph)
+    try:
+        run = await store.create_run(session, payload, owner_id=owner_id_for(user))
     except store.TeamNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     return await store.run_read(session, run)
 
 
 @router.get("/runs/{run_id}")
-async def get_run(run_id: str, session: AsyncSession = Depends(get_session)) -> RunDetail:
-    try:
-        run = await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+async def get_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> RunDetail:
+    run = await _owned_run(run_id, session, user)
     detail = await store.run_detail(session, run)
     detail.chat_active = chat_bus.is_running(run_id) or execution.is_chat_running(run_id)
     return detail
@@ -179,7 +278,10 @@ async def get_run(run_id: str, session: AsyncSession = Depends(get_session)) -> 
 
 @router.get("/runs/{run_id}/steps/{step_id}/parts")
 async def get_step_parts(
-    run_id: str, step_id: str, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    step_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> StepPartsRead:
     """单个步骤的完整过程（工具调用 / 思考 / 结果）。
 
@@ -187,6 +289,7 @@ async def get_step_parts(
     工具流水，全量返回会让打开详情慢到不可用。前端在用户点开「过程」折叠块时
     才调这里，按需取这一步的 ``parts``。
     """
+    await _owned_run(run_id, session, user)
     try:
         parts = await store.step_parts(session, run_id, step_id)
     except store.RunNotFound as exc:
@@ -195,7 +298,12 @@ async def get_step_parts(
 
 
 @router.delete("/runs/{run_id}", status_code=204)
-async def delete_run(run_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> Response:
+    await _owned_run(run_id, session, user)
     execution.cancel_run(run_id)
     bus.cancel(run_id)
     chat_bus.cancel(run_id)
@@ -207,11 +315,12 @@ async def delete_run(run_id: str, session: AsyncSession = Depends(get_session)) 
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_run(run_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    try:
-        run = await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+async def cancel_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    run = await _owned_run(run_id, session, user)
     execution.cancel_run(run_id)
     cancelled = bus.cancel(run_id)
     chat_cancelled = chat_bus.cancel(run_id)
@@ -272,19 +381,24 @@ def _stream_chat(prepared: engine.PreparedChat) -> StreamingResponse:
 
 
 @router.get("/runs/{run_id}/stream")
-async def stream_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+async def stream_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> StreamingResponse:
     """订阅一次运行的实时事件：用于断开后重连，或在另一台设备上实时围观。"""
-    try:
-        await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    await _owned_run(run_id, session, user)
     return _sse(bus.subscribe(run_id))
 
 
 @router.post("/runs/{run_id}/messages")
 async def send_message(
-    run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    payload: RunMessage,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> StreamingResponse:
+    await _owned_run(run_id, session, user)
     if bus.is_running(run_id):
         raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
     if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
@@ -300,39 +414,39 @@ async def send_message(
 
 @router.get("/runs/{run_id}/chat")
 async def list_chat(
-    run_id: str, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """入口智能体对话历史；运行推进期间也可以随时读取。"""
-    try:
-        await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    await _owned_run(run_id, session, user)
     return {"items": [item.model_dump() for item in await store.list_chat_messages(session, run_id)]}
 
 
 @router.get("/runs/{run_id}/chat/stream")
-async def stream_chat(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+async def stream_chat(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> StreamingResponse:
     """订阅正在生成的 CEO 回复；断线重连时先补发本轮已产生的事件。"""
-    try:
-        await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    await _owned_run(run_id, session, user)
     return _sse(chat_bus.subscribe(run_id))
 
 
 @router.post("/runs/{run_id}/chat")
 async def send_chat(
-    run_id: str, payload: RunMessage, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    payload: RunMessage,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> StreamingResponse:
     """和入口智能体聊天：**不受**主流程是否正在推进影响。"""
+    await _owned_run(run_id, session, user)
     if not (payload.content or "").strip() and not payload.attachments:
         raise HTTPException(status_code=422, detail="请先输入想对 CEO 说的话，或附上一个文件")
     if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
         raise HTTPException(status_code=409, detail="CEO 正在回复上一条消息，请稍等它说完")
-    try:
-        await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
     try:
         prepared = await engine.prepare_chat(session, run_id, payload.content, payload.attachments)
     except engine.ChatError as exc:
@@ -342,17 +456,17 @@ async def send_chat(
 
 @router.post("/runs/{run_id}/attachments", status_code=201)
 async def upload_run_attachment(
-    run_id: str, payload: RunAttachmentUpload, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    payload: RunAttachmentUpload,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
     """把附件存进这次协作的工作目录（`<工作目录>/attachments/`）。
 
     与对话附件同一套实现（:mod:`app.attachments`）：文件落到工作目录里，发消息时把路径
     写进提示词，因此任何能读工作目录的内核都自动支持。
     """
-    try:
-        run = await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    run = await _owned_run(run_id, session, user)
     try:
         raw = attachments.decode_attachment(payload.content_base64)
         workspace = execution.ensure_workspace(run)
@@ -366,17 +480,17 @@ async def upload_run_attachment(
 
 @router.get("/runs/{run_id}/files/{rel_path:path}")
 async def get_run_file(
-    run_id: str, rel_path: str, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    rel_path: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> FileResponse:
     """把这次协作工作目录里的一个文件回给浏览器看（附件预览、岗位产出的图片等）。
 
     只读，且仅限工作目录内部（与对话域同一个 `app.attachments.resolve_workspace_file` 守卫）；
     路径不存在时不创建目录，直接 4xx。
     """
-    try:
-        run = await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    run = await _owned_run(run_id, session, user)
     try:
         target = attachments.resolve_workspace_file(rel_path, execution.workspace_root(run))
     except attachments.AttachmentError as exc:
@@ -390,7 +504,10 @@ async def get_run_file(
 
 @router.post("/runs/{run_id}/budget")
 async def patch_run_budget(
-    run_id: str, payload: RunBudgetPatch, session: AsyncSession = Depends(get_session)
+    run_id: str,
+    payload: RunBudgetPatch,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
 ) -> RunRead:
     """运行中调高预算：步数/工单数/token 超限挂起后，调高上限再点「继续」就能救回来。
 
@@ -399,10 +516,7 @@ async def patch_run_budget(
     """
     if bus.is_running(run_id) or execution.is_running(run_id):
         raise HTTPException(status_code=409, detail="这次协作正在推进中，请等它挂起或完成后再调预算")
-    try:
-        run = await store.get_run(session, run_id)
-    except store.RunNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    run = await _owned_run(run_id, session, user)
 
     budget = graph_service.budget_from_storable(run.budget)
     steps_used = run.steps_used or 0
@@ -449,8 +563,13 @@ async def patch_run_budget(
 
 
 @router.post("/runs/{run_id}/resume")
-async def resume_run(run_id: str, session: AsyncSession = Depends(get_session)) -> StreamingResponse:
+async def resume_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> StreamingResponse:
     """从中断处继续（不追加用户消息）。"""
+    await _owned_run(run_id, session, user)
     if bus.is_running(run_id):
         raise HTTPException(status_code=409, detail="这次协作正在推进中，请稍候（可直接围观实时输出）")
     if chat_bus.is_running(run_id) or execution.is_chat_running(run_id):
@@ -465,7 +584,11 @@ async def resume_run(run_id: str, session: AsyncSession = Depends(get_session)) 
 
 
 @router.post("/steps/{step_id}/retry")
-async def retry_step(step_id: str, session: AsyncSession = Depends(get_session)) -> RunRead:
+async def retry_step(
+    step_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> RunRead:
     """把这一步所在的工单放回队列，随后用 ``/runs/{id}/resume`` 重跑。
 
     典型场景：产出不符合工单协议导致运行挂起 —— 用户改好剧本/模型后点「重试」。
@@ -473,6 +596,7 @@ async def retry_step(step_id: str, session: AsyncSession = Depends(get_session))
     step = await session.get(CollabStep, step_id)
     if step is None:
         raise HTTPException(status_code=404, detail="找不到这一步")
+    await _owned_run(step.run_id, session, user)
     try:
         run = await store.get_run(session, step.run_id)
     except store.RunNotFound as exc:
