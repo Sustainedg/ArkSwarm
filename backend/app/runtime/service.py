@@ -17,6 +17,7 @@ from ..agents.events import AgentEvent, error, log, run_finished
 from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
 from ..credentials import with_notice
 from ..db import SessionLocal
+from ..image_ingest import ingest_images
 from ..models import AgentProfile, Conversation, Gateway, Message
 from ..settings import get_settings
 from .credentials import decrypt_for_profile
@@ -415,8 +416,21 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
         yield error(str(exc))
         yield run_finished("error", detail=str(exc))
     finally:
+        content = "".join(text_parts)
+        # 网关生成的图只在 MCP 侧有一份：落库前取回工作目录并改写为相对路径，
+        # 保证对话历史自包含（网关下线/清缓存后老对话仍能显示）。
+        prefixes = get_settings().image_ingest_prefix_list
+        if prefixes:
+            try:
+                content, parts, ingested = await ingest_images(
+                    content, parts, resolve_workspace(prepared.conversation), prefixes
+                )
+                if ingested:
+                    logger.info("已取回 %d 张生成图片到对话工作目录", ingested)
+            except Exception:  # noqa: BLE001 - 取图失败不能影响落库
+                logger.warning("取回生成图片失败，保留原链接", exc_info=True)
         message = prepared.assistant_message
-        message.content = "".join(text_parts)
+        message.content = content
         message.parts = parts
         message.usage = usage_totals
         message.error = error_text

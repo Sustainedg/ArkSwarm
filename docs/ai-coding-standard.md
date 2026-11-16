@@ -234,7 +234,7 @@ POST /api/conversations/{id}/messages
 ├─ 换存储 / 换传输
 │     → 只动 db.py+settings（存储）或 transport/sse.py+前端 streamPost（传输）
 ├─ 要在对话里生成图片
-│     → 用平台自带的「图片生成」MCP 服务器（scripts/image_mcp_server.py）：在「MCP」页新建，
+│     → 用平台自带的「图片生成」MCP 服务器（scripts/mcp/image_mcp_server.py）：在「MCP」页新建，
 │       填 IMAGE_GEN_GATEWAY / IMAGE_GEN_MODEL / IMAGE_GEN_API_KEY 三个环境变量（加密落库），
 │       再到「智能体 → MCP」里分配 —— 不改框架任何一层，见 docs/architecture.md §6
 └─ 其它（智能体、网关、对话、页面、样式）

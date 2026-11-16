@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 SERVER_NAME = "arkswarm-image-gen"
 SERVER_VERSION = "1.0.0"
@@ -56,6 +56,17 @@ ENV_GATEWAY = "IMAGE_GEN_GATEWAY"
 ENV_MODEL = "IMAGE_GEN_MODEL"
 ENV_API_KEY = "IMAGE_GEN_API_KEY"
 ENV_TIMEOUT = "IMAGE_GEN_TIMEOUT"
+#: 可选：图片的对外访问前缀（如静态图床 ``http://192.168.2.168:3050``）。
+#: 设置后工具结果给出的是绝对 URL，不再依赖「调用方工作目录」——适合经 MCPHub
+#: 等网关代跑、与客户端不在同一文件系统的场景。不设置则保持相对路径。
+ENV_PUBLIC_BASE_URL = "IMAGE_PUBLIC_BASE_URL"
+#: 可选：额外的只读输入根目录（冒号分隔），用于「网关代跑」时读取调用方留在
+#: 工作区里的参考图。客户端传 ``attachments/x.png`` 这类相对路径时，除当前工作
+#: 目录外，还会到这些根目录的下一层（对话/协作工作区）里按同样的相对路径查找。
+ENV_INPUT_ROOTS = "IMAGE_GEN_INPUT_ROOTS"
+#: 可选：生成图片在本地保留多少分钟后自动清理（0 / 未设置＝不清理）。
+#: 经网关代跑时，图片只是给客户端取回的**中转**：客户端拿到副本后，这份就可以删。
+ENV_RETENTION_MINUTES = "IMAGE_RETENTION_MINUTES"
 
 #: 单张图片的字节上限与张数上限（防失控响应把磁盘塞满 / 上下文撑爆）
 DEFAULT_TIMEOUT = 300.0
@@ -224,18 +235,75 @@ INPUT_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 _HTTP_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
-def _read_workspace_image(spec: str) -> tuple[bytes, str]:
-    """读取工作目录内的参考图，返回 (字节, 类型)；越界或类型不支持时给出中文提示。"""
+def _input_roots() -> list[Path]:
+    """``IMAGE_GEN_INPUT_ROOTS`` 里配置的只读根目录（不存在/不是目录的忽略）。"""
+    raw = (os.environ.get(ENV_INPUT_ROOTS) or "").strip()
+    if not raw:
+        return []
+    roots: list[Path] = []
+    for part in raw.replace(";", ":").split(":"):
+        part = part.strip()
+        if not part:
+            continue
+        root = Path(part).expanduser()
+        if root.is_dir():
+            roots.append(root.resolve())
+    return roots
+
+
+def _in_roots(path: Path, roots: Sequence[Path]) -> bool:
+    return any(path.is_relative_to(root) for root in roots)
+
+
+def _resolve_input_file(spec: str, roots: Sequence[Path]) -> Path:
+    """把参考图入参解析成可读的文件路径。
+
+    * 相对路径：先按当前工作目录解析（本地直连的原有行为）；找不到时，在
+      ``IMAGE_GEN_INPUT_ROOTS`` 的各工作区里按「工作区 + 同一相对路径」查找；
+    * 绝对路径：必须落在当前工作目录或已配置的根目录内。
+
+    只在网关代跑、客户端与工具不在同一文件系统时才会走到工作区查找那一步。
+    """
+    cwd = Path.cwd().resolve()
     candidate = Path(spec)
-    if not candidate.is_absolute():
-        candidate = Path.cwd() / candidate
-    try:
-        resolved = candidate.resolve()
-        resolved.relative_to(Path.cwd().resolve())
-    except (OSError, ValueError):
-        raise ValueError(f"参考图只能读工作目录内的文件：「{spec}」不在工作目录里") from None
-    if not resolved.is_file():
-        raise ValueError(f"参考图不存在：「{spec}」")
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            raise ValueError(f"参考图路径无法解析：「{spec}」") from None
+        if resolved.is_file() and (resolved.is_relative_to(cwd) or _in_roots(resolved, roots)):
+            return resolved
+        raise ValueError(f"参考图只能读工作目录内的文件：「{spec}」不在工作目录里")
+
+    local = (cwd / candidate).resolve()
+    if local.is_file() and local.is_relative_to(cwd):
+        return local
+
+    relative = candidate.as_posix().lstrip("./")
+    matches: list[Path] = []
+    for root in roots:
+        # 先按「工作区/相对路径」找（对话与协作工作区都只有一层），再退回全树搜索
+        for pattern in (f"*/{relative}", f"**/{relative}"):
+            found = [p.resolve() for p in root.glob(pattern) if p.is_file()]
+            if found:
+                matches.extend(found)
+                break
+    unique = list(dict.fromkeys(matches))
+    if len(unique) == 1:
+        return unique[0]
+    if not unique:
+        raise ValueError(
+            f"参考图不存在：「{spec}」——工作目录和已挂载的工作区里都没找到"
+        )
+    raise ValueError(
+        f"参考图「{spec}」在多个工作区里重名（{len(unique)} 处），请改传绝对路径"
+    )
+
+
+def _read_workspace_image(spec: str) -> tuple[bytes, str]:
+    """读取工作目录（或已挂载工作区）内的参考图，返回 (字节, 类型)。"""
+    roots = _input_roots()
+    resolved = _resolve_input_file(spec, roots)
     try:
         size = resolved.stat().st_size
     except OSError as exc:
@@ -268,8 +336,47 @@ def input_image_url(spec: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
+def retention_minutes() -> float:
+    """``IMAGE_RETENTION_MINUTES`` 解析成分钟数；非法值按 0（不清理）处理。"""
+    raw = (os.environ.get(ENV_RETENTION_MINUTES) or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        print(f"{ENV_RETENTION_MINUTES} 配置不成分钟数（{raw}），按不清理处理", file=sys.stderr)
+        return 0.0
+
+
+def prune_expired_images() -> int:
+    """删掉超过保留期的生成图片，返回删除数量。
+
+    只动 ``generated-images/`` 下由本服务器命名的 ``image-*`` 文件，不碰调用方的
+    其它文件；保留期为 0 时什么都不做。客户端应在保留期内把图片取走。
+    """
+    minutes = retention_minutes()
+    if minutes <= 0:
+        return 0
+    directory = Path.cwd() / IMAGE_SUBDIR
+    if not directory.is_dir():
+        return 0
+    cutoff = time.time() - minutes * 60
+    removed = 0
+    for path in directory.iterdir():
+        if not path.name.startswith("image-") or path.suffix.lower() not in _EXT_BY_TYPE.values():
+            continue
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:  # 并发删除/权限问题都不该影响生图
+            continue
+    return removed
+
+
 def _save_image(data: bytes) -> tuple[Path, str]:
     """把图片字节写进工作目录的 generated-images/，返回 (路径, 类型)。"""
+    prune_expired_images()
     mime = sniff_image_type(data)
     directory = Path.cwd() / IMAGE_SUBDIR
     directory.mkdir(parents=True, exist_ok=True)
@@ -290,6 +397,23 @@ def workspace_relative(path: Path) -> str:
         return path.relative_to(Path.cwd()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def public_base_url() -> str:
+    """静态图床前缀；未配置时返回空串。"""
+    return (os.environ.get(ENV_PUBLIC_BASE_URL) or "").strip().rstrip("/")
+
+
+def image_reference(path: Path) -> str:
+    """给模型抄进回复的图片引用。
+
+    * 配了 ``IMAGE_PUBLIC_BASE_URL``：回绝对 URL（图片由图床托管，跨进程/跨容器可访问）；
+    * 没配：回工作目录内的相对路径（本地生图、前端按对话工作目录解析）。
+    """
+    base = public_base_url()
+    if base:
+        return f"{base}/{path.name}"
+    return workspace_relative(path)
 
 
 # --- 工具层 -------------------------------------------------------------------
@@ -328,8 +452,9 @@ TOOL_SCHEMA: dict[str, Any] = {
 }
 
 TOOL_DESCRIPTION = (
-    "生成或编辑图片：按文字描述调用生图网关，图片会保存到工作目录的 "
-    f"{IMAGE_SUBDIR}/ 下，并返回文件路径。传 image / images（工作目录内的图片路径或 http 地址）"
+    "生成或编辑图片：按文字描述调用生图网关，生成后返回图片地址"
+    "（本地直接运行时是工作目录内的相对路径，经网关/图床托管时是绝对 URL）。"
+    "传 image / images（工作目录内的图片路径或 http 地址）"
     "就是图片编辑（图生图），不传就是文生图。需要配图、画示意图、改图时使用。"
 )
 
@@ -415,19 +540,20 @@ def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
             "生图网关没有返回可用的图片" + (f"（{failures[0]}）" if failures else "")
         )
 
-    if specs:
-        headline = (
-            f"已根据 {len(specs)} 张参考图生成 {len(saved)} 张图片，"
-            f"保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："
-        )
+    if public_base_url():
+        where = "可访问地址"
     else:
-        headline = f"已生成 {len(saved)} 张图片，保存在工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）："
+        where = f"工作目录的 {IMAGE_SUBDIR}/ 下（路径相对工作目录）"
+    if specs:
+        headline = f"已根据 {len(specs)} 张参考图生成 {len(saved)} 张图片，{where}："
+    else:
+        headline = f"已生成 {len(saved)} 张图片，{where}："
     lines = [headline]
     for path, mime in saved:
-        lines.append(f"- {workspace_relative(path)}（{mime.removeprefix('image/').upper()}）")
+        lines.append(f"- {image_reference(path)}（{mime.removeprefix('image/').upper()}）")
     lines.append(
         "要在回复里直接把图展示出来，就原样写一行 Markdown 图片："
-        f"`![]({workspace_relative(saved[0][0])})` —— 页面会渲染成图；只贴路径的话只会显示成一串字。"
+        f"`![]({image_reference(saved[0][0])})` —— 页面会渲染成图；只贴地址的话只会显示成一串字。"
     )
     lines.append("也可以继续对这些文件做后续处理。")
     if failures:
@@ -510,6 +636,7 @@ def handle_message(message: Any) -> dict[str, Any] | None:
 
 def serve() -> int:
     """主循环：逐行读 stdin（每行一条 JSON-RPC 消息），回应写回 stdout。"""
+    prune_expired_images()
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -420,11 +420,11 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
   值一律**换行**而不是省略号截断（启动命令很长）；样式是两端各一份的 `.mcp-*` 共享段
   （`tests/test_mobile_web.py::test_mcp_detail_styles_are_identical_on_both_ends` 守着逐字一致）。
 
-**平台自带的通用服务器**：`scripts/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
+**平台自带的通用服务器**：`scripts/mcp/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
 服务器（stdio、纯标准库）——把 OpenAI 兼容网关的生图接口包成一个 `generate_image` 工具：
 不传参考图走 `POST /v1/images/generations`（文生图）；传 `image` / `images` 则走
 `POST /v1/images/edits`（图生图 / 图片编辑，支持一次给多张参考图）。在「MCP」页新建服务器
-（命令 `python scripts/image_mcp_server.py`），配置全走它的环境变量（加密落库、运行时注入）：
+（命令 `python scripts/mcp/image_mcp_server.py`），配置全走它的环境变量（加密落库、运行时注入）：
 
 | 环境变量 | 说明 |
 | --- | --- |
@@ -432,14 +432,24 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
 | `IMAGE_GEN_MODEL` | 生图模型名（需支持图片编辑时才有图生图能力，如 `doubao-seedream-5-lite`） |
 | `IMAGE_GEN_API_KEY` | 网关密钥（无鉴权的本地网关可不填） |
 | `IMAGE_GEN_TIMEOUT` | 单次生图超时秒数（默认 300） |
+| `IMAGE_PUBLIC_BASE_URL` | 可选：图片的对外访问前缀（如静态图床 `http://192.168.2.168:3050`）。设置后工具结果回**绝对 URL**，适合经 MCPHub 等网关代跑、与平台不在同一文件系统的场景；不设置则回工作目录内的相对路径 |
+| `IMAGE_GEN_INPUT_ROOTS` | 可选：额外的只读输入根目录（冒号分隔）。网关代跑时按相对路径到这些根目录的下一层查找调用方留在工作区里的参考图 |
+| `IMAGE_RETENTION_MINUTES` | 可选：生成图片本地保留多少分钟后自动清理（0 / 未设置＝不清理）。网关代跑时图片只是给客户端取回的中转，客户端（平台的取图逻辑见下文）拿到副本后即可清理 |
 
 参考图取值：**工作目录内的相对路径**（如 `attachments/a.png`、`generated-images/b.png`）或
 http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给网关 —— 网关在另一台机器上，
 拿不到本机路径。只支持 PNG / JPEG / WebP，单张 ≤ 10 MB、一次最多 10 张。
 
-生成的图片落在**对话工作目录**的 `generated-images/` 下，工具结果只回**工作目录内的相对路径**
-（如 `generated-images/image-….png`）——大图不进上下文，模型把该路径写进 `![](…)` 即可在页面上
-显示成图（前端按相对路径换成只读文件出口的 URL；给绝对路径会解析不到）。
+生成的图片落在本进程工作目录的 `generated-images/` 下；工具结果回什么取决于部署形态：
+
+* **本地直连**（平台内直接起进程，工作目录就是对话工作目录）：回**工作目录内的相对路径**
+  （如 `generated-images/image-….png`）——大图不进上下文，模型把该路径写进 `![](…)` 即可
+  在页面上显示成图（前端按相对路径换成只读文件出口的 URL；给绝对路径会解析不到）。
+* **网关代跑**（配了 `IMAGE_PUBLIC_BASE_URL`）：回**绝对 URL**（图片由图床托管，跨进程 /
+  跨容器可访问）。这种形态下图片只在 MCP 侧有一份，所以平台在助手消息落库前会把它取回
+  对话工作目录并改写成相对路径，保证对话历史自包含（`app/image_ingest.py`，前缀由
+  `ARKSWARM_IMAGE_INGEST_PREFIXES` 显式配置）。
+
 服务器内部按「协议层 → 工具层 → 客户端层 → 配置层」单向分层，测试见
 `backend/tests/test_image_mcp.py`。
 

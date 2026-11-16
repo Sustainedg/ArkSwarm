@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "image_mcp_server.py"
+SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "mcp" / "image_mcp_server.py"
 
 
 def load_module():
@@ -472,3 +473,39 @@ async def test_register_as_platform_mcp_server(client):
     # 明文密钥绝不出现，值只回掩码
     assert "sk-test-not-a-real-key" not in json.dumps(body)
     assert all(body["env_preview"].get(key) for key in body["env_keys"])
+
+
+# --- 生成图片保留期 -----------------------------------------------------------------
+
+
+def test_prune_expired_images_removes_only_old_files(image_mcp, monkeypatch, tmp_path):
+    """超过保留期才删，且只动本服务器命名的 image-* 文件。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(image_mcp.ENV_RETENTION_MINUTES, "60")
+    folder = tmp_path / image_mcp.IMAGE_SUBDIR
+    folder.mkdir()
+    old = folder / "image-old.png"
+    old.write_bytes(b"\x89PNG\r\n\x1a\n")
+    fresh = folder / "image-fresh.png"
+    fresh.write_bytes(b"\x89PNG\r\n\x1a\n")
+    other = folder / "notes.txt"
+    other.write_text("别动我")
+    os.utime(old, (0, 0))
+
+    assert image_mcp.prune_expired_images() == 1
+    assert not old.exists()
+    assert fresh.exists() and other.exists()
+
+
+def test_prune_disabled_without_retention(image_mcp, monkeypatch, tmp_path):
+    """默认不清理：本地直连时图片就是最终产物。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(image_mcp.ENV_RETENTION_MINUTES, raising=False)
+    folder = tmp_path / image_mcp.IMAGE_SUBDIR
+    folder.mkdir()
+    old = folder / "image-old.png"
+    old.write_bytes(b"\x89PNG\r\n\x1a\n")
+    os.utime(old, (0, 0))
+
+    assert image_mcp.prune_expired_images() == 0
+    assert old.exists()

@@ -187,7 +187,7 @@ function initialJsonText(state: FormState, server: McpServer | null): string {
       description: '调用生图网关 POST /v1/images/generations 生成图片，结果保存到工作目录 generated-images/',
       transport: 'stdio',
       command: 'python3',
-      args: ['/path/to/scripts/image_mcp_server.py'],
+      args: ['/path/to/scripts/mcp/image_mcp_server.py'],
       env: {
         IMAGE_GEN_GATEWAY: 'https://api.example.com（生图网关地址，带不带 /v1 都可以）',
         IMAGE_GEN_MODEL: '模型名，例如 flux-dev / gpt-image-1',

@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     update_repo: str | None = None
     #: GitHub API 基址；GitHub Enterprise 部署可换自己的域名
     update_github_api: str | None = None
+    #: 需要取回对话工作区的图片 URL 前缀（逗号分隔），例如 MCP 网关图床
+    #: ``http://192.168.2.168:3050``。命中前缀的图片会在助手消息落库前下载到
+    #: ``generated-images/`` 并改写为相对路径，让对话历史自包含。
+    image_ingest_prefixes: str = ""
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -58,6 +62,10 @@ class Settings(BaseSettings):
     @property
     def egress_allowed_hosts_list(self) -> list[str]:
         return [h.strip() for h in self.egress_allowed_hosts.split(",") if h.strip()]
+
+    @property
+    def image_ingest_prefix_list(self) -> list[str]:
+        return [p.strip() for p in self.image_ingest_prefixes.split(",") if p.strip()]
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
