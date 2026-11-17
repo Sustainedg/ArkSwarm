@@ -154,6 +154,23 @@ fi
 # 这样 Claude Code / Codex / Gemini 的安装态跟着数据卷走，容器重建不需要重装。
 # 用户在界面里「卸载」某个内核时删的是 HOME 下 npm 全局目录里的包，重启后这里补回去；
 # 装失败不致命（界面里仍可手动装）。网络不通时可用 ARKSWARM_SKIP_KERNEL_INSTALL=1 跳过。
+#: 安装期代理：只作用于「装内核」这几条命令，不污染智能体运行时（它们要直连网关）。
+#: 用法：ARKSWARM_INSTALL_PROXY=http://192.168.2.168:7890
+install_proxy() {
+  [ -n "${ARKSWARM_INSTALL_PROXY:-}" ] && printf '%s' "$ARKSWARM_INSTALL_PROXY" || true
+}
+
+# 在（可选）代理环境下执行命令：curl / git / uv / npm 都认这几个变量。
+run_with_install_proxy() {
+  local proxy
+  proxy="$(install_proxy)"
+  if [ -n "$proxy" ]; then
+    HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" http_proxy="$proxy" https_proxy="$proxy" "$@"
+  else
+    "$@"
+  fi
+}
+
 ensure_kernels() {
   # 内核已经物化在数据卷里、或运维自己管理内核时，可跳过启动期补装，
   # 避免 GitHub / npm 不通时把启动拖住（界面里仍可手动安装）。
@@ -172,16 +189,42 @@ ensure_kernels() {
     esac
     if ! command -v "$bin" >/dev/null 2>&1; then
       log "补装内核 $bin（$pkg，最多 5 分钟）"
-      timeout 300 npm install -g "$pkg" >/dev/null 2>&1 \
+      timeout 300 run_with_install_proxy npm install -g "$pkg" >/dev/null 2>&1 \
         || log "⚠ 补装 $bin 失败或超时，可在界面里手动安装"
     fi
   done
-  # Hermes：curl 脚本安装（不是 npm 包）。它的安装要 clone 仓库 + 下 uv + 下 Python + 装依赖，
-  # 网络不稳时容易卡住，所以加 5 分钟超时：超时就跳过，界面里仍可手动点装。
+  # Hermes：curl 脚本安装（不是 npm 包）。它要 clone 仓库 + 下 uv / Python / Node +
+  # 装依赖，慢网络下 5 分钟远远不够；默认给 20 分钟，可用 ARKSWARM_KERNEL_INSTALL_TIMEOUT 覆盖。
   if ! command -v hermes >/dev/null 2>&1; then
-    log "补装内核 hermes（最多 5 分钟，超时跳过）"
-    timeout 300 bash -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash' >/dev/null 2>&1 \
+    log "补装内核 hermes（最多 ${ARKSWARM_KERNEL_INSTALL_TIMEOUT:-1200} 秒，超时跳过）"
+    timeout "${ARKSWARM_KERNEL_INSTALL_TIMEOUT:-1200}" \
+      run_with_install_proxy bash -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash' \
+      >/dev/null 2>&1 \
       || log "⚠ 补装 hermes 失败或超时，可在界面里手动安装"
+  fi
+}
+
+# ---- 技能播种：让「技能」页在内核刚装好时就有内容 ----
+# 各内核的内置技能由**各自的安装器 / 首次运行**播种进 HOME，镜像不预置：
+#   Codex  → ~/.codex/skills/.system（`codex debug prompt-input` 触发，离线可跑）
+#   Hermes → ~/.hermes/skills（`hermes --run-module tools.skills_sync`，幂等）
+#   Claude → ~/.claude/skills（用户技能，随用户自己的配置走；镜像不代建）
+# 只做**幂等补齐**：已有技能就跳过，绝不覆盖用户改过的内容。
+seed_kernel_skills() {
+  [ "${ARKSWARM_SKIP_KERNEL_INSTALL:-0}" = "1" ] && return 0
+
+  if command -v codex >/dev/null 2>&1 && [ ! -d "$HOME/.codex/skills/.system" ]; then
+    log "播种 Codex 系统技能"
+    timeout 120 codex debug prompt-input >/dev/null 2>&1 || true
+  fi
+
+  if command -v hermes >/dev/null 2>&1; then
+    local skills_dir="$HOME/.hermes/skills"
+    if [ ! -d "$skills_dir" ] \
+      || [ -z "$(find "$skills_dir" -name SKILL.md -print -quit 2>/dev/null)" ]; then
+      log "播种 Hermes 内置技能"
+      timeout 300 hermes --run-module tools.skills_sync >/dev/null 2>&1 || true
+    fi
   fi
 }
 # npm 全局 bin 与用户 ~/.local/bin 都放进 PATH，让安装后的内核命令能被找到
@@ -189,6 +232,7 @@ NPM_BIN="$(npm prefix -g 2>/dev/null)/bin"
 [ -d "$NPM_BIN" ] && case ":$PATH:" in *":$NPM_BIN:"*) ;; *) export PATH="$NPM_BIN:$PATH" ;; esac
 [ -d "$HOME/.local/bin" ] && case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 ensure_kernels
+seed_kernel_skills
 
 # ---- 启动（exec：uvicorn 接管 PID 1，界面更新时 os.execv 原地替换的就是它）----
 export ARKSWARM_DATA_DIR="$DATA_DIR"

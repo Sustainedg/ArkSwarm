@@ -52,6 +52,7 @@ cd ArkSwarm
 1. **设置 → 自定义网关** — 新建网关（名称、地址、协议、鉴权、API 密钥），点「获取模型」拿到可选模型并勾选
 2. **智能体 → 新建** — 选内核类型、选网关、定默认模型，写头像与系统提示词，按需勾选技能 / MCP，点「连通性测试」
 3. **对话 → 新建对话** — 选择智能体开始聊天；工具调用、推理过程、token 用量实时展开
+4. **设置 → IM**（可选）— 把智能体连到 Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack，配对账号后就能在聊天软件里直接对话（只用长连接，不需要公网地址）
 
 ---
 
@@ -67,6 +68,7 @@ cd ArkSwarm
 | **技能** | 从各内核技能目录（`SKILL.md`）统一编目的能力包，**只能通过智能体分配生效** | `skills` + `agent_skills` |
 | **MCP 服务器** | 统一编目的工具服务（stdio / http / sse），同样严格仅分配 | `mcp_servers` + `agent_mcp_servers` |
 | **消息** | 一轮消息，含工具调用 / 推理过程 / token 用量 | `messages` |
+| **IM 连接** | 把聊天软件里的一个机器人绑到一个智能体（Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack），配对后直接在那边对话 | `im_connections` + `im_peers` + `im_chats` |
 
 关系：`智能体类型 → 网关（密钥）→ 智能体 → 对话`。
 
@@ -191,7 +193,7 @@ class AcmeAgent(AgentDefinition):
 - **凭据只以环境变量注入**：模型只知道变量名（如 `$GITHUB_TOKEN`），值不进提示词、日志与接口响应；运行层逐条事件擦除凭据值
 - **日志自动脱敏**所有出现在 env 中的凭据
 - **路径护栏**：`Runtime.API` 型智能体的工具被限制在工作目录内，`../` 逃逸会被拒绝
-- **超时与取消**：单轮默认 3600 秒超时，可随时中断（消息标记 `interrupted`）
+- **超时与取消**：普通对话默认不限时，可随时中断（消息标记 `interrupted`）；需要护栏的部署可设 `ARKSWARM_RUN_TIMEOUT_SECONDS`
 - ⚠️ `bypassPermissions` / `danger-full-access` 等无人值守模式请只在沙箱里使用
 
 ---
@@ -226,6 +228,13 @@ class AcmeAgent(AgentDefinition):
 | POST | `/api/conversations/{id}/session/reset` | 丢弃智能体侧会话记忆 |
 | GET | `/api/system/overview` · `/api/runs` | 运行状态与实时任务 |
 | GET | `/api/usage/overview` | 用量汇总：token 消耗与技能分配 |
+| GET | `/api/im/platforms` | 可连接的 IM 平台及字段（添加表单由它生成） |
+| GET/POST | `/api/im/connections` | 列出 / 新建 IM 连接（保存前先向平台核对凭据） |
+| PATCH/DELETE | `/api/im/connections/{id}` | 改绑定 / 启停 / 移除（移除时一并删配对与聊天） |
+| POST | `/api/im/connections/{id}/retry` | 重连一次 |
+| GET | `/api/im/peers` | 等待允许的连接请求与已配对账号 |
+| POST/DELETE | `/api/im/connections/{id}/peers/{peer_id}` | 允许 / 拒绝 / 移除配对账号 |
+| GET | `/api/im/connections/{id}/chats` | 连接见过的聊天（群可单独指定智能体） |
 
 交互式文档：启动后访问 `http://127.0.0.1:8010/docs`。
 
@@ -239,6 +248,8 @@ backend/
   app/agents/            适配器层（base · events · registry · builtin/*）
   app/runtime/           service（编排/持久化）· runner（执行）· manager（运行表）·
                          provisioning（运行时的安装 / 更新 / 卸载）
+  app/im/                IM 域：base（平台元数据/契约）· platforms/*（各平台收发）·
+                         service（连接登记表/配对/发送队列）· bridge（与对话域的唯一交界）
   app/api/               路由 · SSE
   app/models.py db.py    数据模型与引擎
   tests/                 适配器解析、API 契约、harness 工具循环、架构守卫
@@ -248,6 +259,7 @@ frontend/
   src/mobile/            移动端（PWA）
 docs/
   architecture.md             一次运行的完整时序、事件协议、扩展点
+  im.md                       IM：支持哪些平台、配对与消息路由、分层
   ai-coding-standard.md       编码规范详版
   collaboration-design.md     多智能体协作设计详版
   collab-guide.html           协作机制图文版（浏览器直接打开）

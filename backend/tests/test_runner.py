@@ -19,6 +19,7 @@ from app.agents.events import log, text_delta
 from app.runtime import runner
 from app.runtime.manager import registry
 from app.runtime.runner import _StreamLines
+from app.settings import get_settings
 
 FAKE_LONG_LINE_AGENT = str(Path(__file__).parent / "fakes" / "fake_long_line_agent.py")
 FAKE_LURKING_CHILD = str(Path(__file__).parent / "fakes" / "fake_lurking_child.py")
@@ -334,4 +335,40 @@ async def test_stream_run_per_run_timeout_negative_means_no_limit(monkeypatch):
     kinds = [event.type.value for event in events]
     assert kinds[-1] == "run.finished"
     assert not [event for event in events if event.type.value == "error"], kinds
+
+
+def test_plain_chat_is_unlimited_by_default(monkeypatch):
+    """普通对话没指定时限、全局也没配：不得有任何 deadline，跑多久都不该被掐断。
+
+    这条守着「3600 秒默认值」的回归：对话域的 ``ActiveRun.timeout_seconds`` 恒为 0，
+    以前它会回落到 ``settings.run_timeout_seconds = 3600``，于是普通对话一小时后被杀。
+    """
+    monkeypatch.setattr(get_settings(), "run_timeout_seconds", None)
+    active = registry.register("conversation-plain", "plain")
+    try:
+        assert active.timeout_seconds == 0
+        assert runner.resolve_timeout_limit(active) is None
+    finally:
+        registry.finish(active, "ok")
+
+
+def test_configured_global_timeout_still_guards_plain_chat(monkeypatch):
+    """部署方显式配了护栏时，普通对话仍按它掐表——只是默认值不再是 3600。"""
+    monkeypatch.setattr(get_settings(), "run_timeout_seconds", 42)
+    active = registry.register("conversation-guarded", "guarded")
+    try:
+        assert runner.resolve_timeout_limit(active) == 42
+    finally:
+        registry.finish(active, "ok")
+
+
+def test_collab_step_timeout_wins_over_global_default(monkeypatch):
+    """协作域的单步限时优先于全局值：配了对话护栏也不该影响协作的「不限」。"""
+    monkeypatch.setattr(get_settings(), "run_timeout_seconds", 42)
+    active = registry.register("collab-unlimited", "collab")
+    active.timeout_seconds = -1
+    try:
+        assert runner.resolve_timeout_limit(active) is None
+    finally:
+        registry.finish(active, "ok")
 

@@ -707,8 +707,9 @@ async def test_zero_step_timeout_reaches_runner_as_unlimited(
     """预算单步限时 0 = 不限：执行层必须转成负数交给 runner，而不是落回全局默认。
 
     ``BudgetSpec.step_timeout_seconds`` 只允许非负数，用户能表达「不限」的唯一写法就是 0；
-    而 runner 沿用的哨兵是「0 = 全局默认、负数 = 不限」。两者之间必须显式翻译，
-    否则界面写着「不限」，实际却在 ``settings.run_timeout_seconds`` 到点时被掐断。
+    而 runner 的哨兵是「0 = 这次没指定、负数 = 不限」。两者之间必须显式翻译，
+    否则一旦部署方给对话域配了 ``settings.run_timeout_seconds``，界面写着「不限」的那一步
+    也会在全局值到点时被掐断。
     """
     scenario = await make_scenario({"ceo": [{"action": "done", "remark": "完成"}]}, tmp_path)
     body = team_body(scenario["agent_profiles"])

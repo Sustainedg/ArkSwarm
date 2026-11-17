@@ -48,6 +48,8 @@ services:
       # 内核已放在 /app/data/home/.local；跳过启动期自动补装，避免网络不通时阻塞启动。
       # 需要容器每次启动自动补回被卸载的内核时，把这里改成 "0"。
       ARKSWARM_SKIP_KERNEL_INSTALL: "1"
+      # 安装期代理（只给补装内核用，不影响智能体运行时）：内网代理按需填写。
+      # ARKSWARM_INSTALL_PROXY: "http://192.168.2.168:7890"
 
 volumes:
   arkswarm-app:

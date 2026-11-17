@@ -64,10 +64,11 @@ CLI 的 stdout 由 `runner._StreamLines` 拆行：`asyncio.StreamReader.readline
 `log(warn)`，不会把整轮运行判成 error（铁律 10 / 11）。
 
 **协作域**（`app/collab/`，见 `docs/collaboration-design.md`）是第二个编排器：它**不重写执行链路**，
-每一步仍然调用 `runtime.runner.stream_run()`，因此取消、超时、脱敏与全局默认时限都复用同一套实现。
+每一步仍然调用 `runtime.runner.stream_run()`，因此取消、超时、脱敏都复用同一套实现。
 单步限时不走全局默认：团队预算的 `budget.step_timeout_seconds`（默认 36000 秒，`0 = 不限`）经
 `execution.prepare_step()` / `prepare_chat()` 落成 `handle.timeout_seconds`，其中 0 转成 -1
-（runner 的「负数 = 不限」），再交给 `stream_run()`；全局 `run_timeout_seconds` 只服务对话域默认值。
+（runner 的「负数 = 不限」），再交给 `stream_run()`；全局 `run_timeout_seconds` 只服务对话域，
+且**默认为空 = 不限时**——普通对话不该被平台级硬时限掐断，需要护栏的部署自行配置。
 区别只在编排与记忆：
 
 ```
@@ -497,6 +498,15 @@ collab_steps(id, run_id→collab_runs, ticket_id→collab_tickets, agent_profile
              error, audit JSON)
 collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→agent_profiles,
                 sequence, status, content, parts JSON, usage JSON, error, meta JSON)
+
+-- IM 域（旁路：通道，不是成员，见 docs/im.md）
+im_connections(id, platform, account_name, account_id, fields JSON, secrets JSON,
+               agent_profile_id→agent_profiles, enabled, last_status, last_error,
+               runtime JSON, owner_id)
+im_peers(id, connection_id→im_connections, sender_id, sender_name,
+         state(pending|allowed|denied), chat_key, chat_kind, chat_title)
+im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title,
+         agent_profile_id→agent_profiles, conversation_id→conversations)
 ```
 
 设计取舍：
@@ -529,9 +539,14 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   `submitter_key`（最近提交者，打回时默认退回给他）记岗位流转；步骤用 `gist` 存**引擎派生**的
   一句话摘要 —— 拼下游 prompt 时只读 `gist`、不读 `content`，从数据通路上保证"下游只看工单、
   看不到上游对话"。岗位用 key 而不是智能体 id，是因为智能体可以改绑，历史工单仍要能复现。
+- **IM 是通道，不是成员**：`im_connections` 把「聊天软件里的一个机器人」绑到一个智能体，
+  消息进来就是**用户说的话**（交给 `runtime.service` 的同一套运行链路），回复只发回发起这一轮
+  的那个聊天；`im_peers` 保证只有配对过的账号能进智能体，`im_chats` 记聊天 → 对话的对应关系
+  （一条聊天固定一条对话，上下文才连续）。凭据按字段加密存在 `secrets` 里，接口只回字段名。
 - **加字段要能容忍旧行**：`create_all` 只建新表、**不会给已存在的表加列**，所以"后加的可选列"
-  登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）与 `collab/tables.py` 的
-  `ADDITIVE_COLUMNS`（协作域），由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
+  登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）、`collab/tables.py` 的
+  `ADDITIVE_COLUMNS`（协作域）与 `im/tables.py` 的 `ADDITIVE_COLUMNS`（IM 域），
+  由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
   幂等补齐：现有 `arkswarm.db` 启动后自动对齐，不重建、不丢数据。
 - **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
@@ -547,6 +562,12 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 - **口令**：`auth.py` 用 PBKDF2-HMAC-SHA256（600k 次、16 字节盐）存
   `pbkdf2$<迭代>$<盐>$<哈希>`；明文口令永不入库 / 进日志 / 进响应。哈希 / 校验在接口里
   放线程池执行，避免阻塞事件循环。
+- **头像**：`app/avatars.py` 是唯一实现（校验 / 落盘 / 读取）。只收 PNG / JPEG / WebP 位图
+  （按魔数认，≤2 MB；SVG 会被拒绝 —— 它能内嵌脚本，而头像直接进 `<img>`），文件名由服务端按
+  「用户 id + 内容摘要」生成并落在 `<数据目录>/avatars/`，库里只存 `users.avatar_file`。
+  接口：`PUT/DELETE /api/auth/me/avatar`（本人）、`GET /api/auth/users/{id}/avatar`（任何登录用户，
+  用户列表与协作消息要显示）。前端 `lib/avatar.ts` 带令牌 `fetch` 成 blob + object URL 渲染，
+  避免把令牌拼进图片 URL；展示统一走 `components/UserAvatar.tsx`。
 - **归属**：`owner_id` 覆盖网关、智能体、凭据、对话、MCP 服务器、协作组与协作运行。
   非管理员的列表只回自己的行：网关额外包含官方链路，扫描来的 MCP 是只读共享目录；
   按 id 读取别人的行返回 404（官方网关与扫描来的 MCP 保持与列表一致）。跨用户引用
@@ -658,7 +679,8 @@ frontend/
 ├── index.html              # 桌面端入口 → /
 ├── m/index.html            # 移动端入口 → /m/
 ├── public/m/               # 移动端 PWA 资产（manifest + Service Worker）
-├── public/icons/           # 两端口共用的应用图标（由 scripts/gen_icons.py 生成）
+├── public/icons/           # 两端口共用的应用图标（由 scripts/gen_icons.py 生成；
+│                           #   界面品牌标 components/BrandMark.tsx 与它同一组几何）
 └── src/
     ├── App.tsx · pages/ · index.css                  # 桌面端
     ├── components/                                   # 两端共用的纯展示组件（Composer · Icons · MessageView…）

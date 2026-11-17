@@ -329,8 +329,10 @@ def _runner_step_timeout(budget_value: int) -> int:
     """把预算里的单步限时翻译成 runner 的语义。
 
     预算对用户承诺「0 = 不限」（``BudgetSpec.step_timeout_seconds`` 的 ``ge=0`` 只允许非负数），
-    而 ``runner.stream_run`` 的入参沿用对话域的哨兵：0 = 用全局默认、负数 = 不限。
-    因此 0 必须在这里转成 -1；否则用户看到「不限」，实际却静默落到全局 ``run_timeout_seconds``。
+    而 ``runner`` 的哨兵是：0 = 这次没指定（回落全局默认）、负数 = 不限。
+    因此 0 必须在这里转成 -1；否则用户看到「不限」，实际却落到全局 ``run_timeout_seconds``。
+    （全局默认如今是「不限时」，但这条翻译仍然必要：部署方一旦给对话配了护栏，
+    协作域的单步「不限」不能被它顺带掐断。）
     """
     return -1 if budget_value == 0 else budget_value
 

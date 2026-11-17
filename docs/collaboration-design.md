@@ -478,7 +478,7 @@ engine.consume_turn(prepared)            # 串行推进直到挂起/完成
   `0 = 不限`）：执行层在 `prepare_step` / `prepare_chat` 时把它转成
   `handle.timeout_seconds`（预算的 0 转成 -1），再交给 `runtime.runner.stream_run()`；
   runner 的语义是正数 = 限死、负数 = 不限、0 = 沿用全局 `settings.run_timeout_seconds`
-  （该哨兵只服务对话域的 `ActiveRun` 默认值，协作域不会把 0 传下去）。
+  （全局默认为空 = 对话域不限时，所以这个哨兵不能表达「不限」，协作域不会把 0 传下去）。
 - 预算超限挂起：步数 / 工单 / token 任一达到上限都会挂起并给出可读原因；用户可以
   `POST /api/collab/runs/{id}/budget` **只调高**对应上限（`max_tokens=0` 表示不限），
   清掉挂起原因后再 `POST /resume` 从原处续跑。新上限必须大于当前已用量，避免“调完立刻又挂起”。

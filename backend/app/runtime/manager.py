@@ -31,7 +31,8 @@ class ActiveRun:
     events: list[dict[str, Any]] = field(default_factory=list)
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     ended: bool = False
-    #: 本次运行的单次执行时限（秒）：0 表示用全局 ``run_timeout_seconds``。
+    #: 本次运行的单次执行时限（秒）：``0`` 表示「这次没指定」（对话域走全局默认，
+    #: 而全局默认为空 = 不限时）；正数 = 限死；负数 = 本次不限时。
     #: 协作域通过它把团队预算的「单步限时」传进执行层，覆盖全局默认值。
     timeout_seconds: int = 0
 

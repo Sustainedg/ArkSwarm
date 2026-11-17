@@ -119,6 +119,25 @@ class _StreamLines:
         return line
 
 
+def resolve_timeout_limit(run: ActiveRun) -> int | None:
+    """这次运行的时限（秒）；``None`` 表示不限时。
+
+    优先级：``run.timeout_seconds``（协作域的单步限时）→ 全局 ``run_timeout_seconds``。
+    ``run.timeout_seconds`` 为 0 表示「这次没指定」，交给全局默认；全局默认为空即不限时——
+    普通对话本就不该被一个平台级硬时限掐断，需要护栏的部署自行配置。
+
+    非正数一律视为不限时：0 秒的时限没有意义，若当成真值会让运行在启动瞬间就被判超时
+    （``deadline = now``），这里直接挡掉，别让一个误填的 0 变成「一开跑就失败」。
+    """
+    if run.timeout_seconds:
+        limit = run.timeout_seconds
+    else:
+        limit = get_settings().run_timeout_seconds
+    if limit is None or limit <= 0:
+        return None
+    return limit
+
+
 async def stream_run(
     definition: AgentDefinition,
     ctx: AgentContext,
@@ -127,11 +146,11 @@ async def stream_run(
     """按 runtime 分发到 CLI 或 API 的执行路径。
 
     ``run.timeout_seconds``（协作域的「单步限时」）为正时覆盖全局 ``run_timeout_seconds``；
-    0 表示沿用全局默认，负数表示本次不限时。
+    0 表示沿用全局默认（默认为空 = 不限时）；负数表示本次不限时。
     """
     yield run_started(run.id)
-    limit = run.timeout_seconds if run.timeout_seconds else get_settings().run_timeout_seconds
-    deadline = None if limit < 0 else asyncio.get_event_loop().time() + limit
+    limit = resolve_timeout_limit(run)
+    deadline = None if limit is None else asyncio.get_event_loop().time() + limit
     if definition.runtime is Runtime.API:
         timed_out = False
         async for event in definition.stream(ctx):
@@ -160,14 +179,13 @@ async def stream_cli_run(
 ) -> AsyncIterator[AgentEvent]:
     """执行一次 CLI 内核运行。
 
-    ``timeout_seconds`` 为正时按它限死这次运行；0 / None 表示沿用全局
-    ``run_timeout_seconds``；负数表示本次不限时（协作预算把单步限时设为「不限」）。
+    ``timeout_seconds`` 为正时按它限死这次运行；``None`` 或负数表示不限时。
     """
-    if not timeout_seconds:
-        timeout_seconds = get_settings().run_timeout_seconds
     #: None 表示不限时
     deadline: float | None = (
-        None if timeout_seconds < 0 else asyncio.get_event_loop().time() + timeout_seconds
+        None
+        if not timeout_seconds or timeout_seconds < 0
+        else asyncio.get_event_loop().time() + timeout_seconds
     )
     agent_run: AgentRun = definition.create_run(ctx)
     try:

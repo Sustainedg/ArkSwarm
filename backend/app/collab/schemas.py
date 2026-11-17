@@ -162,8 +162,9 @@ class BudgetSpec(BaseModel):
     max_tokens: int = Field(default=0, ge=0)
     timeout_seconds: int = Field(default=3600, ge=30)
     #: 单步限时（秒）：一个工单步骤 / 聊天回复的执行上限；**0 表示不限**。
-    #: 执行层用它覆盖全局 run_timeout_seconds——重活（大仓库构建、长测试）经常跑过一小时；
-    #: 0 在这里是「不限」而不是「用默认」，执行层会把它转成 runner 认识的 -1。
+    #: 这是协作域**自己的**时限，与对话域的全局 ``run_timeout_seconds`` 互不影响——
+    #: 重活（大仓库构建、长测试）经常跑过一小时；0 在这里是「不限」而不是「用默认」，
+    #: 执行层会把它转成 runner 认识的 -1。
     step_timeout_seconds: int = Field(default=36000, ge=0)
 
 

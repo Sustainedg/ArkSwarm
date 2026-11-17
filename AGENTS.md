@@ -27,6 +27,7 @@
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
 | MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
+| IM 域 | `backend/app/im/` —— 把智能体连到聊天软件（Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack）；设置页标签「IM」，见 `docs/im.md` |
 
 ---
 
@@ -49,7 +50,9 @@
 8. **改完必须验证。** 后端 ≥ `pytest`；前端改动还要 `tsc --noEmit` + `npm run build`；
    两者都用 `bash scripts/test.sh` 一次跑完。**前端改完不 build 不重启，线上看不到效果。**
 9. **数据库变更必须向后兼容。** 本地库含真实数据，禁止"删库重建"式变更；加字段要能容忍旧行。
-10. **长任务必须可取消、可超时。** 子进程/HTTP 调用都要响应 `run.cancel_event` 与 `run_timeout_seconds`。
+10. **长任务必须可取消、可超时。** 子进程/HTTP 调用都要响应 `run.cancel_event` 与
+    `runner.resolve_timeout_limit(run)`；普通对话默认不限时（全局 `run_timeout_seconds` 为空），
+    协作域的单步限时走自己的 `budget.step_timeout_seconds`，两者不要互相顶替。
 11. **错误必须显式暴露**：要么抛 `HTTPException`（API 层），要么产出 `error` 事件（运行层）。
     禁止 `except Exception: pass` 静默吞掉。
 12. **不要新增依赖**（后端 `requirements*.txt`、前端 `package.json`），除非任务确实需要；
@@ -76,6 +79,7 @@
  │ api/            路由、请求校验(Pydantic)、SSE 封装、HTTP 状态码    │
  ├───────────────────────────────────────────────────────────────────┤
  │ collab/         协作域（旁路）：编排图 · 工单协议 · 串行引擎 · 运行 API │
+ │ im/             IM 域（旁路）：连接登记 · 配对 · 平台适配器 · 运行桥   │
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
  │                 manager=运行表(注册/取消/追踪) · skills=技能编目/分配/物化 │
@@ -94,6 +98,14 @@
 **`agents` 不得反向依赖任何上层**。跨层共享的数据结构定义在叶子层（如 `agents/base.py` 的 `AgentContext`）。
 `auth.py`（口令哈希 / 令牌）与 `auth_deps.py`（当前用户 / 管理员 / 归属校验）放在顶层叶子层，
 因为协作域有架构守卫禁止依赖 `app.api.*`，但协作路由同样需要鉴权。
+
+IM 域 `im/` 同样是**旁路功能**，不在主干上：`api/__init__.py` 只把 `im/api.py` 挂成一条子路由，
+它与对话域的**唯一边界**是 `im/bridge.py`（调 `runtime.service.prepare_run` / `start_run`）。
+平台适配器（`im/platforms/*`）是**叶子节点**：只能依赖 `im/base.py`、`im/format.py`、
+`im/crypto.py`（企业微信媒体解密用的 AES，`cryptography` 只在这里出现）、标准库、
+`httpx` 与 `websockets`，不得 import `app.api.*` / `app.runtime.*` / `app.db` /
+`app.models`（有守卫测试 `tests/test_im_architecture.py`）。「某个平台怎么收发消息」是
+适配器的知识，框架层（`im/service.py`）不得为具体平台开分支。
 
 协作域 `collab/` 是**旁路功能**，不在主干上：`api` 只把它当一条子路由挂上去，它在内部经**唯一边界**
 `collab/execution.py` 调用 `runtime.runner`。硬约束（有守卫测试 `tests/test_collab_architecture.py`）：
@@ -381,7 +393,18 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 `POST /api/collab/runs/{id}/attachments`，`chat` 只收相对路径 —— 附件是工作目录里的普通文件，
 不是协作域新表（也别往对话域塞）。
 
-### 4.9 让运行时可由平台安装 / 更新 / 卸载
+### 4.9 接入一个新的 IM 平台
+1. 在 `backend/app/im/base.py` 的 `PLATFORMS` 加一条 `Platform(...)` 元数据（id / 名字 / 字段 /
+   是否支持群与按钮 / 设置步骤）—— 设置页的添加表单由它生成，**不要改前端**。
+2. 在 `backend/app/im/platforms/` 新建模块，实现 `check(fields)`（先核对一次凭据）与
+   `connect(fields, handlers, runtime)`（返回一个 `ConnectionBase` 子类：实现 `send`，
+   需要时覆盖 `typing` / `open`），并在 `platforms/__init__.py` 的 `ADAPTERS` 里注册。
+3. 长连接 / 长轮询的游标这类小状态放进 `RuntimeState`（框架会节流落库到 `im_connections.runtime`），
+   不要自己写文件。
+4. 加测试：参考 `tests/test_im.py`（用假适配器验证框架行为）与 `tests/test_im_architecture.py`。
+5. 平台只支持「客户端往外连」（WebSocket / 长轮询）：需要公网回调地址的接口不做。
+
+### 4.10 让运行时可由平台安装 / 更新 / 卸载
 1. 在适配器声明 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…,
    update_argv=…, uninstall_argv=…, latest_argv=…, prepare_argv=…)` —— 命令（用哪个包管理器、包名、装到哪、
    动作前要清掉什么残留）是**适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
@@ -392,7 +415,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
    卡片副标题会写明「进程内运行」/「自备可执行文件」。
 
-### 4.10 让某个适配器支持 MCP
+### 4.11 让某个适配器支持 MCP
 1. `capabilities` 里声明 `mcp=True`。
 2. 实现 `discover_mcp_servers()`：只读扫描本机已有的 MCP 配置，用 `agents/mcp.py` 的
    `parse_json_servers()` / `parse_toml_servers()` 解析成 `McpServerSpec`，`type_id` 填 `self.id`；
@@ -470,6 +493,14 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
 - **令牌吊销**：JWT 带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令必须
   把 `token_version` +1，让旧令牌立即失效。新增会改口令的入口时不要漏掉这一步。
+- **头像**：`app/avatars.py` 只此一份（校验 / 落盘 / 读取）。硬约束：
+  ① **只收位图**（PNG / JPEG / WebP，按魔数认，≤2 MB）—— SVG 能内嵌脚本，而头像会直接进
+  `<img>`，放进来就是存储型 XSS；② 文件名由服务端按「用户 id + 内容摘要」生成，不采信客户端
+  文件名（挡目录穿越，且「换头像 = 换文件名」让缓存自动失效）；③ 文件在
+  `<数据目录>/avatars/`，库里只存 `users.avatar_file`。
+  前端取图走 `lib/avatar.ts` 带令牌 `fetch` 成 blob + object URL，**不要**把头像地址塞进
+  `<img src>` 拼 `?access_token=`（令牌会进日志与历史）。展示统一用 `components/UserAvatar.tsx`
+  （有图显示图、没图显示显示名首字母）。
 
 ---
 
@@ -511,6 +542,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `auth.py` / `auth_deps.py` / `api/auth.py` | 登录 / 注册 / 用户管理、`current_user` 依赖、`owner_id` 过滤、管理员入口、前端 `AuthGate` / `AccountPanel` / `UserAdminPanel` 与 `lib/auth.ts` |
+| `app/avatars.py` / `api/auth.py` 的头像接口 | `models.ADDITIVE_COLUMNS` 的 `users.avatar_file`、`schemas` / `types.ts` 的 `AuthUser.avatar`、前端 `lib/avatar.ts` + `UserAvatar` / `AvatarUploader`（两端共用）、`tests/test_auth.py` 的头像用例 |
 | 任一资产表新增 `owner_id` 或新的共享目录 | 对应 `ADDITIVE_COLUMNS`、`bootstrap.backfill_ownership`、列表/详情/写入三处的归属过滤、成员端应隐藏的管理员按钮 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
 | `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封、超时、取消、脱敏 |
@@ -522,7 +554,8 @@ curl -s http://127.0.0.1:8010/api/health
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
-| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对）；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管 |
+| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对）；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管；**改了图标要同步 `components/BrandMark.tsx`**（界面品牌标与图标是同一组几何，内联 SVG 用 `currentColor` 跟随主题） |
+| `im/*`（IM 域） | `pytest tests/test_im.py` + `tests/test_im_architecture.py`（分层 / 平台元数据 / 归属）；新增平台只加 `base.PLATFORMS` 一条 + `platforms/` 一个模块；IM 表加列登记 `im/tables.py` 的 `ADDITIVE_COLUMNS`；碰运行层只能改 `bridge.py`；同步 `docs/im.md` |
 | `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -18,10 +19,12 @@ class Settings(BaseSettings):
     secret_key: str | None = None
     workspace_dir: Path | None = None
     cors_origins: str = "*"
-    #: 一次运行的默认时限（秒）：协作域经团队预算的 step_timeout_seconds 覆盖（0 = 不限），
-    #: 对话域沿用这里的全局默认。
-    run_timeout_seconds: int = 3600
-    #: 安装/更新/卸载智能体运行时（CLI 内核）的单次上限；比一次对话更宽松。
+    #: 对话域（普通对话）单轮运行的时限（秒）：``None`` 表示**不限时**。
+    #: 需要给对话加护栏的部署才显式配置 ``ARKSWARM_RUN_TIMEOUT_SECONDS=<秒数>``。
+    #: 协作域**不读这个值**：它的每一步都带自己的单步限时（``budget.step_timeout_seconds``，
+    #: 默认 36000 秒，0 = 不限），由 ``collab.execution.stream_step()`` 落到 ``ActiveRun`` 上。
+    run_timeout_seconds: int | None = None
+    #: 安装/更新/卸载智能体运行时（CLI 内核）的单次上限；这类动作本就有明确终点。
     provision_timeout_seconds: int = 900
     #: 网络出口过滤模式：off（不限制）/ block（全部阻断）/ allowlist（只放行白名单）
     egress_mode: str = "off"
@@ -46,6 +49,18 @@ class Settings(BaseSettings):
     admin_username: str | None = None
     #: 首任管理员的口令（首启建初始管理员用；已存在用户时不生效）
     admin_password: str | None = None
+
+    @field_validator("run_timeout_seconds", mode="before")
+    @classmethod
+    def _empty_timeout_means_unlimited(cls, value: object) -> object:
+        """``ARKSWARM_RUN_TIMEOUT_SECONDS=``（留空）按「不配置」处理。
+
+        默认不限时以后，「把它留空」是运维最自然的写法；而空串对 ``int`` 是解析错误，
+        会让服务直接起不来。空值一律折成 ``None``（= 不限时），别把一个空字符串变成启动故障。
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def sqlalchemy_url(self) -> str:
