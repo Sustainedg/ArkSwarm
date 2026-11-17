@@ -11,11 +11,11 @@ import { ConversationThread, type ConversationThreadItem } from './ConversationT
 import type { RenderMessage } from './MessageView'
 import { TicketBoard } from './TicketBoard'
 import { Modal } from './Modal'
-import { api, ApiError, streamGet, streamPost } from '../lib/api'
+import { api, ApiError, collabRunFileUrl, streamGet, streamPost } from '../lib/api'
 import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import { applyChatEvent, chatAdvanceFrom, dismissChatAdvance, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
-import { composeWithAttachments } from '../lib/media'
+import { MediaUrlProvider, composeWithAttachments } from '../lib/media'
 import { useComposerDraft } from '../lib/composerDraft'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
@@ -640,6 +640,9 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   }, [detail])
 
   return (
+    <MediaUrlProvider
+      resolver={(relPath) => (runId ? collabRunFileUrl(runId, relPath) : null)}
+    >
     <div className="collab-shell">
       <aside className="collab-list">
         <button className="btn primary" style={{ justifyContent: 'center' }} onClick={() => setPicking(true)}>
@@ -1165,6 +1168,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
         </Modal>
       )}
     </div>
+    </MediaUrlProvider>
   )
 }
 

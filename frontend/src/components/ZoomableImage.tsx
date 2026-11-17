@@ -8,10 +8,13 @@ export function ZoomableImage({
   src,
   alt,
   className,
+  onError,
 }: {
   src: string
   alt?: string
   className?: string
+  /** 图片取不到时交给调用方决定如何退化（例如附件改成文件名胶囊）。 */
+  onError?: () => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -22,7 +25,7 @@ export function ZoomableImage({
         onClick={() => setOpen(true)}
         aria-label={alt ? `放大查看：${alt}` : '放大查看图片'}
       >
-        <img src={src} alt={alt ?? ''} loading="lazy" />
+        <img src={src} alt={alt ?? ''} loading="lazy" onError={onError} />
       </button>
       {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
     </>

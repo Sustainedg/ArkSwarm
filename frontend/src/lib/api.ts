@@ -410,10 +410,12 @@ export const api = {
  * 这是浏览器唯一能取到工作目录内文件的方式 —— 本地绝对路径在页面里必然是裂图。
  */
 function fileUrl(prefix: string, id: string, relPath: string): string {
-  const encoded = relPath
-    .split('/')
-    .map((segment) => encodeURIComponent(segment))
-    .join('/')
+  const clean = relPath.replace(/\\/g, '/')
+  // 绝对路径整体编码：既保留开头的 `/`，又不会拼出 `/files//app/...` 这种
+  // 可能被反向代理折叠成相对路径的地址。相对路径仍按段编码、保留分隔符。
+  const encoded = clean.startsWith('/')
+    ? encodeURIComponent(clean)
+    : clean.split('/').map((segment) => encodeURIComponent(segment)).join('/')
   const token = getAccessToken()
   // <img src> 没法带 Authorization 头，只能把会话令牌放进查询参数；后端 current_user
   // 只在没有 Bearer 头时才读它（见 app/auth_deps.py）。

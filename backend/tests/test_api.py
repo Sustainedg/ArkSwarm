@@ -5,6 +5,7 @@ import base64
 import json
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -589,6 +590,23 @@ async def test_workspace_file_endpoint_serves_attachments_and_blocks_traversal(
     (workspace.parent / "secret.txt").write_text("top secret", encoding="utf-8")
     escape = await client.get(f"/api/conversations/{conversation['id']}/files/..%2Fsecret.txt")
     assert escape.status_code == 422
+
+    # 智能体常直接回工作目录的**绝对路径**（容器内是 `/app/data/workspaces/<id>/a.png`）：
+    # 只要它确实在当前工作目录内，就要能取到；不做跨工作区重映射。
+    (workspace / "generated.png").write_bytes(png)
+    absolute = str(workspace / "generated.png")
+    got_absolute = await client.get(
+        f"/api/conversations/{conversation['id']}/files/{quote(absolute, safe='')}"
+    )
+    assert got_absolute.status_code == 200, got_absolute.text
+    assert got_absolute.content == png
+
+    # 工作目录之外的绝对路径仍被拒绝。
+    outside = str(workspace.parent / "secret.txt")
+    crossed = await client.get(
+        f"/api/conversations/{conversation['id']}/files/{quote(outside, safe='')}"
+    )
+    assert crossed.status_code == 422
 
     # 不存在的文件给明确的 4xx，而不是裸 500
     missing = await client.get(

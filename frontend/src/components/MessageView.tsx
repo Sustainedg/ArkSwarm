@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { MessagePart } from '../lib/types'
-import { isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
+import { extractImagePaths, isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
 import { MarkdownView } from './MarkdownView'
 import { ZoomableImage } from './ZoomableImage'
 
@@ -31,6 +31,14 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
   const { text: bodyText, paths: attachmentPaths } = isUser
     ? splitAttachmentBlock(message.content)
     : { text: message.content, paths: [] as string[] }
+  // 智能体经常只把「文件名 / 工作目录路径」写成普通文字（而不是 Markdown 图片），
+  // 这些文件其实已经生成好了。把它们从正文里摘出来单独画成图，正文照旧保留，
+  // 用户就不用再对着 `/app/data/workspaces/...` 自己猜图在哪。
+  const bodyImagePaths = isUser
+    ? []
+    : extractImagePaths(
+        [bodyText, ...message.parts.filter((part) => part.kind === 'text').map((part) => part.text ?? '')].join('\n'),
+      )
 
   // 一律按真实时间线渲染：思考 / 正文 / 工具调用与结果保持它们实际发生的先后顺序。
   // 旧消息只有 content 与工具、思考片段（没有内联正文段），这里把 content 合成一段兜底，
@@ -89,6 +97,7 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
         {showThinking && <ThinkingBubble />}
 
         {attachmentPaths.length > 0 && <AttachmentGallery paths={attachmentPaths} />}
+        {bodyImagePaths.length > 0 && <AttachmentGallery paths={bodyImagePaths} large />}
 
         {message.logs && message.logs.length > 0 && (
           <details className="tool-card">
@@ -254,15 +263,22 @@ function ToolCard({ part }: { part: MessagePart }) {
  * 一条消息带过的附件：图片画成可点开放大的缩略图，其余（文档等）显示文件名胶囊。
  * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）；拿不到解析器时退化成文件名，不至于空白。
  */
-function AttachmentGallery({ paths }: { paths: string[] }) {
+function AttachmentGallery({ paths, large = false }: { paths: string[]; large?: boolean }) {
   const mediaUrl = useMediaUrl()
+  const [failed, setFailed] = useState<string[]>([])
   return (
     <div className="bubble-attachments">
       {paths.map((relPath) => {
         const name = relPath.split('/').pop() ?? relPath
         const url = mediaUrl?.(relPath) ?? null
-        return url && isImagePath(relPath) ? (
-          <ZoomableImage key={relPath} className="bubble-attachment-thumb" src={url} alt={name} />
+        return url && isImagePath(relPath) && !failed.includes(relPath) ? (
+          <ZoomableImage
+            key={relPath}
+            className={large ? 'md-image' : 'bubble-attachment-thumb'}
+            src={url}
+            alt={name}
+            onError={() => setFailed((current) => (current.includes(relPath) ? current : [...current, relPath]))}
+          />
         ) : (
           <span className="bubble-attachment-chip" key={relPath}>
             {name}

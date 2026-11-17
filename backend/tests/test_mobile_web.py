@@ -407,6 +407,34 @@ def test_collab_draft_vocabulary_has_a_single_source():
 
 
 @needs_frontend
+def test_workspace_image_paths_are_recognised_from_plain_text():
+    """智能体把图片写成普通文本（文件名 + 工作目录）时，气泡也要能画出来。
+
+    真实故障：回复里是「文件：xxx.jpg」与「位置：/app/data/workspaces/<id>/」，
+    既不是 Markdown 图片也不是「📎 附件」块，旧渲染器只显示一串路径。
+    解析只有一份（`lib/media.tsx`），桌面端 / 移动端 / 协作都复用它。
+    """
+    media = (FRONTEND / "src" / "lib" / "media.tsx").read_text(encoding="utf-8")
+    assert "export function extractImagePaths" in media, "lib/media.tsx 缺少 extractImagePaths"
+    # 真实回复是「xxx.jpg（896×1152，51KB）」：全角括号必须被识别为文件名边界，
+    # 否则文件名会整段漏掉，后面的取图逻辑根本不会触发。
+    assert "?![A-Za-z0-9_/\\\\]" in media, "文件名边界要容忍全角括号等中文标点"
+
+    message = (FRONTEND / "src" / "components" / "MessageView.tsx").read_text(encoding="utf-8")
+    assert "extractImagePaths" in message, "MessageView 要从正文里提取图片路径"
+    assert "bodyImagePaths" in message, "MessageView 要把正文图片画成缩略图"
+
+    for page, symbol in (
+        (FRONTEND / "src" / "pages" / "ChatPage.tsx", "conversationFileUrl"),
+        (MOBILE_SRC / "pages" / "MobileChatPage.tsx", "conversationFileUrl"),
+        (FRONTEND / "src" / "components" / "CollabRunsPanel.tsx", "collabRunFileUrl"),
+        (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx", "collabRunFileUrl"),
+    ):
+        text = page.read_text(encoding="utf-8")
+        assert symbol in text, f"{page.name} 要接只读文件出口"
+
+
+@needs_frontend
 def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
     """移动端是「固定外壳」的应用形态，锁定缩放；桌面端保持可缩放（浏览器缩放是它的无障碍能力）。"""
     mobile_html = (FRONTEND / "m" / "index.html").read_text(encoding="utf-8")

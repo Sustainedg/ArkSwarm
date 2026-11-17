@@ -38,33 +38,46 @@ export function isImagePath(nameOrPath: string): boolean {
 }
 
 /**
- * 工作目录里由平台或工具约定的顶层目录。智能体常直接吐工作目录的**绝对路径**
- * （工具结果里就是绝对路径），从这些目录名切下去那一段，才是能对上的相对路径。
+ * 一段可能指向工作目录的路径：绝对路径、相对路径或纯文件名。
+ *
+ * 扩展名后面只要求「不是字母数字或路径分隔符」，而不是枚举中文标点：智能体经常写成
+ * `xxx.jpg（896×1152）`，全角括号若被当成路径的一部分或边界不匹配，整张图就会漏掉。
  */
-const WORKSPACE_PREFIXES = ['attachments/', 'generated-images/']
+const WORKSPACE_PATH = /(?:^|\s|`|[(（:：])((?:\/|\.{1,2}\/)?[^\s`<>"'()（）:：，,。；;]+\.[A-Za-z0-9]{1,8})(?![A-Za-z0-9_/\\])/g
 
-/** 从可能是绝对路径的地址里切出工作目录内的相对路径；切不出来返回 null。 */
-function workspaceRelative(value: string): string | null {
-  for (const prefix of WORKSPACE_PREFIXES) {
-    const at = value.indexOf(prefix)
-    if (at >= 0) return value.slice(at)
+/** 从一段文本里取出所有像图片路径的片段（去重，保持出现顺序）。 */
+export function extractImagePaths(content: string): string[] {
+  const found: string[] = []
+  for (const match of content.matchAll(WORKSPACE_PATH)) {
+    const value = match[1].trim()
+    // 外链由 Markdown / 浏览器直接加载，不要当成工作目录里的文件画成「取不到」的胶囊。
+    // `https://…` 可能被上一轮的 `/` 抢先命中，所以先看它前面的字符，而不是只看 value。
+    const start = match.index + match[0].lastIndexOf(value)
+    const before = content.slice(0, start)
+    if (before.endsWith(':') || before.endsWith(':/')) continue
+    // Markdown 图片 / 链接的地址（`![](…)` / `[…](…)`）由 Markdown 渲染器处理，
+    // 这里再摘一遍会让同一张图在气泡里出现两次。
+    if (before.endsWith('](') || before.endsWith(']（')) continue
+    if (isImagePath(value) && !found.includes(value)) found.push(value)
   }
-  return null
+  // 「文件：a.jpg」与「位置：/app/.../a.jpg」同时出现时只留完整路径，避免同一张图画两遍。
+  return found.filter(
+    (path) =>
+      path.includes('/') || !found.some((other) => other !== path && other.endsWith(`/${path}`)),
+  )
 }
 
 /**
- * 把 Markdown 里的图片地址解析成可加载的 URL。
+ * 把 Markdown / 正文里的图片地址解析成可加载的 URL。
  * - 外链 / `data:` / `blob:`：原样返回（本来就能加载）；
- * - 命中工作目录里的已知目录（`attachments/`、`generated-images/`）：连同绝对路径前缀一起切掉；
- * - 其余按工作目录内的相对路径处理（砍掉开头的 `./` 或 `/`）。
+ * - 绝对路径 / 相对路径 / 纯文件名：原样交给页面解析器，再由后端只读出口校验
+ *   它确实在当前工作目录内（容器内的绝对路径只要位于工作目录下也能直接取到）。
  */
 export function resolveImageSrc(src: string, resolve: MediaUrlResolver | null): string | null {
   const value = src.trim()
   if (!value) return null
   if (/^(https?:|data:|blob:)/i.test(value)) return value
-  const known = workspaceRelative(value)
-  if (known) return resolve ? resolve(known) : null
-  return resolve ? resolve(value.replace(/^\.?\//, '')) : null
+  return resolve ? resolve(value) : null
 }
 
 /**
