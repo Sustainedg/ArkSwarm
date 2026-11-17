@@ -412,7 +412,8 @@ class AcmeHarness(OpenAIHarnessBase):
 
 ## 9. 维护规则
 
-- **版本**：只改 `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示）。
+- **版本**：只在公开发版时改 `backend/app/__init__.py` 的 `__version__`（唯一版本源，前端从
+  `/api/system/overview` 读取展示）。日常提交不动版本号，也不往 `VERSION_HISTORY` 追加条目。
 - **依赖升级**：后端 `requirements*.txt` 用精确版本号；前端升级后必须 `npm run build` 通过。
   升级 FastAPI / Pydantic / SQLModel 大版本时，重点回归：SSE 流、外键 RESTRICT、JSON 列的读写。
 - **弃用**：要下线一个配置项或事件类型，先在文档里标注，再在一个版本内保留兼容读取，

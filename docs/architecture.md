@@ -574,7 +574,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 | 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
-| 发布一个新版本 | 改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 → `bash scripts/release.sh`（构建前端、打 tar.gz、`gh release create`）；运行端在「设置 → 关于」一键更新 |
+| 发布一个新版本 | 改 `backend/app/__init__.py` 的 `__version__`（唯一版本源；**只在公开发版时递增**，日常提交不动）→ 提交 → `bash scripts/release.sh`（构建前端、打 tar.gz、`gh release create`）；运行端在「设置 → 关于」一键更新 |
 
 ### 8.1 平台自更新（版本级 · GitHub Release）
 

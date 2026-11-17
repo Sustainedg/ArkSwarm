@@ -567,9 +567,12 @@ curl -s http://127.0.0.1:8010/api/health
 
 ### 版本发布与更新（版本级 · GitHub Release）
 
+- 版本号规则：**只在公开发版时递增**，日常提交不动 `__version__` / `VERSION_HISTORY`
+  （旧的“每次提交 bump 一版”会让版本号通胀，V0.01–V0.43 就是这么堆出来的）。
+  V0.1 是首个公开版本，此前的内部迭代编号不再单列。
 - 发版：改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 →
   `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
-  tag 必须与 `__version__` 一致（`v0.44` ↔ `V0.44`），脚本会校验。
+  tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
 - Docker：`docker/Dockerfile` 只封装环境（python + curl），应用代码在 `/app` 卷里
   （`docker/entrypoint.sh` 空卷首启自动装最新 Release，requirements 变化时自动重装依赖）。
   版本级更新走「设置 → 关于」：下载 Release → `releases/<版本>/` → 原子切 `current` →
