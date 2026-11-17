@@ -39,12 +39,15 @@ RUN set -eux; \
     node --version; \
     npm --version
 
-# 当前代码兜底：/app 卷为空、GitHub 不可达或还没有 Release 时，entrypoint 用它起一个版本。
+# 应用代码：**构建时就打进去**，空卷首启直接用它跑（「构建什么就运行什么」）。
+# 之后版本升级统一走界面「设置 → 关于」的更新机制：下载 Release → releases/<版本>/
+# → 原子切 current → execv 原地重启，不需要重建镜像。
+# 设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1 可恢复「空卷先联网拉最新 Release」的旧行为。
 COPY backend/app /image-app/backend/app
 COPY backend/requirements.txt /image-app/backend/requirements.txt
 COPY backend/.env.example /image-app/backend/.env.example
 # 前端产物：frontend/dist 被 .gitignore 忽略，构建镜像前先 `cd frontend && npm run build`。
-# 镜像自带这份产物，即使 GitHub 不可达 / 还没有 Release，离线首启也能直接出 UI。
+# 镜像自带这份产物，首启即可出 UI。
 COPY frontend/dist /image-app/frontend/dist
 COPY scripts/serve.sh /image-app/scripts/serve.sh
 

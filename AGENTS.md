@@ -606,9 +606,17 @@ curl -s http://127.0.0.1:8010/api/health
 - 发版：改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 →
   `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
   tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
-- Docker：`docker/Dockerfile` 只封装环境（python + curl），应用代码在 `/app` 卷里
-  （`docker/entrypoint.sh` 空卷首启自动装最新 Release，requirements 变化时自动重装依赖）。
+- Docker：`docker/Dockerfile` 把**源码构建进镜像**（`/image-app`），`/app` 卷只存版本目录
+  与 venv。空卷首启直接用镜像自带代码落一个版本（「构建什么就运行什么」）；
+  设 `ARKSWARM_FETCH_RELEASE_ON_EMPTY=1` 才恢复「空卷先联网拉最新 Release」的旧行为。
   版本级更新走「设置 → 关于」：下载 Release → `releases/<版本>/` → 原子切 `current` →
   `os.execv` 原地重启（uvicorn 是 PID 1，容器不退出）。
+- 部署配置与仓库分离：真实内网地址（代理、图床、网关）只写在部署侧 compose（不入 git），
+  仓库模板一律用 `<placeholder>`。镜像源/代理都用环境变量注入，不改代码。
+- 首启装依赖的坑：`/app` 卷为空且镜像 venv 的 stamp 与 requirements 对不上时会走在线
+  `pip install`。pip **不认** `ARKSWARM_INSTALL_PROXY`（那是给 curl/npm/uv 的），必须由
+  entrypoint 转成 `HTTP(S)_PROXY` —— 否则就是直连 PyPI，国内网络实测只有 ~15KB/s，
+  装完要二十多分钟。entrypoint 已把 pip 包进 `run_with_install_proxy`，并支持
+  `ARKSWARM_PIP_INDEX_URL` 指向国内镜像（清华 / 阿里，实测 17–24 秒装完全套）。
 - 源码模式（仓库里直接跑）：关于页只提示新版本，不给一键更新按钮 —— 升级走 git。
 - 仓库与 API 可用 `ARKSWARM_UPDATE_REPO` / `ARKSWARM_UPDATE_GITHUB_API` 覆盖（fork / GHE 部署）。

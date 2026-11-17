@@ -1,10 +1,26 @@
 from __future__ import annotations
 
-__version__ = "V0.1"
+__version__ = "V0.11"
 
 #: 版本记录（最新在前）。版本号只在公开发版时递增，日常提交不动版本号。
 #: V0.1 是首个公开版本；此前的 V0.01–V0.43 为内部迭代编号，不再逐条单列。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
+    {
+        "version": "V0.11",
+        "date": "2026-11-17",
+        "title": "部署加固：构建即运行 · 首启不再卡网络",
+        "highlights": (
+            "Docker 空卷首启改用镜像里构建进去的源码，做到「构建什么就运行什么」，"
+            "不再用线上旧包覆盖新代码（需要旧行为可设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1）",
+            "首启装 Python 依赖时 pip 也走安装期代理，并支持 ARKSWARM_PIP_INDEX_URL "
+            "指向国内镜像；直连 PyPI 装完要二十多分钟，现在压到十几秒",
+            "entrypoint 收紧 pip 重试与超时，网络不通时快速失败并给出可执行的提示，"
+            "不再静默卡住启动",
+            "内网地址（代理 / 图床 / 生图网关）从仓库模板移出，改用占位符与环境变量注入，"
+            "真实地址只留在部署侧配置",
+            "README 补充完整的 Docker 部署章节：数据卷职责、国内网络加速、内核安装与升级方式",
+        ),
+    },
     {
         "version": "V0.1",
         "date": "2026-11-17",

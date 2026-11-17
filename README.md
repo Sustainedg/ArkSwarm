@@ -47,12 +47,124 @@ cd ArkSwarm
 
 首次启动自动播种：为本机**已安装**的智能体类型各创建一条官方网关，并配套一个起始智能体。数据落在 `backend/data/`（SQLite + 每个对话独立的工作目录）。
 
-### 用起来的三步
+> 🐳 想用容器部署？见 [**Docker 部署**](#-docker-部署) —— 内含数据卷说明、国内网络加速与升级方式。
 
+### 用起来的几步
+
+0. **设置 → 内核管理** — 按需安装内核（Claude Code / Codex / Gemini CLI / Hermes）。
+   镜像与首次启动都**不预装**内核，不装就没有可用的智能体类型（详见 [Docker 部署](#-docker-部署)）
 1. **设置 → 自定义网关** — 新建网关（名称、地址、协议、鉴权、API 密钥），点「获取模型」拿到可选模型并勾选
 2. **智能体 → 新建** — 选内核类型、选网关、定默认模型，写头像与系统提示词，按需勾选技能 / MCP，点「连通性测试」
 3. **对话 → 新建对话** — 选择智能体开始聊天；工具调用、推理过程、token 用量实时展开
 4. **设置 → IM**（可选）— 把智能体连到 Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack，配对账号后就能在聊天软件里直接对话（只用长连接，不需要公网地址）
+
+---
+
+## 🐳 Docker 部署
+
+镜像里封装好 Python 3.11 / Node 22 / git，**源码在构建时打进去**（「构建什么就运行什么」），
+`/app` 与 `/app/data` 两个卷把应用与数据分开，容器重建不丢。
+
+### 一键起服务
+
+```bash
+git clone https://github.com/Sustainedg/ArkSwarm.git
+cd ArkSwarm
+
+# 前端产物不进仓库，构建镜像前先打包
+(cd frontend && npm install && npm run build)
+
+docker compose -f docker/docker-compose.yml up -d --build
+# → http://<本机IP>:8010
+```
+
+改端口：`ARKSWARM_HTTP_PORT=8080 docker compose -f docker/docker-compose.yml up -d`。
+
+### 两个卷各管什么
+
+| 卷 | 挂载点 | 内容 | 删了会怎样 |
+| --- | --- | --- | --- |
+| `arkswarm-app` | `/app` | 版本目录 `releases/` + Python venv | 下次启动从镜像自动重建（复制自带 venv，**离线秒级**），对话数据不受影响 |
+| `arkswarm-data` | `/app/data` | SQLite、工作区、`secret.key`、内核 HOME | ⚠️ **数据全丢**（对话、智能体、凭据、登录态） |
+
+> 💡 只清理应用代码时删 `arkswarm-app` 就好。**千万别连 `arkswarm-data` 一起删** ——
+> 那是唯一存放业务数据的地方，删了无法恢复。
+
+### 常用配置
+
+```yaml
+environment:
+  # 多用户与鉴权（默认开启）
+  ARKSWARM_AUTH_ENABLED: "true"
+  ARKSWARM_REGISTRATION_OPEN: "true"
+  # 首任管理员（首启有效；不填则第一个注册的账号成为管理员）
+  ARKSWARM_ADMIN_USERNAME: "admin"
+  ARKSWARM_ADMIN_PASSWORD: "change-me-please"
+```
+
+完整清单见 [`backend/.env.example`](./backend/.env.example) 与 [`docker/docker-compose.yml`](./docker/docker-compose.yml)。
+
+### 国内网络：装依赖别直连 PyPI
+
+首次启动若 `arkswarm-app` 卷是空的，需要装 Python 依赖。**直连 PyPI 实测只有 ~15KB/s，
+装完要二十多分钟**，务必配一个出口：
+
+```yaml
+environment:
+  # 方式一：安装期代理（pip 也会用；entrypoint 会转成 HTTP(S)_PROXY）
+  ARKSWARM_INSTALL_PROXY: "http://<proxy-host>:<port>"
+  # 方式二：国内镜像源（不需要代理，实测 17–24 秒装完）
+  ARKSWARM_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+```
+
+两个都配也行（代理优先）。**真实地址请写在你自己的部署 compose 里，不要提交进仓库。**
+
+### 内核：装好应用后自己点安装
+
+**镜像里不预装内核**（Claude Code / Codex / Gemini CLI / Hermes），这是刻意的设计：
+
+- 内核更新频繁，烘进镜像等于每次都要重建镜像；
+- 内核要装进 `$HOME`（即 `/app/data/home`）才能**保住登录态**，容器重建后不用重新登录；
+- 不预装可以让镜像保持小巧（几百 MB 的差别）。
+
+**部署完成后的操作**：打开界面「**设置 → 内核管理**」，按需点「安装」即可（需要管理员账号）。
+装好的内核落在 `/app/data/home/.local`，跟着 `arkswarm-data` 卷走，容器重建不丢。
+
+> 💡 这些安装动作要联网（npm / curl 脚本）。国内网络建议配好 `ARKSWARM_INSTALL_PROXY`
+> 或让机器的 npm 走镜像源，否则可能很慢。
+
+如果你希望**容器启动时自动补装**缺失的内核，把 `ARKSWARM_SKIP_KERNEL_INSTALL` 改成 `"0"`：
+
+```yaml
+environment:
+  ARKSWARM_SKIP_KERNEL_INSTALL: "0"   # 启动时自动补装缺失的内核（网络差时会拖慢启动）
+```
+
+默认是跳过（`docker/docker-compose.yml` 里显式设成了 `"1"`），让启动保持快速、可预测。
+
+### 升级：不用重建镜像
+
+版本升级走界面「**设置 → 关于 → 检测更新**」：下载 Release → 解到 `releases/<版本>/` →
+原子切 `current` → `os.execv` 原地重启（uvicorn 是 PID 1，容器不退出）。
+
+```bash
+# 只有改了 Dockerfile / entrypoint / 系统依赖时才需要重建
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+空卷首启默认用**镜像里构建进去的源码**；想恢复「空卷先联网拉最新 Release」的旧行为，
+设 `ARKSWARM_FETCH_RELEASE_ON_EMPTY=1`。
+
+### 让智能体读写宿主机项目
+
+容器内外必须用**同一个路径**，否则对话里记录的工作目录在容器内不存在：
+
+```bash
+HOST_PROJECT_DIR=/path/to/projects \
+  docker compose -f docker/docker-compose.yml up -d
+```
+
+（前提是 `docker/docker-compose.yml` 里那行 `volumes` 已取消注释。）
 
 ---
 
@@ -281,8 +393,21 @@ docs/
 
 ## ⬆️ 更新
 
+**源码运行**：
+
 ```bash
 git pull
 (cd frontend && npm install && npm run build)   # 前端有变动时
 ./scripts/serve.sh                                # 重启服务
 ```
+
+**Docker**：界面「设置 → 关于 → 检测更新」一键升级，**不需要重建镜像**。
+只有改了 `Dockerfile` / `entrypoint.sh` / 系统依赖时才需要：
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+**自己发版**：改 `backend/app/__init__.py` 的 `__version__` → 提交 →
+`bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
+tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。

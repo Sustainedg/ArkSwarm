@@ -34,6 +34,25 @@ mkdir -p "$RELEASES" "$DATA_DIR" "$HOME" "$NPM_CONFIG_PREFIX"
 log() { echo "[entrypoint] $*"; }
 die() { echo "[entrypoint] ✗ $*" >&2; exit 1; }
 
+#: 安装期代理：只作用于「下 Release / 装依赖 / 装内核」这些一次性动作，
+#: 不污染智能体运行时（它们要直连网关）。用法：ARKSWARM_INSTALL_PROXY=http://host:port
+install_proxy() {
+  [ -n "${ARKSWARM_INSTALL_PROXY:-}" ] && printf '%s' "$ARKSWARM_INSTALL_PROXY" || true
+}
+
+# 在（可选）代理环境下执行命令：curl / git / uv / npm / pip 都认这几个变量。
+#: 注意 pip **不认** ARKSWARM_INSTALL_PROXY，只认 HTTP(S)_PROXY —— 所以装依赖
+#: 必须经由这里，否则就是一个直连 PyPI 的裸奔进程。
+run_with_install_proxy() {
+  local proxy
+  proxy="$(install_proxy)"
+  if [ -n "$proxy" ]; then
+    HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" http_proxy="$proxy" https_proxy="$proxy" "$@"
+  else
+    "$@"
+  fi
+}
+
 version_key() {
   # V0.44.1 → "0 044 001"（用 0 填充对齐，sort 能直接比）
   local v="${1#V}"; v="${v#v}"
@@ -57,8 +76,10 @@ install_latest_release() {
   # 下载 Release 元数据（走代理：容器内访问 GitHub 常需要）
   local api="https://api.github.com/repos/$REPO_SLUG/releases/latest"
   local curl_args=(--silent --show-error --fail --location --max-time 60)
-  if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
-    curl_args+=(--proxy "${HTTPS_PROXY:-${HTTP_PROXY:-${https_proxy:-${http_proxy}}}}")
+  # 代理优先级：显式 HTTP(S)_PROXY > ARKSWARM_INSTALL_PROXY（安装期代理）
+  local proxy="${HTTPS_PROXY:-${HTTP_PROXY:-${https_proxy:-${http_proxy:-$(install_proxy)}}}}"
+  if [ -n "$proxy" ]; then
+    curl_args+=(--proxy "$proxy")
   fi
   local meta asset_url tag version
   meta="$(curl "${curl_args[@]}" -H 'Accept: application/vnd.github+json' "$api")" \
@@ -96,27 +117,35 @@ install_latest_release() {
   log "已安装 $version"
 }
 
-# 离线 / 无 Release 兜底：用镜像自带的代码（/image-app）起一个版本。
-# 版本号从自带代码的 __version__ 读，落进 releases/ 后与正常版本同构 ——
-# 之后 GitHub 有了 Release，界面「检测更新」照样能升级。
+# 用镜像自带的代码（/image-app）起一个版本 —— 这是**空卷时的默认路径**。
+# 构建镜像时源码就已经 COPY 进去了，「构建什么就运行什么」，版本升级统一走
+# 界面里的更新机制（下载 Release → releases/<版本>/ → 原子切 current → execv 重启）。
 install_bundled() {
-  local reason="${1:-GitHub 不可达}"
+  local reason="${1:-使用镜像自带代码}"
   local bundled="/image-app"
   if [ ! -f "$bundled/backend/app/__init__.py" ]; then
-    die "$reason，且镜像没有自带代码兜底。离线部署请先手动把版本目录放进 $RELEASES 再启动。"
+    die "$reason，但镜像里没有自带代码（/image-app）。请检查 Dockerfile 的 COPY 步骤。"
   fi
   local version
   version="$(grep -oP '(?<=^__version__ = ")[^"]+' "$bundled/backend/app/__init__.py" 2>/dev/null || echo "V0.0.0")"
-  log "$reason → 用镜像自带代码 $version 兜底"
+  log "$reason → 安装 $version 到 $RELEASES/$version"
   mkdir -p "$RELEASES/$version"
   cp -a "$bundled/." "$RELEASES/$version/"
-  log "已安装 $version（兜底；有 Release 后可在界面里点击更新）"
+  log "已安装 $version（与镜像同源；后续升级走「设置 → 关于」的更新机制）"
 }
 
 # ---- 选定要运行的版本 ----
 if [ ! -e "$RELEASES/current" ] || [ ! -d "$RELEASES/current/" ]; then
   if ! pick_latest_dir >/dev/null 2>&1; then
-    install_latest_release
+    # 空卷：默认用镜像自带代码。镜像构建时已经把源码打进去了，
+    # 再去 GitHub 拉 Release 只会把「构建进去的新代码」换成线上旧包。
+    # 确实想沿用旧行为（空卷先联网拉最新 Release）时设
+    # ARKSWARM_FETCH_RELEASE_ON_EMPTY=1。
+    if [ "${ARKSWARM_FETCH_RELEASE_ON_EMPTY:-0}" = "1" ]; then
+      install_latest_release
+    else
+      install_bundled
+    fi
   fi
   TARGET="$(pick_latest_dir)"
   ln -sfn "$TARGET" "$RELEASES/current"
@@ -129,9 +158,27 @@ RUN_DIR="$RELEASES/current"
 # ---- 依赖（版本变了 requirements 也会变；用标记文件避免每次启动重装）----
 # 镜像里预装了一份 venv 模板（/image-venv），首启直接复制它，避免容器里联网 pip install；
 # requirements 与模板不一致（Release 带了新依赖）才回退到在线安装。
+#
+# 在线安装必须**又快又不挂住启动**：
+#   * 走 ARKSWARM_INSTALL_PROXY（pip 只认 HTTP(S)_PROXY，不认那个变量名本身）；
+#   * 可用 ARKSWARM_PIP_INDEX_URL 指到国内镜像（清华 / 阿里），绕开 PyPI 直连；
+#   * 收紧重试与超时 —— 网络不通时快速失败并给出可执行的提示，而不是静默卡二十分钟。
 VENV="$APP_ROOT/venv"
 MARKER="$VENV/.requirements-stamp"
 STAMP="$(cat "$RUN_DIR/backend/requirements.txt" | sha256sum | cut -d' ' -f1)"
+
+#: pip 安装参数：镜像源可选，重试/超时写死成「快速失败」。
+pip_install_args() {
+  local args=(-q --disable-pip-version-check --retries 2 --timeout 15)
+  local index="${ARKSWARM_PIP_INDEX_URL:-}"
+  if [ -n "$index" ]; then
+    args+=(-i "$index")
+    # 国内镜像多是纯 https 单源，额外源反而会拖慢解析；用 host 信任即可。
+    args+=(--trusted-host "$(printf '%s' "$index" | sed -E 's#^[a-z]+://##; s#/.*$##')")
+  fi
+  printf '%s\n' "${args[@]}"
+}
+
 if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$MARKER" 2>/dev/null || true)" != "$STAMP" ]; then
   IMAGE_VENV_STAMP=""
   if [ -x /image-venv/bin/python ] && [ -f /image-venv/.requirements-stamp ]; then
@@ -143,9 +190,18 @@ if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$MARKER" 2>/dev/null || true)" != "$
     cp -a /image-venv "$VENV"
   else
     log "准备虚拟环境（requirements 与镜像模板不一致，在线安装）"
+    if [ -n "$(install_proxy)" ]; then
+      log "pip 走安装期代理 $(install_proxy)"
+    elif [ -n "${ARKSWARM_PIP_INDEX_URL:-}" ]; then
+      log "pip 走镜像源 $ARKSWARM_PIP_INDEX_URL"
+    else
+      log "⚠ 未配置安装期代理或镜像源，将直连 PyPI（国内网络可能很慢）"
+    fi
     python3 -m venv "$VENV"
-    "$VENV/bin/pip" -q install -U pip
-    "$VENV/bin/pip" -q install -r "$RUN_DIR/backend/requirements.txt"
+    mapfile -t PIP_ARGS < <(pip_install_args)
+    run_with_install_proxy "$VENV/bin/pip" install "${PIP_ARGS[@]}" -U pip
+    run_with_install_proxy "$VENV/bin/pip" install "${PIP_ARGS[@]}" \
+      -r "$RUN_DIR/backend/requirements.txt"
   fi
   echo "$STAMP" > "$MARKER"
 fi
@@ -154,23 +210,6 @@ fi
 # 这样 Claude Code / Codex / Gemini 的安装态跟着数据卷走，容器重建不需要重装。
 # 用户在界面里「卸载」某个内核时删的是 HOME 下 npm 全局目录里的包，重启后这里补回去；
 # 装失败不致命（界面里仍可手动装）。网络不通时可用 ARKSWARM_SKIP_KERNEL_INSTALL=1 跳过。
-#: 安装期代理：只作用于「装内核」这几条命令，不污染智能体运行时（它们要直连网关）。
-#: 用法：ARKSWARM_INSTALL_PROXY=http://192.168.2.168:7890
-install_proxy() {
-  [ -n "${ARKSWARM_INSTALL_PROXY:-}" ] && printf '%s' "$ARKSWARM_INSTALL_PROXY" || true
-}
-
-# 在（可选）代理环境下执行命令：curl / git / uv / npm 都认这几个变量。
-run_with_install_proxy() {
-  local proxy
-  proxy="$(install_proxy)"
-  if [ -n "$proxy" ]; then
-    HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" http_proxy="$proxy" https_proxy="$proxy" "$@"
-  else
-    "$@"
-  fi
-}
-
 ensure_kernels() {
   # 内核已经物化在数据卷里、或运维自己管理内核时，可跳过启动期补装，
   # 避免 GitHub / npm 不通时把启动拖住（界面里仍可手动安装）。

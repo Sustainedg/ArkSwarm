@@ -11,8 +11,9 @@
 # HOST_PROJECT_DIR（容器内外使用同一路径，避免工作目录对不上）：
 #   HOST_PROJECT_DIR=/path/to/projects docker compose -f docker/docker-compose.yml up -d
 #
-# 内核（Claude Code / Codex / Gemini / Hermes）装在 /app/data/home，不需要重建镜像；
-# 首次启动会尝试联网补装，网络不通时设 ARKSWARM_SKIP_KERNEL_INSTALL=1（默认已设）。
+# 内核（Claude Code / Codex / Gemini / Hermes）**不预装**：部署后在界面「设置 → 内核管理」
+# 里按需点击安装，装进 /app/data/home 并跟着数据卷走（容器重建不用重装 / 重新登录）。
+# 想让容器启动时自动补装缺失的内核，把下面的 ARKSWARM_SKIP_KERNEL_INSTALL 改成 "0"。
 name: arkswarm
 
 services:
@@ -45,11 +46,18 @@ services:
       # 都落在 /app/data/home，容器重建后不需要重新安装 / 登录。
       HOME: "/app/data/home"
       NPM_CONFIG_PREFIX: "/app/data/home/.local"
-      # 内核已放在 /app/data/home/.local；跳过启动期自动补装，避免网络不通时阻塞启动。
-      # 需要容器每次启动自动补回被卸载的内核时，把这里改成 "0"。
+      # 内核**不预装**：部署后到「设置 → 内核管理」自己点安装（装进 HOME，跟着数据卷走）。
+      # 设为 "0" 则容器启动时自动补装缺失的内核 —— 网络差时会明显拖慢启动，故默认跳过。
       ARKSWARM_SKIP_KERNEL_INSTALL: "1"
-      # 安装期代理（只给补装内核用，不影响智能体运行时）：内网代理按需填写。
-      # ARKSWARM_INSTALL_PROXY: "http://192.168.2.168:7890"
+      # 安装期代理：作用于「装 Python 依赖 / 补装内核」这些一次性动作，
+      # 不影响智能体运行时（它们要直连网关）。pip 也认它（entrypoint 会转成 HTTP(S)_PROXY）。
+      # 内网部署建议在**部署侧的 compose override** 里填真实地址，不要写进仓库。
+      # ARKSWARM_INSTALL_PROXY: "http://<proxy-host>:<port>"
+      # 备选：不配代理时改用国内 PyPI 镜像（不走代理也能秒级装完）。
+      # ARKSWARM_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      # 空卷首启默认用**镜像里构建进去的源码**；想沿用「空卷先联网拉最新 Release」
+      # 的旧行为时设为 "1"。
+      # ARKSWARM_FETCH_RELEASE_ON_EMPTY: "0"
 
 volumes:
   arkswarm-app:

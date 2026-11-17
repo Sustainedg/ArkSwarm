@@ -437,6 +437,23 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
 | `IMAGE_GEN_INPUT_ROOTS` | 可选：额外的只读输入根目录（冒号分隔）。网关代跑时按相对路径到这些根目录的下一层查找调用方留在工作区里的参考图 |
 | `IMAGE_RETENTION_MINUTES` | 可选：生成图片本地保留多少分钟后自动清理（0 / 未设置＝不清理）。网关代跑时图片只是给客户端取回的中转，客户端（平台的取图逻辑见下文）拿到副本后即可清理 |
 
+**独立 HTTP 容器（集中管理形态）**：不想让生图跟着 MCPHub 的 stdio 进程走时，可以用
+`docker/image-mcp/` 把它单独跑成一个容器：`server.py` 用 MCP SDK 的 Streamable HTTP 传输
+把同一份 `generate_image` 暴露成 `POST /mcp`，并在同一端口用 `GET /images/<文件名>`
+托管生成的图片（不再需要单独的 nginx 图床）。生图逻辑仍复用
+`scripts/mcp/image_mcp_server.py`，两份入口共享同一套环境变量与 `generated-images/` 目录。
+
+* 镜像：`docker/image-mcp/Dockerfile`（构建上下文是仓库根目录），MCP 依赖只有
+  `mcp==1.30.0` + `uvicorn`，不引入到后端 `requirements.txt`；
+* 运行配置：宿主机 `/vol1/1000/docker/image-mcp/`（`docker-compose.yml` + `.env` + `data/`），
+  端口 `3070`；`.env` 里的 `IMAGE_MCP_TOKEN` 同时是 `/mcp` 的 Bearer 令牌；
+* `IMAGE_PUBLIC_BASE_URL` 指向本容器自己的 `/images/`（如 `http://<宿主机IP>:3070/images`），
+  因此工具结果直接是可访问 URL，配合 `ARKSWARM_IMAGE_INGEST_PREFIXES` 落库前取回；
+* 图生图参考图：把 ArkSwarm 的 `workspaces/` 只读挂到容器里，用 `IMAGE_GEN_INPUT_ROOTS` 指过去；
+* Magpie（`/library`）用 `library mcp add image-gen http://image-mcp:8000/mcp
+  header=Authorization="Bearer <IMAGE_MCP_TOKEN>"` 登记，就能在它的 MCP hub 里集中路由；
+  对外暴露的工具名是 `image-gen__generate_image`（MCPHub 那份是 `generate_image`）。
+
 参考图取值：**工作目录内的相对路径**（如 `attachments/a.png`、`generated-images/b.png`）或
 http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给网关 —— 网关在另一台机器上，
 拿不到本机路径。只支持 PNG / JPEG / WebP，单张 ≤ 10 MB、一次最多 10 张。
@@ -627,8 +644,14 @@ GitHub Release ──/releases/latest──▶ app/selfupdate.check_latest()   �
 
 实现在 `app/selfupdate.py`（叶子模块：标准库 + httpx + settings，不碰数据库以外的层），
 路由在 `api/update.py`（`update.*` SSE 信封是本模块自有的，不属于适配器事件协议）。
-发布侧 `scripts/release.sh`；Docker 形态 `docker/Dockerfile` + `docker/entrypoint.sh`
-（镜像只封装环境，应用代码在 `/app` 卷里，空卷首启自动装最新 Release）。
+发布侧 `scripts/release.sh`；Docker 形态 `docker/Dockerfile` + `docker/entrypoint.sh`。
+**源码在构建时打进镜像**（`/image-app`），`/app` 卷只存版本目录与 venv：空卷首启直接用
+镜像自带代码落一个版本，即「构建什么就运行什么」；`ARKSWARM_FETCH_RELEASE_ON_EMPTY=1`
+才恢复「空卷先联网拉最新 Release」的旧行为。后续升级统一走上面的更新机制。
+entrypoint 的依赖安装**必须**走 `run_with_install_proxy`：pip 只认 `HTTP(S)_PROXY`，
+不认 `ARKSWARM_INSTALL_PROXY`，漏了就是直连 PyPI（国内网络会卡二十多分钟）；
+`ARKSWARM_PIP_INDEX_URL` 可改走国内镜像，二者取其一即可把首启压到几十秒。
+真实内网地址只写在部署侧 compose（不入 git），仓库模板用占位符。
 
 ## 9. 已知边界
 
