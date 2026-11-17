@@ -1,0 +1,56 @@
+# 独立图片 MCP 容器。
+#
+# 本文件就在仓库里，构建上下文是仓库根目录：
+#   cd /vol1/1000/同步库/python/项目/Bot/docker/image-mcp
+#   cp .env.example .env   # 填网关密钥与令牌，chmod 600
+#   docker compose up -d --build
+#
+# 持久化数据（含 .env）放在 /vol1/1000/docker/image-mcp/，与其它服务一致。
+#
+# 与 magpie 共用 magpie_default 网络，Magpie 里登记 http://image-mcp:8000/mcp
+# 即可；对 ArkSwarm / 浏览器暴露的是宿主机 3070。
+services:
+  image-mcp:
+    build:
+      context: ../..
+      dockerfile: docker/image-mcp/Dockerfile
+    image: arkswarm-image-mcp:latest
+    container_name: arkswarm-image-mcp
+    restart: unless-stopped
+    ports:
+      - "3070:8000"
+    env_file:
+      - .env
+    environment:
+      IMAGE_MCP_HOST: "0.0.0.0"
+      IMAGE_MCP_PORT: "8000"
+      IMAGE_MCP_DATA_DIR: "/data"
+      # 同时接受容器网络名与宿主机 IP：Magpie 走前者，ArkSwarm / 浏览器走后者。
+      IMAGE_MCP_ALLOWED_HOSTS: "image-mcp:8000,192.168.2.168:3070,127.0.0.1:8000,localhost:8000"
+      # 生图脚本返回的图片 URL：由本容器自己的 /images/ 提供。
+      IMAGE_PUBLIC_BASE_URL: "http://192.168.2.168:3070/images"
+      # 图生图参考图：ArkSwarm 的工作区以只读方式挂进来。
+      IMAGE_GEN_INPUT_ROOTS: "/workspaces"
+      IMAGE_RETENTION_MINUTES: "60"
+      TZ: "Asia/Shanghai"
+    volumes:
+      - /vol1/1000/docker/image-mcp/data:/data
+      - /vol1/1000/docker/arkswarm/data/workspaces:/workspaces:ro
+    networks:
+      - magpie
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  magpie:
+    external: true
+    name: magpie_default
