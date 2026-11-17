@@ -548,8 +548,8 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
   用量与运行表也按归属过滤。
 - **管理员**：可看全部用户资产、管理用户（改角色 / 禁用 / 重置口令）；不能降级或禁用
   当前登录的自己，系统至少保留一名启用中的管理员。
-- **开关**：`ARKSWARM_AUTH_ENABLED` 默认关闭，单用户部署升级后行为不变；开启后
-  `current_user` 校验令牌，未登录返回 401。`ARKSWARM_REGISTRATION_OPEN=false` 关闭自助注册，
+- **开关**：`ARKSWARM_AUTH_ENABLED` 默认开启（多用户形态），单用户部署可显式设为 `false`；
+  开启后 `current_user` 校验令牌，未登录返回 401。`ARKSWARM_REGISTRATION_OPEN=false` 关闭自助注册，
   只能由管理员建用户。首任管理员可由 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD`
   在空库首启时创建；老库的存量行由 `bootstrap.backfill_ownership` 回填给管理员
   （`.ownership_backfilled` 防重）。

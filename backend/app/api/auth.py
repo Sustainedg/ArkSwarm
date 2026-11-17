@@ -8,7 +8,7 @@
 设计要点：
 
 * **无状态会话**：令牌是 JWT（见 :mod:`app.auth`），服务端不存 session，水平扩展无需共享会话存储。
-* **鉴权开关**：默认关闭；开启后由 :func:`current_user` 校验令牌，未登录返回 401。
+* **鉴权开关**：默认开启；由 :func:`current_user` 校验令牌，未登录返回 401。
   ``ARKSWARM_AUTH_ENABLED=false`` 时返回虚拟管理员，所有接口照旧可用 —— 给单用户部署
   保留开箱即用的形态。
 * **归属过滤**：资产接口拿到 ``current_user`` 后，在查询里加 ``owner_id == user.id``（管理员

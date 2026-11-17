@@ -23,7 +23,7 @@
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
-| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认关闭，开启后按 `owner_id` 隔离，口令只存 PBKDF2 哈希 |
+| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希 |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
 | MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
@@ -464,10 +464,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   是只读共享目录），按 id 读取别人的行返回 404；跨用户引用（网关 / 凭据 / 平台通用 MCP /
   协作图节点上的智能体）必须在写入或启动运行前拒绝。管理员可看全部，但凭据仍只能以
   环境变量注入、事件仍要脱敏。
-- **鉴权开关**：`ARKSWARM_AUTH_ENABLED` 默认关闭，保证单用户部署升级后行为不变；多用户部署
-  显式开启，并配置 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD` 或关闭自助注册。
-  `ARKSWARM_ADMIN_*`、`ARKSWARM_REGISTRATION_OPEN` 与 `ARKSWARM_AUTH_ENABLED` 的说明见
-  `backend/.env.example`。口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
+- **鉴权开关**：`ARKSWARM_AUTH_ENABLED` 默认开启（多用户形态）；单用户开箱即用可显式设为
+  `false`。空库首启配置 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD`，不配置时
+  第一个注册的账号成为管理员；`ARKSWARM_REGISTRATION_OPEN` 控制自助注册。
+  口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
 - **令牌吊销**：JWT 带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令必须
   把 `token_version` +1，让旧令牌立即失效。新增会改口令的入口时不要漏掉这一步。
 

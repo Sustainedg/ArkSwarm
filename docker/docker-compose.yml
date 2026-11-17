@@ -37,7 +37,7 @@ services:
       ARKSWARM_PORT: "8010"
       ARKSWARM_UPDATE_REPO: "Sustainedg/ArkSwarm"
       # 多用户部署：开启鉴权并配置首任管理员，或关闭自助注册。
-      ARKSWARM_AUTH_ENABLED: "${ARKSWARM_AUTH_ENABLED:-false}"
+      ARKSWARM_AUTH_ENABLED: "${ARKSWARM_AUTH_ENABLED:-true}"
       ARKSWARM_REGISTRATION_OPEN: "${ARKSWARM_REGISTRATION_OPEN:-true}"
       # ARKSWARM_ADMIN_USERNAME: "admin"
       # ARKSWARM_ADMIN_PASSWORD: "change-me-please"

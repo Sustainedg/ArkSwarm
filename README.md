@@ -43,7 +43,7 @@ cd ArkSwarm
 ./scripts/dev.sh              # → API :8000 + Web UI :5173
 ```
 
-**环境变量**（全部可选）：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）、`ARKSWARM_DATA_DIR`（数据目录）、`ARKSWARM_AUTH_ENABLED`（多用户鉴权，默认关闭）、`ARKSWARM_REGISTRATION_OPEN`（默认开放注册）——完整清单见 [`backend/.env.example`](./backend/.env.example)。开启鉴权后可用 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD` 创建管理员；不填时第一个注册的账号自动成为管理员。
+**环境变量**（全部可选）：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）、`ARKSWARM_DATA_DIR`（数据目录）、`ARKSWARM_AUTH_ENABLED`（多用户鉴权，默认开启）、`ARKSWARM_REGISTRATION_OPEN`（默认开放注册）——完整清单见 [`backend/.env.example`](./backend/.env.example)。开启鉴权后可用 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD` 创建管理员；不填时第一个注册的账号自动成为管理员。
 
 首次启动自动播种：为本机**已安装**的智能体类型各创建一条官方网关，并配套一个起始智能体。数据落在 `backend/data/`（SQLite + 每个对话独立的工作目录）。
 
