@@ -7,6 +7,7 @@ import type { ArchitectureDoc } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { ProxySettings } from '../../components/ProxySettings'
+import { UserAvatar } from '../../components/UserAvatar'
 import { TitleSettingsSection } from '../../components/TitleSettings'
 import { refreshShell, useInstallController } from '../pwa'
 import { describeError } from '../util'
@@ -52,7 +53,7 @@ export function MobileSettingsPage({ version }: { version: string }) {
             <div className="stack" style={{ gap: 8 }}>
               <div className="card-section-title">账号</div>
               <button className="m-item" onClick={() => navigate('/account')}>
-                <span style={{ fontSize: 18 }}>👤</span>
+                <UserAvatar user={user} size={30} />
                 <span className="m-item-main">
                   <span className="m-item-title">{user.display_name || user.username}</span>
                   <span className="m-item-sub">
@@ -116,6 +117,14 @@ export function MobileSettingsPage({ version }: { version: string }) {
               <span className="m-item-main">
                 <span className="m-item-title">自定义网关</span>
                 <span className="m-item-sub">API 密钥的唯一来源；官方链路 + 自建网关</span>
+              </span>
+              <span className="m-item-chevron">›</span>
+            </button>
+            <button className="m-item" onClick={() => navigate('/im')}>
+              <span style={{ fontSize: 18 }}>💬</span>
+              <span className="m-item-main">
+                <span className="m-item-title">IM</span>
+                <span className="m-item-sub">把智能体连到微信 / 飞书 / 钉钉 / Telegram 等聊天软件</span>
               </span>
               <span className="m-item-chevron">›</span>
             </button>

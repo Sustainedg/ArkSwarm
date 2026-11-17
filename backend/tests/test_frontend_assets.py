@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import struct
 from pathlib import Path
 from types import ModuleType
 
@@ -189,3 +190,82 @@ def test_runtime_cards_use_the_shared_logo_and_trimmed_copy():
     assert "maskImage" in logo, "Logo 用遮罩染色，深浅两套外观才能共用一份图形"
     for css in (FRONTEND / "src" / "index.css", MOBILE_SRC / "mobile.css"):
         assert ".kernel-logo" in css.read_text(encoding="utf-8"), f"{css.name} 缺少 .kernel-logo 规则"
+
+
+# --- 应用图标与品牌标 ---------------------------------------------------------
+
+ICON_DIR = FRONTEND / "public" / "icons"
+ICON_GENERATOR = REPO / "scripts" / "gen_icons.py"
+
+
+def _load_icon_generator() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("gen_icons", ICON_GENERATOR)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@needs_frontend
+def test_committed_app_icons_are_up_to_date():
+    """应用图标是生成产物：改了 `scripts/gen_icons.py` 就要重新生成，否则线上还是旧图。"""
+    module = _load_icon_generator()
+    svg_file = ICON_DIR / "icon.svg"
+    assert svg_file.is_file(), "缺少 frontend/public/icons/icon.svg"
+    assert svg_file.read_text(encoding="utf-8") == module.build_svg(), (
+        "icon.svg 与 scripts/gen_icons.py 的产物不一致，请重新执行 python3 scripts/gen_icons.py"
+    )
+    # PNG 只比 192 这一张（生成最快），其余几张同一趟脚本一起产出。
+    png_file = ICON_DIR / "icon-192.png"
+    assert png_file.is_file(), "缺少 frontend/public/icons/icon-192.png"
+    assert png_file.read_bytes() == _png_bytes(module, 192, rounded=True, mark_scale=1.0), (
+        "icon-192.png 与生成脚本的产物不一致，请重新执行 python3 scripts/gen_icons.py"
+    )
+    for name, size in (
+        ("icon-512.png", 512),
+        ("icon-maskable-512.png", 512),
+        ("apple-touch-icon.png", 180),
+    ):
+        blob = (ICON_DIR / name).read_bytes()
+        assert blob[:8] == b"\x89PNG\r\n\x1a\n", f"{name} 不是 PNG"
+        assert struct.unpack(">II", blob[16:24]) == (size, size), f"{name} 尺寸不对"
+
+
+def _png_bytes(module: ModuleType, size: int, *, rounded: bool, mark_scale: float) -> bytes:
+    """把生成器的渲染结果写成 PNG 字节（走临时目录，避免覆盖仓库里的文件）。"""
+    import tempfile
+    from pathlib import Path as _Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = _Path(tmp) / "x.png"
+        module._write_png(target, size, module._render_rgba(size, rounded=rounded, mark_scale=mark_scale))
+        return target.read_bytes()
+
+
+@needs_frontend
+def test_brand_mark_is_one_inline_svg_on_both_ends():
+    """界面里的品牌标只有一份实现，且是内联 SVG（跟随主题换色，不用两张图）。"""
+    mark = (FRONTEND / "src" / "components" / "BrandMark.tsx").read_text(encoding="utf-8")
+    assert "currentColor" in mark, "品牌标要用 currentColor，深浅两套外观才能共用"
+    assert "circle" in mark and "path" in mark, "品牌标应当是「节点 + 连线」的星座图形"
+
+    users = [
+        FRONTEND / "src" / "App.tsx",
+        FRONTEND / "src" / "components" / "LoginScreen.tsx",
+        MOBILE_SRC / "components" / "MobileDrawer.tsx",
+        MOBILE_SRC / "components" / "MobileMenuButton.tsx",
+    ]
+    for path in users:
+        text = path.read_text(encoding="utf-8")
+        assert "BrandMark" in text, f"{path.name} 应当用共享的品牌标组件"
+        assert "✦" not in text, f"{path.name} 里还留着旧的 ✦ 字符"
+
+
+@needs_frontend
+def test_avatar_styles_exist_on_both_ends():
+    """头像组件两端共用（移动端不加载 index.css），样式两边都要有。"""
+    for css in (FRONTEND / "src" / "index.css", MOBILE_SRC / "mobile.css"):
+        text = css.read_text(encoding="utf-8")
+        for selector in (".user-avatar", ".avatar-editor", ".avatar-editor-pic"):
+            assert selector in text, f"{css.name} 缺少 {selector}"
+        assert "--avatar-size" in text, f"{css.name} 的头像尺寸要走 --avatar-size 变量"

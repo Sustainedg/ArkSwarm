@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { BrandMark } from './components/BrandMark'
+import { UserAvatar } from './components/UserAvatar'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
 import { useAuth } from './components/AuthGate'
@@ -78,7 +80,6 @@ export default function App() {
   }, [userMenuOpen])
 
   const displayName = user?.display_name || user?.username || '系统'
-  const avatarText = displayName.trim().slice(0, 1).toUpperCase() || '👤'
 
   const toggleSidebar = () =>
     setCollapsed((current) => {
@@ -103,7 +104,9 @@ export default function App() {
     <div className={`app-shell${collapsed ? ' collapsed' : ''}`}>
       <aside className="sidebar" id="app-sidebar">
         <div className="brand">
-          <div className="brand-mark">✦</div>
+          <div className="brand-mark">
+            <BrandMark size={17} />
+          </div>
           <div className="brand-text">
             <div className="brand-name">
               ArkSwarm
@@ -177,7 +180,7 @@ export default function App() {
               aria-expanded={userMenuOpen}
               title={user?.role === 'admin' ? '管理员' : undefined}
             >
-              <span className="sidebar-user-avatar">{avatarText}</span>
+              <UserAvatar user={user} size={28} className="sidebar-user-avatar" />
               <span className="sidebar-user-name">{displayName}</span>
             </button>
           </div>

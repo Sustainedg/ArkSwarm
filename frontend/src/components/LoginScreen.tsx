@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import { saveSession } from '../lib/auth'
 import type { AuthConfig, AuthSession } from '../lib/types'
+import { BrandMark } from './BrandMark'
 
 interface Props {
   config: AuthConfig
@@ -57,7 +58,9 @@ export function LoginScreen({ config, onAuthed, mobile }: Props) {
     <div className={`auth-screen${mobile ? ' auth-mobile' : ''}`}>
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="auth-mark">✦</div>
+          <div className="auth-mark">
+            <BrandMark size={24} />
+          </div>
           <div>
             <div className="auth-title">ArkSwarm</div>
             <div className="auth-sub">多智能体控制台</div>

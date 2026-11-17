@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import { saveSession } from '../lib/auth'
 import { useAuth } from './AuthGate'
+import { UserAvatar } from './UserAvatar'
 import type { AuthUser } from '../lib/types'
 
 /**
@@ -167,6 +168,7 @@ export function UserAdminPanel() {
               const self = row.id === me?.id
               return (
                 <div className="account-user-row" key={row.id}>
+                  <UserAvatar user={row} size={34} />
                   <div className="account-user-main">
                     <div className="account-user-name">
                       {row.display_name || row.username}

@@ -4,6 +4,7 @@ import { AccountPanel } from '../components/AccountPanel'
 import { UserAdminPanel } from '../components/UserAdminPanel'
 import { CredentialVault } from '../components/CredentialVault'
 import { GatewayManager } from '../components/GatewayManager'
+import { ImSettings } from '../components/ImSettings'
 import { KernelManager } from '../components/KernelManager'
 import { ProxySettings } from '../components/ProxySettings'
 import { TitleSettingsSection } from '../components/TitleSettings'
@@ -28,6 +29,7 @@ const ALL_TABS = [
   { id: 'chat', label: '对话' },
   { id: 'gateways', label: '网关' },
   { id: 'credentials', label: '凭据' },
+  { id: 'im', label: 'IM' },
   { id: 'network', label: '网络' },
   { id: 'kernels', label: '内核管理' },
   { id: 'about', label: '关于' },
@@ -114,7 +116,7 @@ export function SettingsPage() {
         <div>
           <h1 className="page-title">设置</h1>
           <p className="page-desc">
-            按类型分页：外观 · 账号{isAdmin ? ' · 用户' : ''} · 对话 · 网关 · 凭据 · 网络 · 内核管理 · 关于。
+            按类型分页：外观 · 账号{isAdmin ? ' · 用户' : ''} · 对话 · 网关 · 凭据 · IM · 网络 · 内核管理 · 关于。
           </p>
         </div>
       </header>
@@ -183,6 +185,9 @@ export function SettingsPage() {
         {tab === 'gateways' && <GatewayManager />}
 
         {tab === 'credentials' && <CredentialVault />}
+
+        {/* IM 是通道：每条连接绑一个智能体，私聊直接进它当前那段对话。 */}
+        {tab === 'im' && <ImSettings />}
 
         {tab === 'network' &&
           (isAdmin ? (

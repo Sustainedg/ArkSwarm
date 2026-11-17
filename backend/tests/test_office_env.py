@@ -366,10 +366,11 @@ def test_office_env_adds_no_runtime_dependency():
 def test_mobile_shell_cache_version_is_bumped():
     """§11.5：`mobile.css` 属外壳样式表，外壳缓存名必须 +1，否则已装到主屏的应用换不到新样式。"""
     source = SW_JS.read_text(encoding="utf-8")
-    assert "arkswarm-m-shell-v82" in source
-    assert "arkswarm-m-assets-v82" in source
-    assert "arkswarm-m-shell-v81" not in source
-    assert "arkswarm-m-assets-v81" not in source
+    # 版本号只增不减：钉住「至少是这次改动之后的版本」，具体数字留给改动方自己 +1
+    # （两个人同时改外壳时，谁后合入谁的数字更大，这条守卫不会因为别人再 +1 而误报）。
+    versions = [int(match) for match in re.findall(r"arkswarm-m-(?:shell|assets)-v(\d+)", source)]
+    assert versions, "sw.js 里找不到带版本号的缓存名"
+    assert min(versions) >= 83, f"外壳缓存版本必须 ≥ 83（当前 {min(versions)}）"
 
 
 # --- 2. 叶子纯函数：没有随机源，种子由 key 派生 ---------------------------------------

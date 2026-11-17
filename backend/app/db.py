@@ -51,8 +51,13 @@ def _add_missing_columns(connection, columns_by_table: dict[str, dict[str, str]]
 async def init_db() -> None:
     from . import models  # 注册表结构，并取用对话域的后加列声明
     from .collab import tables as collab_tables  # 协作域的表结构与后加列声明
+    from .im import tables as im_tables  # IM 域的表结构与后加列声明
 
-    additive_columns = {**models.ADDITIVE_COLUMNS, **collab_tables.ADDITIVE_COLUMNS}
+    additive_columns = {
+        **models.ADDITIVE_COLUMNS,
+        **collab_tables.ADDITIVE_COLUMNS,
+        **im_tables.ADDITIVE_COLUMNS,
+    }
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         if _settings.sqlalchemy_url.startswith("sqlite"):

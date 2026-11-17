@@ -44,7 +44,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # owner_id 是多用户系统后加的：老行留空，由 bootstrap 回填给首任管理员
     "conversations": {"model": "VARCHAR(160)", "last_read_at": "DATETIME", "owner_id": "VARCHAR(64)"},
     # 会话令牌版本：改口令 / 管理员重置口令时 +1，让旧令牌立即失效（无状态 JWT 的吊销机制）。
-    "users": {"token_version": "INTEGER NOT NULL DEFAULT 0"},
+    # 头像文件名是后加的：老行留空，界面回退到「显示名首字母」的渐变圆。
+    "users": {"token_version": "INTEGER NOT NULL DEFAULT 0", "avatar_file": "VARCHAR(120)"},
     # ---- 多用户系统：每张「用户资产」表加 owner_id（可空，老库由 bootstrap 回填给首任管理员）。
     # 技能（skills）、运行时状态（runtime_status）、平台设置（platform_settings）是平台级
     # 共享数据，不加 owner_id。网关含 API 密钥，按用户私有；管理员可看全部。
@@ -422,5 +423,8 @@ class User(SQLModel, table=True):
     role: str = Field(default="member", sa_column=Column(String(16), nullable=False))
     #: 是否启用；禁用的用户无法登录、其历史数据照旧可读
     is_active: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, default=True))
+    #: 头像文件名（``<用户id>-<内容摘要>.<png|jpg|webp>``，文件在 ``<数据目录>/avatars/``）。
+    #: 为空表示没上传过，界面回退到「显示名首字母」的渐变圆。
+    avatar_file: str | None = Field(default=None, sa_column=Column(String(120)))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))

@@ -33,6 +33,7 @@ def test_desktop_settings_is_grouped_into_tabs_by_type():
         ("chat", "对话", "<TitleSettingsSection />"),
         ("gateways", "网关", "<GatewayManager />"),
         ("credentials", "凭据", "<CredentialVault />"),
+        ("im", "IM", "<ImSettings />"),
         ("network", "网络", "<ProxySettings />"),
         ("kernels", "内核管理", "<KernelManager />"),
         ("about", "关于", "版本记录"),

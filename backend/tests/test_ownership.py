@@ -276,3 +276,83 @@ async def test_cannot_create_team_with_other_users_agent(client):
         headers=_auth(bob["access_token"]),
     )
     assert resp.status_code == 201, resp.text
+
+
+async def test_im_connections_are_owner_scoped(client):
+    """IM 连接按 owner_id 隔离：别人的连接在列表里看不到，改 / 删 / 重试 / 读聊天都是 404。"""
+    from app.im.tables import ImConnection
+
+    alice, bob = await _member_pair(client)
+    alice_agent = await _create_agent(client, alice["access_token"], "Alice 智能体")
+
+    # 绕过「先向平台核对」直接落库：本用例只验归属，不连任何平台。
+    async with SessionLocal() as session:
+        row = ImConnection(
+            platform="telegram",
+            agent_profile_id=alice_agent["id"],
+            owner_id=alice["user"]["id"],
+            fields={},
+            secrets={"token": "fake"},
+        )
+        session.add(row)
+        await session.commit()
+        connection_id = row.id
+
+    alice_list = (await client.get("/api/im/connections", headers=_auth(alice["access_token"]))).json()
+    assert [item["id"] for item in alice_list["items"]] == [connection_id]
+    bob_list = (await client.get("/api/im/connections", headers=_auth(bob["access_token"]))).json()
+    assert bob_list["items"] == []
+
+    # 不能把别人的连接绑到自己的智能体上
+    bob_agent = await _create_agent(client, bob["access_token"], "Bob 智能体")
+    for method, path, payload in (
+        ("patch", f"/api/im/connections/{connection_id}", {"agent_profile_id": bob_agent["id"]}),
+        ("delete", f"/api/im/connections/{connection_id}", None),
+        ("post", f"/api/im/connections/{connection_id}/retry", None),
+        ("get", f"/api/im/connections/{connection_id}/chats", None),
+    ):
+        kwargs = {"headers": _auth(bob["access_token"])}
+        if payload is not None:
+            kwargs["json"] = payload
+        resp = await getattr(client, method)(path, **kwargs)
+        assert resp.status_code == 404, f"{method} {path} 应当 404，实际 {resp.status_code}"
+
+    # 配对请求的列表同样只回自己名下的连接
+    assert (await client.get("/api/im/peers", headers=_auth(bob["access_token"]))).json()["items"] == []
+
+
+async def test_backfill_covers_im_connections(client):
+    """IM 连接也带 owner_id：鉴权关闭期间建的连接，打开鉴权后要能回填给管理员。
+
+    ``backfill_ownership`` 漏掉某张表时，那些行会永远停在 ``owner_id IS NULL``，
+    管理员在列表里看不到、也没法接管 —— 这是 AGENTS.md §9 矩阵明确要求的同步项。
+    """
+    from app.bootstrap import backfill_ownership
+    from app.im.tables import ImConnection
+
+    alice, _bob = await _member_pair(client)
+    async with SessionLocal() as session:
+        admin = await session.get(User, alice["user"]["id"])
+        assert admin is not None
+        # 模拟「鉴权关闭期间创建」的行：owner_id 为空
+        session.add(ImConnection(platform="telegram", fields={}, secrets={"token": "x"}))
+        await session.commit()
+
+    settings = get_settings()
+    marker = settings.data_dir / ".ownership_backfilled"
+    had_marker = marker.exists()
+    if had_marker:
+        marker.unlink()
+    try:
+        async with SessionLocal() as session:
+            admin = await session.get(User, alice["user"]["id"])
+            assert admin is not None
+            await backfill_ownership(session, admin)
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(__import__("sqlmodel").select(ImConnection))
+            ).scalars().all()
+        assert rows and all(row.owner_id == alice["user"]["id"] for row in rows)
+    finally:
+        if not had_marker and marker.exists():
+            marker.unlink()

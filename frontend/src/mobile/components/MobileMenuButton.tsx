@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
+import { BrandMark } from '../../components/BrandMark'
 
 /** 打开左侧抽屉的回调：由 `MobileApp` 注入，页面只负责触发。 */
 const MobileMenuContext = createContext<() => void>(() => undefined)
@@ -22,7 +23,9 @@ export function MobileMenuButton() {
   const open = useMobileMenu()
   return (
     <button className="m-logo-btn" onClick={open} aria-label="打开导航菜单">
-      <span className="m-brand-mark">✦</span>
+      <span className="m-brand-mark">
+        <BrandMark size={17} />
+      </span>
     </button>
   )
 }

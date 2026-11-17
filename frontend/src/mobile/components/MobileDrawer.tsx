@@ -6,6 +6,8 @@ import { formatListTime } from '../../lib/datetime'
 import type { Conversation, AgentProfile } from '../../lib/types'
 import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { describeError } from '../util'
+import { BrandMark } from '../../components/BrandMark'
+import { UserAvatar } from '../../components/UserAvatar'
 
 /** 抽屉上半部分的主导航：对应曾经固定在底部的 Tab（「对话」是回聊天页的入口）。 */
 const NAV = [
@@ -127,13 +129,14 @@ export function MobileDrawer({ open, onClose, version }: Props) {
 
   const canLogout = authEnabled && user && user.id !== '__system__'
   const displayName = user?.display_name || user?.username || '系统'
-  const initial = displayName.trim().slice(0, 1).toUpperCase() || '👤'
 
   return (
     <div className="m-drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <aside className="m-drawer" role="dialog" aria-modal="true" aria-label="导航与对话列表">
         <div className="m-drawer-head">
-          <span className="m-brand-mark">✦</span>
+          <span className="m-brand-mark">
+            <BrandMark size={17} />
+          </span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div className="m-drawer-title">
               ArkSwarm
@@ -329,7 +332,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
               aria-haspopup="menu"
               aria-expanded={accountOpen}
             >
-              <span className="m-drawer-account-avatar">{initial}</span>
+              <UserAvatar user={user} size={30} className="m-drawer-account-avatar" />
               <span className="m-drawer-account-name">{displayName}</span>
             </button>
           </div>

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from ..collab.api import router as collab_router
+from ..im.api import router as im_router
 from . import (
     agents,
     agent_types,
@@ -34,5 +35,6 @@ api_router.include_router(runs.router)
 api_router.include_router(usage.router)
 api_router.include_router(update.router)
 api_router.include_router(collab_router)
+api_router.include_router(im_router)
 
 __all__ = ["api_router"]

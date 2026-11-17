@@ -35,6 +35,9 @@ frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 +
         │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages · GET .../{id}/stream
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
+collab/             协作域（旁路）：编排图 · 工单协议 · 串行引擎 · 运行 API
+im/                 IM 域（旁路）：连接登记 · 配对 · 平台适配器（叶子）· 运行桥
+        │
 runtime/service.py  编排：对话→智能体→适配器（网关解密密钥与地址）、能力决策、历史回放、落库
 runtime/runner.py   执行：起子进程 / 发 HTTP、逐行/逐块转事件、双向 stdin 代写、超时、取消、脱敏
 runtime/manager.py  运行表：注册、查询、取消、快照
@@ -55,6 +58,7 @@ auth.py auth_deps.py                                               口令 / 令�
 | 规则 | 理由 |
 | --- | --- |
 | 适配器**不得** import `api/runtime/db/models/settings` | 适配器是叶子。一旦它能读数据库或读全局配置，就无法独立测试，也无法保证"新增智能体不动框架" |
+| IM 平台适配器**不得** import 上层；`cryptography` 只允许经 `im/crypto.py` | 与智能体适配器同理；把平台协议细节（企业微信 AES）收进一个叶子工具模块，依赖清单才精确可控 |
 | 适配器**不得**自己持久化 | 持久化是 `service.consume_run` 的职责；适配器只产出事件。这样才能保证"换个存储不影响任何适配器" |
 | `api/` 保持薄 | 参数校验用 `schemas.py`，业务决策在 `runtime/`。这样同一套逻辑既能被 REST 复用，也能被未来的 WebSocket/CLI 复用 |
 | 前端**不得**知道任何智能体细节 | 表单由 `config_fields` 生成（`DynamicForm`），消息展示只认 `MessagePart`/`AgentEvent`。加智能体不该改一行前端 |
@@ -208,7 +212,8 @@ POST /api/conversations/{id}/messages
 - 网关是 API 密钥的**唯一来源**：智能体只引用 `gateway_id`，模型必须取自网关的 `selected_models` 白名单。
 
 **后加的可选列**：SQLite 的 `create_all` 不会给已存在的表加列，所以新列要登记在
-`models.py`（对话域）或 `collab/tables.py`（协作域）的 `ADDITIVE_COLUMNS`，由 `db.init_db` 幂等补齐。
+`models.py`（对话域）、`collab/tables.py`（协作域）或 `im/tables.py`（IM 域）的
+`ADDITIVE_COLUMNS`，由 `db.init_db` 幂等补齐。
 
 **schema 变更规则**（本地库有真实数据）：
 1. 只做**加列/加表**这类向后兼容变更，新列必须有默认值或可空。

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import { saveSession, saveUser } from '../lib/auth'
+import { AvatarUploader } from './AvatarUploader'
 import { useAuth } from './AuthGate'
 
 /**
@@ -95,6 +96,8 @@ export function AccountPanel() {
             退出登录
           </button>
         </div>
+
+        <AvatarUploader user={user} />
 
         <form className="stack" onSubmit={saveProfile}>
           <div className="grid two">

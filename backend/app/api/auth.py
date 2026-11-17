@@ -20,11 +20,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlmodel import select
 from starlette.concurrency import run_in_threadpool
 
+from .. import avatars
 from ..auth import hash_password, issue_token, verify_password
 from ..auth_deps import _SYSTEM_USER, current_user, owner_id_for, require_admin, require_owned
 from ..db import SessionLocal
@@ -59,6 +60,10 @@ class UserRead(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    #: 头像的对外标识：有值时前端拼 ``/api/auth/users/{id}/avatar?v=<它>``；
+    #: 为空表示没上传过，界面回退到「显示名首字母」。
+    #: 它同时是缓存键 —— 换头像就换值，浏览器不必猜什么时候该重取。
+    avatar: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -96,6 +101,7 @@ def _to_read(user: User) -> UserRead:
         role=user.role,
         is_active=user.is_active,
         created_at=user.created_at,
+        avatar=user.avatar_file,
     )
 
 
@@ -224,6 +230,87 @@ async def update_me(
         await session.commit()
         await session.refresh(row)
     return _to_read(row)
+
+
+class AvatarUpload(BaseModel):
+    """上传头像：base64 图片（前端 `FileReader` 读出来直接发）。"""
+
+    content_base64: str = Field(min_length=1)
+    #: 客户端给的原始文件名，只用于报错信息，不参与落盘命名
+    name: str | None = Field(default=None, max_length=200)
+
+
+@router.put("/me/avatar")
+async def upload_my_avatar(
+    payload: AvatarUpload, user: Annotated[User, Depends(current_user)]
+) -> UserRead:
+    """上传 / 替换自己的头像。
+
+    只收位图（PNG / JPEG / WebP，≤2 MB），文件名由服务端按「用户 id + 内容摘要」生成 ——
+    既挡掉目录穿越，也让「换头像 = 换文件名」，浏览器缓存自动失效。
+    """
+    if user.id == _SYSTEM_USER.id:
+        raise HTTPException(status_code=400, detail="鉴权已关闭，没有个人头像可设置")
+    try:
+        raw, extension = avatars.decode_avatar(payload.content_base64)
+    except avatars.AvatarError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    data_dir = get_settings().data_dir
+    try:
+        stored = avatars.store_avatar(data_dir, user.id, raw, extension)
+    except avatars.AvatarError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    async with SessionLocal() as session:
+        row = await session.get(User, user.id)
+        if row is None:
+            avatars.remove_avatar(data_dir, stored.filename)
+            raise HTTPException(status_code=404, detail="用户不存在")
+        row.avatar_file = stored.filename
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    return _to_read(row)
+
+
+@router.delete("/me/avatar")
+async def delete_my_avatar(user: Annotated[User, Depends(current_user)]) -> UserRead:
+    """清掉自己的头像，界面回退到「显示名首字母」。"""
+    if user.id == _SYSTEM_USER.id:
+        raise HTTPException(status_code=400, detail="鉴权已关闭，没有个人头像可清除")
+    data_dir = get_settings().data_dir
+    async with SessionLocal() as session:
+        row = await session.get(User, user.id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        previous = row.avatar_file
+        row.avatar_file = None
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    avatars.remove_avatar(data_dir, previous)
+    return _to_read(row)
+
+
+@router.get("/users/{user_id}/avatar")
+async def get_user_avatar(
+    user_id: str, user: Annotated[User, Depends(current_user)]
+) -> Response:
+    """取某个用户的头像（任何登录用户都能看 —— 用户列表、协作消息里都要显示）。"""
+    async with SessionLocal() as session:
+        row = await session.get(User, user_id)
+    if row is None or not row.avatar_file:
+        raise HTTPException(status_code=404, detail="该用户没有头像")
+    target = avatars.resolve_avatar(get_settings().data_dir, row.avatar_file)
+    if target is None:
+        raise HTTPException(status_code=404, detail="头像文件已丢失")
+    # 文件名带内容摘要，可以长缓存；用户换头像后 URL 里的 `avatar` 值也变了。
+    return Response(
+        content=target.read_bytes(),
+        media_type=avatars.guess_media_type(target.name),
+        headers={"Cache-Control": "private, max-age=604800"},
+    )
 
 
 # --- 管理员接口 ------------------------------------------------------------

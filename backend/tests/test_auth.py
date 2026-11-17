@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import base64
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -262,3 +264,92 @@ def test_malformed_token_is_rejected_not_500(token):
 
     with pytest.raises(TokenError):
         parse_token(token)
+
+
+# --- 头像 ------------------------------------------------------------------
+
+#: 1×1 的 PNG（67 字节），只用来验证「按魔数认出是位图」这条路径。
+_PNG_1PX = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
+)
+
+
+async def test_upload_avatar_then_read_it(auth_client, tmp_path, monkeypatch):
+    """上传头像后：`/me` 带回标识，GET 头像能取到同一张图，换图后文件名变化。"""
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    data = await _register(auth_client, "alice")
+    headers = _auth(data["access_token"])
+
+    resp = await auth_client.put(
+        "/api/auth/me/avatar",
+        json={"content_base64": _PNG_1PX, "name": "me.png"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    first = resp.json()["avatar"]
+    assert first and first.endswith(".png")
+
+    # 任何登录用户都能取到（用户列表、协作消息里要显示）
+    image = await auth_client.get(f"/api/auth/users/{data['user']['id']}/avatar", headers=headers)
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    assert image.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # 文件名里带内容摘要：同一张图再传一次不会换名，旧文件也不会堆积
+    again = await auth_client.put(
+        "/api/auth/me/avatar", json={"content_base64": _PNG_1PX}, headers=headers
+    )
+    assert again.json()["avatar"] == first
+    assert len(list((tmp_path / "avatars").glob("alice*"))) == 0  # 文件名用用户 id，不是用户名
+    assert len(list((tmp_path / "avatars").glob("*.png"))) == 1
+
+
+async def test_avatar_rejects_non_image_and_oversized(auth_client, tmp_path, monkeypatch):
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    data = await _register(auth_client, "alice")
+    headers = _auth(data["access_token"])
+
+    # SVG 能内嵌脚本，头像会直接进 <img>，必须拒绝
+    svg = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>').decode()
+    resp = await auth_client.put(
+        "/api/auth/me/avatar", json={"content_base64": svg}, headers=headers
+    )
+    assert resp.status_code == 422
+    assert "PNG / JPEG / WebP" in resp.json()["detail"]
+
+    resp = await auth_client.put(
+        "/api/auth/me/avatar", json={"content_base64": "not-base64!!"}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+async def test_avatar_can_be_removed(auth_client, tmp_path, monkeypatch):
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    data = await _register(auth_client, "alice")
+    headers = _auth(data["access_token"])
+    await auth_client.put(
+        "/api/auth/me/avatar", json={"content_base64": _PNG_1PX}, headers=headers
+    )
+
+    resp = await auth_client.delete("/api/auth/me/avatar", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["avatar"] is None
+    # 文件也删掉了，不留垃圾
+    assert list((tmp_path / "avatars").glob("*.png")) == []
+    # 没有头像时取图是 404（前端回退到首字母）
+    resp = await auth_client.get(f"/api/auth/users/{data['user']['id']}/avatar", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_avatar_requires_login(auth_client):
+    resp = await auth_client.put(
+        "/api/auth/me/avatar", json={"content_base64": _PNG_1PX}
+    )
+    assert resp.status_code == 401

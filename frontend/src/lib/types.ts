@@ -1048,6 +1048,11 @@ export interface AuthUser {
   role: 'admin' | 'member'
   is_active: boolean
   created_at: string
+  /**
+   * 头像标识（文件名摘要）：有值时由 `lib/avatar.ts` 带令牌 fetch 成 blob 渲染；
+   * 为空回退到首字母圆。它同时是本地缓存键 —— 换头像就换值。
+   */
+  avatar?: string | null
 }
 
 /** 登录 / 注册成功的响应。 */
@@ -1062,4 +1067,89 @@ export interface AuthConfig {
   auth_enabled: boolean
   registration_open: boolean
   has_users: boolean
+}
+
+// --- IM（设置 → IM：在聊天软件里和智能体说话）--------------------------------
+
+/** 一个平台字段；`secret` 的值加密落库，界面只显示「已填」。 */
+export interface ImPlatformField {
+  key: string
+  label: string
+  secret: boolean
+  hint?: string | null
+  options: { value: string; label: string }[]
+}
+
+/** 可连接的平台（添加表单由它生成）。 */
+export interface ImPlatform {
+  id: string
+  name: string
+  /** 界面上的小图标（后端元数据给，前端不按 id 写映射） */
+  icon: string
+  fields: ImPlatformField[]
+  groups: boolean
+  buttons: boolean
+  available: boolean
+  note?: string | null
+  docs?: string | null
+  steps: string[]
+}
+
+/** 连接级「发什么」的开关：过程内容默认全部关闭，聊天里只有正文。 */
+export interface ImConnectionOptions {
+  show_thinking: boolean
+  show_tools: boolean
+  show_logs: boolean
+}
+
+/** 一条 IM 连接：一个平台账号 + 绑定的智能体。 */
+export interface ImConnection {
+  id: string
+  platform: string
+  platform_name: string
+  account_name: string
+  account_id: string
+  agent_profile_id?: string | null
+  agent_name?: string | null
+  agent_avatar?: string | null
+  enabled: boolean
+  /** ready / connecting / retrying / error / off */
+  state: string
+  error?: string | null
+  /** 已填的密钥字段名（值永不回传） */
+  secret_fields: string[]
+  /** 发什么：过程内容（思考 / 工具 / 日志），默认都不发 */
+  options: ImConnectionOptions
+  created_at: string
+  updated_at: string
+  peers: number
+  pending: number
+  chats: number
+}
+
+/** 配对过的账号 / 等待允许的连接请求。 */
+export interface ImPeer {
+  id: string
+  connection_id: string
+  sender_id: string
+  sender_name: string
+  /** pending / allowed / denied */
+  state: string
+  chat_key: string
+  chat_kind: string
+  chat_title: string
+  created_at: string
+}
+
+/** 连接见过的一个聊天。 */
+export interface ImChat {
+  id: string
+  connection_id: string
+  chat_key: string
+  kind: string
+  title: string
+  agent_profile_id?: string | null
+  agent_name?: string | null
+  conversation_id?: string | null
+  updated_at: string
 }

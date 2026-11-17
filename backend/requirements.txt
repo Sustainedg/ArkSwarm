@@ -9,3 +9,6 @@ python-dotenv==1.0.1
 aiosqlite==0.20.0
 # 技能（SKILL.md）的 YAML frontmatter 解析；uvicorn[standard] 已间接带入，这里显式锁定
 pyyaml==6.0.3
+# IM 的 WebSocket 平台（飞书 / 钉钉 / 企业微信 / Discord / Slack / QQ）需要它。
+# uvicorn[standard] 已间接带入，这里显式锁定，避免换掉 extras 时悄悄缺依赖。
+websockets==17.4

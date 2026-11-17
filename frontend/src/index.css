@@ -292,11 +292,11 @@ code, pre, .mono { font-family: var(--mono); }
   height: 100vh; overflow: hidden;
 }
 
-/* 侧边栏整体缩放进度：字体、图标与行距同比例收紧 10%（对话列表不再显得拥挤）。
+/* 侧边栏整体缩放进度：字体、图标与行距同比例缩放（0.963 = 原 0.9 再放大 7%）。
    只在这一块生效 —— 用 `var(--sbs, 1)` 是因为 `.chat-item` 也被技能页等复用，
    那些地方拿不到这个变量，会按原尺寸渲染。 */
 .sidebar {
-  --sbs: 0.9;
+  --sbs: 0.963;
   min-height: 0;
   display: flex; flex-direction: column; gap: calc(6px * var(--sbs));
   padding: calc(18px * var(--sbs)) calc(14px * var(--sbs)); border-right: 1px solid var(--border);
@@ -309,8 +309,11 @@ code, pre, .mono { font-family: var(--mono); }
   width: calc(30px * var(--sbs)); height: calc(30px * var(--sbs)); border-radius: calc(9px * var(--sbs)); flex: none;
   background: linear-gradient(135deg, var(--brand), #7b5cff);
   box-shadow: 0 6px 18px rgba(217, 79, 208, 0.4);
-  display: grid; place-items: center; font-size: calc(15px * var(--sbs));
+  display: grid; place-items: center; color: #fff;
 }
+/* 品牌标是内联 SVG（components/BrandMark.tsx）：图形随 currentColor 走，
+   深浅两套外观都不用换图。 */
+.brand-mark-glyph { display: block; }
 .brand-name { font-weight: 650; font-size: calc(15px * var(--sbs)); letter-spacing: -0.02em; display: flex; align-items: center; gap: calc(6px * var(--sbs)); }
 .brand-version {
   font-size: calc(9.5px * var(--sbs)); font-weight: 600; letter-spacing: 0.02em;
@@ -356,12 +359,8 @@ code, pre, .mono { font-family: var(--mono); }
 .sidebar-user-btn[aria-expanded='true'] {
   background: var(--bg-hover); border-color: var(--border);
 }
-.sidebar-user-avatar {
-  width: calc(28px * var(--sbs)); height: calc(28px * var(--sbs)); flex: none;
-  display: grid; place-items: center; border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand), var(--accent));
-  color: #fff; font-size: calc(12px * var(--sbs)); font-weight: 700; line-height: 1;
-}
+/* 侧栏头像跟着侧栏宽度缩放（--sbs）；图形本身由 .user-avatar 负责 */
+.sidebar-user-avatar { --avatar-size: calc(28px * var(--sbs)); }
 .sidebar-user-name {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: calc(12px * var(--sbs)); color: var(--text); font-weight: 600;
@@ -422,7 +421,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---------- 对话行（左侧栏列表 / 选智能体新建对话共用） ----------
    鼠标移上去时右上角浮出「⋯ 会话操作 / ✎ 重命名 / 🗑 删除」三个小图标（见 ConversationList）。
-   尺寸走 `var(--sbs, 1)`：在侧边栏里随侧边栏一起缩小 10%，技能页等复用同一 class 的地方保持原样。 */
+   尺寸走 `var(--sbs, 1)`：在侧边栏里随侧边栏一起缩放，技能页等复用同一 class 的地方保持原样。 */
 .chat-item {
   position: relative; display: block; width: 100%; text-align: left; color: inherit;
   padding: calc(8px * var(--sbs, 1)) calc(10px * var(--sbs, 1)); border-radius: var(--radius-sm); cursor: pointer;
@@ -2833,7 +2832,8 @@ code, pre, .mono { font-family: var(--mono); }
 .auth-brand { display: flex; align-items: center; gap: 12px; }
 .auth-mark {
   width: 42px; height: 42px; display: grid; place-items: center;
-  border-radius: 13px; background: var(--brand); color: #fff; font-size: 22px;
+  border-radius: 13px; background: linear-gradient(135deg, var(--brand), #7b5cff); color: #fff;
+  box-shadow: 0 8px 22px rgba(217, 79, 208, 0.34);
 }
 .auth-title { font-size: 19px; font-weight: 700; letter-spacing: 0.3px; }
 .auth-sub { font-size: 12px; color: var(--text-dim); }
@@ -2860,3 +2860,25 @@ code, pre, .mono { font-family: var(--mono); }
 .account-user-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .account-reset-row { display: flex; gap: 8px; width: 100%; }
 .account-reset-row .input { flex: 1; }
+
+/* 用户头像（`components/UserAvatar.tsx`，两端共用）：有图显示图，没图显示显示名首字母。
+   底色用品牌渐变，和「没有头像」时的首字母圆是同一个视觉，换了图也不会跳。 */
+.user-avatar {
+  --avatar-size: 28px;
+  width: var(--avatar-size); height: var(--avatar-size);
+  flex: none; display: grid; place-items: center; overflow: hidden;
+  border-radius: 50%; background: linear-gradient(135deg, var(--brand), #7b5cff);
+  color: #fff; font-size: calc(var(--avatar-size) * 0.42);
+  font-weight: 700; line-height: 1; user-select: none;
+}
+.user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 头像上传区（`components/AvatarUploader.tsx`）：大头像 + 名字 + 两个动作 */
+.avatar-editor { display: flex; flex-direction: column; gap: 10px; }
+.avatar-editor-pic { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.avatar-editor-pic .user-avatar { border: 1px solid var(--border); }
+.avatar-editor-meta { min-width: 0; }
+.avatar-editor-name {
+  font-size: 14px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

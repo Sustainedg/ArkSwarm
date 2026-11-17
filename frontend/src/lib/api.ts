@@ -19,6 +19,11 @@ import type {
   AuthUser,
   AuthSession,
   AuthConfig,
+  ImChat,
+  ImConnection,
+  ImConnectionOptions,
+  ImPeer,
+  ImPlatform,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -130,6 +135,11 @@ export const api = {
     request<AuthSession>('/api/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   updateMe: (body: { display_name?: string | null; email?: string | null }) =>
     request<AuthUser>('/api/auth/me', { method: 'PUT', body: JSON.stringify(body) }),
+  /** 上传头像：base64 图片（PNG / JPEG / WebP，≤2 MB），返回更新后的用户。 */
+  uploadAvatar: (body: { content_base64: string; name?: string }) =>
+    request<AuthUser>('/api/auth/me/avatar', { method: 'PUT', body: JSON.stringify(body) }),
+  /** 清掉头像，回退到首字母。 */
+  deleteAvatar: () => request<AuthUser>('/api/auth/me/avatar', { method: 'DELETE' }),
   changePassword: (body: { old_password: string; new_password: string }) =>
     request<{ ok: boolean; access_token: string }>('/api/auth/me/password', {
       method: 'PUT',
@@ -350,6 +360,55 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  // --- IM（设置 → IM：把智能体连到微信 / 飞书 / 钉钉 / 企业微信 / QQ / Telegram / Discord / Slack）
+  listImPlatforms: () => request<{ items: ImPlatform[] }>('/api/im/platforms').then((r) => r.items),
+  listImConnections: () =>
+    request<{ items: ImConnection[] }>('/api/im/connections').then((r) => r.items),
+  createImConnection: (body: {
+    platform: string
+    agent_profile_id?: string | null
+    fields: Record<string, unknown>
+    options?: Partial<ImConnectionOptions>
+    enabled?: boolean
+  }) =>
+    request<ImConnection>('/api/im/connections', { method: 'POST', body: JSON.stringify(body) }),
+  updateImConnection: (id: string, body: {
+    agent_profile_id?: string | null
+    fields?: Record<string, unknown>
+    options?: Partial<ImConnectionOptions>
+    enabled?: boolean
+  }) =>
+    request<ImConnection>(`/api/im/connections/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteImConnection: (id: string) => request<void>(`/api/im/connections/${id}`, { method: 'DELETE' }),
+  retryImConnection: (id: string) =>
+    request<{ ok: boolean; state: { state: string; error?: string | null } | null }>(
+      `/api/im/connections/${id}/retry`,
+      { method: 'POST' },
+    ),
+  listImPeers: (params?: { state?: string; connection_id?: string }) => {
+    const search = new URLSearchParams()
+    if (params?.state) search.set('state', params.state)
+    if (params?.connection_id) search.set('connection_id', params.connection_id)
+    const suffix = search.toString() ? `?${search.toString()}` : ''
+    return request<{ items: ImPeer[] }>(`/api/im/peers${suffix}`).then((r) => r.items)
+  },
+  answerImPeer: (connectionId: string, peerId: string, allow: boolean) =>
+    request<ImPeer>(`/api/im/connections/${connectionId}/peers/${peerId}`, {
+      method: 'POST',
+      body: JSON.stringify({ allow }),
+    }),
+  removeImPeer: (connectionId: string, peerId: string) =>
+    request<void>(`/api/im/connections/${connectionId}/peers/${peerId}`, { method: 'DELETE' }),
+  listImChats: (connectionId: string) =>
+    request<{ items: ImChat[] }>(`/api/im/connections/${connectionId}/chats`).then((r) => r.items),
+  updateImChat: (connectionId: string, chatId: string, agentProfileId: string | null) =>
+    request<ImChat>(`/api/im/connections/${connectionId}/chats/${chatId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ agent_profile_id: agentProfileId }),
+    }),
+  removeImChat: (connectionId: string, chatId: string) =>
+    request<void>(`/api/im/connections/${connectionId}/chats/${chatId}`, { method: 'DELETE' }),
 
   // --- 协作域 ---------------------------------------------------------------
   // 协作组（可视化编排图）

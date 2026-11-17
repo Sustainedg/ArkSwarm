@@ -204,8 +204,9 @@ async def backfill_ownership(session: AsyncSession, admin: User) -> None:
                 "WHERE owner_id IS NULL OR owner_id = '__system__'"
             ).bindparams(owner=owner_id)
         )
-    # 协作域表
-    for table_name in ("collab_teams", "collab_runs"):
+    # 协作域表 + IM 域表（同样带 owner_id；漏掉 IM 的话，鉴权关闭期间建的连接
+    # 打开鉴权后会永远看不到，且没人能接管）
+    for table_name in ("collab_teams", "collab_runs", "im_connections"):
         await session.execute(
             text(
                 f"UPDATE {table_name} SET owner_id = :owner "

@@ -12,6 +12,7 @@ import { MobileAccountPage } from './pages/MobileAccountPage'
 import { MobileAgentsPage } from './pages/MobileAgentsPage'
 import { MobileCredentialsPage } from './pages/MobileCredentialsPage'
 import { MobileGatewaysPage } from './pages/MobileGatewaysPage'
+import { MobileImPage } from './pages/MobileImPage'
 import { MobileRuntimesPage } from './pages/MobileRuntimesPage'
 import { MobileSettingsPage } from './pages/MobileSettingsPage'
 import { MobileMcpPage } from './pages/MobileMcpPage'
@@ -54,6 +55,7 @@ export function MobileApp() {
         <Route path="/agents" element={<MobileAgentsPage />} />
         <Route path="/gateways" element={<MobileGatewaysPage />} />
         <Route path="/credentials" element={<MobileCredentialsPage />} />
+        <Route path="/im" element={<MobileImPage />} />
         <Route path="/skills" element={<MobileSkillsPage />} />
         <Route path="/mcp" element={<MobileMcpPage />} />
         <Route path="/usage" element={<MobileUsagePage />} />

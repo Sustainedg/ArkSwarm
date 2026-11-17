@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, collab
 from .agents import all_agents
+from .im import im_manager
 from .api import api_router
 from .bootstrap import (
     active_admin,
@@ -30,8 +31,20 @@ from .transport.gzip import SSEExemptGZipMiddleware
 
 logger = logging.getLogger("arkswarm")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# httpx 在 INFO 级别会把**完整请求 URL** 打进日志。Telegram 的 bot token 在路径里
+# （``/bot<id>:<token>/``）、钉钉 / 飞书的凭据曾以 query 形式出现，因此把它的日志压到
+# WARNING：正常请求不再回显 URL，真正的错误仍会由适配器产出可读的 error 状态。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+
+async def _start_im() -> None:
+    """启动时把已启用的 IM 连接接上；单条连不上只记状态，不拦服务启动。"""
+    try:
+        await im_manager.start_all()
+    except Exception:  # noqa: BLE001 - IM 是旁路，不能因为连不上就起不来服务
+        logger.warning("IM 连接启动失败，可在「设置 → IM」里重试", exc_info=True)
 
 
 async def _scan_skills(session) -> None:
@@ -68,12 +81,19 @@ async def lifespan(app: FastAPI):
     # 运行时可用性（内核装没装、什么版本）是缓存 + 定时检测的，绝不放在请求路径上：
     # 探测要起一次 `内核 --version` 子进程，同步跑会冻住整个事件循环。
     detector = asyncio.create_task(availability_service.scheduler())
+    # IM 连接：只连「启用了、凭据齐全」的那些；连不上不影响服务启动（状态显示在设置页）。
+    im_task = asyncio.create_task(_start_im())
     try:
         yield
     finally:
         detector.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await detector
+        await im_manager.stop_all()
+        if not im_task.done():
+            im_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await im_task
 
 
 app = FastAPI(
