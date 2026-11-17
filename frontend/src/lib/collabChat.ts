@@ -1,7 +1,7 @@
 /** 入口智能体聊天事件（`collab.chat.*`）的纯归约器，与工单推进状态互不干扰。 */
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from './agentStream'
 import { normalizeCollabChoices, type CollabAsk } from './collabAsk'
-import type { CollabChoice, CollabEvent } from './types'
+import type { CollabChatMessage, CollabChoice, CollabEvent, CollabStep } from './types'
 
 export interface LiveChatReply {
   messageId: string
@@ -37,7 +37,7 @@ export function dismissChatAdvance(state: ChatTurnState): ChatTurnState {
 }
 
 /** 把 chat_finished 的 advance（或落库 meta 里恢复的同构数据）规整成决策卡。 */
-export function chatAdvanceFrom(raw: unknown): CollabAsk | null {
+export function chatAdvanceFrom(raw: unknown, messageId = ''): CollabAsk | null {
   if (!raw || typeof raw !== 'object') return null
   const record = raw as Record<string, unknown>
   const order = typeof record.order === 'string' ? record.order.trim() : ''
@@ -51,7 +51,37 @@ export function chatAdvanceFrom(raw: unknown): CollabAsk | null {
         { label: '按建议推进', value: order, freeform: false },
         { label: '我再想想', value: '', freeform: true },
       ]
-  return { ticketId: '', question, options: choices }
+  return { ticketId: '', messageId, question, options: choices }
+}
+
+/** 后端写的是 UTC 的 naive 时间（`2026-11-16 15:03:28.184362`）：补上 T/Z 再解析。 */
+function collabTimeMs(value: string | null | undefined): number | null {
+  if (!value) return null
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  const ms = Date.parse(normalized.endsWith('Z') ? normalized : `${normalized}Z`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * 这条 CEO 聊天里的推进卡是否已经被之后的用户指令消费掉了。
+ *
+ * 工单通道的用户消息不在 `chat_messages` 里，而是 `collab_steps` 的 `role_key=user`；
+ * 只要有这样一条消息晚于 CEO 的回复，卡上的 `order` 就已经发出去执行了。旧数据里
+ * `meta.advance` 不会自动消失，这个判断保证刷新/换设备后不会把旧卡重新弹出来。
+ */
+export function advanceOvertakenByTicketSteps(
+  chat: CollabChatMessage,
+  steps: CollabStep[],
+): boolean {
+  const repliedAt = collabTimeMs(chat.finished_at ?? chat.created_at)
+  if (repliedAt === null) return false
+  let latestUserStep: number | null = null
+  for (const step of steps) {
+    if (step.role_key !== 'user') continue
+    const at = collabTimeMs(step.started_at)
+    if (at !== null && (latestUserStep === null || at > latestUserStep)) latestUserStep = at
+  }
+  return latestUserStep !== null && latestUserStep > repliedAt
 }
 
 export function applyChatEvent(state: ChatTurnState, event: CollabEvent): ChatTurnState {
@@ -100,7 +130,7 @@ export function applyChatEvent(state: ChatTurnState, event: CollabEvent): ChatTu
         text = text ? `${text}；${line}` : line
         level = 'warn'
       }
-      return { live: null, notice: text ? { level, text } : null, advance: chatAdvanceFrom(advance) }
+      return { live: null, notice: text ? { level, text } : null, advance: chatAdvanceFrom(advance, event.message_id ?? '') }
     }
 
     default:

@@ -14,7 +14,13 @@ import { Modal } from './Modal'
 import { api, ApiError, collabRunFileUrl, streamGet, streamPost } from '../lib/api'
 import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
-import { applyChatEvent, chatAdvanceFrom, dismissChatAdvance, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../lib/collabChat'
+import {
+  applyChatEvent, advanceOvertakenByTicketSteps, chatAdvanceFrom, dismissChatAdvance,
+  dismissChatNotice, emptyChatTurn, type ChatTurnState,
+} from '../lib/collabChat'
+import {
+  forgetConsumedAdvances, loadConsumedAdvances, rememberConsumedAdvance,
+} from '../lib/collabAdvance'
 import { MediaUrlProvider, composeWithAttachments } from '../lib/media'
 import { useComposerDraft } from '../lib/composerDraft'
 import {
@@ -60,6 +66,10 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
   const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
   const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
+  //: 已经点选/关掉的「推进任务」卡（按 CEO 聊天消息 ID 记，刷新后不再恢复）
+  const [consumedAdvances, setConsumedAdvances] = useState<Set<string>>(
+    () => loadConsumedAdvances(runId ?? ''),
+  )
   /** 草稿与待发附件按运行各记各的：切走再回来还在原处（与普通对话共用同一份实现）。 */
   const { text: draft, setText: setDraft, attachments, setAttachments } = useComposerDraft(runId)
   const [busy, setBusy] = useState(false)
@@ -134,6 +144,11 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   useEffect(() => {
     void loadRuns()
   }, [loadRuns])
+
+  // 切到另一次运行：读取它自己的决策卡消费记忆（本地兜底，后端清 meta 为主）。
+  useEffect(() => {
+    setConsumedAdvances(loadConsumedAdvances(runId ?? ''))
+  }, [runId])
 
   // 离开页面时退订；运行本身在服务端继续，回来再订阅即可。
   useEffect(() => () => {
@@ -342,13 +357,23 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     }
   }
 
+  /** 点选/关掉一张「推进任务」卡：本地记住它已消费，避免刷新后又从 meta 里恢复。 */
+  const consumeAdvance = (ask: { messageId?: string } | null) => {
+    const messageId = ask?.messageId ?? ''
+    if (detail && messageId) {
+      rememberConsumedAdvance(detail.id, messageId)
+      setConsumedAdvances((prev) => new Set(prev).add(messageId))
+    }
+    setChatTurn((prev) => dismissChatAdvance(prev))
+  }
+
   /**
    * 用户在「推进任务」决策卡上点了确认（或直接发自由指令）：把 CEO 给出的推进
    * 指令发进工单通道。任务还没开始时这就是开场的任务描述。
    */
   const advanceRun = (text: string) => {
     if (!detail || busy || chatBusy || !text.trim()) return
-    setChatTurn((prev) => dismissChatAdvance(prev))
+    consumeAdvance(advanceAsk)
     void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
   }
 
@@ -625,11 +650,15 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     [detail, status, turn?.tickets],
   )
   //: 刷新后从最近一条 CEO 聊天的 meta 里恢复「推进任务」决策卡（live 流里已由事件带出）。
-  const persistedAdvance = useMemo(
-    () => chatAdvanceFrom(chatMessages.at(-1)?.meta?.advance),
-    [chatMessages],
-  )
-  const advanceAsk = chatTurn.advance ?? (chatTurn.live ? null : persistedAdvance ?? null)
+  //: 已点选/关掉的卡、以及之后已有用户指令进了工单通道的旧卡，都不再恢复。
+  const lastChat = chatMessages.at(-1)
+  const persistedAdvance = useMemo(() => {
+    if (!lastChat || lastChat.sender !== 'leader') return null
+    if (consumedAdvances.has(lastChat.id)) return null
+    if (advanceOvertakenByTicketSteps(lastChat, detail?.steps ?? [])) return null
+    return chatAdvanceFrom(lastChat.meta?.advance, lastChat.id)
+  }, [lastChat, consumedAdvances, detail?.steps])
+  const advanceAsk = chatTurn.live ? null : (chatTurn.advance ?? persistedAdvance)
   const runUsage = summarizeUsage([detail?.usage])
   const usedTokens = rawUsageTotal(detail?.usage)
   // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
@@ -746,6 +775,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                       return
                     }
                     forgetDismissedNotices(detail.id)
+                    forgetConsumedAdvances(detail.id)
                     onOpenRun(null)
                     await loadRuns()
                   }}
@@ -834,7 +864,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
                       className="banner-close"
                       aria-label="关掉这张决策卡"
                       title="不推进：只把它当聊天"
-                      onClick={() => setChatTurn((prev) => dismissChatAdvance(prev))}
+                      onClick={() => consumeAdvance(advanceAsk)}
                     >
                       ✕
                     </button>

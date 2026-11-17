@@ -1192,6 +1192,12 @@ async def test_chat_advance_renders_decision_card_then_user_confirms(
     user_steps = [step for step in final["steps"] if step["role_key"] == "user"]
     assert any("导出按钮" in step["content"] for step in user_steps)
 
+    # 卡片已经消费：指令进入工单通道后，落库 meta 里不再留 advance，
+    # 否则每次刷新都会把这张早就执行过的卡重新弹出来（前端点 × 也挡不住刷新）。
+    consumed = final["chat_messages"][-1]["meta"]
+    assert "advance" not in consumed
+    assert consumed.get("advance_consumed") is True
+
     # 聊天 prompt 教过 CEO 这套判断规则。
     chat_prompts = [text for text in prompts(scenario["state_dir"]) if "[协作对话]" in text]
     assert chat_prompts and "chat_advance" in chat_prompts[0]

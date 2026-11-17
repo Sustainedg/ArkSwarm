@@ -4,7 +4,13 @@ import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { api, collabRunFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
 import { useComposerDraft } from '../../lib/composerDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../../lib/collabAsk'
-import { applyChatEvent, chatAdvanceFrom, dismissChatAdvance, dismissChatNotice, emptyChatTurn, type ChatTurnState } from '../../lib/collabChat'
+import {
+  applyChatEvent, advanceOvertakenByTicketSteps, chatAdvanceFrom, dismissChatAdvance,
+  dismissChatNotice, emptyChatTurn, type ChatTurnState,
+} from '../../lib/collabChat'
+import {
+  forgetConsumedAdvances, loadConsumedAdvances, rememberConsumedAdvance,
+} from '../../lib/collabAdvance'
 import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
 import {
   applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
@@ -68,6 +74,10 @@ export function MobileCollabRunPage() {
   //: 用户点过「×」关掉的提醒（按运行记，刷新后不再重建）
   const dismissedNotices = useMemo(() => loadDismissedNotices(runId ?? ''), [runId])
   const [chatTurn, setChatTurn] = useState<ChatTurnState>(emptyChatTurn)
+  //: 已经点选/关掉的「推进任务」卡（按 CEO 聊天消息 ID 记，刷新后不再恢复）
+  const [consumedAdvances, setConsumedAdvances] = useState<Set<string>>(
+    () => loadConsumedAdvances(runId ?? ''),
+  )
   /**
    * 草稿（文字 + 待发附件）按「运行」各记各的：切到别的运行再切回来，没发出去的内容还在原处。
    */
@@ -155,6 +165,11 @@ export function MobileCollabRunPage() {
     abortRef.current?.abort()
     chatAbortRef.current?.abort()
   }, [])
+
+  // 切到另一次运行：读取它自己的决策卡消费记忆（本地兜底，后端清 meta 为主）。
+  useEffect(() => {
+    setConsumedAdvances(loadConsumedAdvances(runId ?? ''))
+  }, [runId])
 
   // SSE 只负责本设备发起的增量；运行详情以落库结果为准，并定时对齐其他设备。
   // 运行中 5s 对齐一次；挂起/完成后没有新东西，降到 20s——详情接口再瘦也经不起高频空转，
@@ -354,13 +369,23 @@ export function MobileCollabRunPage() {
     }
   }
 
+  /** 点选/关掉一张「推进任务」卡：本地记住它已消费，避免刷新后又从 meta 里恢复。 */
+  const consumeAdvance = (ask: { messageId?: string } | null) => {
+    const messageId = ask?.messageId ?? ''
+    if (detail && messageId) {
+      rememberConsumedAdvance(detail.id, messageId)
+      setConsumedAdvances((prev) => new Set(prev).add(messageId))
+    }
+    setChatTurn((prev) => dismissChatAdvance(prev))
+  }
+
   /**
    * 用户在「推进任务」决策卡上点了确认：把 CEO 给出的推进指令发进工单通道。
    * 任务还没开始时这就是开场的任务描述。
    */
   const advanceRun = (text: string) => {
     if (!detail || busy || chatBusy || !text.trim()) return
-    setChatTurn((prev) => dismissChatAdvance(prev))
+    consumeAdvance(advanceAsk)
     void stream(`/api/collab/runs/${detail.id}/messages`, { content: text }, text)
   }
 
@@ -484,6 +509,7 @@ export function MobileCollabRunPage() {
       return
     }
     forgetDismissedNotices(detail.id)
+    forgetConsumedAdvances(detail.id)
     navigate('/collab', { replace: true })
   }
 
@@ -675,11 +701,15 @@ export function MobileCollabRunPage() {
   const usedTokens = rawUsageTotal(detail?.usage)
   const advancing = status === 'running' || busy
   //: 刷新后从最近一条 CEO 聊天的 meta 里恢复「推进任务」决策卡（live 流里已由事件带出）。
-  const persistedAdvance = useMemo(
-    () => chatAdvanceFrom(chatMessages.at(-1)?.meta?.advance),
-    [chatMessages],
-  )
-  const advanceAsk = chatTurn.advance ?? (chatTurn.live ? null : persistedAdvance ?? null)
+  //: 已点选/关掉的卡、以及之后已有用户指令进了工单通道的旧卡，都不再恢复。
+  const lastChat = chatMessages.at(-1)
+  const persistedAdvance = useMemo(() => {
+    if (!lastChat || lastChat.sender !== 'leader') return null
+    if (consumedAdvances.has(lastChat.id)) return null
+    if (advanceOvertakenByTicketSteps(lastChat, detail?.steps ?? [])) return null
+    return chatAdvanceFrom(lastChat.meta?.advance, lastChat.id)
+  }, [lastChat, consumedAdvances, detail?.steps])
+  const advanceAsk = chatTurn.live ? null : (chatTurn.advance ?? persistedAdvance)
   const showComposerHeader = pendingAsks.length > 0 || advancing
 
   /**
@@ -779,7 +809,7 @@ export function MobileCollabRunPage() {
             <button
               className="banner-close"
               aria-label="关掉这张决策卡"
-              onClick={() => setChatTurn((prev) => dismissChatAdvance(prev))}
+              onClick={() => consumeAdvance(advanceAsk)}
             >
               ✕
             </button>
@@ -812,7 +842,9 @@ export function MobileCollabRunPage() {
   )
 
   return (
-    <MediaUrlProvider resolver={(relPath) => (runId ? collabRunFileUrl(runId, relPath) : null)}>
+    <MediaUrlProvider
+      resolver={(relPath) => (runId ? collabRunFileUrl(runId, relPath) : null)}
+    >
       <div className="m-page">
       <MobileTopBar
         onBack={() => navigate('/collab')}

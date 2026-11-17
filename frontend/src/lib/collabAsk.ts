@@ -9,6 +9,8 @@ import type { CollabChoice, CollabTicket } from './types'
 
 export interface CollabAsk {
   ticketId: string
+  /** 「推进任务」卡的身份：产生它的 CEO 聊天消息 ID（用于记住已点选/已关闭）。 */
+  messageId?: string
   question: string
   options: CollabChoice[]
 }

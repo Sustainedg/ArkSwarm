@@ -201,6 +201,30 @@ def _first_line(text: str, limit: int = 60) -> str:
     return line[:limit]
 
 
+async def _consume_chat_advances(session: AsyncSession, run_id: str) -> None:
+    """用户把指令发进了工单通道：聊天里已经给出的「推进任务」卡都算消费过了。
+
+    前端刷新时会从最近一条 CEO 聊天的 ``meta.advance`` 恢复决策卡。指令都已经执行了，
+    旧卡还留在 meta 里，就会每次打开/刷新都重新弹出来（点 × 也只是前端临时关掉）。
+    这里在消息真正进入工单通道时清掉卡片数据，保留 ``advance_consumed`` 便于审计。
+    """
+    rows = (
+        await session.execute(
+            select(CollabMessage).where(
+                CollabMessage.run_id == run_id,
+                CollabMessage.sender == "leader",
+            )
+        )
+    ).scalars().all()
+    for message in rows:
+        meta = dict(message.meta or {})
+        if "advance" not in meta:
+            continue
+        meta.pop("advance", None)
+        meta["advance_consumed"] = True
+        message.meta = meta
+
+
 async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) -> PreparedTurn:
     """校验图、把用户的这句话接到入口节点的工单上。"""
     run = await session.get(CollabRun, run_id)
@@ -251,6 +275,9 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
                 finished_at=utcnow(),
             )
         )
+        # 这张指令是从聊天决策卡点进来的（或用户直接发了推进指令）：旧卡已经消费，
+        # 别再让刷新后的前端从 meta 里把它恢复出来。
+        await _consume_chat_advances(session, run.id)
 
     if root is None:
         if not text:
@@ -708,7 +735,7 @@ async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIt
                     state.reason = (
                         f"这条消息没有可推进的工单：有 {len(blocked)} 张工单卡在「等待处理」。"
                         "打开「工单看板」查看受阻原因，或点错误卡片上的「重试」；"
-                        "想先了解进度，可以直接切到「只聊天」找 CEO。"
+                        "想先了解进度，可以直接在下方和入口智能体聊天。"
                     )
             break
 
