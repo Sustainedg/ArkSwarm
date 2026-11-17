@@ -29,10 +29,13 @@ import anyio
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
+from starlette.applications import Starlette
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import Mount, Route
 
 from http_support import (
     bearer_matches,
@@ -109,6 +112,11 @@ class BearerAuthMiddleware:
 
 def build_server() -> FastMCP:
     allowed_hosts = parse_allowed_hosts(os.environ.get("IMAGE_MCP_ALLOWED_HOSTS", ""))
+    # 内网独立服务：默认不拦 Host；显式配置白名单时打开 SDK 的 DNS rebinding 防护。
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(allowed_hosts),
+        allowed_hosts=allowed_hosts,
+    )
     server = FastMCP(
         SERVER_NAME,
         instructions=(
@@ -121,14 +129,8 @@ def build_server() -> FastMCP:
         stateless_http=True,
         json_response=False,
         log_level="INFO",
+        transport_security=security,
     )
-    security = server.settings.transport_security
-    if allowed_hosts:
-        security.enable_dns_rebinding_protection = True
-        security.allowed_hosts = allowed_hosts
-    else:
-        # 内网独立服务，默认不拦 Host；需要更严时显式配置白名单。
-        security.enable_dns_rebinding_protection = False
 
     @server.tool(name=image_mcp.TOOL_NAME, description=image_mcp.TOOL_DESCRIPTION)
     async def generate_image(
@@ -172,38 +174,59 @@ def build_server() -> FastMCP:
         except (image_mcp.ConfigError, image_mcp.GatewayError, ValueError) as exc:
             raise ToolError(f"生成图片失败：{exc}") from exc
 
-    @server.custom_route("/health", methods=["GET"])
-    async def health(_: Request) -> Response:
-        return JSONResponse(
-            {
-                "status": "ok",
-                "server": SERVER_NAME,
-                "version": SERVER_VERSION,
-                "tool": image_mcp.TOOL_NAME,
-                "data_dir": str(DATA_DIR),
-                "image_dir": str(IMAGE_DIR),
-                "retention_minutes": image_mcp.retention_minutes(),
-                "auth": bool(TOKEN),
-            }
-        )
-
-    @server.custom_route("/images/{name:path}", methods=["GET"])
-    async def serve_image(_: Request, name: str) -> Response:
-        if not is_safe_image_name(name):
-            return Response("not found", status_code=404, media_type="text/plain")
-        path = (IMAGE_DIR / name).resolve()
-        if path.parent != IMAGE_DIR.resolve() or not path.is_file():
-            return Response("not found", status_code=404, media_type="text/plain")
-        return FileResponse(
-            path,
-            media_type=content_type_for(name),
-            headers={
-                "Cache-Control": "public, max-age=3600",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-
     return server
+
+
+async def health(_: Request) -> Response:
+    """健康检查：给容器 HEALTHCHECK 与运维用，不暴露密钥。"""
+    return JSONResponse(
+        {
+            "status": "ok",
+            "server": SERVER_NAME,
+            "version": SERVER_VERSION,
+            "tool": image_mcp.TOOL_NAME,
+            "data_dir": str(DATA_DIR),
+            "image_dir": str(IMAGE_DIR),
+            "retention_minutes": image_mcp.retention_minutes(),
+            "auth": bool(TOKEN),
+        }
+    )
+
+
+async def serve_image(request: Request) -> Response:
+    """只提供本服务生成的图片；目录穿越与非 image-* 文件名一律 404。"""
+    name = request.path_params.get("name", "")
+    if not is_safe_image_name(name):
+        return Response("not found", status_code=404, media_type="text/plain")
+    path = (IMAGE_DIR / name).resolve()
+    if path.parent != IMAGE_DIR.resolve() or not path.is_file():
+        return Response("not found", status_code=404, media_type="text/plain")
+    return FileResponse(
+        path,
+        media_type=content_type_for(name),
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def build_app(server: FastMCP) -> Starlette:
+    """把 MCP 端点与图片/健康检查拼成一个 ASGI 应用。
+
+    ``FastMCP.custom_route`` 只接受静态路径，图片名需要路径参数，因此这里用外层
+    Starlette 路由挂载 MCP 子应用；lifespan 沿用子应用的，保证会话管理器能启动。
+    """
+    mcp_app = server.streamable_http_app()
+    return Starlette(
+        routes=[
+            Route("/health", health, methods=["GET"]),
+            Route("/images/{name:path}", serve_image, methods=["GET"]),
+            Mount("/", app=mcp_app),
+        ],
+        lifespan=mcp_app.router.lifespan_context,
+    )
+
 
 
 def main() -> None:
@@ -218,7 +241,7 @@ def main() -> None:
     threading.Thread(target=prune_forever, name="image-prune", daemon=True).start()
 
     server = build_server()
-    app = server.streamable_http_app()
+    app = build_app(server)
     if TOKEN:
         app = BearerAuthMiddleware(app, token=TOKEN, path=MCP_PATH)
     print(

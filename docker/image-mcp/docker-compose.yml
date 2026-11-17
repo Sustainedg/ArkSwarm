@@ -1,14 +1,15 @@
-# 独立图片 MCP 容器。
+# 独立图片 MCP 容器（仓库内模板；宿主机运行配置见 /vol1/1000/docker/image-mcp/docker-compose.yml）。
 #
-# 本文件就在仓库里，构建上下文是仓库根目录：
-#   cd /vol1/1000/同步库/python/项目/Bot/docker/image-mcp
-#   cp .env.example .env   # 填网关密钥与令牌，chmod 600
-#   docker compose up -d --build
+# 代码与镜像定义在 ArkSwarm 仓库里：
+#   /vol1/1000/同步库/python/项目/Bot/docker/image-mcp/
+# 这里只保留运行配置与数据：
+#   /vol1/1000/docker/image-mcp/
+#   ├── docker-compose.yml
+#   ├── .env                # 网关密钥、MCP 令牌，权限 600
+#   └── data/generated-images/
 #
-# 持久化数据（含 .env）放在 /vol1/1000/docker/image-mcp/，与其它服务一致。
-#
-# 与 magpie 共用 magpie_default 网络，Magpie 里登记 http://image-mcp:8000/mcp
-# 即可；对 ArkSwarm / 浏览器暴露的是宿主机 3070。
+# 本模板用相对路径，可在仓库内直接 `docker compose up -d --build` 试跑；
+# 正式部署用宿主机那份绝对路径版本。
 services:
   image-mcp:
     build:
@@ -25,16 +26,17 @@ services:
       IMAGE_MCP_HOST: "0.0.0.0"
       IMAGE_MCP_PORT: "8000"
       IMAGE_MCP_DATA_DIR: "/data"
-      # 同时接受容器网络名与宿主机 IP：Magpie 走前者，ArkSwarm / 浏览器走后者。
-      IMAGE_MCP_ALLOWED_HOSTS: "image-mcp:8000,192.168.2.168:3070,127.0.0.1:8000,localhost:8000"
+      # 同时接受容器网络名与宿主机地址：Magpie 走前者，ArkSwarm / 浏览器走后者。
+      # 宿主机地址在部署侧 override 里按实际填写，仓库模板只放占位符。
+      IMAGE_MCP_ALLOWED_HOSTS: "${IMAGE_MCP_ALLOWED_HOSTS:-image-mcp,image-mcp:8000,127.0.0.1,127.0.0.1:3070,127.0.0.1:8000,localhost,localhost:3070,localhost:8000}"
       # 生图脚本返回的图片 URL：由本容器自己的 /images/ 提供。
-      IMAGE_PUBLIC_BASE_URL: "http://192.168.2.168:3070/images"
+      IMAGE_PUBLIC_BASE_URL: "${IMAGE_PUBLIC_BASE_URL:-http://<host>:3070/images}"
       # 图生图参考图：ArkSwarm 的工作区以只读方式挂进来。
       IMAGE_GEN_INPUT_ROOTS: "/workspaces"
       IMAGE_RETENTION_MINUTES: "60"
       TZ: "Asia/Shanghai"
     volumes:
-      - /vol1/1000/docker/image-mcp/data:/data
+      - ./data:/data
       - /vol1/1000/docker/arkswarm/data/workspaces:/workspaces:ro
     networks:
       - magpie
