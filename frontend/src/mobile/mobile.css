@@ -1316,7 +1316,8 @@ code, pre, .mono { font-family: var(--mono); }
    用 padding-bottom 长写而不是改 padding 简写，避免被其他 .composer 规则的简写覆盖。 */
 .composer {
   flex: none; border-top: 1px solid var(--border); background: rgba(18, 17, 28, 0.96);
-  padding: 8px 10px calc(6px + var(--safe-bottom));
+  padding: 8px 10px 6px;
+  padding-bottom: calc(6px + var(--safe-bottom));
 }
 /* 输入框高度上限按可视视口算：小屏上别让输入区把整屏吃掉 */
 .composer textarea { max-height: 34vh; max-height: 34dvh; }

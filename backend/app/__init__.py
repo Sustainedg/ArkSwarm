@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-__version__ = "V0.11"
+__version__ = "V0.1.1"
 
 #: 版本记录（最新在前）。版本号只在公开发版时递增，日常提交不动版本号。
-#: V0.1 是首个公开版本；此前的 V0.01–V0.43 为内部迭代编号，不再逐条单列。
+#: 版本号采用「V主.次.修订」三段式：V0.1 是首个公开版本，V0.1.1 是它的修订版。
+#: 此前的 V0.01–V0.43 为内部迭代编号，不再逐条单列。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
     {
-        "version": "V0.11",
+        "version": "V0.1.1",
         "date": "2026-11-18",
         "title": "PWA 安全区修复 · 部署加固",
         "highlights": (
@@ -15,6 +16,7 @@ VERSION_HISTORY: tuple[dict[str, object], ...] = (
             "修复移动端 PWA 底部用量条被 Home 指示条遮挡：.composer 底部 padding 补上 "
             "env(safe-area-inset-bottom)，消耗量统计重新可见",
             "Service Worker 外壳缓存版本 v87 → v88，老客户端下次打开自动更新",
+            "版本号改为三段式 V主.次.修订（V0.11 → V0.1.1），此前的两位次版本号不再使用",
             "Docker 空卷首启改用镜像里构建进去的源码，做到「构建什么就运行什么」，"
             "不再用线上旧包覆盖新代码（需要旧行为可设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1）",
             "首启装 Python 依赖时 pip 也走安装期代理，并支持 ARKSWARM_PIP_INDEX_URL "

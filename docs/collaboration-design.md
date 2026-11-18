@@ -1132,7 +1132,7 @@ ticket.updated 6 / run.status 1`，且 6 步时间线与 2 张工单的字段与
 被拒」「上抛件提示词不含 delegate」「用户回答重新打开的是提问的那张工单（非根工单）」；
 `bash scripts/test.sh` → **200 passed, 1 skipped**，`npm run build` 通过。
 
-### M10 提醒生命周期 · 进度页画成流程图（V0.11）
+### M10 提醒生命周期 · 进度页画成流程图（V0.1.1）
 
 **关注点**
 
