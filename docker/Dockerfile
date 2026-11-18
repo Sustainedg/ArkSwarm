@@ -52,6 +52,11 @@ COPY frontend/dist /image-app/frontend/dist
 COPY scripts/serve.sh /image-app/scripts/serve.sh
 
 # 预装 Python 依赖到 /image-venv：首启直接复制，离线也能启动。
+# 构建期也允许走代理 / 国内镜像；只影响构建，不进入运行期环境变量。
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
 RUN python3 -m venv /image-venv \
   && /image-venv/bin/pip -q install -U pip \
   && /image-venv/bin/pip -q install -r /image-app/backend/requirements.txt \

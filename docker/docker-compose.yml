@@ -21,6 +21,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      # 构建期可选的代理 / PyPI 镜像；真实地址只写在部署侧，不提交进仓库。
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_TRUSTED_HOST: "${PIP_TRUSTED_HOST:-}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
     image: arkswarm:latest
     container_name: arkswarm
     restart: unless-stopped
