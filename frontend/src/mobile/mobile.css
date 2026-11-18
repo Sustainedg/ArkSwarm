@@ -1310,12 +1310,13 @@ code, pre, .mono { font-family: var(--mono); }
 .composer-foot .usage-bar { margin-top: 0; }
 
 /* ---------- 移动端：输入区贴着屏幕最下边 ---------- */
-/* 只留 6px 收边，底部安全区**不照搬**：iOS 独立应用里 `env(safe-area-inset-bottom)` 是 34px，
-   而 Home 条本身只占 ~13px，照搬会在输入框下面留出一整条空白（用户看到的「没到底」）；
-   底色一直铺到屏幕底边，安全区里也不会露出页面底色。 */
+/* 底部安全区要加进 padding：iOS 独立应用（viewport-fit=cover + black-translucent）里
+   `env(safe-area-inset-bottom)` 是 ~34px，不加的话输入框下方的用量条（.composer-foot）
+   会被 Home 指示条吃掉，用户看不到消耗量。底色铺到屏幕底边，安全区里不露页面底色。
+   用 padding-bottom 长写而不是改 padding 简写，避免被其他 .composer 规则的简写覆盖。 */
 .composer {
   flex: none; border-top: 1px solid var(--border); background: rgba(18, 17, 28, 0.96);
-  padding: 8px 10px 6px;
+  padding: 8px 10px calc(6px + var(--safe-bottom));
 }
 /* 输入框高度上限按可视视口算：小屏上别让输入区把整屏吃掉 */
 .composer textarea { max-height: 34vh; max-height: 34dvh; }

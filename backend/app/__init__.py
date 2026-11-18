@@ -7,9 +7,14 @@ __version__ = "V0.11"
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
     {
         "version": "V0.11",
-        "date": "2026-11-17",
-        "title": "部署加固：构建即运行 · 首启不再卡网络",
+        "date": "2026-11-18",
+        "title": "PWA 安全区修复 · 部署加固",
         "highlights": (
+            "修复移动端 PWA 顶部空白：theme-color 改用顶栏背景叠在页面底色上的实际色"
+            "（深色 #11101b / 浅色 #fefeff），Android standalone 状态栏不再与顶栏色差断层",
+            "修复移动端 PWA 底部用量条被 Home 指示条遮挡：.composer 底部 padding 补上 "
+            "env(safe-area-inset-bottom)，消耗量统计重新可见",
+            "Service Worker 外壳缓存版本 v87 → v88，老客户端下次打开自动更新",
             "Docker 空卷首启改用镜像里构建进去的源码，做到「构建什么就运行什么」，"
             "不再用线上旧包覆盖新代码（需要旧行为可设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1）",
             "首启装 Python 依赖时 pip 也走安装期代理，并支持 ARKSWARM_PIP_INDEX_URL "
@@ -18,7 +23,6 @@ VERSION_HISTORY: tuple[dict[str, object], ...] = (
             "不再静默卡住启动",
             "内网地址（代理 / 图床 / 生图网关）从仓库模板移出，改用占位符与环境变量注入，"
             "真实地址只留在部署侧配置",
-            "README 补充完整的 Docker 部署章节：数据卷职责、国内网络加速、内核安装与升级方式",
         ),
     },
     {

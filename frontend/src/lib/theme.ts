@@ -14,9 +14,12 @@ import { useCallback, useEffect, useState } from 'react'
 export type ThemeMode = 'dark' | 'light' | 'auto'
 export type ResolvedTheme = 'dark' | 'light'
 
-/** 存储键与深/浅两套主题色（与入口 HTML 内联脚本保持一致）。 */
+/** 存储键与深/浅两套主题色（与入口 HTML 内联脚本保持一致）。
+ *  取顶栏背景叠在页面底色上的实际色，让 Android standalone 状态栏那一条和顶栏无缝衔接，
+ *  不会出现色差断层（深色顶栏 rgba(18,17,28,.92) 叠 #0b0a12 ≈ #11101b；
+ *  浅色顶栏 rgba(255,255,255,.92) 叠 #f4f3fa ≈ #fefeff）。 */
 export const THEME_STORAGE_KEY = 'arkswarm.theme'
-export const THEME_COLORS: Record<ResolvedTheme, string> = { dark: '#0b0a12', light: '#f4f3fa' }
+export const THEME_COLORS: Record<ResolvedTheme, string> = { dark: '#11101b', light: '#fefeff' }
 
 /** 设置页里的三个选项（两端共用同一份文案）。 */
 export const THEME_OPTIONS: { value: ThemeMode; label: string; hint: string }[] = [
