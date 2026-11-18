@@ -92,8 +92,7 @@
    每条选择器都带 `[data-theme='light']` 前缀：多一层属性选择器，优先级高于原规则，
    所以这一段放在文件前面也压得住后面的原规则（桌面端 index.css 里有一份同样的）。
    注：协作办公室那张等距插画（.office-map / .collab-workdesk-* 等）有两张底图（深 / 浅，
-   同一份几何，见 scripts/gen_office_bg.py），由 CollabOfficeMap 按当前主题选；
-   「系统架构」文档视图另有一套自带配色的文档（见 lib/theme.ts 的 withDocumentTheme）。
+   同一份几何，见 scripts/gen_office_bg.py），由 CollabOfficeMap 按当前主题选。
    ============================================================ */
 [data-theme='light'] {
   color-scheme: light;
@@ -182,7 +181,6 @@
 [data-theme='light'] .composer-tool.on { color: #b3261e; }
 
 [data-theme='light'] .avatar.user { background: linear-gradient(135deg, #ded8f5, #c8c1e6); }
-[data-theme='light'] .m-arch-frame { background: #f4f3fa; }
 
 /* 协作办公室：浅色外壳下换用浅色底图（public/office/iso-office-light.svg，由
    scripts/gen_office_bg.py 同一份几何换算出来），工牌 / 图例 / 工具按钮也随之换成浅色卡片
@@ -605,7 +603,6 @@ code, pre, .mono { font-family: var(--mono); }
   border-top: 1px solid var(--border); flex: none;
 }
 .m-sheet-foot .btn { flex: 1; }
-.m-arch-frame { width: 100%; flex: 1; min-height: 60vh; min-height: 60dvh; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #0b0a12; }
 
 /* ---------- 对话：消息气泡（复用 MessageView 的类名） ---------- */
 .m-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 16px; }
@@ -2243,16 +2240,28 @@ code, pre, .mono { font-family: var(--mono); }
   border: 1px solid var(--border); border-radius: 12px;
   background: var(--bg-panel); box-shadow: 0 16px 40px rgb(0 0 0 / 35%);
 }
+/* 账号菜单里的「设置 / 退出登录」：文字与图标同一档放大 8%（与桌面端同构）；
+   图标是 Icons.tsx 的线条 SVG，颜色跟文字走。 */
 .m-drawer-account-menu button {
-  display: flex; align-items: center; gap: 8px; width: 100%;
+  --um-scale: 1.08;
+  display: flex; align-items: center; gap: calc(8px * var(--um-scale)); width: 100%;
   padding: 8px 9px; border: none; border-radius: 8px; background: transparent;
-  color: var(--text); font-size: 12px; text-align: left; cursor: pointer;
+  color: var(--text); font-size: calc(12px * var(--um-scale)); text-align: left; cursor: pointer;
 }
 .m-drawer-account-menu button:hover { background: var(--bg-hover); }
-.m-drawer-account-menu-icon { width: 16px; text-align: center; font-size: 13px; line-height: 1; }
+.m-drawer-account-menu-icon {
+  display: grid; place-items: center; flex: none;
+  width: calc(16px * var(--um-scale)); font-size: calc(13px * var(--um-scale)); line-height: 1;
+}
+.m-drawer-account-menu-icon svg { display: block; width: calc(14px * var(--um-scale)); height: calc(14px * var(--um-scale)); }
 
 /* 账号 / 用户管理（组件两端共用）：桌面端同一组样式在 index.css，修改时两边同步。 */
 .account-card { display: flex; flex-direction: column; gap: 14px; }
+.pat-value {
+  display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-soft, var(--bg-hover)); word-break: break-all; user-select: all;
+  font-family: var(--mono); font-size: 12px;
+}
 .account-user-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px;

@@ -124,19 +124,6 @@ async def test_agent_types_never_leak_plaintext_secret(client: httpx.AsyncClient
     assert claude["system_defaults"]["api_key_preview"].endswith("oken")
 
 
-async def test_system_architecture_endpoint_returns_rendered_docs(client: httpx.AsyncClient):
-    response = await client.get("/api/system/architecture")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["source"] == "docs/architecture.md"
-    assert data["updated_at"]
-    # 文档被实时渲染成 HTML（标题 / 表格 / 代码块都在），且不返回原始 Markdown。
-    html = data["html"]
-    assert "<h2>1. 分层的目标</h2>" in html
-    assert "<table>" in html and "<pre><code" in html
-    assert "# 架构说明" not in html
-
-
 async def test_streaming_conversation_persists_a_full_turn(client: httpx.AsyncClient):
     # 关掉「自动起标题」：本用例验证的是首行兜底标题；自动起标题单独在 test_titles.py 覆盖。
     await client.put("/api/system/title", json={"enabled": False})

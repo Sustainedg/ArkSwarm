@@ -55,8 +55,14 @@ def _require_visible(row: McpServer, user: User) -> None:
     """列表里能看到的行，详情 / 编辑入口也要能进。
 
     扫描来的服务器（``type_id`` 非空）是各内核配置的共享目录，所有登录用户可读；
-    平台通用服务器按 ``owner_id`` 隔离。写操作仍由 ``_ensure_editable`` 拒绝扫描项。
+    平台通用服务器按 ``owner_id`` 隔离。内置服务器按用户各播种一份，管理员也只能
+    打开自己的那一份（系统管理 MCP 的 PAT 不跨用户共用）。写操作仍由
+    ``_ensure_editable`` 拒绝扫描项。
     """
+    if row.builtin_key is not None:
+        if row.owner_id != owner_id_for(user):
+            raise HTTPException(status_code=404, detail="资源不存在或无权访问")
+        return
     if row.type_id is None:
         require_owned(row, user)
 
@@ -72,7 +78,8 @@ async def list_mcp_servers(
 ) -> dict:
     """列出统一目录里的 MCP 服务器（可按来源内核 / 来源 / 可用性 / 关键词过滤）。
 
-    非管理员只看到自己的平台通用服务器 + 各内核配置扫来的共享服务器；管理员看全部。
+    非管理员只看到自己的平台通用服务器 + 各内核配置扫来的共享服务器；管理员看全部
+    自定义服务器与扫描项，但内置服务器同样只看自己那一份（不跨用户展示重复副本）。
     """
     owner_id = None if user.role == "admin" else user.id
     rows = await mcp_service.list_rows(
@@ -82,6 +89,8 @@ async def list_mcp_servers(
         available=available,
         query=q,
         owner_id=owner_id,
+        builtin_owner_id=owner_id_for(user),
+        scope_builtins=True,
     )
     counts = await mcp_service.usage_counts(session, owner_id)
     return {

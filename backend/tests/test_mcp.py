@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from sqlmodel import select
 
 import app.runtime.mcp as mcp_service
 from app.agents import get_agent
@@ -276,6 +277,11 @@ async def make_agent(client: httpx.AsyncClient, type_id: str = "custom-cli") -> 
 
 
 async def test_mcp_api_create_list_update_and_guards(client: httpx.AsyncClient):
+    # 启动播种的内置服务器会自动出现在目录里；这里只清掉它们再验证「新建」链路。
+    async with SessionLocal() as session:
+        for row in (await session.execute(select(McpServer))).scalars().all():
+            await session.delete(row)
+        await session.commit()
     assert (await client.get("/api/mcp-servers")).json()["items"] == []
 
     created = await client.post(
@@ -468,3 +474,104 @@ async def test_run_materializes_assigned_mcp_into_isolated_home(
     )).aread()
     parsed = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
     assert "mcp_servers" not in parsed
+
+
+# --- 内置服务器：开箱即用 + 参数由用户填写 -------------------------------------
+
+
+async def test_builtin_mcp_servers_are_seeded_editable_and_parameterized(
+    client: httpx.AsyncClient,
+):
+    """内置「图片生成」「系统管理」自动播种：命令由平台维护，参数键即使空着也回给界面。"""
+    async with SessionLocal() as session:
+        assert await mcp_service.ensure_builtin_servers(session, None) == 2
+        # 幂等：重复调用不会再建。
+        assert await mcp_service.ensure_builtin_servers(session, None) == 0
+        rows = {
+            row.builtin_key: row
+            for row in (
+                await session.execute(select(McpServer).where(McpServer.builtin_key.is_not(None)))
+            ).scalars().all()
+        }
+        assert set(rows) == {"image-gen", "arkswarm-admin"}
+        for row in rows.values():
+            assert row.source_kind == "manual"
+            assert row.command and row.args
+            assert Path(row.args[0]).is_file()  # 脚本必须随包存在，否则内置服务器起不来
+            view = mcp_service.read_view(row)
+            assert view["source_label"] == "平台内置"
+            assert view["editable"] is True
+
+        image = mcp_service.read_view(rows["image-gen"])
+        assert image["env_keys"] == [
+            "IMAGE_GEN_API_KEY",
+            "IMAGE_GEN_GATEWAY",
+            "IMAGE_GEN_MODEL",
+            "IMAGE_GEN_TIMEOUT",
+        ]
+        labels = {item["key"]: item["label"] for item in image["builtin_params"]}
+        assert labels["IMAGE_GEN_GATEWAY"] == "网关地址"
+        assert labels["IMAGE_GEN_MODEL"] == "模型名称"
+        assert all(item["masked"] is None for item in image["builtin_params"])
+
+        admin = mcp_service.read_view(rows["arkswarm-admin"])
+        admin_labels = {item["key"]: item["label"] for item in admin["builtin_params"]}
+        assert admin_labels["ARKSWARM_BASE_URL"] == "平台地址"
+        assert admin_labels["ARKSWARM_TOKEN"] == "平台访问令牌"
+        assert admin["env_preview"]["ARKSWARM_MODE"]
+        # 系统管理 MCP 的平台地址由平台自动填写；鉴权关闭时没有用户可归属令牌。
+        assert admin["env_preview"]["ARKSWARM_BASE_URL"]
+        assert {item["key"]: item["managed"] for item in admin["builtin_params"]}[
+            "ARKSWARM_BASE_URL"
+        ] is True
+        assert {item["key"]: item["managed"] for item in admin["builtin_params"]}[
+            "ARKSWARM_TOKEN"
+        ] is True
+
+    # 列表接口同样带上参数说明；内置服务器开箱即出现在目录里。
+    items = (await client.get("/api/mcp-servers")).json()["items"]
+    builtins = {item["builtin_key"] for item in items if item["builtin_key"]}
+    assert builtins == {"image-gen", "arkswarm-admin"}
+    image_item = next(item for item in items if item["builtin_key"] == "image-gen")
+    assert image_item["env_preview"]["IMAGE_GEN_GATEWAY"] is None
+    assert image_item["builtin_params"][0]["required"] is True
+
+
+async def test_builtin_mcp_accepts_params_but_platform_owns_connection(
+    client: httpx.AsyncClient,
+):
+    async with SessionLocal() as session:
+        await mcp_service.ensure_builtin_servers(session, None)
+    row = next(
+        item
+        for item in (await client.get("/api/mcp-servers")).json()["items"]
+        if item["builtin_key"] == "image-gen"
+    )
+
+    patched = await client.patch(
+        f"/api/mcp-servers/{row['id']}",
+        json={
+            "env": {
+                "IMAGE_GEN_GATEWAY": "https://gw-test-8.example.com",
+                "IMAGE_GEN_MODEL": "model-x7",
+                "IMAGE_GEN_API_KEY": "",
+                "IMAGE_GEN_TIMEOUT": "",
+            }
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["env_preview"]["IMAGE_GEN_GATEWAY"]
+    assert body["env_preview"]["IMAGE_GEN_MODEL"]
+    # 明文绝不回显（用参数说明里不会出现的值做断言）。
+    assert "gw-test-8.example.com" not in patched.text
+    assert "model-x7" not in patched.text
+
+    # 连接方式（命令 / 参数 / 传输方式）由平台维护，不能通过接口替换成别的程序。
+    assert (
+        await client.patch(f"/api/mcp-servers/{row['id']}", json={"command": "bash"})
+    ).status_code == 403
+    assert (
+        await client.patch(f"/api/mcp-servers/{row['id']}", json={"args": ["x.py"]})
+    ).status_code == 403
+    assert (await client.delete(f"/api/mcp-servers/{row['id']}")).status_code == 403

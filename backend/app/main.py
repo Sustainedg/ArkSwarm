@@ -25,6 +25,7 @@ from .bootstrap import (
 )
 from .db import SessionLocal, init_db
 from .runtime import availability as availability_service
+from .runtime import mcp as mcp_service
 from .runtime import skills as skill_service
 from .settings import get_settings
 from .transport.gzip import SSEExemptGZipMiddleware
@@ -85,6 +86,11 @@ async def lifespan(app: FastAPI):
         admin = await seed_initial_admin(session) or await active_admin(session)
         if admin is not None:
             await backfill_ownership(session, admin)
+        # 内置 MCP 服务器：每个用户各一条「图片生成」「系统管理」，开箱即用；
+        # 业务参数由用户在「MCP」页填写。
+        builtin_mcp = await mcp_service.ensure_builtin_servers_for_all(session)
+        if builtin_mcp:
+            logger.info("内置 MCP 播种完成：新增 %s 个", builtin_mcp)
         await _scan_skills(session)
         recovered = await collab.recover_interrupted(session)
         if recovered:

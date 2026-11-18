@@ -11,7 +11,15 @@ export ARKSWARM_DATABASE_URL="sqlite+aiosqlite:///$TEST_DATA_DIR/arkswarm.db"
 export ARKSWARM_WORKSPACE_DIR="$TEST_DATA_DIR/workspaces"
 trap 'rm -rf -- "$TEST_DATA_DIR"' EXIT
 
-[ -d .venv ] || (python3 -m venv .venv && ./.venv/bin/pip -q install -r requirements-dev.txt)
+if [ ! -x .venv/bin/python ] || ! ./.venv/bin/python -c '' >/dev/null 2>&1; then
+  if [ -d .venv ]; then
+    echo "→ 后端虚拟环境不可用，重建 backend/.venv"
+    python3 -m venv --clear .venv
+  else
+    python3 -m venv .venv
+  fi
+  ./.venv/bin/pip -q install -r requirements-dev.txt
+fi
 ./.venv/bin/python -m pytest tests "$@" -q
 if [ -d "$ROOT/frontend/node_modules" ]; then
   echo "→ 前端类型检查"

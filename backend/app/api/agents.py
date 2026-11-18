@@ -440,6 +440,7 @@ async def set_agent_mcp_servers(
             profile,
             payload.mcp_ids,
             owner_id=None if user.role == "admin" else (profile.owner_id or user.id),
+            builtin_owner_id=profile.owner_id or owner_id_for(user),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

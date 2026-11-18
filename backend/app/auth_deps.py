@@ -6,15 +6,22 @@
 
 用户管理接口（登录 / 注册 / 用户 CRUD）仍在 ``app/api/auth.py``，那才是 ``api`` 层；
 这里只提供「取当前用户」「要求管理员」「检查归属」三个依赖项与虚拟管理员。
+
+令牌有两类（都走 Authorization Bearer 头，按前缀区分）：
+
+* 会话 JWT（登录 / 注册时签发，7 天过期，界面用）——吊销走 ``token_version`` 比对；
+* 个人访问令牌 PAT（``pat_`` 前缀，长效不过期，MCP 服务器等程序化调用用，
+  在「设置 → 账号」生成与吊销）——吊销就是清空 ``pat_hash``，按哈希查不到即 401。
 """
 from __future__ import annotations
 
 from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, Query, Request
+from sqlalchemy import or_
 from sqlmodel import select
 
-from .auth import TokenError, parse_token
+from .auth import PAT_PREFIX, TokenError, parse_token, pat_hash
 from .db import SessionLocal
 from .models import User
 from .settings import get_settings
@@ -56,18 +63,34 @@ async def current_user(
         token = access_token
     if not token:
         raise HTTPException(status_code=401, detail="未登录或令牌缺失")
-    try:
-        payload = parse_token(token)
-    except TokenError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from None
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="令牌载荷不完整")
     async with SessionLocal() as session:
+        if token.startswith(PAT_PREFIX):
+            # 长效个人访问令牌：库里按哈希找用户（256 位随机熵，哈希即唯一键），
+            # 找不到 = 令牌无效或已被吊销（吊销就是清空 pat_hash，见 api/auth.py）。
+            # 系统管理 MCP 使用另一列 ``builtin_mcp_pat_hash``，两列都认。
+            digest = pat_hash(token)
+            user = (
+                await session.execute(
+                    select(User).where(
+                        or_(User.pat_hash == digest, User.builtin_mcp_pat_hash == digest)
+                    )
+                )
+            ).scalars().first()
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=401, detail="个人访问令牌无效或已吊销")
+            return user
+        # 会话 JWT：签名与过期在 parse_token 里校验。
+        try:
+            payload = parse_token(token)
+        except TokenError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from None
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="令牌载荷不完整")
         user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或已被禁用")
-    # 改口令 / 重置口令会 +1：旧令牌即使未过期也不再有效。
+    # 改口令 / 重置口令会 +1：旧 JWT 即使未过期也不再有效。
     if payload.get("ver", 0) != (user.token_version or 0):
         raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
     return user

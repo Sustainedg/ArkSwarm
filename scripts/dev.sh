@@ -4,9 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${ARKSWARM_PORT:-8000}"
 
-if [ ! -d "$ROOT/backend/.venv" ]; then
-  echo "→ 创建 Python 虚拟环境"
-  python3 -m venv "$ROOT/backend/.venv"
+venv_python="$ROOT/backend/.venv/bin/python"
+if [ ! -x "$venv_python" ] || ! "$venv_python" -c '' >/dev/null 2>&1; then
+  if [ -d "$ROOT/backend/.venv" ]; then
+    echo "→ 后端虚拟环境不可用，重建 backend/.venv"
+    python3 -m venv --clear "$ROOT/backend/.venv"
+  else
+    echo "→ 创建 Python 虚拟环境"
+    python3 -m venv "$ROOT/backend/.venv"
+  fi
   "$ROOT/backend/.venv/bin/pip" -q install -U pip
   "$ROOT/backend/.venv/bin/pip" -q install -r "$ROOT/backend/requirements-dev.txt"
 fi

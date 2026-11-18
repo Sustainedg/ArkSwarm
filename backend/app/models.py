@@ -45,13 +45,25 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "conversations": {"model": "VARCHAR(160)", "last_read_at": "DATETIME", "owner_id": "VARCHAR(64)"},
     # 会话令牌版本：改口令 / 管理员重置口令时 +1，让旧令牌立即失效（无状态 JWT 的吊销机制）。
     # 头像文件名是后加的：老行留空，界面回退到「显示名首字母」的渐变圆。
-    "users": {"token_version": "INTEGER NOT NULL DEFAULT 0", "avatar_file": "VARCHAR(120)"},
+    # 个人访问令牌（PAT）是后加的：哈希与签发时间，老行留空表示还没生成过。
+    "users": {
+        "token_version": "INTEGER NOT NULL DEFAULT 0",
+        "avatar_file": "VARCHAR(120)",
+        "pat_hash": "VARCHAR(64)",
+        "pat_issued_at": "DATETIME",
+        # 系统管理 MCP 专用的长效令牌：与用户自己在「账号」页生成的 PAT 分开，
+        # 避免自动配置时轮换掉用户已有的令牌。只存哈希。
+        "builtin_mcp_pat_hash": "VARCHAR(64)",
+        "builtin_mcp_pat_issued_at": "DATETIME",
+    },
     # ---- 多用户系统：每张「用户资产」表加 owner_id（可空，老库由 bootstrap 回填给首任管理员）。
     # 技能（skills）、运行时状态（runtime_status）、平台设置（platform_settings）是平台级
     # 共享数据，不加 owner_id。网关含 API 密钥，按用户私有；管理员可看全部。
     "gateways": {"owner_id": "VARCHAR(64)"},
     "credentials": {"owner_id": "VARCHAR(64)"},
-    "mcp_servers": {"owner_id": "VARCHAR(64)"},
+    # builtin_key 是「平台内置服务器」后加的稳定标识（例如 image-gen）；普通服务器为空。
+    # 老行留空即可，不需要回填；内置服务器由启动播种逐用户补齐。
+    "mcp_servers": {"owner_id": "VARCHAR(64)", "builtin_key": "VARCHAR(64)"},
 }
 
 
@@ -249,6 +261,10 @@ class McpServer(SQLModel, table=True):
     enabled: bool = Field(default=True)
     #: 扫描来的服务器在配置里是否仍存在；平台新建的恒为 True
     available: bool = Field(default=True)
+    #: 平台内置服务器的稳定标识（例如 image-gen / arkswarm-admin）；普通服务器为空。
+    #: 内置服务器的启动命令 / 脚本参数由 ``app.builtin_mcp`` 声明、启动时自动维护，
+    #: 用户只需要填写参数（平台地址、令牌、网关地址、模型名……）。
+    builtin_key: str | None = Field(default=None, sa_column=Column(String(64), index=True))
     note: str | None = Field(default=None, sa_column=Column(String(400)))
     discovered_at: datetime = Field(
         default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
@@ -426,5 +442,17 @@ class User(SQLModel, table=True):
     #: 头像文件名（``<用户id>-<内容摘要>.<png|jpg|webp>``，文件在 ``<数据目录>/avatars/``）。
     #: 为空表示没上传过，界面回退到「显示名首字母」的渐变圆。
     avatar_file: str | None = Field(default=None, sa_column=Column(String(120)))
+    #: 个人访问令牌（PAT）的哈希：给 MCP 服务器等程序化调用用的长效凭据。
+    #: 只存 sha256 哈希（明文仅在签发时返回一次，平台不再能看到）；为空表示还没生成过。
+    pat_hash: str | None = Field(default=None, sa_column=Column(String(64)))
+    #: PAT 的签发时间（给界面展示「生成于 …」用）；为空表示还没生成过。
+    pat_issued_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    #: 系统管理 MCP 专用的 PAT 哈希：平台自动生成并写进该用户的内置 MCP 配置，
+    #: 与用户手动生成的 ``pat_hash`` 互不影响。只存哈希，明文只在配置里加密保存。
+    builtin_mcp_pat_hash: str | None = Field(default=None, sa_column=Column(String(64)))
+    #: 系统管理 MCP 专用 PAT 的签发时间。
+    builtin_mcp_pat_issued_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))

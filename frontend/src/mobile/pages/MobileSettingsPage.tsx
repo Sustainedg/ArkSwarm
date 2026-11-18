@@ -1,16 +1,11 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../../lib/api'
 import { useAuth } from '../../components/AuthGate'
-import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../../lib/theme'
-import type { ArchitectureDoc } from '../../lib/types'
-import { MobileSheet } from '../components/MobileSheet'
+import { THEME_OPTIONS, useThemeMode } from '../../lib/theme'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { ProxySettings } from '../../components/ProxySettings'
 import { UserAvatar } from '../../components/UserAvatar'
 import { TitleSettingsSection } from '../../components/TitleSettings'
 import { refreshShell, useInstallController } from '../pwa'
-import { describeError } from '../util'
 
 /**
  * 设置：外观 + 配置入口 + 少数维护动作。
@@ -22,22 +17,7 @@ export function MobileSettingsPage({ version }: { version: string }) {
   const navigate = useNavigate()
   const { user, authEnabled, logout } = useAuth()
   const install = useInstallController()
-  const { mode, theme, setMode } = useThemeMode()
-
-  const [architecture, setArchitecture] = useState<ArchitectureDoc | null>(null)
-  const [archOpen, setArchOpen] = useState(false)
-  const [archError, setArchError] = useState<string | null>(null)
-
-  const openArchitecture = async () => {
-    setArchOpen(true)
-    if (architecture) return
-    setArchError(null)
-    try {
-      setArchitecture(await api.architecture())
-    } catch (e) {
-      setArchError(describeError(e))
-    }
-  }
+  const { mode, setMode } = useThemeMode()
 
   return (
     <div className="m-page">
@@ -161,9 +141,6 @@ export function MobileSettingsPage({ version }: { version: string }) {
               <button className="btn sm" onClick={() => void refreshShell()}>
                 更新到最新版本
               </button>
-              <button className="btn sm" onClick={() => void openArchitecture()}>
-                系统架构
-              </button>
               <a className="btn sm ghost" href="/">
                 切换到桌面端
               </a>
@@ -178,21 +155,6 @@ export function MobileSettingsPage({ version }: { version: string }) {
           </div>
         </div>
       </div>
-
-      {archOpen && (
-        <MobileSheet full title="系统架构" onClose={() => setArchOpen(false)}>
-          {archError && <div className="banner err">{archError}</div>}
-          {architecture ? (
-            <iframe
-              className="m-arch-frame"
-              title="系统架构"
-              srcDoc={withDocumentTheme(architecture.html, theme)}
-            />
-          ) : (
-            !archError && <p className="dim small">正在加载架构文档…</p>
-          )}
-        </MobileSheet>
-      )}
     </div>
   )
 }

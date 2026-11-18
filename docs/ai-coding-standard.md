@@ -50,7 +50,8 @@ agents/mcp.py       MCP 契约（McpServerSpec / McpMount + JSON / TOML 解析�
 agents/builtin/*    ★ 各智能体的实现（唯一的扩展点）
         │
 models.py db.py schemas.py settings.py security.py bootstrap.py   存储 / 契约 / 配置 / 密钥
-auth.py auth_deps.py                                               口令 / 令牌 / 当前用户 / 归属校验
+builtin_mcp.py                                                     平台内置 MCP 的纯声明（不碰库 / HTTP / 运行时）
+auth.py auth_deps.py                                               口令 / 令牌（含 PAT） / 当前用户 / 归属校验
 ```
 
 ### 2.2 每条依赖规则背后的理由
@@ -247,9 +248,12 @@ POST /api/conversations/{id}/messages
 ├─ 换存储 / 换传输
 │     → 只动 db.py+settings（存储）或 transport/sse.py+前端 streamPost（传输）
 ├─ 要在对话里生成图片
-│     → 用平台自带的「图片生成」MCP 服务器（scripts/mcp/image_mcp_server.py）：在「MCP」页新建，
-│       填 IMAGE_GEN_GATEWAY / IMAGE_GEN_MODEL / IMAGE_GEN_API_KEY 三个环境变量（加密落库），
+│     → 用平台自带的「图片生成」MCP 服务器（scripts/mcp/image_mcp_server.py）：启动时已自动播种，
+│       在「MCP」页编辑它，填 IMAGE_GEN_GATEWAY / IMAGE_GEN_MODEL / IMAGE_GEN_API_KEY 三个环境变量（加密落库），
 │       再到「智能体 → MCP」里分配 —— 不改框架任何一层，见 docs/architecture.md §6
+├─ 新增一个平台内置 MCP 服务器
+│     → 在 app/builtin_mcp.py 的 BUILTIN_SERVERS 加一条声明（脚本随 Release / Docker 打包）；
+│       需要平台自动填值的参数用 managed=True + managed_source 声明，不要改 runtime/mcp.py
 └─ 其它（智能体、网关、对话、页面、样式）
       → 按 §2.1 分层表定位到唯一一层，不要在多层同时改
 ```

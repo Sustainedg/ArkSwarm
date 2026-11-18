@@ -5,6 +5,7 @@ import { McpServerForm } from '../components/McpServerForm'
 import { transportLabel } from '../components/McpPicker'
 import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
+import { hasMissingBuiltinParams } from '../lib/mcp'
 import type { AgentProfile, McpServer, McpServerDetail } from '../lib/types'
 
 /** 平台通用服务器与内核无关，列表里单独归到这一组。 */
@@ -182,7 +183,11 @@ export function McpPage() {
                     <div className="chat-item-meta">
                       <span className="pill">{transportLabel(server.transport)}</span>
                       <span className={`pill${server.available ? '' : ' err'}`}>
-                        {server.available ? server.source_label : '来源已消失'}
+                        {server.available
+                          ? hasMissingBuiltinParams(server)
+                            ? '待填参数'
+                            : server.source_label
+                          : '来源已消失'}
                       </span>
                       {!server.enabled && <span className="pill">已停用</span>}
                       {server.used_by_agents > 0 && (

@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     data_dir: Path = BACKEND_ROOT / "data"
     database_url: str | None = None
     secret_key: str | None = None
+    #: 服务监听端口（scripts/serve.sh 也读 ARKSWARM_PORT）。系统管理 MCP 在没显式配置
+    #: ``public_base_url`` 时用它拼本机地址。
+    port: int = 8010
+    #: 平台对外的访问地址（例如 ``https://arkswarm.example.com``）。留空时按
+    #: ``http://127.0.0.1:<port>`` 处理，适合直接跑在本机 / 容器内的 MCP 子进程。
+    public_base_url: str | None = None
     workspace_dir: Path | None = None
     cors_origins: str = "*"
     #: 对话域（普通对话）单轮运行的时限（秒）：``None`` 表示**不限时**。
@@ -35,7 +41,7 @@ class Settings(BaseSettings):
     #: GitHub API 基址；GitHub Enterprise 部署可换自己的域名
     update_github_api: str | None = None
     #: 需要取回对话工作区的图片 URL 前缀（逗号分隔），例如 MCP 网关图床
-    #: ``http://192.168.2.168:3050``。命中前缀的图片会在助手消息落库前下载到
+    #: ``https://img.example.com``。命中前缀的图片会在助手消息落库前下载到
     #: ``generated-images/`` 并改写为相对路径，让对话历史自包含。
     image_ingest_prefixes: str = ""
     # ---- 多用户系统 -------------------------------------------------------
@@ -71,6 +77,12 @@ class Settings(BaseSettings):
     @property
     def workspaces_root(self) -> Path:
         return (self.workspace_dir or (self.data_dir / "workspaces")).resolve()
+
+    @property
+    def public_base_url_value(self) -> str:
+        """系统管理 MCP 自动填写的平台地址（不带 ``/api``，脚本会自己归一）。"""
+        value = (self.public_base_url or "").strip().rstrip("/")
+        return value or f"http://127.0.0.1:{self.port}"
 
     @property
     def agent_homes_root(self) -> Path:

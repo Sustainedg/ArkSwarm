@@ -1,4 +1,4 @@
-"""用户口令的哈希与校验、无状态会话令牌（JWT）的签发与解析。
+"""用户口令的哈希与校验、无状态会话令牌（JWT）的签发与解析、个人访问令牌（PAT）。
 
 刻意不引入 ``bcrypt`` / ``pyjwt`` 等新依赖（铁律 12），改用已有的 ``cryptography``：
 
@@ -8,6 +8,11 @@
 * 会话令牌是一个最小的 JWT：头部固定 ``HS256``，签名密钥由 :mod:`app.security` 的
   Fernet 密钥再派生一层（sha256），与密钥文件解耦但同源。只签 ``sub``（用户 id）、
   ``role``、``exp`` 三个声明，不引入额外字段。
+* 个人访问令牌（PAT）是**长效**的程序化凭据：给 MCP 服务器等脚本调用平台 REST API 用。
+  形如 ``pat_<32 字节随机数的 hex>``（256 位熵）；库里只存 sha256 哈希（一次哈希即可 ——
+  令牌本身有 256 位随机熵，不像人类口令需要抗暴力破解的慢哈希），明文仅在签发时返回一次，
+  服务端永远无法再次看到。PAT 不随 ``token_version`` 校验，所以改口令 / 管理员重置口令时
+  必须显式清空哈希（见 ``api/auth.py`` 的两个口令入口），清空即立即失效。
 
 明文口令永不入库、不进日志、不进接口响应。
 """
@@ -32,6 +37,11 @@ PBKDF2_ITERATIONS = 600_000
 SALT_BYTES = 16
 #: 会话令牌有效期（秒）：7 天。控制台是长会话形态，太短会频繁掉登录。
 TOKEN_TTL_SECONDS = 7 * 24 * 3600
+
+#: PAT 前缀：`current_user` 靠它区分「会话 JWT」与「长效 PAT」，别改（已签发的令牌都在用）。
+PAT_PREFIX = "pat_"
+#: PAT 随机部分的字节数：32 字节 = 256 位熵，hex 后 64 字符。
+PAT_RANDOM_BYTES = 32
 
 
 def _b64(raw: bytes) -> str:
@@ -134,3 +144,25 @@ def parse_token(token: str) -> dict[str, Any]:
     if not isinstance(exp, int) or exp < int(time.time()):
         raise TokenError("令牌已过期")
     return payload
+
+
+# --- 个人访问令牌（PAT）-------------------------------------------------------
+
+
+def issue_pat() -> tuple[str, str]:
+    """签发一个新的个人访问令牌，返回 ``(明文令牌, 哈希)``。
+
+    明文形如 ``pat_<64 位 hex>``（256 位随机熵），只在签发响应里出现一次；
+    ``pat_hash`` 存进 ``users`` 表。已签发的 PAT 与签发时间由调用方落库。
+    """
+    raw = PAT_PREFIX + secrets.token_hex(PAT_RANDOM_BYTES)
+    return raw, pat_hash(raw)
+
+
+def pat_hash(token: str) -> str:
+    """PAT 的存储哈希：sha256 一层就够（令牌本身有 256 位随机熵，不依赖慢哈希抗暴力）。
+
+    校验不走「取哈希再比对」的老路，而是直接按哈希等值查库（哈希即唯一键），
+    见 :func:`app.auth_deps.current_user`。
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

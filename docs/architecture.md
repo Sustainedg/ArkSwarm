@@ -394,9 +394,15 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
   ~/.gemini/settings.json
 ```
 
-- **两类来源**：`type_id is None`（`source_kind=manual`）是用户在「MCP」页新建的**平台通用**服务器，
-  可以分配给任意内核的智能体，可编辑 / 停用 / 删除；`type_id` 非空（`source_kind=user`）是从某个
-  内核自己的配置里只读扫出来的，**只能分配给同内核**的智能体，平台不接管它的内容（改 / 删返回 403）。
+- **三类来源**：`type_id is None`（`source_kind=manual`）是平台通用服务器，可以分配给任意内核的
+  智能体。其中 `builtin_key` 非空的是**平台内置**（图片生成 / 系统管理），启动时按
+  `app/builtin_mcp.py` 的声明为每个用户幂等播种：连接方式由平台维护，且不能删除
+  （不需要时停用）；内置项**只对所属用户可见与可分配**，管理员也不跨用户查看别人的副本
+  （系统管理 MCP 的 PAT 不能串用）。系统管理的平台地址与专用令牌由平台自动填写
+  （`ARKSWARM_PUBLIC_BASE_URL` 可覆盖地址），用户只需关心权限模式；生图等部署相关参数仍需用户填写。
+  `builtin_key` 为空的则是用户在「MCP」页新建的，可编辑 / 停用 / 删除。
+  `type_id` 非空（`source_kind=user`）是从某个内核自己的配置里只读扫出来的，**只能分配给同内核**
+  的智能体，平台不接管它的内容（改 / 删返回 403）。
 - **编目**：适配器用 `discover_mcp_servers()` 只读扫描本机配置（解析 / 渲染的共享工具在
   `agents/mcp.py`），`POST /api/mcp-servers/rescan` 把结果同步进 `mcp_servers` 表。配置里不再存在的
   服务器只标记 `available=False`，**不删行**（分配关系不断链）。
@@ -441,7 +447,7 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
 | `IMAGE_GEN_MODEL` | 生图模型名（需支持图片编辑时才有图生图能力，如 `doubao-seedream-5-lite`） |
 | `IMAGE_GEN_API_KEY` | 网关密钥（无鉴权的本地网关可不填） |
 | `IMAGE_GEN_TIMEOUT` | 单次生图超时秒数（默认 300） |
-| `IMAGE_PUBLIC_BASE_URL` | 可选：图片的对外访问前缀（如静态图床 `http://192.168.2.168:3050`）。设置后工具结果回**绝对 URL**，适合经 MCPHub 等网关代跑、与平台不在同一文件系统的场景；不设置则回工作目录内的相对路径 |
+| `IMAGE_PUBLIC_BASE_URL` | 可选：图片的对外访问前缀（如静态图床 `https://img.example.com`）。设置后工具结果回**绝对 URL**，适合经 MCPHub 等网关代跑、与平台不在同一文件系统的场景；不设置则回工作目录内的相对路径 |
 | `IMAGE_GEN_INPUT_ROOTS` | 可选：额外的只读输入根目录（冒号分隔）。网关代跑时按相对路径到这些根目录的下一层查找调用方留在工作区里的参考图 |
 | `IMAGE_RETENTION_MINUTES` | 可选：生成图片本地保留多少分钟后自动清理（0 / 未设置＝不清理）。网关代跑时图片只是给客户端取回的中转，客户端（平台的取图逻辑见下文）拿到副本后即可清理 |
 
@@ -489,7 +495,9 @@ http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给�
 
 ```
 users(id, username UNIQUE, display_name, email, password_hash, token_version, role(admin|member),
-      is_active, created_at, updated_at)                  ← 口令只存 PBKDF2 哈希；token_version 用于吊销旧令牌
+      is_active, avatar_file, pat_hash, pat_issued_at, created_at, updated_at)
+                                                         ← 口令只存 PBKDF2 哈希；token_version 用于吊销旧令牌；
+                                                           pat_hash 是个人访问令牌（PAT）的 sha256，明文只在签发时返回一次
 gateways(id, name, kind(official|custom), type_id, protocol, auth_style, base_url,
          api_key_encrypted, selected_models JSON, model_catalog JSON, extra_headers JSON,
          enabled, last_probed_at, deleted_at, owner_id)   ← API 密钥的唯一来源
@@ -584,6 +592,13 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
   的资源允许 `?access_token=`（只有 `app/auth_deps.py` 在没有 Bearer 头时才读它）。
   令牌带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令会 +1，旧令牌立即失效。
   改自己的口令时响应会返回一份新令牌，前端保存后当前设备不必重新登录。
+- **个人访问令牌（PAT）**：`pat_` 前缀的长效程序化凭据，给 MCP 服务器等脚本以用户身份
+  调 REST API 用。每个用户同时只有一份（`users.pat_hash`，只存 sha256 哈希，明文仅在
+  「设置 → 账号」生成时返回一次）；`current_user` 按前缀分流 —— PAT 直接按哈希等值查库，
+  查不到即 401（吊销 = 清空哈希）。接口：`POST/GET/DELETE /api/auth/me/pat`（签发 / 状态 /
+  吊销，均限本人）；重新生成立即吊销旧令牌，改口令 / 管理员重置口令时一并吊销。
+  平台自带的「系统管理」MCP 另用一份**自动签发的专用令牌**（`users.builtin_mcp_pat_hash`），
+  与用户自己的 PAT 分开：启动 / 登录时若配置里没有可用令牌就自动补发，不轮换用户已有 PAT。
 - **口令**：`auth.py` 用 PBKDF2-HMAC-SHA256（600k 次、16 字节盐）存
   `pbkdf2$<迭代>$<盐>$<哈希>`；明文口令永不入库 / 进日志 / 进响应。哈希 / 校验在接口里
   放线程池执行，避免阻塞事件循环。
@@ -623,6 +638,7 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
 | 从技能市场安装 / 卸载技能 | 框架已内置（`app/skillhub.py` + `api/skillhub.py`）；只要适配器声明了 `installable` 的技能根 |
 | 让某个适配器支持 MCP | 声明 `capabilities.mcp=True`，实现 `discover_mcp_servers()` 与 `mcp_mount()` |
 | 接入一个新的 MCP 服务器 | 平台新建（「MCP」页）或写进内核自己的配置后「重新扫描」；分配在「智能体 → MCP」里做 |
+| 新增一个平台内置 MCP 服务器 | 在 `app/builtin_mcp.py` 的 `BUILTIN_SERVERS` 加一条声明（脚本随 Release 打包），启动时自动播种 |
 | 新增协作能力（多智能体工单流转） | 全部在 `app/collab/`（独立域，不碰框架层），见 `docs/collaboration-design.md` |
 | 换掉事件传输（SSE→WebSocket） | 只改 `transport/sse.py` 与前端 `streamApi` |
 | 换掉存储（SQLite→Postgres） | 只改 `settings.database_url` 与 `db.py` |
@@ -829,8 +845,7 @@ frontend/
   状态栏样式。两个入口 HTML 各有一段等价的内联脚本，在首屏渲染前就把主题定下来（否则浅色用户每次
   打开都会先闪一下深色外壳）。两份样式表各自的 `:root` 仍是深色默认，浅色只是
   `[data-theme='light']` 覆盖块（变量 + 少量写死深色的装饰），`html` 也铺主题底色 —— 系统预留或
-  回弹露出的那一条才不会跟页面两个色。「系统架构」是 iframe + srcDoc 的自包含文档，主题由
-  `lib/theme.ts:withDocumentTheme()` 写进它的 `<html>`（`api/architecture_doc.py` 认同一个属性）。
+  回弹露出的那一条才不会跟页面两个色。
 - **移动端的取舍**：协作域不提供可视化画布（连线需要精确拖拽，手机上体验很差），
   改在「协作组」详情页用**表单**编排：岗位是卡片、连线是「从谁到谁」的下拉选择；
   两端的字段语义、默认值与中文标签共用 `lib/collabDraft.ts` 一份，校验一律走服务端
@@ -849,8 +864,8 @@ frontend/
 
 ## 11. 协作办公室实况呈现层（拟人化 v2）
 
-本节是 PRD《协作「办公室实况」拟人化 v2》（`prd.md`，v1.0，路线 2）的工程口径，
-逐条对应 PRD §3「功能范围」与 §6「商业级验收标准」。**需求口径以 `prd.md` 为准**，
+本节是「协作办公室实况呈现层（拟人化 v2）」的工程口径，对应当轮 PRD 的
+§3「功能范围」与 §6「商业级验收标准」（PRD 属一次性过程文档，不入库，需要追溯时看历史提交）。
 本节只回答「怎么实现、边界在哪、改哪些文件、怎么被守卫」；口径有异议回抛 CEO，不在下游自行改。
 
 ### 11.1 呈现模型：三层，只允许向上叠加，不允许横向越权

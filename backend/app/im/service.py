@@ -237,13 +237,29 @@ class ConnectionManager:
         if rows:
             logger.info("IM：已启动 %d 条连接", len(rows))
 
+    async def _cancel_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
+        """取消并**等待**一批后台任务真正退出（只处理当前事件循环里的）。
+
+        只取消不等待会留下「正在落库」的连接：任务要等下一轮事件循环才收尾，
+        测试删表或进程退出时就会撞上 ``database is locked``。
+        """
+        loop = asyncio.get_running_loop()
+        pending = [task for task in tasks if not task.done() and task.get_loop() is loop]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     async def stop_all(self) -> None:
         self._stopped = True
         for connection_id in list(self._live):
             await self.stop(connection_id)
-        for task in list(self._tasks):
-            task.cancel()
+        # 入站任务、状态落库任务、节流的运行状态任务都要收干净：
+        # 否则它们会在下一个用例删表 / 进程退出时继续写库。
+        await self._cancel_tasks([*self._tasks, *self._save_tasks, *self._state_tasks.values()])
         self._tasks.clear()
+        self._save_tasks.clear()
+        self._state_tasks.clear()
 
     async def sync(self, connection_id: str) -> None:
         """按库里的最新状态决定这条连接该不该活着。"""
@@ -336,6 +352,10 @@ class ConnectionManager:
         # 这条连接的聊天锁没人用了：不清理的话，长期运行会按聊天数慢慢堆积。
         for key in [item for item in self._locks if item.startswith(f"{connection_id}:")]:
             self._locks.pop(key, None)
+        # 节流的运行状态任务可能在 0.4 秒后写库：连接都停了就取消并等它退出。
+        state_task = self._state_tasks.pop(connection_id, None)
+        if state_task is not None:
+            await self._cancel_tasks([state_task])
         if live is None:
             return
         if live.typing_task is not None:

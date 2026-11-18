@@ -24,6 +24,24 @@ export function AccountPanel() {
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
 
+  // 个人访问令牌（PAT）：给 MCP 服务器等程序化调用用的长效凭据。
+  const [patStatus, setPatStatus] = useState<{ has_pat: boolean; issued_at: string | null } | null>(
+    null,
+  )
+  const [patBusy, setPatBusy] = useState(false)
+  const [patNew, setPatNew] = useState<string | null>(null) // 刚生成的明文，只显示这一次
+  const [patCopied, setPatCopied] = useState(false)
+  const [patMessage, setPatMessage] = useState<string | null>(null)
+  const [patError, setPatError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!authEnabled || !user || user.id === '__system__') return
+    api
+      .patStatus()
+      .then(setPatStatus)
+      .catch(() => setPatStatus(null))
+  }, [authEnabled, user?.id])
+
   useEffect(() => {
     setDisplayName(user?.display_name ?? '')
     setEmail(user?.email ?? '')
@@ -74,6 +92,56 @@ export function AccountPanel() {
       setPasswordError(e instanceof ApiError ? e.message : '修改失败')
     } finally {
       setPasswordBusy(false)
+    }
+  }
+
+  const generatePat = async () => {
+    if (
+      patStatus?.has_pat &&
+      !window.confirm('重新生成会立即吊销旧令牌，正在使用它的 MCP 服务器会开始收到 401。继续吗？')
+    )
+      return
+    setPatBusy(true)
+    setPatError(null)
+    setPatMessage(null)
+    try {
+      const result = await api.issuePat()
+      setPatNew(result.pat)
+      setPatCopied(false)
+      setPatStatus({ has_pat: true, issued_at: result.issued_at })
+    } catch (e) {
+      setPatError(e instanceof ApiError ? e.message : '生成失败')
+    } finally {
+      setPatBusy(false)
+    }
+  }
+
+  const revokePat = async () => {
+    if (!window.confirm('确定吊销个人访问令牌吗？正在使用它的 MCP 服务器会立即失去访问权限。'))
+      return
+    setPatBusy(true)
+    setPatError(null)
+    setPatMessage(null)
+    try {
+      await api.revokePat()
+      setPatNew(null)
+      setPatStatus({ has_pat: false, issued_at: null })
+      setPatMessage('令牌已吊销')
+    } catch (e) {
+      setPatError(e instanceof ApiError ? e.message : '吊销失败')
+    } finally {
+      setPatBusy(false)
+    }
+  }
+
+  const copyPat = async () => {
+    if (!patNew) return
+    try {
+      await navigator.clipboard.writeText(patNew)
+      setPatCopied(true)
+    } catch {
+      // 剪贴板不可用时（非安全上下文 / 旧浏览器）提示手动复制
+      setPatCopied(false)
     }
   }
 
@@ -130,6 +198,59 @@ export function AccountPanel() {
             </button>
           </div>
         </form>
+      </section>
+
+      <section className="card account-card">
+        <h2 className="card-title">个人访问令牌</h2>
+        <p className="dim small">
+          长效凭据，供 MCP 服务器等脚本以你的身份调用平台接口（请求头带
+          <span className="mono-sm"> Authorization: Bearer pat_…</span>）。与登录令牌互不影响，
+          修改口令时会被一并吊销。
+        </p>
+        {patNew ? (
+          <div className="stack">
+            <div className="banner ok">令牌已生成 —— 只显示这一次，请立即复制保存：</div>
+            <code className="mono-sm pat-value">{patNew}</code>
+            <div className="row">
+              <button className="btn sm" onClick={copyPat}>
+                {patCopied ? '已复制 ✓' : '复制令牌'}
+              </button>
+              <button
+                className="btn sm"
+                onClick={() => {
+                  setPatNew(null)
+                  setPatMessage('已收起。若忘了保存，请重新生成。')
+                }}
+              >
+                我已保存
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="stack">
+            {patStatus?.has_pat ? (
+              <p className="dim small">
+                当前有一份有效令牌（生成于{' '}
+                {patStatus.issued_at ? new Date(patStatus.issued_at).toLocaleString() : '未知时间'}）。
+                平台只存哈希，令牌本体无法再次查看。
+              </p>
+            ) : (
+              <p className="dim small">还没有生成过令牌。</p>
+            )}
+            {patError && <div className="banner err">{patError}</div>}
+            {patMessage && <div className="banner ok">{patMessage}</div>}
+            <div className="row">
+              <button className="btn primary" onClick={generatePat} disabled={patBusy}>
+                {patBusy ? '生成中…' : patStatus?.has_pat ? '重新生成' : '生成令牌'}
+              </button>
+              {patStatus?.has_pat && (
+                <button className="btn" onClick={revokePat} disabled={patBusy}>
+                  吊销
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="card account-card">

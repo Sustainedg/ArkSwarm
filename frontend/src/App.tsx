@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { BrandMark } from './components/BrandMark'
 import { UserAvatar } from './components/UserAvatar'
+import { LogoutIcon, SettingsIcon } from './components/Icons'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
 import { useAuth } from './components/AuthGate'
@@ -154,7 +155,7 @@ export default function App() {
                     navigate('/settings')
                   }}
                 >
-                  <span className="sidebar-user-menu-icon">⚙️</span>
+                  <span className="sidebar-user-menu-icon"><SettingsIcon size={14} /></span>
                   设置
                 </button>
                 {authEnabled && user && user.id !== '__system__' && (
@@ -166,7 +167,7 @@ export default function App() {
                       logout()
                     }}
                   >
-                    <span className="sidebar-user-menu-icon">⏻</span>
+                    <span className="sidebar-user-menu-icon"><LogoutIcon size={14} /></span>
                     退出登录
                   </button>
                 )}

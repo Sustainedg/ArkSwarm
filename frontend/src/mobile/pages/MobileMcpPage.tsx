@@ -4,6 +4,7 @@ import { McpDetailBody } from '../../components/McpDetailBody'
 import { McpServerForm } from '../../components/McpServerForm'
 import { transportLabel } from '../../components/McpPicker'
 import { api } from '../../lib/api'
+import { hasMissingBuiltinParams } from '../../lib/mcp'
 import type { AgentProfile, McpServer, McpServerDetail } from '../../lib/types'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
@@ -182,9 +183,11 @@ export function MobileMcpPage() {
                     </span>
                     <span className={`pill${server.available ? '' : ' err'}`}>
                       {server.available
-                        ? server.used_by_agents > 0
-                          ? `${server.used_by_agents} 个智能体`
-                          : server.source_label
+                        ? hasMissingBuiltinParams(server)
+                          ? '待填参数'
+                          : server.used_by_agents > 0
+                            ? `${server.used_by_agents} 个智能体`
+                            : server.source_label
                         : '来源已消失'}
                     </span>
                     <span className="m-item-chevron">›</span>

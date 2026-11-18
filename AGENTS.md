@@ -23,9 +23,9 @@
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
-| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希 |
+| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希；长效程序化凭据是 PAT（`pat_` 前缀，库里只存 sha256） |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
-| MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
+| MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`）。平台内置服务器（`builtin_key` 非空，声明在 `app/builtin_mcp.py`：图片生成 / 系统管理）启动时逐用户播种，连接方式由平台维护 |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
 | IM 域 | `backend/app/im/` —— 把智能体连到聊天软件（Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack）；设置页标签「IM」，见 `docs/im.md` |
 
@@ -89,7 +89,7 @@
  │ agents/         ★ 适配器插件层：base(契约) · events(事件) ·         │
  │                 registry(注册) · skills(技能契约) · mcp(MCP 契约) · builtin/*(实现) │
  ├───────────────────────────────────────────────────────────────────┤
- │ models/db · schemas · settings · security · auth/auth_deps · attachments · bootstrap│
+ │ models/db · schemas · settings · security · auth/auth_deps · attachments · builtin_mcp · bootstrap│
  └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -277,6 +277,12 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   「物化好的隔离目录」。密钥只能写进配置物化的产物（`files` / `workspace_files`），
   **禁止写进提示词、日志或事件**。
 - 声明了 `Capabilities.mcp=True` 的适配器**必须**实现 `mcp_mount()`（有架构守卫测试）。
+- **平台内置服务器**（`app/builtin_mcp.py` 的 `BUILTIN_SERVERS`）随平台分发：启动时为每个启用用户
+  幂等播种一条（`builtin_key` 标记），连接方式（传输 / 命令 / 参数）由平台维护、接口拒绝修改，
+  且不能删除（不需要时停用）。用户只需填写业务参数；平台托管参数用
+  `BuiltinParam(managed=True, managed_source=…)` 声明来源（`public_base_url` / `platform_token`），
+  `runtime/mcp.py` 只按声明执行，**不得**在框架层判断具体 `builtin_key` 或硬编码参数名。
+  内置项按用户各一份：列表、详情与分配都只能看到 / 使用自己的那份（管理员也不跨用户查看）。
 
 ## 4. 扩展手册（照着做，别自创路径）
 
@@ -517,6 +523,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
 - **令牌吊销**：JWT 带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令必须
   把 `token_version` +1，让旧令牌立即失效。新增会改口令的入口时不要漏掉这一步。
+- **个人访问令牌（PAT）**：`pat_` 前缀、256 位随机熵，给 MCP 服务器等程序化调用用；
+  库里只存 sha256（`users.pat_hash`），明文只在签发响应出现一次。它**不校验
+  `token_version`**，所以改口令 / 管理员重置口令时必须显式清空 `pat_hash`（重置口令还要清
+  `builtin_mcp_pat_hash`），清空即吊销。`current_user` 按前缀分流；新增吊销入口不要漏。
 - **头像**：`app/avatars.py` 只此一份（校验 / 落盘 / 读取）。硬约束：
   ① **只收位图**（PNG / JPEG / WebP，按魔数认，≤2 MB）—— SVG 能内嵌脚本，而头像会直接进
   `<img>`，放进来就是存储型 XSS；② 文件名由服务端按「用户 id + 内容摘要」生成，不采信客户端
@@ -563,6 +573,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `runtime/skills.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端技能页与智能体弹窗 |
 | `agents/mcp.py` / MCP 契约 | 全部声明 `mcp=True` 的适配器 + `runtime/mcp.py` + `api/mcp.py` + `tests/test_mcp.py` |
 | `runtime/mcp.py` · `api/mcp.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端 MCP 页（两端）与智能体弹窗 |
+| `app/builtin_mcp.py`（内置 MCP 声明） | 启动播种与 `ensure_builtin_servers`、`docs/architecture.md` §6、`docs/admin-mcp.md`、`tests/test_mcp.py` 的内置用例；脚本要随 `scripts/release.sh` 与 `docker/Dockerfile` 打包 |
 | `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `auth.py` / `auth_deps.py` / `api/auth.py` | 登录 / 注册 / 用户管理、`current_user` 依赖、`owner_id` 过滤、管理员入口、前端 `AuthGate` / `AccountPanel` / `UserAdminPanel` 与 `lib/auth.ts` |

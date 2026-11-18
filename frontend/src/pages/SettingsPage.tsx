@@ -9,11 +9,10 @@ import { KernelManager } from '../components/KernelManager'
 import { ProxySettings } from '../components/ProxySettings'
 import { TitleSettingsSection } from '../components/TitleSettings'
 import { UpdatePanel } from '../components/UpdatePanel'
-import { Modal } from '../components/Modal'
 import { api, ApiError } from '../lib/api'
 import { useAuth } from '../components/AuthGate'
-import { THEME_OPTIONS, useThemeMode, withDocumentTheme } from '../lib/theme'
-import type { ActiveCollabRun, ArchitectureDoc, Overview } from '../lib/types'
+import { THEME_OPTIONS, useThemeMode } from '../lib/theme'
+import type { ActiveCollabRun, Overview } from '../lib/types'
 
 /**
  * 设置页的标签页：**按设置类型分组**，一页只放一类设置。
@@ -54,7 +53,7 @@ function isSettingsTab(value: string | null): value is SettingsTab {
 export function SettingsPage() {
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
-  const { mode, theme, setMode } = useThemeMode()
+  const { mode, setMode } = useThemeMode()
   const [params, setParams] = useSearchParams()
   const current = params.get('tab')
   const requested: SettingsTab = isSettingsTab(current) ? current : 'appearance'
@@ -65,9 +64,6 @@ export function SettingsPage() {
   /** 协作里的运行是另一张登记表（`/api/collab/active-runs`），不在 overview.active_runs 里 */
   const [collabRuns, setCollabRuns] = useState<ActiveCollabRun[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [architecture, setArchitecture] = useState<ArchitectureDoc | null>(null)
-  const [archOpen, setArchOpen] = useState(false)
-  const [archError, setArchError] = useState<string | null>(null)
 
   const setTab = (next: SettingsTab) => {
     // replace：切标签不该往浏览器历史里塞一串记录 —— 退一次就离开设置页更符合直觉。
@@ -96,17 +92,6 @@ export function SettingsPage() {
     // reload 每次渲染都是新的，这里只盯标签页
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
-
-  const openArchitecture = async () => {
-    setArchOpen(true)
-    if (architecture) return
-    setArchError(null)
-    try {
-      setArchitecture(await api.architecture())
-    } catch (e) {
-      setArchError(describe(e))
-    }
-  }
 
   const versionHistory = overview?.version_history ?? []
 
@@ -209,9 +194,6 @@ export function SettingsPage() {
                 <h2 className="card-section-title" style={{ flex: 1 }}>
                   系统信息
                 </h2>
-                <button className="btn sm" onClick={() => void openArchitecture()}>
-                  🏛 系统架构
-                </button>
                 <button className="btn sm" onClick={() => void reload()}>
                   ↻ 刷新
                 </button>
@@ -310,39 +292,6 @@ export function SettingsPage() {
           </>
         )}
       </div>
-
-      {archOpen && (
-        <Modal
-          title="系统架构"
-          wide
-          extraClass="arch"
-          onClose={() => setArchOpen(false)}
-          footer={
-            <button className="btn ghost" onClick={() => setArchOpen(false)}>
-              关闭
-            </button>
-          }
-        >
-          <p className="dim small">
-            内容实时渲染自文档 <code className="mono-sm">{architecture?.source ?? 'docs/architecture.md'}</code>
-            ，本地更新文档后重新打开即可看到最新版本。
-          </p>
-          {archError && <div className="banner err">{archError}</div>}
-          {architecture ? (
-            <iframe
-              className="arch-frame"
-              title="系统架构"
-              srcDoc={withDocumentTheme(architecture.html, theme)}
-            />
-          ) : (
-            !archError && (
-              <div className="row">
-                <span className="spin">◌</span> 正在生成系统架构…
-              </div>
-            )
-          )}
-        </Modal>
-      )}
     </>
   )
 }

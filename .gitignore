@@ -26,3 +26,12 @@ npm-debug.log*
 # 上传的附件与「图片生成」MCP 落盘的图片都是用户数据，不该提交进仓库
 /attachments/
 /generated-images/
+
+# 一次性过程文档：PRD 与工单拆解只服务于当轮开发，使用者不需要关心，
+# 留在本地即可（需要追溯时找历史提交）。docs/ 里的长期文档不受影响。
+/prd.md
+/docs/office-live-v2-tasks.md
+
+# 本机临时脚本 / 补丁工作区（只服务于某次调试，不随仓库分发）
+/.venv-fix.sh
+/.git-tmp/

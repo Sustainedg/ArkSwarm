@@ -1,7 +1,7 @@
 import { getAccessToken, notifyUnauthorized } from './auth'
 import type {
   ActiveCollabRun,
-  AgentEvent, AgentProfile, AgentRuntime, AgentType, ArchitectureDoc, AttachmentRef, Availability, CollabChatMessage,
+  AgentEvent, AgentProfile, AgentRuntime, AgentType, AttachmentRef, Availability, CollabChatMessage,
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, CollabBudgetPatch, Conversation,
   ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
@@ -145,6 +145,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+  /** 生成（或重新生成）个人访问令牌：明文只在本次响应出现一次。 */
+  issuePat: () =>
+    request<{ ok: boolean; pat: string; issued_at: string; hint: string }>('/api/auth/me/pat', {
+      method: 'POST',
+    }),
+  /** PAT 状态：只回「有没有 / 何时生成」，永不回令牌本体。 */
+  patStatus: () => request<{ has_pat: boolean; issued_at: string | null }>('/api/auth/me/pat'),
+  /** 吊销个人访问令牌（正在用它的 MCP 服务器会开始收到 401）。 */
+  revokePat: () => request<{ ok: boolean }>('/api/auth/me/pat', { method: 'DELETE' }),
   listUsers: () => request<{ items: AuthUser[] }>('/api/auth/users').then((r) => r.items),
   createUser: (body: { username: string; password: string; display_name?: string; email?: string }) =>
     request<AuthUser>('/api/auth/users', { method: 'POST', body: JSON.stringify(body) }),
@@ -171,7 +180,6 @@ export const api = {
     const suffix = search.toString() ? `?${search.toString()}` : ''
     return request<UsageOverview>(`/api/usage/overview${suffix}`)
   },
-  architecture: () => request<ArchitectureDoc>('/api/system/architecture'),
   /** 「设置 → 关于」的版本更新：检测（GitHub Release）、本地状态。 */
   updateCheck: () => request<UpdateStatus>('/api/update/check'),
   updateStatus: () => request<UpdateStatus>('/api/update/status'),

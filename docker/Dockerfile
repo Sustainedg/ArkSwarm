@@ -50,6 +50,8 @@ COPY backend/.env.example /image-app/backend/.env.example
 # 镜像自带这份产物，首启即可出 UI。
 COPY frontend/dist /image-app/frontend/dist
 COPY scripts/serve.sh /image-app/scripts/serve.sh
+# 平台自带的「平台通用」MCP 服务器（图片生成 / 系统管理），分配给智能体即可使用。
+COPY scripts/mcp /image-app/scripts/mcp
 
 # 预装 Python 依赖到 /image-venv：首启直接复制，离线也能启动。
 # 构建期也允许走代理 / 国内镜像；只影响构建，不进入运行期环境变量。

@@ -9,6 +9,7 @@ import base64
 
 import httpx
 import pytest_asyncio
+from sqlmodel import select
 
 from app.db import SessionLocal, engine, init_db
 from app.main import app
@@ -21,7 +22,9 @@ from app.models import (
     User,
     utcnow,
 )
+from app.auth import pat_hash
 from app.settings import get_settings
+from app.runtime import mcp as mcp_service
 
 
 @pytest_asyncio.fixture
@@ -144,6 +147,122 @@ async def test_cannot_assign_other_users_platform_mcp(client):
         headers=_auth(bob["access_token"]),
     )
     assert resp.status_code == 422, resp.text
+
+
+async def test_builtin_mcp_servers_are_scoped_to_their_owner(client):
+    """内置服务器按用户各一份：列表只显示自己的 2 条，管理员也不看别人的副本。
+
+    系统管理 MCP 的令牌属于配置它的用户；管理员若能把别人的那份挂到自己的智能体上，
+    就会串用对方的 PAT。列表、详情与分配三处都必须按 ``owner_id`` 收敛。
+    """
+    root = await _register(client, "root")
+    alice = await _register(client, "alice")
+    bob = await _register(client, "bob")
+
+    async def builtin_items(token: str) -> list[dict]:
+        resp = await client.get("/api/mcp-servers", headers=_auth(token))
+        assert resp.status_code == 200, resp.text
+        return [item for item in resp.json()["items"] if item["builtin_key"]]
+
+    root_items = await builtin_items(root["access_token"])
+    alice_items = await builtin_items(alice["access_token"])
+    bob_items = await builtin_items(bob["access_token"])
+    for items in (root_items, alice_items, bob_items):
+        assert len(items) == 2
+        assert {item["builtin_key"] for item in items} == {"image-gen", "arkswarm-admin"}
+
+    root_ids = {item["id"] for item in root_items}
+    alice_ids = {item["id"] for item in alice_items}
+    bob_ids = {item["id"] for item in bob_items}
+    assert root_ids.isdisjoint(alice_ids)
+    assert root_ids.isdisjoint(bob_ids)
+    assert alice_ids.isdisjoint(bob_ids)
+
+    # 管理员也不能打开或分配别人的内置服务器。
+    bob_builtin = bob_items[0]
+    assert (
+        await client.get(
+            f"/api/mcp-servers/{bob_builtin['id']}", headers=_auth(root["access_token"])
+        )
+    ).status_code == 404
+
+    root_agent = await _create_agent(client, root["access_token"], "Root 智能体")
+    denied = await client.put(
+        f"/api/agents/{root_agent['id']}/mcp-servers",
+        json={"mcp_ids": [bob_builtin["id"]]},
+        headers=_auth(root["access_token"]),
+    )
+    assert denied.status_code == 422, denied.text
+
+    allowed = await client.put(
+        f"/api/agents/{root_agent['id']}/mcp-servers",
+        json={"mcp_ids": [root_items[0]["id"]]},
+        headers=_auth(root["access_token"]),
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["mcp_ids"] == [root_items[0]["id"]]
+
+
+async def test_admin_mcp_is_zero_config_and_uses_dedicated_token(client):
+    """系统管理 MCP 开箱即用：地址与专用令牌自动填好，且不会轮换用户自己的 PAT。"""
+    root = await _register(client, "root")
+    alice = await _register(client, "alice")
+
+    # 用户自己生成的 PAT 必须原样保留。
+    own_pat = (
+        await client.post("/api/auth/me/pat", headers=_auth(alice["access_token"]))
+    ).json()["pat"]
+
+    async def admin_item(token: str) -> dict:
+        items = (await client.get("/api/mcp-servers", headers=_auth(token))).json()["items"]
+        return next(item for item in items if item["builtin_key"] == "arkswarm-admin")
+
+    item = await admin_item(alice["access_token"])
+    # 地址与令牌都自动填好：界面不再显示「待填参数」。
+    assert item["env_preview"]["ARKSWARM_BASE_URL"]
+    assert item["env_preview"]["ARKSWARM_TOKEN"]
+    assert all(
+        not param["required"] or param["managed"] or item["env_preview"].get(param["key"])
+        for param in item["builtin_params"]
+    )
+
+    async with SessionLocal() as session:
+        user = await session.get(User, alice["user"]["id"])
+        assert user is not None and user.builtin_mcp_pat_hash
+        # 自动令牌与用户自己的 PAT 是两份，不互相覆盖。
+        assert user.pat_hash == pat_hash(own_pat)
+        assert user.builtin_mcp_pat_hash != user.pat_hash
+
+    # 自动令牌能直接调平台 API，身份就是这个用户。
+    async with SessionLocal() as session:
+        admin_mcp = next(
+            row
+            for row in (
+                await session.execute(
+                    select(McpServer).where(
+                        McpServer.owner_id == alice["user"]["id"],
+                        McpServer.builtin_key == "arkswarm-admin",
+                    )
+                )
+            ).scalars().all()
+        )
+        from app.security import decrypt
+
+        auto_token = decrypt(admin_mcp.env_encrypted["ARKSWARM_TOKEN"])
+    assert auto_token and auto_token.startswith("pat_")
+    me = await client.get("/api/auth/me", headers=_auth(auto_token))
+    assert me.status_code == 200 and me.json()["username"] == "alice"
+
+    # 再次播种是幂等的：不会把已经可用的令牌轮换掉。
+    async with SessionLocal() as session:
+        await mcp_service.ensure_builtin_servers(session, alice["user"]["id"])
+    assert (await client.get("/api/auth/me", headers=_auth(auto_token))).status_code == 200
+    assert (await client.get("/api/auth/me", headers=_auth(own_pat))).status_code == 200
+
+    # 管理员看自己的内置项同样自动填好，且与 alice 的不是同一份。
+    root_item = await admin_item(root["access_token"])
+    assert root_item["id"] != item["id"]
+    assert root_item["env_preview"]["ARKSWARM_TOKEN"]
 
 
 async def test_mcp_usage_count_is_owner_scoped(client):

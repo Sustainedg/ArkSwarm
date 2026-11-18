@@ -56,7 +56,7 @@ ENV_GATEWAY = "IMAGE_GEN_GATEWAY"
 ENV_MODEL = "IMAGE_GEN_MODEL"
 ENV_API_KEY = "IMAGE_GEN_API_KEY"
 ENV_TIMEOUT = "IMAGE_GEN_TIMEOUT"
-#: 可选：图片的对外访问前缀（如静态图床 ``http://192.168.2.168:3050``）。
+#: 可选：图片的对外访问前缀（如静态图床 ``https://img.example.com``）。
 #: 设置后工具结果给出的是绝对 URL，不再依赖「调用方工作目录」——适合经 MCPHub
 #: 等网关代跑、与客户端不在同一文件系统的场景。不设置则保持相对路径。
 ENV_PUBLIC_BASE_URL = "IMAGE_PUBLIC_BASE_URL"

@@ -8,7 +8,7 @@ from app import image_ingest
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 #: 与 PNG 内容对应的 sha256 前 12 位（内容寻址文件名的一部分）
 PNG_DIGEST = hashlib.sha256(PNG).hexdigest()[:12]
-HUB = "http://172.16.0.5:3050"
+HUB = "http://192.0.2.5:3050"
 
 
 async def test_ingest_rewrites_url_to_relative(tmp_path, monkeypatch):
@@ -17,7 +17,7 @@ async def test_ingest_rewrites_url_to_relative(tmp_path, monkeypatch):
 
     monkeypatch.setattr(image_ingest, "_download", fake_download)
     workspace = tmp_path / "ws"
-    content = "画好了：![](http://172.16.0.5:3050/image-1.png)"
+    content = "画好了：![](http://192.0.2.5:3050/image-1.png)"
 
     new_content, parts, count = await image_ingest.ingest_images(content, [], workspace, [HUB])
 
@@ -48,7 +48,7 @@ async def test_ingest_keeps_url_when_download_fails(tmp_path, monkeypatch):
         raise RuntimeError("网关挂了")
 
     monkeypatch.setattr(image_ingest, "_download", broken_download)
-    content = "![](http://172.16.0.5:3050/image-2.png)"
+    content = "![](http://192.0.2.5:3050/image-2.png)"
 
     new_content, _, count = await image_ingest.ingest_images(
         content, [], tmp_path / "ws", [HUB]
@@ -68,7 +68,7 @@ async def test_ingest_rewrites_tool_result_parts(tmp_path, monkeypatch):
         {
             "kind": "tool_result",
             "name": "generate_image",
-            "output": "已生成：http://172.16.0.5:3050/image-3.png（PNG）",
+            "output": "已生成：http://192.0.2.5:3050/image-3.png（PNG）",
         },
     ]
 
@@ -91,8 +91,8 @@ async def test_ingest_same_basename_different_content_no_clobber(tmp_path, monke
 
     monkeypatch.setattr(image_ingest, "_download", fake_download)
     content = (
-        "![](http://172.16.0.5:3050/a/image-1.png)"
-        "![](http://172.16.0.5:3050/b/image-1.png)"
+        "![](http://192.0.2.5:3050/a/image-1.png)"
+        "![](http://192.0.2.5:3050/b/image-1.png)"
     )
 
     new_content, _, count = await image_ingest.ingest_images(

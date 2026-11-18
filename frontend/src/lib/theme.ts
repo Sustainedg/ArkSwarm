@@ -89,17 +89,8 @@ export function initTheme(): void {
 }
 
 /**
- * 把主题写进一份自包含文档的 `<html>` 上：「系统架构」那页是 iframe + srcDoc，
- * 文档自带一套认 `[data-theme='light']` 的配色（`api/architecture_doc.py`），
- * 只差把当前主题递进那个文档里。
- */
-export function withDocumentTheme(html: string, theme: ResolvedTheme): string {
-  return html.replace('<html', `<html data-theme="${theme}"`)
-}
-
-/**
  * 设置页用：读当前模式 + 当前生效的主题 + 切换（切换后立即生效并记住，跨页面 / 下次打开都保持）。
- * `theme` 是解析后的结果，界面里要按主题分支时用它（例如给 iframe 文档写 data-theme）。
+ * `theme` 是解析后的结果，界面里要按主题分支时用它（例如协作办公室按主题选深浅底图）。
  */
 export function useThemeMode(): {
   mode: ThemeMode

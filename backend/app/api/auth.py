@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import avatars
 from ..auth import hash_password, issue_token, verify_password
+from ..auth import issue_pat as auth_issue_pat
 from ..auth_deps import _SYSTEM_USER, current_user, owner_id_for, require_admin, require_owned
 from ..db import SessionLocal
 from ..models import User
@@ -174,6 +175,10 @@ async def register(payload: RegisterRequest) -> LoginResponse:
             from ..bootstrap import backfill_ownership
 
             await backfill_ownership(session, user)
+        # 新用户开箱即用：把平台内置的 MCP 服务器播种到他的名下（幂等）。
+        from ..runtime import mcp as mcp_service
+
+        await mcp_service.ensure_builtin_servers(session, user.id)
     token = issue_token(user.id, user.role, user.token_version or 0)
     return LoginResponse(access_token=token, user=_to_read(user))
 
@@ -201,7 +206,10 @@ async def change_password(
             raise HTTPException(status_code=400, detail="旧口令不正确")
         row.password_hash = await run_in_threadpool(hash_password, payload.new_password)
         # 旧令牌立即失效；给当前设备签发一份新令牌，改完口令不必重新登录。
+        # PAT 是长效凭据，口令改了说明「凭据可能已泄露」，一并吊销（清空哈希即失效）。
         row.token_version = (row.token_version or 0) + 1
+        row.pat_hash = None
+        row.pat_issued_at = None
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)
         await session.commit()
@@ -238,6 +246,71 @@ class AvatarUpload(BaseModel):
     content_base64: str = Field(min_length=1)
     #: 客户端给的原始文件名，只用于报错信息，不参与落盘命名
     name: str | None = Field(default=None, max_length=200)
+
+
+# --- 个人访问令牌（PAT）------------------------------------------------------
+
+
+@router.post("/me/pat")
+async def issue_my_pat(user: Annotated[User, Depends(current_user)]) -> dict:
+    """生成（或重新生成）自己的个人访问令牌。
+
+    每个用户同时只有一份 PAT：重新生成会立即吊销旧的（旧哈希被覆盖）。
+    明文令牌**只在本次响应里出现一次** —— 平台只存 sha256 哈希，关掉弹窗就再也看不到。
+    用途：MCP 服务器等脚本以你的身份调用平台 REST API（带 ``Authorization: Bearer pat_…``）。
+    """
+    if user.id == _SYSTEM_USER.id:
+        raise HTTPException(status_code=400, detail="鉴权已关闭，无需个人访问令牌")
+    raw, token_hash = auth_issue_pat()
+    async with SessionLocal() as session:
+        row = await session.get(User, user.id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        row.pat_hash = token_hash
+        row.pat_issued_at = datetime.now(timezone.utc)
+        row.updated_at = row.pat_issued_at
+        session.add(row)
+        await session.commit()
+        # commit 会把对象过期掉，值要在会话还开着时取出来。
+        issued_at = row.pat_issued_at.isoformat()
+    return {
+        "ok": True,
+        "pat": raw,
+        "issued_at": issued_at,
+        "hint": "请立即复制保存：令牌只显示这一次，关闭后无法再查看。",
+    }
+
+
+@router.get("/me/pat")
+async def my_pat_status(user: Annotated[User, Depends(current_user)]) -> dict:
+    """看自己的 PAT 状态（只回「有没有 / 何时生成」，永不回令牌本体或哈希）。"""
+    if user.id == _SYSTEM_USER.id:
+        raise HTTPException(status_code=400, detail="鉴权已关闭，没有个人访问令牌")
+    async with SessionLocal() as session:
+        row = await session.get(User, user.id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {
+            "has_pat": bool(row.pat_hash),
+            "issued_at": row.pat_issued_at.isoformat() if row.pat_issued_at else None,
+        }
+
+
+@router.delete("/me/pat")
+async def revoke_my_pat(user: Annotated[User, Depends(current_user)]) -> dict:
+    """吊销自己的个人访问令牌（清空哈希即失效，正在用它的 MCP 服务器会开始收到 401）。"""
+    if user.id == _SYSTEM_USER.id:
+        raise HTTPException(status_code=400, detail="鉴权已关闭，没有个人访问令牌可吊销")
+    async with SessionLocal() as session:
+        row = await session.get(User, user.id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        row.pat_hash = None
+        row.pat_issued_at = None
+        row.updated_at = datetime.now(timezone.utc)
+        session.add(row)
+        await session.commit()
+    return {"ok": True}
 
 
 @router.put("/me/avatar")
@@ -350,6 +423,10 @@ async def admin_create_user(
         session.add(user)
         await session.commit()
         await session.refresh(user)
+        # 管理员建的用户同样开箱即用：播种内置 MCP 服务器（幂等）。
+        from ..runtime import mcp as mcp_service
+
+        await mcp_service.ensure_builtin_servers(session, user.id)
     return _to_read(user)
 
 
@@ -410,6 +487,13 @@ async def admin_reset_password(
         row.password_hash = await run_in_threadpool(hash_password, payload.new_password)
         # 旧令牌立即失效，必须用新口令重新登录。
         row.token_version = (row.token_version or 0) + 1
+        # PAT 不校验 token_version（长效凭据），所以必须显式清空哈希；
+        # 管理员重置口令通常意味着账号可能已泄露，这里连同内置 MCP 专用令牌一起吊销。
+        # 内置令牌清空后，下次启动播种会自动补发一份新的，不会弄挂系统管理 MCP。
+        row.pat_hash = None
+        row.pat_issued_at = None
+        row.builtin_mcp_pat_hash = None
+        row.builtin_mcp_pat_issued_at = None
         row.updated_at = datetime.now(timezone.utc)
         session.add(row)
         await session.commit()

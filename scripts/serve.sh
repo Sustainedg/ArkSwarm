@@ -10,9 +10,14 @@ HOST="${ARKSWARM_HOST:-0.0.0.0}"
 PORT="${ARKSWARM_PORT:-8010}"
 
 venv_python="$ROOT/backend/.venv/bin/python"
-if [ ! -x "$venv_python" ]; then
-  echo "→ 创建后端虚拟环境 backend/.venv"
-  python3 -m venv "$ROOT/backend/.venv"
+if [ ! -x "$venv_python" ] || ! "$venv_python" -c '' >/dev/null 2>&1; then
+  if [ -d "$ROOT/backend/.venv" ]; then
+    echo "→ 后端虚拟环境不可用，重建 backend/.venv"
+    python3 -m venv --clear "$ROOT/backend/.venv"
+  else
+    echo "→ 创建后端虚拟环境 backend/.venv"
+    python3 -m venv "$ROOT/backend/.venv"
+  fi
   "$ROOT/backend/.venv/bin/pip" -q install -U pip
   "$ROOT/backend/.venv/bin/pip" -q install -r "$ROOT/backend/requirements.txt"
 fi

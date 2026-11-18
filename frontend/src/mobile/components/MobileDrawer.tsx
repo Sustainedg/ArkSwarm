@@ -8,6 +8,7 @@ import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { describeError } from '../util'
 import { BrandMark } from '../../components/BrandMark'
 import { UserAvatar } from '../../components/UserAvatar'
+import { LogoutIcon, SettingsIcon } from '../../components/Icons'
 
 /** 抽屉上半部分的主导航：对应曾经固定在底部的 Tab（「对话」是回聊天页的入口）。 */
 const NAV = [
@@ -307,7 +308,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                     navigate('/settings')
                   }}
                 >
-                  <span className="m-drawer-account-menu-icon">⚙️</span>
+                  <span className="m-drawer-account-menu-icon"><SettingsIcon size={14} /></span>
                   设置
                 </button>
                 {canLogout && (
@@ -319,7 +320,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                       logout()
                     }}
                   >
-                    <span className="m-drawer-account-menu-icon">⏻</span>
+                    <span className="m-drawer-account-menu-icon"><LogoutIcon size={14} /></span>
                     退出登录
                   </button>
                 )}

@@ -171,7 +171,8 @@ function fromJsonText(text: string): FormState {
 
 /**
  * JSON 视图的初始文本：编辑时回显当前配置；新建时给一份**带中文说明的完整示例**
- * （含平台自带的「图片生成」服务器，填上网关 / 模型 / 密钥即可直接使用）。
+ * （平台自带的「系统管理」服务器：分配给某个智能体后，就能在对话里让它管理
+ * 平台的智能体 / 协作组 / 技能 / MCP；令牌在「设置 → 账号」生成）。
  */
 function initialJsonText(state: FormState, server: McpServer | null): string {
   if (server) return toJsonText(state)
@@ -180,19 +181,21 @@ function initialJsonText(state: FormState, server: McpServer | null): string {
       _说明: [
         '把下面这些字段改成你的服务器信息，多余的键会被忽略；',
         'transport 是 stdio（本地进程）时填 command + args + env，是 http / sse 时填 url + headers；',
-        'env / headers 的值会加密保存，编辑已有服务器时值留空＝保持原值、删掉整行＝删除。',
+        'env / headers 的值会加密保存，编辑已有服务器时值留空＝保持原值、删掉整行＝删除；',
+        '「系统管理」服务器把平台的智能体 / 协作组 / 技能 / MCP 管理接口包成对话工具；',
+        '个人访问令牌在「设置 → 账号」生成；ARKSWARM_MODE 填 ro 可限制为只读。',
       ].join('\n'),
-      name: '图片生成',
+      name: '系统管理',
       slug: '',
-      description: '调用生图网关 POST /v1/images/generations 生成图片，结果保存到工作目录 generated-images/',
+      description:
+        '让智能体在对话里管理本平台：查看 / 创建 / 编辑智能体与协作组，增删技能与 MCP 服务器',
       transport: 'stdio',
       command: 'python3',
-      args: ['/path/to/scripts/mcp/image_mcp_server.py'],
+      args: ['/path/to/scripts/mcp/arkswarm_admin_mcp_server.py'],
       env: {
-        IMAGE_GEN_GATEWAY: 'https://api.example.com（生图网关地址，带不带 /v1 都可以）',
-        IMAGE_GEN_MODEL: '模型名，例如 flux-dev / gpt-image-1',
-        IMAGE_GEN_API_KEY: '网关密钥',
-        IMAGE_GEN_TIMEOUT: '生图超时秒数，可不填（默认 300）',
+        ARKSWARM_BASE_URL: 'http://127.0.0.1:8010（平台地址，带不带 /api 都可以）',
+        ARKSWARM_TOKEN: 'pat_…（个人访问令牌，在「设置 → 账号」生成）',
+        ARKSWARM_MODE: 'ro（只读，推荐）/ rw（可读写），可不填（默认 ro）',
       },
       headers: {},
       enabled: true,
@@ -225,8 +228,25 @@ export function McpServerForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  /** 高级字段（启动参数 / 环境变量 / 请求头）；已有服务器要用它的掩码当占位提示。 */
-  const fields = useMemo(() => advancedFields(server), [server])
+  /** 高级字段（启动参数 / 环境变量 / 请求头）；已有服务器要用它的掩码当占位提示。
+   *  内置服务器的连接方式（启动命令 / 参数）由平台维护：这里不渲染「启动参数」，
+   *  免得界面能改、保存时却被服务端以 403 拒绝。 */
+  const fields = useMemo(
+    () => advancedFields(server).filter((field) => !(server?.builtin_key && field.key === 'args')),
+    [server],
+  )
+
+  /** 内置服务器：参数单独成组，不和「环境变量」键值编辑器重复展示。 */
+  const builtinParams = useMemo(() => server?.builtin_params ?? [], [server])
+  const builtinKeys = useMemo(
+    () => new Set(builtinParams.map((param) => param.key)),
+    [builtinParams],
+  )
+  const isBuiltin = Boolean(server?.builtin_key)
+  const extraEnv = useMemo(
+    () => Object.fromEntries(Object.entries(state.env).filter(([key]) => !builtinKeys.has(key))),
+    [state.env, builtinKeys],
+  )
 
   /** JSON → 表单（切换或保存前调用）；不通过时回 null 并把原因展示出来。 */
   const syncFromJson = (): FormState | null => {
@@ -258,6 +278,17 @@ export function McpServerForm({
     const current = view === 'json' ? syncFromJson() : state
     if (!current) return
     if (!current.name.trim()) return setError('请填写名称')
+    // 内置服务器的必填参数：已经存过值（有掩码）时留空＝保持原值，不算缺。
+    const missing = builtinParams.filter(
+      (param) =>
+        param.required &&
+        !param.managed &&
+        !(current.env[param.key] ?? '').trim() &&
+        !param.masked,
+    )
+    if (missing.length) {
+      return setError(`请填写${missing.map((param) => `「${param.label}」`).join('、')}`)
+    }
     setSaving(true)
     setError(null)
     try {
@@ -349,19 +380,29 @@ export function McpServerForm({
                 onChange={(e) => setState({ ...state, description: e.target.value })}
               />
             </div>
-            <div className="field">
-              <label className="field-label">传输方式</label>
-              <select
-                className="select"
-                value={state.transport}
-                onChange={(e) => setState({ ...state, transport: e.target.value })}
-              >
-                <option value="stdio">本地进程（stdio）</option>
-                <option value="http">HTTP</option>
-                <option value="sse">SSE</option>
-              </select>
-            </div>
-            {transportField}
+            {isBuiltin ? (
+              <div className="field span-2">
+                <span className="field-help">
+                  内置服务器：连接方式（传输方式 / 启动命令 / 参数）由平台维护，只需要填写下面的参数。
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="field">
+                  <label className="field-label">传输方式</label>
+                  <select
+                    className="select"
+                    value={state.transport}
+                    onChange={(e) => setState({ ...state, transport: e.target.value })}
+                  >
+                    <option value="stdio">本地进程（stdio）</option>
+                    <option value="http">HTTP</option>
+                    <option value="sse">SSE</option>
+                  </select>
+                </div>
+                {transportField}
+              </>
+            )}
             <div className="field span-2">
               <label className="field-label">启用</label>
               <label className="switch">
@@ -375,17 +416,60 @@ export function McpServerForm({
             </div>
           </div>
 
+          {builtinParams.length > 0 && (
+            <div className="form-grid">
+              {builtinParams.map((param) =>
+                param.managed ? (
+                  <div className="field" key={param.key}>
+                    <label className="field-label">
+                      {param.label}
+                      <span className="pill">平台托管</span>
+                    </label>
+                    <input
+                      className="input mono"
+                      value={param.masked ?? '由平台自动填写'}
+                      readOnly
+                      disabled
+                    />
+                    {param.help && <span className="field-help">{param.help}</span>}
+                  </div>
+                ) : (
+                  <div className="field" key={param.key}>
+                    <label className="field-label">
+                      {param.label}
+                      {param.required && <span className="pill err">必填</span>}
+                    </label>
+                    <input
+                      className="input mono"
+                      type={param.secret ? 'password' : 'text'}
+                      value={state.env[param.key] ?? ''}
+                      placeholder={param.masked ?? param.placeholder}
+                      onChange={(e) =>
+                        setState({ ...state, env: { ...state.env, [param.key]: e.target.value } })
+                      }
+                    />
+                    {param.help && <span className="field-help">{param.help}</span>}
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+
           <DynamicForm
             fields={fields}
-            value={{ args: state.args, env: state.env, headers: state.headers }}
-            onChange={(next) =>
+            value={{ args: state.args, env: extraEnv, headers: state.headers }}
+            onChange={(next) => {
+              const nextEnv = (next.env as Record<string, string>) ?? {}
+              const kept = Object.fromEntries(
+                Object.entries(state.env).filter(([key]) => builtinKeys.has(key)),
+              )
               setState({
                 ...state,
                 args: (next.args as string[]) ?? [],
-                env: (next.env as Record<string, string>) ?? {},
+                env: { ...kept, ...nextEnv },
                 headers: (next.headers as Record<string, string>) ?? {},
               })
-            }
+            }}
           />
         </>
       ) : (
@@ -395,6 +479,7 @@ export function McpServerForm({
             {server && (
               <span className="field-help" style={{ display: 'block' }}>
                 已有的密钥只回键名：值留空＝保持原值，删掉整行＝删除。
+                {isBuiltin && ' 内置服务器的传输方式 / 启动命令 / 启动参数由平台维护，改这几项会被服务端拒绝。'}
               </span>
             )}
           </label>

@@ -65,7 +65,8 @@ tar -czf "$OUT" \
   --exclude='__pycache__' \
   --exclude='*.pyc' \
   --exclude='*.pyo' \
-  backend/app backend/requirements.txt backend/.env.example frontend/dist scripts/serve.sh
+  backend/app backend/requirements.txt backend/.env.example frontend/dist \
+  scripts/serve.sh scripts/mcp
 SHA256="$(sha256sum "$OUT" | cut -d' ' -f1)"
 echo "$SHA256" > "$OUT.sha256"
 echo "→ sha256: $SHA256"

@@ -19,7 +19,7 @@ SRC = FRONTEND / "src"
 
 needs_frontend = pytest.mark.skipif(not FRONTEND.is_dir(), reason="未检出前端源码目录")
 
-#: 主题相关的公共出口：设置页、入口、架构文档 iframe 都从这里拿。
+#: 主题相关的公共出口：设置页、入口都从这里拿。
 THEME_EXPORTS = (
     "THEME_STORAGE_KEY",
     "THEME_COLORS",
@@ -28,7 +28,6 @@ THEME_EXPORTS = (
     "applyTheme",
     "initTheme",
     "useThemeMode",
-    "withDocumentTheme",
 )
 
 
@@ -81,11 +80,3 @@ def test_both_settings_pages_expose_the_appearance_picker():
         page = (SRC / name).read_text(encoding="utf-8")
         assert "THEME_OPTIONS" in page and "useThemeMode" in page, f"{name} 缺少外观设置"
         assert "外观" in page, f"{name} 的可见文案要用「外观」"
-
-    # 「系统架构」是 iframe + srcDoc：主题要递进那个文档里，否则浅色下弹出一片黑。
-    for name in ("pages/SettingsPage.tsx", "mobile/pages/MobileSettingsPage.tsx"):
-        page = (SRC / name).read_text(encoding="utf-8")
-        assert "withDocumentTheme" in page, f"{name} 要把当前主题传给系统架构文档"
-
-    doc = (REPO / "backend" / "app" / "api" / "architecture_doc.py").read_text(encoding="utf-8")
-    assert "[data-theme='light']" in doc, "系统架构文档要认外壳写的 data-theme"
