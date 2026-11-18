@@ -274,6 +274,26 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
     # （探测在后台线程里跑，不占用事件循环），并用新结论收尾。
     status = await availability_service.refresh_definition(definition)
     ok = outcome.returncode == 0 and not outcome.timed_out
+    # 装完 / 更新完立刻播种内核自带技能：多数内核的内置技能要「首次运行」才落盘，
+    # 不补这一步，「技能」页在用户装完内核后仍只有市场技能。
+    # 卸载后不播种（没什么可播的），失败也只记一条警告，绝不改变安装结论。
+    if ok and action in ("install", "update") and status.installed:
+        try:
+            actions = await asyncio.to_thread(definition.seed_skills)
+            if actions:
+                yield _event(
+                    "output",
+                    runtime_id=definition.id,
+                    text="已播种内核内置技能：" + "；".join(actions),
+                    level="info",
+                )
+        except Exception:  # noqa: BLE001 - 播种失败不影响安装结果
+            yield _event(
+                "output",
+                runtime_id=definition.id,
+                text="内核内置技能播种失败，可在「技能」页点击重新扫描重试",
+                level="warn",
+            )
     yield _event(
         "finished",
         runtime_id=definition.id,

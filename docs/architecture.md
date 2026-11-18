@@ -324,20 +324,28 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 ```
 各内核技能根 ──discover_skills()──▶ 统一目录(skills 表) ──分配──▶ agent_skills ──▶ 运行时物化
   ~/.claude/skills(+ .skillhub)            （只读索引）       （智能体弹窗）      agent-homes/<对话>/…
+  ~/.claude/plugins/cache（已安装插件）
   $CODEX_HOME/skills(+ .skillhub)
 ```
 
 - **编目**：适配器用 `skill_roots()` 声明自己的技能根（路径 + 来源 + 是否可安装），框架用
-  `scan_skill_roots()` 统一扫描，去重（同名技能按「平台技能 > 市场技能 > 个人 > 项目 > 插件 > 系统」
+  `scan_skill_roots()` 统一扫描，去重（同一个 slug 按「平台技能 > 市场技能 > 个人 > 项目 > 插件 > 系统」
   取优先级最高的一份）后写入 `skills` 表。目录消失时只把 `available` 置 False，**不删行**，
   智能体分配不会断链。来源标签见 `runtime/skills.py:SOURCE_LABELS`。
+- **插件技能只认「已安装」**：`plugins/marketplaces/<市场>/` 只是市场目录的克隆（可浏览、未安装），
+  真正的插件技能在 `plugins/cache/<市场>/<插件>/<版本>/`，由 `installed_plugins.json` 指向。
+  插件技能只读（卸载走插件管理器），目录消失后不在列表里留失效行。
+- **同名技能靠命名空间共存**：技能标识与物化目录名都取自 `slug`（技能目录名）。多个插件各带一个
+  `access` 时，`SkillRoot.namespace` 会把它变成 `<插件名>-access`，原始目录名记在
+  `SkillSpec.extra["original_slug"]`，展示名带上来源（`access · telegram`）。
 - **分配**：`agent_skills` 是智能体能用的技能的**唯一来源**；`PUT /api/agents/{id}/skills` 整表替换。
   类型与智能体的内核不一致的技能，界面直接禁止选择，服务端再兜底返回 422。
 - **物化（严格仅分配）**：适配器的 `skill_mount(ctx)` 声明「我的内核从哪里读技能」——
   例如 Claude Code 用 `CLAUDE_CONFIG_DIR` 指向一个只含「分配到的技能 + 本机 settings」的隔离
   配置目录，并关闭内核自带的 bundled 技能与内置插件；Codex 用 `CODEX_HOME`。
   框架按这份声明把技能目录复制进 `agent-homes/<对话ID>/<内核配置目录>`（每次运行重建技能目录，
-  取消分配即立刻消失），并携带/打补丁必要的配置文件。
+  取消分配即立刻消失），并携带/打补丁必要的配置文件。加了前缀的副本会同步改写 `SKILL.md` 的
+  `name`（Claude Code 按目录名调用，Hermes 按 frontmatter 的 `name` 查找），源目录始终只读。
 
   隔离目录放在数据目录而不是临时目录：内核的会话记录也写在自己的配置目录下，
   每次运行都换目录会导致多轮对话无法续接。

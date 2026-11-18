@@ -113,7 +113,8 @@ export function SkillsPage() {
           <h1 className="page-title">技能</h1>
           <p className="page-desc">
             各智能体内核自带的技能在这里统一编目。技能通过「智能体分配」生效；
-            腾讯 SkillHub 安装的技能与自行放进技能目录的技能都可以删除，内核自带技能只读。
+            腾讯 SkillHub 安装的技能与自行放进技能目录的技能都可以删除，
+            内核自带技能与已安装插件里的技能只读。
           </p>
         </div>
         <div className="spacer" />

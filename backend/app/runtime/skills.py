@@ -138,10 +138,14 @@ async def list_rows(
     if available is not None:
         statement = statement.where(Skill.available == available)  # noqa: E712
     else:
-        # 市场技能被卸载后目录就没了，它不该再出现在技能列表里（用户看到的「已卸载」）。
-        # 内核自带技能目录消失时仍保留一行并显示「目录已消失」，提示分配关系需要清理。
+        # 市场技能被卸载、插件技能随插件卸载后目录就没了，它们不该再出现在技能列表里
+        # （用户看到的「已卸载」）。内核自带技能目录消失时仍保留一行并显示「目录已消失」，
+        # 提示分配关系需要清理。
         statement = statement.where(
-            or_(Skill.source_kind != MARKET_SOURCE, Skill.available == True)  # noqa: E712
+            or_(
+                Skill.source_kind.not_in(HIDDEN_WHEN_MISSING),  # type: ignore[attr-defined]
+                Skill.available == True,  # noqa: E712
+            )
         )
     rows = (await session.execute(statement)).scalars().all()
     if query:
@@ -160,9 +164,23 @@ async def get_row(session: AsyncSession, skill_id: str) -> Skill | None:
     return await session.get(Skill, skill_id)
 
 
+#: 由别人（内核或插件管理器）托管的来源：目录归它们所有，平台只能读、不能删。
+#: ``plugin`` 是「已安装插件」里的技能 —— 单独删一个技能会让那个插件残缺，
+#: 要卸载应该走插件管理器整包卸载。
+READONLY_SOURCES = frozenset({"system", "plugin"})
+
+#: 目录消失后就不该再出现在列表里的来源：它们跟着「卸载」动作整体消失，
+#: 留一行「目录已消失」只会误导（也删不掉）。内核自带技能仍保留，提示要清理分配。
+HIDDEN_WHEN_MISSING = frozenset({MARKET_SOURCE, "plugin"})
+
+
 def is_deletable(row: Skill) -> bool:
-    """内核自带（``system``）之外的技能都允许从技能页删除。"""
-    return row.source_kind != "system"
+    """只有「目录归平台管」的技能允许从技能页删除。
+
+    内核自带（``system``）与已安装插件（``plugin``）里的技能只读：前者删了内核就残缺，
+    后者删了插件就残缺，而且重扫还会把它们加回来（用户会看到「删不掉」）。
+    """
+    return row.source_kind not in READONLY_SOURCES
 
 
 async def usage_counts(session: AsyncSession) -> dict[str, int]:
@@ -346,10 +364,16 @@ def materialize(home: Path, mount: SkillMount, specs: Iterable[SkillSpec]) -> li
                 f"技能「{spec.name}」约 {spec.total_bytes // 1024} KB，超过单技能上限，已跳过"
             )
             continue
+        target = skills_root / name
         try:
-            shutil.copytree(source, skills_root / name, symlinks=False, dirs_exist_ok=True)
+            shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True)
         except OSError as exc:
             warnings.append(f"技能「{spec.name}」复制失败：{exc}")
+            continue
+        # 只在「名字被改过」时同步 frontmatter：加了命名空间的技能 slug 与源目录名不同，
+        # 其余情况（市场技能常见的 `目录 kdocs-skill / name: kdocs`）必须原样保留。
+        if name != source.name:
+            _sync_frontmatter_name(target / SKILL_FILE, name, warnings)
 
     for source_path, dest_rel in mount.carry:
         _carry_file(home, source_path, dest_rel, warnings)
@@ -358,6 +382,40 @@ def materialize(home: Path, mount: SkillMount, specs: Iterable[SkillSpec]) -> li
         _patch_json(home / dest_rel, patch, warnings)
 
     return warnings
+
+
+def _sync_frontmatter_name(path: Path, name: str, warnings: list[str]) -> None:
+    """让物化副本的 frontmatter ``name`` 与目录名一致（尽力而为）。
+
+    内核之间认技能的方式不同：Claude Code 按**目录名**调用，Hermes 按 frontmatter
+    的 ``name`` 查找。加了命名空间的技能目录叫 ``telegram-access``，若文件里仍写着
+    ``name: access``，Hermes 就找不到它、Claude Code 也会报「名字对不上」。
+
+    只改物化出来的**副本**，源目录始终只读。改写失败不影响复制结果（技能照旧可用），
+    但会在告警里说明，避免「明明分配了却调不到」。
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return
+    closing = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if closing is None:
+        return
+    for index in range(1, closing):
+        if not lines[index].startswith("name:"):
+            continue
+        current = lines[index].split(":", 1)[1].strip().strip("\"'")
+        if current == name:
+            return
+        lines[index] = f"name: {name}\n"
+        try:
+            path.write_text("".join(lines), encoding="utf-8")
+        except OSError as exc:
+            warnings.append(f"技能「{name}」的 SKILL.md 改名失败：{exc}")
+        return
 
 
 def _carry_file(home: Path, source_path: str, dest_rel: str, warnings: list[str]) -> None:
@@ -534,11 +592,15 @@ async def _drop_skill_row(session: AsyncSession, row: Skill) -> None:
 
 
 async def delete_skill(session: AsyncSession, skill_id: str) -> str:
-    """删除一个非内核自带的技能（个人 / 项目 / 插件 / 市场…），返回技能名。"""
+    """删除一个由平台管理的技能（个人 / 项目 / 市场…），返回技能名。"""
     row = await get_row(session, skill_id)
     if row is None:
         raise SkillNotFound(f"技能不存在：{skill_id}")
     if not is_deletable(row):
+        if row.source_kind == "plugin":
+            raise SkillError(
+                f"「{row.name}」属于已安装的插件，不能单独删除；请在插件管理器里卸载整个插件"
+            )
         raise SkillError(f"「{row.name}」是内核自带技能，不能删除")
     name = row.name
     _remove_skill_directory(row.type_id, row)

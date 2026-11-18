@@ -48,7 +48,19 @@ async def _start_im() -> None:
 
 
 async def _scan_skills(session) -> None:
-    """启动时把各内核的技能同步进统一目录；失败不影响服务启动。"""
+    """启动时把各内核的技能同步进统一目录；失败不影响服务启动。
+
+    先让各内核把自己的**内置技能**落盘（:meth:`AgentDefinition.seed_skills`），
+    再统一编目 —— 否则内核刚装好、还没人跑过它时，「技能」页只有市场技能，
+    看不到内核自带的那批。播种走线程（会起子进程），绝不阻塞事件循环。
+    """
+    for definition in all_agents():
+        try:
+            actions = await asyncio.to_thread(definition.seed_skills)
+            if actions:
+                logger.info("内核 %s 播种内置技能：%s", definition.id, "；".join(actions))
+        except Exception:  # noqa: BLE001 - 播种是尽力而为，失败只少几个技能
+            logger.warning("内核 %s 播种内置技能失败", definition.id, exc_info=True)
     try:
         result = await skill_service.rescan(session)
         summary = (

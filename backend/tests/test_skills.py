@@ -262,19 +262,173 @@ def test_claude_warns_about_workspace_skills(tmp_path: Path, monkeypatch: pytest
     assert any(".claude/skills" in note for note in mount.notes)
 
 
-def test_claude_discovers_personal_and_plugin_skills(
+def test_claude_discovers_personal_and_installed_plugin_skills(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """插件技能只认「已安装清单」里的安装目录，不看市场目录的克隆。"""
     monkeypatch.setenv("HOME", str(tmp_path))
     write_skill(tmp_path / ".claude" / "skills", "personal")
-    plugin_skills = (
-        tmp_path / ".claude" / "plugins" / "marketplaces" / "mp" / "plugins" / "p" / "skills"
+
+    plugins = tmp_path / ".claude" / "plugins"
+    # 市场目录的克隆：可浏览、未安装 —— 编目时绝不能出现。
+    write_skill(plugins / "marketplaces" / "mp" / "plugins" / "p" / "skills", "catalog-only")
+    # 真正装上的插件：清单登记在 cache/<市场>/<插件>/<版本>/ 下。
+    installed = write_skill(plugins / "cache" / "mp" / "p" / "1.0.0" / "skills", "plugin-skill")
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "p@mp": [
+                        {"scope": "user", "installPath": str(installed.parent), "version": "1.0.0"}
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
     )
-    write_skill(plugin_skills, "plugin-skill")
 
     found = {spec.id: spec for spec in get_agent("claude-code").discover_skills()}
     assert found["claude-code:personal"].source_kind == "user"
-    assert found["claude-code:plugin-skill"].source_kind == "plugin"
+    # 插件技能带插件名前缀，避免与其它插件的同名技能互相覆盖。
+    assert found["claude-code:p-plugin-skill"].source_kind == "plugin"
+    assert "claude-code:catalog-only" not in found, "市场目录的克隆不该被编目"
+
+
+def test_claude_same_name_skills_from_different_plugins_coexist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """两个插件各带一个 access：必须都在，且能被分别调用（目录名不同）。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plugins = tmp_path / ".claude" / "plugins"
+    entries = {}
+    for channel in ("discord", "telegram"):
+        install = plugins / "cache" / "mp" / channel / "1.0.0"
+        write_skill(install / "skills", "access")
+        entries[f"{channel}@mp"] = [
+            {"scope": "user", "installPath": str(install), "version": "1.0.0"}
+        ]
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": entries}), encoding="utf-8"
+    )
+
+    found = {spec.id: spec for spec in get_agent("claude-code").discover_skills()}
+    assert "claude-code:discord-access" in found
+    assert "claude-code:telegram-access" in found
+    # 原始目录名留档，展示名带上来源，列表里不会出现两个一模一样的「access」。
+    assert found["claude-code:telegram-access"].extra["original_slug"] == "access"
+    assert found["claude-code:discord-access"].name == "access · discord"
+    assert found["claude-code:telegram-access"].name == "access · telegram"
+
+
+def test_plugin_namespace_keeps_unsafe_slugs_and_is_idempotent():
+    """前缀不会让不安全的目录名消失，重复应用也不会叠加前缀。"""
+    from app.agents.skills import _apply_namespace
+
+    spec = SkillSpec(type_id="t", slug="access", name="access")
+    _apply_namespace(spec, "telegram")
+    assert spec.slug == "telegram-access"
+    _apply_namespace(spec, "telegram")
+    assert spec.slug == "telegram-access", "重复应用不能变成 telegram-telegram-access"
+
+    unsafe = SkillSpec(type_id="t", slug="技能 名", name="x")
+    _apply_namespace(unsafe, "telegram")
+    assert unsafe.slug == "技能 名", "无法安全加前缀时保留原名，不能丢技能"
+
+
+def test_claude_plugin_catalog_clone_is_never_a_skill_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """没有任何已安装插件时，技能根也不能指向 plugins/（市场克隆所在处）。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plugins = tmp_path / ".claude" / "plugins"
+    write_skill(plugins / "marketplaces" / "mp" / "plugins" / "p" / "skills", "catalog-only")
+
+    roots = get_agent("claude-code").skill_roots()
+    assert all(Path(root.path) != plugins for root in roots)
+    assert all("marketplaces" not in root.path for root in roots)
+    assert get_agent("claude-code").discover_skills() == []
+
+
+def test_claude_empty_manifest_does_not_fall_back_to_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """清单存在但说「没装插件」时，缓存里的残留不能被当成已安装。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plugins = tmp_path / ".claude" / "plugins"
+    # 已卸载插件留在缓存里的目录
+    write_skill(plugins / "cache" / "mp" / "leftover" / "1.0.0" / "skills", "ghost-skill")
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {}}), encoding="utf-8"
+    )
+
+    assert get_agent("claude-code").discover_skills() == []
+
+
+def test_claude_plugin_cache_fallback_without_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """旧版本内核没有 installed_plugins.json 时，按 cache 布局兜底扫描（同样加前缀）。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cache = tmp_path / ".claude" / "plugins" / "cache"
+    write_skill(cache / "mp" / "p" / "1.0.0" / "skills", "plugin-skill")
+
+    found = {spec.id: spec for spec in get_agent("claude-code").discover_skills()}
+    assert found["claude-code:p-plugin-skill"].source_kind == "plugin"
+
+
+def test_claude_plugin_manifest_survives_broken_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """清单损坏不能让技能页整体失败：退回空列表，个人技能照常编目。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    write_skill(tmp_path / ".claude" / "skills", "personal")
+    state = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+    state.parent.mkdir(parents=True)
+    state.write_text("{ not json", encoding="utf-8")
+
+    found = {spec.id: spec for spec in get_agent("claude-code").discover_skills()}
+    assert found["claude-code:personal"].source_kind == "user"
+
+
+def test_hermes_marks_bundled_skills_as_system(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Hermes 的内置技能与用户技能同目录，靠 .bundled_manifest 区分归属。"""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    skills = tmp_path / "hermes" / "skills"
+    write_skill(skills / "apple", "apple-notes")
+    write_skill(skills / "mine", "my-own-skill")
+    (skills / ".bundled_manifest").write_text("apple-notes:abc123\n", encoding="utf-8")
+
+    found = {spec.id: spec for spec in get_agent("hermes-agent").discover_skills()}
+    assert found["hermes-agent:apple-notes"].source_kind == "system"
+    assert found["hermes-agent:my-own-skill"].source_kind == "user"
+
+
+def test_hermes_manifest_ignores_market_and_curator_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """市场技能不能因为名字撞上清单就被标成自带；curator 抑制表也算自带。"""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    skills = tmp_path / "hermes" / "skills"
+    write_skill(skills / ".skillhub", "hub-skill")
+    write_skill(skills / "p", "pruned-builtin")
+    (skills / ".bundled_manifest").write_text("hub-skill:aaa\n", encoding="utf-8")
+    (skills / ".curator_suppressed").write_text("pruned-builtin\n", encoding="utf-8")
+
+    found = {spec.id: spec for spec in get_agent("hermes-agent").discover_skills()}
+    assert found["hermes-agent:hub-skill"].source_kind == "market"
+    assert found["hermes-agent:pruned-builtin"].source_kind == "system"
+
+
+def test_hermes_without_manifest_keeps_skills_deletable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """没有清单（旧内核）时退回旧行为：全部当用户技能，至少不会把用户技能锁死。"""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    write_skill(tmp_path / "hermes" / "skills" / "x", "some-skill")
+
+    found = {spec.id: spec for spec in get_agent("hermes-agent").discover_skills()}
+    assert found["hermes-agent:some-skill"].source_kind == "user"
 
 
 def test_codex_uses_isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -477,6 +631,38 @@ async def test_delete_refuses_system_skill_and_outside_path(
     assert outside.is_dir()
 
 
+async def test_delete_refuses_installed_plugin_skill(
+    client: httpx.AsyncClient, catalog: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """已安装插件里的技能不能单独删：删了插件就残缺，重扫还会加回来。"""
+    from app.models import Skill
+
+    monkeypatch.setattr(
+        skill_service, "skill_roots_for_type", lambda _type_id: [skill_service.SkillRoot(str(catalog))]
+    )
+    async with SessionLocal() as session:
+        session.add(
+            Skill(
+                id="custom-cli:plugin-skill",
+                type_id="custom-cli",
+                slug="plugin-skill",
+                name="插件里的技能",
+                source_kind="plugin",
+                path=str(catalog / "alpha"),
+            )
+        )
+        await session.commit()
+
+    items = (await client.get("/api/skills")).json()["items"]
+    listed = next(item for item in items if item["slug"] == "plugin-skill")
+    assert listed["deletable"] is False
+
+    response = await client.delete("/api/skills/custom-cli:plugin-skill")
+    assert response.status_code == 422
+    assert "插件" in response.json()["detail"]
+    assert (catalog / "alpha").is_dir()
+
+
 async def test_delete_missing_skill_returns_404(client: httpx.AsyncClient):
     """不存在的技能返回 404（不靠中文字符串匹配状态码）。"""
     response = await client.delete("/api/skills/custom-cli:missing")
@@ -640,3 +826,84 @@ async def test_run_materializes_assigned_skills_into_isolated_home(
     # 删除对话时隔离目录一并回收。
     assert (await client.delete(f"/api/conversations/{conversation['id']}")).status_code == 204
     assert not home.exists()
+
+
+def test_materialize_syncs_frontmatter_name_to_directory(tmp_path: Path):
+    """物化副本的 frontmatter name 要与目录名一致，否则按名字找技能的内核会找不到。"""
+    from app.runtime.skills import materialize
+
+    source = write_skill(tmp_path / "src", "access")
+    spec = spec_for(source, source_kind="plugin")
+    spec.slug = "telegram-access"  # 模拟命名空间前缀后的目录名
+
+    home = tmp_path / "home"
+    warnings = materialize(home, SkillMount(home_name="h"), [spec])
+
+    assert warnings == []
+    copied = (home / "skills" / "telegram-access" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: telegram-access" in copied
+    # 只改副本：源目录必须原样保留。
+    assert "name: access" in (source / "SKILL.md").read_text(encoding="utf-8")
+    # 其它元数据不能被顺手改掉。
+    assert "description: access 的说明" in copied
+
+
+def test_materialize_leaves_matching_name_untouched(tmp_path: Path):
+    """目录名与 frontmatter 一致时不该改写文件（避免无谓地动别人的技能）。"""
+    from app.runtime.skills import materialize
+
+    source = write_skill(tmp_path / "src", "plain")
+    original = (source / "SKILL.md").read_text(encoding="utf-8")
+    home = tmp_path / "home"
+
+    assert materialize(home, SkillMount(home_name="h"), [spec_for(source)]) == []
+    assert (home / "skills" / "plain" / "SKILL.md").read_text(encoding="utf-8") == original
+
+
+def test_seed_skills_is_idempotent_and_skips_when_present(tmp_path: Path, monkeypatch):
+    """内核自带技能播种：已存在就跳过，绝不重复执行子进程。"""
+    from app.agents.builtin import codex as codex_mod
+
+    home = tmp_path / "codex-home"
+    monkeypatch.setattr(codex_mod, "codex_home", lambda: home)
+
+    called: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        called.append(argv)
+
+        class Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        return Result()
+
+    monkeypatch.setattr(codex_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(codex_mod.shutil, "which", lambda _: "/usr/bin/codex")
+
+    agent = get_agent("codex")
+
+    # 目录不存在 → 会跑一次子进程播种
+    (home / "skills").mkdir(parents=True)
+    actions = agent.seed_skills()
+    assert len(called) == 1, called
+    assert called[0][:3] == ["codex", "debug", "prompt-input"]
+    # 假子进程没真的写目录，所以这里不产生动作描述
+    assert actions == []
+
+    # 目录已存在 → 直接跳过，不再起子进程
+    (home / "skills" / ".system").mkdir()
+    called.clear()
+    assert agent.seed_skills() == []
+    assert called == [], "已有 .system 时不应再执行播种命令"
+
+
+def test_seed_skills_never_raises_when_binary_missing(tmp_path: Path, monkeypatch):
+    """没装内核时播种必须静默返回空列表，不能把启动或安装搞挂。"""
+    from app.agents.builtin import codex as codex_mod
+
+    monkeypatch.setattr(codex_mod, "codex_home", lambda: tmp_path / "h")
+    monkeypatch.setattr(codex_mod.shutil, "which", lambda _: None)
+
+    assert get_agent("codex").seed_skills() == []

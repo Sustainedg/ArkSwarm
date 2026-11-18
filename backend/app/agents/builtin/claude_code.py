@@ -81,8 +81,13 @@ _BUILTIN_PLUGIN_IDS = ("cc-plugin-agents-md@builtin", "cc-plugin-plugin-authorin
 #: ``disableBundledSkills`` 关不掉、需要逐个用 ``skillOverrides`` 关闭的内置技能。
 _RESIDUAL_BUNDLED_SKILLS = ("doctor",)
 
-#: 插件市场目录的扫描深度：plugins/<市场>/plugins/<插件>/skills/<技能>。
-_PLUGIN_SKILL_DEPTH = 8
+#: 已安装插件内部的技能深度：``<插件根>/skills/<技能>/SKILL.md``。
+_PLUGIN_SKILL_DEPTH = 2
+
+#: Claude Code 记录「已安装插件」的清单（``plugins/installed_plugins.json``）。
+#: ``plugins/marketplaces/<市场>/`` 只是**市场目录的克隆**（可浏览、未安装），
+#: 真正的已安装插件在 ``plugins/cache/<市场>/<插件>/<版本>/`` 下，由这份清单指向。
+_PLUGIN_STATE_FILE = "installed_plugins.json"
 
 #: 平台「技能市场」安装目录（``<config>/skills/.skillhub/<skill>``），可卸载。
 _MARKET_DIRNAME = ".skillhub"
@@ -108,6 +113,71 @@ def user_config_file(home: str | Path | None = None) -> Path:
     override = os.environ.get("CLAUDE_CONFIG_DIR")
     base = Path(override).expanduser() if override else Path.home()
     return base / ".claude.json"
+
+
+def installed_plugin_paths(home: str | Path | None = None) -> list[tuple[str, str]] | None:
+    """已安装插件：``(插件标识, 安装目录)`` 列表；清单缺失/损坏时返回 ``None``。
+
+    Claude Code 把「插件市场目录」（``plugins/marketplaces/<市场>/``，可浏览的货架）
+    与「已安装插件」（``plugins/cache/<市场>/<插件>/<版本>/``）分开放，两者都带
+    ``skills/`` 子目录。只有后者是用户真正装上的，编目时只能看后者。
+
+    插件标识取自清单的键（``<插件>@<市场>``）：不同插件可能各带一个同名技能
+    （如 discord / telegram 各有一个 ``access``），它用作技能目录名的前缀，
+    让它们能同时存在、也能被分别调用。
+
+    **必须区分「清单说没装插件」（返回空列表）和「没有清单」（返回 ``None``）**：
+    前者是权威结论（缓存里可能还留着已卸载插件的目录，不能再列出来），
+    后者才需要按缓存布局兜底扫描（旧版本内核没有这份清单）。
+    """
+    base = config_dir(home) / "plugins"
+    try:
+        data = json.loads((base / _PLUGIN_STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    entries = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
+        return None
+
+    found: list[tuple[str, str]] = []
+    for plugin_id, records in entries.items():
+        plugin_name = str(plugin_id).split("@", 1)[0].strip() or "plugin"
+        for record in records if isinstance(records, list) else [records]:
+            if not isinstance(record, dict):
+                continue
+            path = record.get("installPath")
+            if isinstance(path, str) and path.strip():
+                found.append((plugin_name, path.strip()))
+    # 同一个插件可能有 user / project 两条安装记录：按「插件 + 路径」去重。
+    return list(dict.fromkeys(found))
+
+
+def _plugin_dirs_in_cache(cache: Path) -> list[tuple[str, Path]]:
+    """缓存布局里的 ``(插件名, 插件根)``：``cache/<市场>/<插件>/<版本>/``（尽力而为）。
+
+    只在旧版本内核没有 ``installed_plugins.json`` 时兜底使用。取最新的版本目录，
+    因为同一个插件可能同时存在多个版本。
+    """
+    found: list[tuple[str, Path]] = []
+    try:
+        markets = sorted(p for p in cache.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    for market in markets:
+        try:
+            plugins = sorted(p for p in market.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for plugin in plugins:
+            try:
+                versions = sorted(p for p in plugin.iterdir() if p.is_dir())
+            except OSError:
+                continue
+            if not versions:
+                continue
+            # 版本目录名按字典序排，取最后一个（1.10.0 > 1.9.0 在这里不严格，但够用）。
+            found.append((plugin.name, versions[-1]))
+    return found
 
 
 def read_system_settings(home: str | Path | None = None) -> dict[str, Any]:
@@ -265,22 +335,53 @@ class ClaudeCodeAgent(AgentDefinition):
         return defaults
 
     def skill_roots(self) -> list[SkillRoot]:
-        """Claude Code 的技能根：平台技能市场 + 个人技能 + 插件市场的插件技能。
+        """Claude Code 的技能根：平台技能市场 + 个人技能 + **已安装**插件的技能。
 
         「技能放在哪」只在这里声明（框架据此编目与安装）；``.skillhub`` 是平台自己的
         技能市场目录，装进来的技能（``source_kind=market``）可以卸载，其余只读编目。
+
+        插件只认 ``installed_plugins.json`` 里登记过的安装目录（``plugins/cache/...``）：
+        ``plugins/marketplaces/<市场>/`` 是市场目录的克隆，里面的技能**没有安装**，
+        把它们编进技能页会让用户以为能分配、还能「删除」——删的是市场货架本身。
+        清单缺失（旧版本内核）时才退回按缓存目录布局扫描，仍然不碰市场克隆。
+
+        每个已安装插件单独成根，并以插件名作命名空间：不同插件可能各带一个同名技能
+        （discord / telegram 各有一个 ``access``），加前缀后变成 ``discord-access`` /
+        ``telegram-access``，既能同时存在，也能被内核分别调用。
         """
         root = config_dir()
-        return [
+        roots = [
             SkillRoot(str(root / "skills" / _MARKET_DIRNAME), source_kind=MARKET_SOURCE),
             SkillRoot(str(root / "skills"), source_kind="user"),
-            SkillRoot(
-                str(root / "plugins"),
-                source_kind="plugin",
-                installable=False,
-                max_depth=_PLUGIN_SKILL_DEPTH,
-            ),
         ]
+        installed = installed_plugin_paths()
+        if installed is not None:
+            # 清单存在就是权威结论：即使为空（一个插件都没装）也不回退扫缓存，
+            # 否则会列出已卸载插件留在缓存里的残留。
+            roots += [
+                SkillRoot(
+                    path,
+                    source_kind="plugin",
+                    installable=False,
+                    max_depth=_PLUGIN_SKILL_DEPTH,
+                    namespace=plugin_name,
+                )
+                for plugin_name, path in installed
+            ]
+        else:
+            # 旧版本内核没有清单：按缓存布局兜底扫描（cache/<市场>/<插件>/<版本>/skills/<技能>）。
+            # 此时插件名仍在路径里，逐插件声明根并同样加命名空间前缀。
+            roots += [
+                SkillRoot(
+                    str(plugin_dir),
+                    source_kind="plugin",
+                    installable=False,
+                    max_depth=_PLUGIN_SKILL_DEPTH,
+                    namespace=plugin_name,
+                )
+                for plugin_name, plugin_dir in _plugin_dirs_in_cache(root / "plugins" / "cache")
+            ]
+        return roots
 
     def discover_skills(self) -> list[SkillSpec]:
         """扫描本内核声明的技能根（个人技能 + 插件技能 + 平台市场技能）。"""

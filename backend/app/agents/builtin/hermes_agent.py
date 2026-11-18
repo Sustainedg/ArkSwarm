@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -52,6 +54,14 @@ _SOUL_FILE = "SOUL.md"
 #: 平台「技能市场」安装目录（``<config>/skills/.skillhub/<skill>``），可卸载。
 _MARKET_DIRNAME = ".skillhub"
 
+#: 内核自带技能的清单（``skills/.bundled_manifest``，每行 ``name:hash``）。
+#: Hermes 把内置技能与用户自己的技能放在**同一个** ``skills/`` 目录里，只能靠这份清单
+#: 区分归属：清单里的算内核自带（只读），不在的才是用户自己的技能。
+_BUNDLED_MANIFEST = ".bundled_manifest"
+
+#: 内核整理器（curator）裁掉的技能清单；它只记录内置技能，同样算「自带」。
+_CURATOR_SUPPRESSED = ".curator_suppressed"
+
 #: **运行时**目录：内核自带解释器（``tools``）与按工程根哈希存的依赖环境（``installs``）。
 #: 它们与用户配置、技能、会话无关，可以跨隔离目录共享（见 :meth:`HermesAgent._share_runtime`）。
 _RUNTIME_DIRS = ("tools", "installs")
@@ -61,6 +71,31 @@ def hermes_home() -> Path:
     """Hermes 的配置目录（认 ``HERMES_HOME`` 环境变量）。"""
     override = os.environ.get("HERMES_HOME")
     return Path(override).expanduser() if override else _CONFIG_DIR
+
+
+def bundled_skill_names(home: str | Path | None = None) -> set[str]:
+    """Hermes 内核自带技能的名字（读 ``skills/.bundled_manifest``，尽力而为）。
+
+    Hermes 把内置技能和用户自己的技能都放在 ``skills/`` 下，靠清单区分归属：
+    清单每行是 ``name:hash``（老版本是纯名字），``name`` 是 SKILL.md 里的 frontmatter 名。
+    清单缺失或损坏时返回空集合（此时全部按用户技能处理，与旧行为一致）。
+    """
+    skills_dir = (Path(home).expanduser() if home else hermes_home()) / "skills"
+    names: set[str] = set()
+    for filename in (_BUNDLED_MANIFEST, _CURATOR_SUPPRESSED):
+        try:
+            text = (skills_dir / filename).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # v2 是 ``name:hash``，v1 只有名字；两种都取冒号前的部分。
+            name = line.split(":", 1)[0].strip()
+            if name:
+                names.add(name)
+    return names
 
 
 @register_agent
@@ -186,8 +221,54 @@ class HermesAgent(AgentDefinition):
         ]
 
     def discover_skills(self) -> list[SkillSpec]:
-        """只读扫描 ``~/.hermes/skills/`` 下的技能（尽力而为、不得抛错）。"""
-        return scan_skill_roots(self.skill_roots(), type_id=self.id)
+        """只读扫描 ``~/.hermes/skills/`` 下的技能（尽力而为、不得抛错）。
+
+        内核自带技能与用户技能混在同一个 ``skills/`` 目录里，所以扫完之后要按
+        ``.bundled_manifest`` 重新归类：清单里登记过的标成 ``system``（只读、不可删），
+        其余才是 ``user``（用户自己的，可以删）。
+        """
+        specs = scan_skill_roots(self.skill_roots(), type_id=self.id)
+        bundled = bundled_skill_names()
+        if not bundled:
+            return specs
+        market_dir = (hermes_home() / "skills" / _MARKET_DIRNAME).resolve()
+        for spec in specs:
+            if spec.source_kind != "user":
+                continue
+            # 市场目录也躺在 skills/ 下（会被父根以 user 身份再扫一遍），
+            # 它归平台市场管，不能因为名字碰巧在清单里就标成内核自带。
+            try:
+                if Path(spec.path).resolve().is_relative_to(market_dir):
+                    continue
+            except (OSError, ValueError):
+                continue
+            if spec.name in bundled or spec.slug in bundled:
+                spec.source_kind = "system"
+        return specs
+
+    def seed_skills(self) -> list[str]:
+        """让 Hermes 自己把内置技能同步到 ``~/.hermes/skills``。
+
+        Hermes 的内置技能由 ``hermes --run-module tools.skills_sync`` 落盘，
+        不播种的话「技能」页看不到内核自带的那批。已有技能时跳过（幂等）。
+        """
+        skills_dir = hermes_home() / "skills"
+        if skills_dir.is_dir() and any(skills_dir.rglob("SKILL.md")):
+            return []
+        binary = self.executable or "hermes"
+        if shutil.which(binary) is None:
+            return []
+        try:
+            subprocess.run(
+                [binary, "--run-module", "tools.skills_sync"],
+                capture_output=True,
+                timeout=300,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001 - 播种失败只意味着少几个技能，不能影响安装
+            return []
+        found = skills_dir.is_dir() and any(skills_dir.rglob("SKILL.md"))
+        return [f"{binary} --run-module tools.skills_sync（播种内置技能）"] if found else []
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
         """把分配到的技能物化进隔离配置目录的 ``skills/`` 子目录。

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -231,6 +233,29 @@ class CodexAgent(AgentDefinition):
     def discover_skills(self) -> list[SkillSpec]:
         """扫描本内核声明的技能根（用户技能 + 系统技能 + 平台市场技能）。"""
         return scan_skill_roots(self.skill_roots(), type_id=self.id)
+
+    def seed_skills(self) -> list[str]:
+        """让 Codex 自己把 ``.system`` 内置技能写进 ``~/.codex/skills``。
+
+        Codex 的内置技能不随 npm 包分发，而是首次运行 ``codex debug prompt-input``
+        时才落盘。不播种的话，「技能」页只看得到市场技能。已存在则跳过（幂等）。
+        """
+        system_dir = codex_home() / "skills" / ".system"
+        if system_dir.is_dir():
+            return []
+        binary = self.executable or "codex"
+        if shutil.which(binary) is None:
+            return []
+        try:
+            subprocess.run(
+                [binary, "debug", "prompt-input"],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001 - 播种失败只意味着少几个技能，不能影响安装
+            return []
+        return [f"{binary} debug prompt-input（播种系统技能）"] if system_dir.is_dir() else []
 
     def skill_mount(self, ctx: AgentContext) -> SkillMount:
         """严格仅分配：把运行环境指向只含「智能体分配到的技能」的隔离 ``CODEX_HOME``。

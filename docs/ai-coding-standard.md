@@ -239,7 +239,9 @@ POST /api/conversations/{id}/messages
 │     → 加一个 ConfigField（§6.4）
 ├─ 让某个适配器支持技能 / MCP
 │     → 声明 `capabilities.skills` / `capabilities.mcp`，再实现扫描与物化钩子
-│       （`discover_skills()` / `skill_mount()`，`discover_mcp_servers()` / `mcp_mount()`）
+│       （`discover_skills()` / `skill_mount()`，`discover_mcp_servers()` / `mcp_mount()`）。
+│       会重名的一类技能（如各插件自带的 `access`）要按来源逐个声明 `SkillRoot` 并填
+│       `namespace`，否则同名技能会在编目与物化时互相覆盖（详见 `AGENTS.md` §3.8）
 ├─ 让界面多展示一种内容（例如"计划"）
 │     → 新增规范化事件（§6.5）
 ├─ 换存储 / 换传输

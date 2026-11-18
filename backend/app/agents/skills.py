@@ -136,12 +136,17 @@ class SkillRoot:
       ``system`` / ``market``…），用于界面分组与「能否卸载」判定。
     * ``installable``：新技能装到这个根是否合适。插件市场那种由别人托管的目录为
       ``False``（只读编目），平台自己的市场目录与个人技能目录为 ``True``。
+    * ``namespace``：给该根下所有技能的目录名加前缀（``<namespace>-<目录名>``）。
+      不同来源可能各有一个同名技能（多个插件各带一个 ``access``），而技能的标识与
+      物化后的目录名都取自目录名，不加前缀就会互相覆盖、只剩一个。
+      内核按**目录名**调用技能，所以前缀同时也让调用名唯一。
     """
 
     path: str
     source_kind: str = "user"
     installable: bool = True
     max_depth: int = 1
+    namespace: str = ""
 
 
 @dataclass(slots=True)
@@ -179,6 +184,9 @@ def scan_skill_roots(roots: Iterable[SkillRoot], *, type_id: str) -> list[SkillS
 
     这是「适配器只声明路径、框架负责扫描」的落点：适配器给出 :class:`SkillRoot`，
     这里逐个调用 :func:`scan_skill_root`，来源与深度都照根的声明来。
+
+    声明了 ``namespace`` 的根，其技能目录名会加上 ``<namespace>-`` 前缀（见
+    :func:`_apply_namespace`），避免不同插件里的同名技能互相覆盖。
     """
     specs: list[SkillSpec] = []
     for root in roots:
@@ -187,8 +195,36 @@ def scan_skill_roots(roots: Iterable[SkillRoot], *, type_id: str) -> list[SkillS
         )
         for spec in scanned:
             _annotate_market(spec, root.source_kind)
+            if root.namespace:
+                _apply_namespace(spec, root.namespace)
         specs.extend(scanned)
     return specs
+
+
+def _apply_namespace(spec: SkillSpec, namespace: str) -> None:
+    """给技能的目录名（slug）加上 ``<namespace>-`` 前缀，保留原始目录名备查。
+
+    技能的标识 ``<type_id>:<slug>`` 与物化后的目录名都取自 ``slug``，而内核按目录名
+    调用技能 —— 前缀让「多个插件各带一个 access」变成 ``telegram-access`` /
+    ``discord-access``，既能同时存在，也能分别调用。
+
+    展示名同样带上来源（``access · telegram``）：三个插件都叫 ``access`` 时，
+    只改 slug 的话列表里仍是三个一模一样的名字，用户没法分辨该选哪个。
+    """
+    prefix = safe_skill_dirname(namespace)
+    if not prefix or not spec.slug or spec.slug.startswith(f"{prefix}-"):
+        return
+    original = spec.slug
+    renamed = safe_skill_dirname(f"{prefix}-{original}")
+    if renamed is None:
+        # 目录名里有前缀无法容纳的字符：保留原名，宁可撞名也不让技能消失。
+        return
+    spec.slug = renamed
+    spec.extra.setdefault("original_slug", original)
+    # 展示名也带上来源：多个插件都叫 access 时，只改 slug 的话列表里仍是几个同名项。
+    # 这里用 frontmatter 的 name（可能不等于目录名），而不是 slug。
+    if spec.name:
+        spec.name = f"{spec.name} · {prefix}"
 
 
 def _annotate_market(spec: SkillSpec, source_kind: str) -> None:

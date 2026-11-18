@@ -249,8 +249,13 @@ ensure_kernels() {
 #   Hermes → ~/.hermes/skills（`hermes --run-module tools.skills_sync`，幂等）
 #   Claude → ~/.claude/skills（用户技能，随用户自己的配置走；镜像不代建）
 # 只做**幂等补齐**：已有技能就跳过，绝不覆盖用户改过的内容。
+#
+# 注意：这里**不受 ARKSWARM_SKIP_KERNEL_INSTALL 影响**。那个开关管的是「装内核」，
+# 而播种只对**已经装好的内核**做补齐 —— 用户自己点安装的内核同样需要它的内置技能，
+# 否则「技能」页永远只有市场技能、看不到内核自带的那些。
+# 需要连播种也跳过时，单独设 ARKSWARM_SKIP_KERNEL_SKILLS=1。
 seed_kernel_skills() {
-  [ "${ARKSWARM_SKIP_KERNEL_INSTALL:-0}" = "1" ] && return 0
+  [ "${ARKSWARM_SKIP_KERNEL_SKILLS:-0}" = "1" ] && return 0
 
   if command -v codex >/dev/null 2>&1 && [ ! -d "$HOME/.codex/skills/.system" ]; then
     log "播种 Codex 系统技能"

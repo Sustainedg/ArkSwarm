@@ -231,6 +231,28 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   供「用量」页统计调用次数；默认不识别——「技能调用长什么样」是适配器的知识）。
   技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
   但落盘路径仍由适配器声明、框架不硬编码。
+- **插件技能只认「已安装」**：内核自带的插件市场目录（如 Claude Code 的
+  `plugins/marketplaces/<市场>/`）只是**可浏览的货架**，里面的技能并没有安装。插件技能必须来自
+  该内核自己的「已安装清单」（Claude Code 是 `plugins/installed_plugins.json` 里登记的
+  `installPath`），否则技能页会把未安装的候选当成可分配技能，还能「删除」掉市场克隆本身。
+  `source_kind=plugin` 的技能归插件管理器所有：**只读、不可单独删除**（卸载要整包走插件管理器），
+  目录消失后也不在列表里留「已失效」行。
+- **同名技能必须靠命名空间共存**：技能标识 `SkillSpec.id` 与物化目录名都取自
+  `SkillSpec.slug`（技能目录名），不同来源各带一个同名技能时（多个插件各有 `access`）
+  会互相覆盖、只剩一个。`SkillRoot.namespace` 用来给某个根下所有技能加
+  `<namespace>-` 前缀（Claude Code 的已安装插件按插件名声明），原始目录名存进
+  `SkillSpec.extra["original_slug"]`，展示名带上来源（`access · telegram`）。
+- **物化时要同步 frontmatter 的 `name`**：Claude Code 按**目录名**调用技能，Hermes 按
+  frontmatter 的 `name` 查找。加了前缀的副本若仍写着 `name: access`，Hermes 就找不到。
+  `runtime/skills.materialize()` 在复制后调用 `_sync_frontmatter_name()` 只改**副本**，
+  源目录始终只读；其余元数据不动。
+- **内核自带技能要按归属清单认，不能按目录猜**：Hermes 把内置技能和用户技能**混在同一个**
+  `skills/` 目录里，归属只能读 `skills/.bundled_manifest`（每行 `name:hash`，v1 是纯名字；
+  `.curator_suppressed` 里被裁掉的内置技能也算自带）。清单里登记过的标 `source_kind=system`
+  （只读、不可删），其余才是 `user`。清单缺失时退回「全按用户技能」（旧内核行为）。
+  判断时要排除 `.skillhub`（市场目录也躺在 `skills/` 下，归平台管）。
+  新内核若也把「自带」与「用户」混放，**必须**给出等价的归属清单，再在 `discover_skills()`
+  里改写 `source_kind`；不允许只靠目录路径推断。
 - **删除语义**：用户显式删除（`DELETE /api/skills/{id}`）或从市场卸载
   （`POST /api/skillhub/uninstall`）时，先断开 `agent_skills` 分配、再删编目行 —— 这是唯一的
   「删行」入口，磁盘目录删不掉要抛错，不能静默当作成功。扫描时发现技能目录**意外消失**
@@ -282,10 +304,12 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 
 ### 4.6 让某个适配器支持技能
 1. `capabilities` 里声明 `skills=True`。
-2. 实现 `skill_roots()` 声明本内核的技能根（`SkillRoot(path, source_kind, installable, max_depth)`；
+2. 实现 `skill_roots()` 声明本内核的技能根（`SkillRoot(path, source_kind, installable, max_depth, namespace)`；
    平台「技能市场」的安装目录是其中 `installable` 的一个，通常把 `.skillhub` 单独列一条、
    `source_kind=MARKET_SOURCE`），再用 `agents/skills.py` 的 `scan_skill_roots()` 实现 `discover_skills()`，
    标注来源（`user` / `project` / `plugin` / `system` / `market`），**只读、不得抛错**。
+   会重名的一类技能（如各插件自带的 `access`）按来源逐个声明根并填 `namespace`，
+   否则同名技能会在编目与物化时互相覆盖。
 3. 实现 `skill_mount(ctx)`：声明隔离目录名、需要携带的配置文件、要关闭的内核自带技能，
    并在 `build_invocation()` 里把 `ctx.home_dir` 写进对应环境变量（如 `CLAUDE_CONFIG_DIR`）。
 4. 加测试：参考 `backend/tests/test_skills.py`（解析、物化、隔离变量）。
