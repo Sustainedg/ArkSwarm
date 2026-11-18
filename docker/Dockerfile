@@ -50,6 +50,9 @@ COPY backend/.env.example /image-app/backend/.env.example
 # 镜像自带这份产物，首启即可出 UI。
 COPY frontend/dist /image-app/frontend/dist
 COPY scripts/serve.sh /image-app/scripts/serve.sh
+# 平台内置 MCP（图片生成）的 stdio 脚本：内置服务器播种后要能直接启动它，
+# 所以必须随版本目录一起分发（见 app/builtin_mcp.py）。
+COPY scripts/mcp /image-app/scripts/mcp
 
 # 预装 Python 依赖到 /image-venv：首启直接复制，离线也能启动。
 RUN python3 -m venv /image-venv \

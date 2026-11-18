@@ -410,4 +410,4 @@ docker compose -f docker/docker-compose.yml up -d --build
 
 **自己发版**：改 `backend/app/__init__.py` 的 `__version__` → 提交 →
 `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
-tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
+tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`、`v0.1.1` ↔ `V0.1.1`），脚本会校验。

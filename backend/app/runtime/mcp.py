@@ -28,8 +28,10 @@ from ..agents.mcp import (
     McpServerSpec,
     safe_slug,
 )
-from ..models import AgentMcpServer, AgentProfile, McpServer
+from ..builtin_mcp import BUILTIN_SERVERS, builtin_by_key
+from ..models import AgentMcpServer, AgentProfile, McpServer, User
 from ..security import decrypt, encrypt, mask
+from ..settings import get_settings
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
 logger = logging.getLogger("arkswarm")
@@ -156,6 +158,136 @@ async def _slug_conflict(
         if mcp_id != keep_id:
             return True
     return False
+
+
+# --- 内置服务器播种 ---------------------------------------------------------
+
+
+async def _builtin_row(
+    session: AsyncSession, owner_id: str | None, key: str
+) -> McpServer | None:
+    """取某个用户名下的内置服务器（软删除的不算）。"""
+    statement = select(McpServer).where(
+        McpServer.builtin_key == key,
+        McpServer.deleted_at.is_(None),
+    )
+    if owner_id is None:
+        statement = statement.where(McpServer.owner_id.is_(None))
+    else:
+        statement = statement.where(McpServer.owner_id == owner_id)
+    return (await session.execute(statement)).scalars().first()
+
+
+async def _builtin_slug(session: AsyncSession, base: str, owner_id: str | None) -> str:
+    """给内置服务器挑一个不冲突的标识（用户可能已经建过同名服务器）。"""
+    candidate = base
+    index = 1
+    while await _slug_conflict(session, candidate, owner_id=owner_id):
+        index += 1
+        candidate = f"{base}-{index}"
+    return candidate
+
+
+async def ensure_builtin_servers(session: AsyncSession, owner_id: str | None) -> int:
+    """确保某个用户名下有全部内置 MCP 服务器；返回本次新建的条数。
+
+    幂等：已存在的那条只刷新「平台维护的连接方式」与新增的参数键，用户填过的参数值
+    原样保留。因此版本升级（脚本路径 / 解释器变化）后调用一次就能对齐。
+    """
+    created = 0
+    changed = False
+    for preset in BUILTIN_SERVERS:
+        row = await _builtin_row(session, owner_id, preset.key)
+        if row is None:
+            now = datetime.now(timezone.utc)
+            session.add(
+                McpServer(
+                    id=f"mcp-{os.urandom(8).hex()}",
+                    name=preset.name,
+                    slug=await _builtin_slug(session, preset.slug, owner_id),
+                    description=preset.description,
+                    type_id=None,
+                    source_kind=PLATFORM_SOURCE,
+                    transport="stdio",
+                    command=preset.command,
+                    args=list(preset.args),
+                    # 参数键先落成空值：界面能立刻看到要填哪些项，但不会注入假配置。
+                    env_encrypted=_encrypt_pairs(preset.env_defaults()),
+                    headers_encrypted={},
+                    enabled=True,
+                    available=True,
+                    builtin_key=preset.key,
+                    discovered_at=now,
+                    updated_at=now,
+                    owner_id=owner_id,
+                )
+            )
+            created += 1
+            continue
+
+        # 连接方式由代码说了算：升级换了脚本位置 / 解释器时跟着更新。
+        if (row.command or "") != preset.command or list(row.args or []) != list(preset.args):
+            row.command = preset.command
+            row.args = list(preset.args)
+            row.updated_at = datetime.now(timezone.utc)
+            changed = True
+        raw_env = dict(row.env_encrypted or {})
+        for key, default in preset.env_defaults().items():
+            if key not in raw_env:
+                raw_env[key] = encrypt(default) or ""
+                changed = True
+        if raw_env != dict(row.env_encrypted or {}):
+            row.env_encrypted = raw_env
+            changed = True
+
+    if created or changed:
+        await session.commit()
+    return created
+
+
+async def ensure_builtin_servers_for_all(session: AsyncSession) -> int:
+    """启动时为所有启用中的用户补齐内置服务器；返回本次新建的条数。
+
+    鉴权关闭时资产归属记 ``None``（与服务端的 ``owner_id_for`` 口径一致），
+    只播种一条共享的内置服务器。
+    """
+    if not get_settings().auth_enabled:
+        return await ensure_builtin_servers(session, None)
+    user_ids = (
+        await session.execute(select(User.id).where(User.is_active == True))  # noqa: E712
+    ).scalars().all()
+    created = 0
+    for user_id in user_ids:
+        created += await ensure_builtin_servers(session, str(user_id))
+    return created
+
+
+async def builtin_param_warnings(
+    session: AsyncSession, profile: AgentProfile
+) -> list[str]:
+    """运行前提示：已分配的内置服务器还有必填参数没填。
+
+    只提示、不阻断运行 —— 用户可能只是想先聊两句；真正调用工具时脚本自己会给出
+    可操作的中文错误。
+    """
+    ids = await agent_mcp_ids(session, profile.id)
+    if not ids:
+        return []
+    rows = (
+        await session.execute(select(McpServer).where(McpServer.id.in_(ids)))
+    ).scalars().all()
+    warnings: list[str] = []
+    for row in rows:
+        preset = builtin_by_key(row.builtin_key)
+        if preset is None:
+            continue
+        missing = preset.missing_required(_decrypt_pairs(row.env_encrypted))
+        if missing:
+            warnings.append(
+                f"内置 MCP「{row.name}」还缺必填参数：{'、'.join(missing)}；"
+                "请到「MCP」页编辑它并补全后再使用生图工具"
+            )
+    return warnings
 
 
 # --- 编目 -------------------------------------------------------------------
@@ -326,6 +458,8 @@ async def update_row(
 ) -> McpServer:
     """更新一个平台通用的 MCP 服务器（扫描来的服务器不可改，调用方先拦）。"""
     _ensure_editable(row)
+    if row.builtin_key:
+        _ensure_builtin_connection(row, transport=transport, command=command, args=args, url=url)
     label = (name or row.name).strip()
     if not label:
         raise McpError("请给这个 MCP 服务器起个名字")
@@ -367,8 +501,13 @@ async def update_row(
 
 
 async def delete_row(session: AsyncSession, row: McpServer) -> None:
-    """软删除一个平台通用的 MCP 服务器（历史对话与协作历史照旧可读）。"""
+    """软删除一个平台通用的 MCP 服务器（历史对话与协作历史照旧可读）。
+
+    内置服务器不提供删除：它随平台分发，删了下次启动还会被播种回来。
+    """
     _ensure_editable(row)
+    if row.builtin_key:
+        raise McpError("内置 MCP 服务器不能删除；不需要时停用即可", status_code=403)
     row.deleted_at = datetime.now(timezone.utc)
     row.updated_at = row.deleted_at
     session.add(row)
@@ -382,6 +521,28 @@ def _ensure_editable(row: McpServer) -> None:
             "请到该内核自己的配置里修改，或新建一个平台通用的服务器",
             status_code=403,
         )
+
+
+def _ensure_builtin_connection(
+    row: McpServer,
+    *,
+    transport: str | None,
+    command: str | None,
+    args: Sequence[Any] | None,
+    url: str | None,
+) -> None:
+    """内置服务器的连接方式由平台维护，只允许改参数。
+
+    界面上这些字段也是只读的；这里再挡一次，避免通过 API 把内置脚本替换成别的命令。
+    """
+    if transport is not None and _normalize_transport(transport) != row.transport:
+        raise McpError("内置 MCP 的连接方式由平台维护，不能修改传输方式", status_code=403)
+    if command is not None and str(command).strip() != (row.command or ""):
+        raise McpError("内置 MCP 的启动命令由平台维护，不能修改", status_code=403)
+    if args is not None and [str(item) for item in args] != list(row.args or []):
+        raise McpError("内置 MCP 的启动参数由平台维护，不能修改", status_code=403)
+    if url is not None:
+        raise McpError("内置 MCP 使用 stdio 传输，不能填写服务器地址", status_code=403)
 
 
 # --- 查询 -------------------------------------------------------------------
@@ -566,6 +727,13 @@ def spec_from_row(row: McpServer) -> McpServerSpec:
 
 def read_view(row: McpServer, *, used_by: int = 0, type_name: str | None = None) -> dict[str, Any]:
     """给界面的只读视图：密钥只给键名与掩码，永远没有明文。"""
+    builtin = builtin_by_key(row.builtin_key)
+    masked = mask_pairs(row.env_encrypted)
+    # 内置服务器的参数键即使还没填值也要回给界面：用户得先看到「网关地址 / 模型名称」
+    # 这两个待填项，才知道该配什么。普通服务器仍只回真正存在的键。
+    env_keys = {str(key) for key in (row.env_encrypted or {})}
+    if builtin is not None:
+        env_keys.update(param.key for param in builtin.params)
     return {
         "id": row.id,
         "name": row.name,
@@ -574,13 +742,15 @@ def read_view(row: McpServer, *, used_by: int = 0, type_name: str | None = None)
         "type_id": row.type_id,
         "type_name": type_name,
         "source_kind": row.source_kind,
-        "source_label": SOURCE_LABELS.get(row.source_kind, row.source_kind),
+        "source_label": "平台内置" if builtin is not None else SOURCE_LABELS.get(
+            row.source_kind, row.source_kind
+        ),
         "transport": row.transport,
         "command": row.command,
         "args": list(row.args or []),
         "url": row.url,
-        "env_keys": sorted(_decrypt_pairs(row.env_encrypted).keys()),
-        "env_preview": mask_pairs(row.env_encrypted),
+        "env_keys": sorted(env_keys),
+        "env_preview": masked,
         "header_keys": sorted(_decrypt_pairs(row.headers_encrypted).keys()),
         "header_preview": mask_pairs(row.headers_encrypted),
         "enabled": bool(row.enabled),
@@ -588,6 +758,9 @@ def read_view(row: McpServer, *, used_by: int = 0, type_name: str | None = None)
         "note": row.note,
         "editable": row.source_kind == PLATFORM_SOURCE and row.type_id is None,
         "used_by_agents": used_by,
+        #: 内置服务器的稳定标识与参数说明；普通服务器为 None / 空数组。
+        "builtin_key": row.builtin_key,
+        "builtin_params": builtin.params_view(masked) if builtin is not None else [],
     }
 
 
@@ -612,7 +785,11 @@ async def prepare_mcp_home(
     mount = definition.mcp_mount(ctx)
     if mount is None:
         return []
+    # 内置服务器已分配但参数没填：提前提示，别等模型调用工具时才撞墙。
+    # 单测会以 ``None`` 会话 / 资料直接调这个函数（只验证物化计划），这里跳过提示。
     warnings: list[str] = []
+    if session is not None and profile is not None:
+        warnings = await builtin_param_warnings(session, profile)
     # 只有当配置真的要写进「内核隔离配置目录」时才建这个家：技能与 MCP 共用同一个目录，
     # 技能物化（prepare_skill_home）已经定过目录时以它为准。只写工作目录的内核
     # （例如 Gemini CLI）不需要这个目录，凭空建一个空目录会被 note_fresh_home

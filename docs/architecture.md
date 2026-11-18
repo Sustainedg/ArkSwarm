@@ -429,16 +429,21 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
   值一律**换行**而不是省略号截断（启动命令很长）；样式是两端各一份的 `.mcp-*` 共享段
   （`tests/test_mobile_web.py::test_mcp_detail_styles_are_identical_on_both_ends` 守着逐字一致）。
 
-**平台自带的通用服务器**：`scripts/mcp/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
+**平台内置的通用服务器**：`scripts/mcp/image_mcp_server.py` 是随平台分发的一个「图片生成」MCP
 服务器（stdio、纯标准库）——把 OpenAI 兼容网关的生图接口包成一个 `generate_image` 工具：
 不传参考图走 `POST /v1/images/generations`（文生图）；传 `image` / `images` 则走
-`POST /v1/images/edits`（图生图 / 图片编辑，支持一次给多张参考图）。在「MCP」页新建服务器
-（命令 `python scripts/mcp/image_mcp_server.py`），配置全走它的环境变量（加密落库、运行时注入）：
+`POST /v1/images/edits`（图生图 / 图片编辑，支持一次给多张参考图）。
 
-| 环境变量 | 说明 |
+它是**内置服务器**（声明在 `backend/app/builtin_mcp.py`）：平台启动时为每个用户自动播种一条
+平台通用记录（`runtime/mcp.py:ensure_builtin_servers_for_all`，注册新用户时也会补），用户
+不需要自己新建、也不需要找脚本路径。连接方式（启动命令 = 当前解释器、参数 = 脚本路径）由
+平台维护，界面上只读；用户只需要在「MCP」页的**参数**里填写网关地址与模型名 —— **模型不写死**，
+按自己的网关填。参数最终仍以环境变量注入（加密落库、运行时注入）：
+
+| 参数（环境变量） | 说明 |
 | --- | --- |
-| `IMAGE_GEN_GATEWAY` | 生图网关地址（裸域名或带 `/v1` 都行，自动归一化） |
-| `IMAGE_GEN_MODEL` | 生图模型名（需支持图片编辑时才有图生图能力，如 `doubao-seedream-5-lite`） |
+| `IMAGE_GEN_GATEWAY` | 生图网关地址（裸域名或带 `/v1` 都行，自动归一化），必填 |
+| `IMAGE_GEN_MODEL` | 生图模型名（需支持图片编辑时才有图生图能力，如 `doubao-seedream-5-lite`），必填 |
 | `IMAGE_GEN_API_KEY` | 网关密钥（无鉴权的本地网关可不填） |
 | `IMAGE_GEN_TIMEOUT` | 单次生图超时秒数（默认 300） |
 | `IMAGE_PUBLIC_BASE_URL` | 可选：图片的对外访问前缀（如静态图床 `http://192.168.2.168:3050`）。设置后工具结果回**绝对 URL**，适合经 MCPHub 等网关代跑、与平台不在同一文件系统的场景；不设置则回工作目录内的相对路径 |
@@ -505,9 +510,9 @@ skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, pat
        available, note, source_url)   # source_kind 含 market（市场技能，可卸载）
 agent_skills(agent_profile_id→agent_profiles, skill_id→skills，复合主键 + position)
 mcp_servers(id, name, slug, description, type_id(空=平台通用), source_kind(manual|user),
-            transport(stdio|http|sse), command, args JSON, url, env_encrypted JSON,
-            headers_encrypted JSON, enabled, available, note, discovered_at, updated_at, deleted_at,
-            owner_id)
+            builtin_key(空=非内置，如 image-gen), transport(stdio|http|sse), command, args JSON, url,
+            env_encrypted JSON, headers_encrypted JSON, enabled, available, note,
+            discovered_at, updated_at, deleted_at, owner_id)
 agent_mcp_servers(agent_profile_id→agent_profiles, mcp_server_id→mcp_servers，复合主键 + position)
 
 -- 协作域（独立于对话域，见 docs/collaboration-design.md）

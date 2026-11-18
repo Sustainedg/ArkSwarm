@@ -51,7 +51,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # 共享数据，不加 owner_id。网关含 API 密钥，按用户私有；管理员可看全部。
     "gateways": {"owner_id": "VARCHAR(64)"},
     "credentials": {"owner_id": "VARCHAR(64)"},
-    "mcp_servers": {"owner_id": "VARCHAR(64)"},
+    # builtin_key 是「平台内置服务器」后加的稳定标识（例如 image-gen）；普通服务器为空。
+    # 老行留空即可，不需要回填；内置服务器由启动播种逐用户补齐。
+    "mcp_servers": {"owner_id": "VARCHAR(64)", "builtin_key": "VARCHAR(64)"},
 }
 
 
@@ -249,6 +251,10 @@ class McpServer(SQLModel, table=True):
     enabled: bool = Field(default=True)
     #: 扫描来的服务器在配置里是否仍存在；平台新建的恒为 True
     available: bool = Field(default=True)
+    #: 平台内置服务器的稳定标识（例如 image-gen）；普通服务器为空。
+    #: 内置服务器的启动命令 / 脚本参数由 ``app.builtin_mcp`` 声明、启动时自动维护，
+    #: 用户只需要填写参数（网关地址、模型名……）。
+    builtin_key: str | None = Field(default=None, sa_column=Column(String(64), index=True))
     note: str | None = Field(default=None, sa_column=Column(String(400)))
     discovered_at: datetime = Field(
         default_factory=utcnow, sa_column=Column(DateTime(timezone=True))

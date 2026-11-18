@@ -25,7 +25,7 @@
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
 | 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希 |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
-| MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`） |
+| MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；另按 `backend/app/builtin_mcp.py` 为每个用户自动播种**内置服务器**（现为「图片生成」，用户只填网关 / 模型参数）；**只能通过智能体分配生效**（`agent_mcp_servers`） |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
 | IM 域 | `backend/app/im/` —— 把智能体连到聊天软件（Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack）；设置页标签「IM」，见 `docs/im.md` |
 
@@ -276,6 +276,11 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 - `AgentContext.mcp_servers` / `AgentContext.home_dir`：框架解密后注入的「本次运行生效的服务器」与
   「物化好的隔离目录」。密钥只能写进配置物化的产物（`files` / `workspace_files`），
   **禁止写进提示词、日志或事件**。
+- **内置服务器**（`backend/app/builtin_mcp.py`）：随平台分发的 stdio 预设，启动时由
+  `runtime/mcp.py:ensure_builtin_servers_for_all` 为每个用户播种一条平台通用记录（`builtin_key`
+  非空）。连接方式（命令 / 脚本参数）由平台维护、接口禁止修改；用户只填声明出来的参数
+  （网关地址、模型名……），参数值仍走 `env` 加密与掩码规则。内置服务器的脚本必须随
+  Release / 镜像打包（`scripts/release.sh`、`docker/Dockerfile`），否则升级后起不来。
 - 声明了 `Capabilities.mcp=True` 的适配器**必须**实现 `mcp_mount()`（有架构守卫测试）。
 
 ## 4. 扩展手册（照着做，别自创路径）
@@ -562,7 +567,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `agents/skills.py` / 技能契约 | 全部声明 `skills=True` 的适配器 + `runtime/skills.py` + `tests/test_skills.py` |
 | `runtime/skills.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端技能页与智能体弹窗 |
 | `agents/mcp.py` / MCP 契约 | 全部声明 `mcp=True` 的适配器 + `runtime/mcp.py` + `api/mcp.py` + `tests/test_mcp.py` |
-| `runtime/mcp.py` · `api/mcp.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端 MCP 页（两端）与智能体弹窗 |
+| `runtime/mcp.py` · `api/mcp.py` | 智能体分配接口、`service.prepare_run` 的物化步骤、前端 MCP 页（两端）与智能体弹窗、`builtin_mcp.py` 的内置声明与启动播种 |
 | `runtime/gateway_probe.py` · `api/gateways.py` | 网关 CRUD、官方案例播种（`bootstrap.py`）、前端 `GatewayManager` / `MobileGatewaysPage`、适配器的 `protocol`/`default_auth_style`/`default_models` |
 | `models.py` / `schemas.py` | `api/*` 的读写、前端 `types.ts`、旧数据兼容性 |
 | `auth.py` / `auth_deps.py` / `api/auth.py` | 登录 / 注册 / 用户管理、`current_user` 依赖、`owner_id` 过滤、管理员入口、前端 `AuthGate` / `AccountPanel` / `UserAdminPanel` 与 `lib/auth.ts` |

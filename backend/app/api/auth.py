@@ -174,6 +174,10 @@ async def register(payload: RegisterRequest) -> LoginResponse:
             from ..bootstrap import backfill_ownership
 
             await backfill_ownership(session, user)
+        # 新用户开箱即用：把平台内置的 MCP 服务器播种到他的名下（幂等）。
+        from ..runtime import mcp as mcp_service
+
+        await mcp_service.ensure_builtin_servers(session, user.id)
     token = issue_token(user.id, user.role, user.token_version or 0)
     return LoginResponse(access_token=token, user=_to_read(user))
 
@@ -350,6 +354,10 @@ async def admin_create_user(
         session.add(user)
         await session.commit()
         await session.refresh(user)
+        # 管理员建的用户同样开箱即用：播种内置 MCP 服务器（幂等）。
+        from ..runtime import mcp as mcp_service
+
+        await mcp_service.ensure_builtin_servers(session, user.id)
     return _to_read(user)
 
 

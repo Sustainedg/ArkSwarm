@@ -228,6 +228,18 @@ export function McpServerForm({
   /** 高级字段（启动参数 / 环境变量 / 请求头）；已有服务器要用它的掩码当占位提示。 */
   const fields = useMemo(() => advancedFields(server), [server])
 
+  /** 内置服务器：参数单独成组，不和「环境变量」键值编辑器重复展示。 */
+  const builtinParams = useMemo(() => server?.builtin_params ?? [], [server])
+  const builtinKeys = useMemo(
+    () => new Set(builtinParams.map((param) => param.key)),
+    [builtinParams],
+  )
+  const isBuiltin = Boolean(server?.builtin_key)
+  const extraEnv = useMemo(
+    () => Object.fromEntries(Object.entries(state.env).filter(([key]) => !builtinKeys.has(key))),
+    [state.env, builtinKeys],
+  )
+
   /** JSON → 表单（切换或保存前调用）；不通过时回 null 并把原因展示出来。 */
   const syncFromJson = (): FormState | null => {
     try {
@@ -258,6 +270,13 @@ export function McpServerForm({
     const current = view === 'json' ? syncFromJson() : state
     if (!current) return
     if (!current.name.trim()) return setError('请填写名称')
+    // 内置服务器的必填参数：已经存过值（有掩码）时留空＝保持原值，不算缺。
+    const missing = builtinParams.filter(
+      (param) => param.required && !(current.env[param.key] ?? '').trim() && !param.masked,
+    )
+    if (missing.length) {
+      return setError(`请填写${missing.map((param) => `「${param.label}」`).join('、')}`)
+    }
     setSaving(true)
     setError(null)
     try {
@@ -322,6 +341,12 @@ export function McpServerForm({
 
       {view === 'form' ? (
         <>
+          {isBuiltin && (
+            <div className="banner info">
+              这是平台内置的 MCP 服务器：启动命令与脚本由平台维护，填好下面的参数即可使用。
+            </div>
+          )}
+
           <div className="form-grid">
             <div className="field">
               <label className="field-label">名称</label>
@@ -331,16 +356,18 @@ export function McpServerForm({
                 onChange={(e) => setState({ ...state, name: e.target.value })}
               />
             </div>
-            <div className="field">
-              <label className="field-label">标识</label>
-              <input
-                className="input mono"
-                value={state.slug}
-                placeholder="写进内核配置的键名，留空按名称生成"
-                onChange={(e) => setState({ ...state, slug: e.target.value })}
-              />
-              <span className="field-help">同一个智能体挂载的两个服务器不能重名（重名会互相覆盖）。</span>
-            </div>
+            {!isBuiltin && (
+              <div className="field">
+                <label className="field-label">标识</label>
+                <input
+                  className="input mono"
+                  value={state.slug}
+                  placeholder="写进内核配置的键名，留空按名称生成"
+                  onChange={(e) => setState({ ...state, slug: e.target.value })}
+                />
+                <span className="field-help">同一个智能体挂载的两个服务器不能重名（重名会互相覆盖）。</span>
+              </div>
+            )}
             <div className="field span-2">
               <label className="field-label">说明</label>
               <input
@@ -349,19 +376,30 @@ export function McpServerForm({
                 onChange={(e) => setState({ ...state, description: e.target.value })}
               />
             </div>
-            <div className="field">
-              <label className="field-label">传输方式</label>
-              <select
-                className="select"
-                value={state.transport}
-                onChange={(e) => setState({ ...state, transport: e.target.value })}
-              >
-                <option value="stdio">本地进程（stdio）</option>
-                <option value="http">HTTP</option>
-                <option value="sse">SSE</option>
-              </select>
-            </div>
-            {transportField}
+            {isBuiltin ? (
+              <div className="field span-2">
+                <label className="field-label">连接方式</label>
+                <span className="field-help">
+                  平台内置维护：{server?.command} {server?.args.join(' ')}
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="field">
+                  <label className="field-label">传输方式</label>
+                  <select
+                    className="select"
+                    value={state.transport}
+                    onChange={(e) => setState({ ...state, transport: e.target.value })}
+                  >
+                    <option value="stdio">本地进程（stdio）</option>
+                    <option value="http">HTTP</option>
+                    <option value="sse">SSE</option>
+                  </select>
+                </div>
+                {transportField}
+              </>
+            )}
             <div className="field span-2">
               <label className="field-label">启用</label>
               <label className="switch">
@@ -375,17 +413,44 @@ export function McpServerForm({
             </div>
           </div>
 
+          {builtinParams.length > 0 && (
+            <div className="form-grid">
+              {builtinParams.map((param) => (
+                <div className="field" key={param.key}>
+                  <label className="field-label">
+                    {param.label}
+                    {param.required && <span className="pill err">必填</span>}
+                  </label>
+                  <input
+                    className="input mono"
+                    type={param.secret ? 'password' : 'text'}
+                    value={state.env[param.key] ?? ''}
+                    placeholder={param.masked ?? param.placeholder}
+                    onChange={(e) =>
+                      setState({ ...state, env: { ...state.env, [param.key]: e.target.value } })
+                    }
+                  />
+                  {param.help && <span className="field-help">{param.help}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
           <DynamicForm
             fields={fields}
-            value={{ args: state.args, env: state.env, headers: state.headers }}
-            onChange={(next) =>
+            value={{ args: state.args, env: extraEnv, headers: state.headers }}
+            onChange={(next) => {
+              const nextEnv = (next.env as Record<string, string>) ?? {}
+              const kept = Object.fromEntries(
+                Object.entries(state.env).filter(([key]) => builtinKeys.has(key)),
+              )
               setState({
                 ...state,
                 args: (next.args as string[]) ?? [],
-                env: (next.env as Record<string, string>) ?? {},
+                env: { ...kept, ...nextEnv },
                 headers: (next.headers as Record<string, string>) ?? {},
               })
-            }
+            }}
           />
         </>
       ) : (

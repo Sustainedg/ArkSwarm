@@ -354,11 +354,24 @@ export interface SkillRescanResult {
   total: number
 }
 
+/** 内置 MCP 的一个业务参数（网关地址、模型名、密钥…）；值只回掩码。 */
+export interface McpBuiltinParam {
+  key: string
+  label: string
+  help: string
+  placeholder: string
+  required: boolean
+  secret: boolean
+  default: string
+  masked: string | null
+}
+
 /**
  * 统一编目的一个 MCP 服务器。
  *
  * 两类来源：平台新建的「通用」服务器（`type_id` 为空，可分配给任意内核的智能体），
  * 以及从某个内核自己的配置里只读扫出来的（`type_id` 是那个内核，只能在同内核里分配）。
+ * 平台内置的服务器也是平台通用的一类（`builtin_key` 非空），启动时自动播种。
  */
 export interface McpServer {
   id: string
@@ -385,6 +398,10 @@ export interface McpServer {
   /** 平台是否接管它的内容（平台新建的为 true，从内核配置扫来的为 false） */
   editable: boolean
   used_by_agents: number
+  /** 内置服务器的稳定标识（例如 image-gen）；普通服务器为空 */
+  builtin_key?: string | null
+  /** 内置服务器要用户填写的参数说明；普通服务器为空数组 */
+  builtin_params?: McpBuiltinParam[]
 }
 
 export interface McpServerDetail extends McpServer {

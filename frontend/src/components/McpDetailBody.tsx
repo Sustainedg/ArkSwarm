@@ -34,19 +34,24 @@ export function McpDetailBody({
   // 元信息压成一行：来源 · 内核 · 传输方式 · 标识。分开是一排标签，读起来是碎片的。
   const meta = [
     server.source_label,
+    server.builtin_key ? '内置' : null,
     server.type_name ?? null,
     transportLabel(server.transport),
     server.slug ? `标识 ${server.slug}` : null,
   ]
     .filter(Boolean)
     .join(' · ')
+  const builtinParams = server.builtin_params ?? []
+  const builtinKeys = new Set(builtinParams.map((param) => param.key))
   const secrets = [
-    ...server.env_keys.map((key) => ({
-      id: `env-${key}`,
-      label: '环境变量',
-      name: key,
-      masked: server.env_preview[key] ?? null,
-    })),
+    ...server.env_keys
+      .filter((key) => !builtinKeys.has(key))
+      .map((key) => ({
+        id: `env-${key}`,
+        label: '环境变量',
+        name: key,
+        masked: server.env_preview[key] ?? null,
+      })),
     ...server.header_keys.map((key) => ({
       id: `header-${key}`,
       label: '请求头',
@@ -81,9 +86,13 @@ export function McpDetailBody({
             <button className="btn sm" onClick={onToggle}>
               {server.enabled ? '停用' : '启用'}
             </button>
-            <button className="btn sm ghost" onClick={onDelete}>
-              删除
-            </button>
+            {server.builtin_key ? (
+              <span className="mcp-hint">内置服务器由平台维护，不能删除；不需要时停用即可。</span>
+            ) : (
+              <button className="btn sm ghost" onClick={onDelete}>
+                删除
+              </button>
+            )}
           </>
         ) : (
           <span className="mcp-hint">内容由该内核自己的配置决定，平台只读收录。</span>
@@ -123,6 +132,34 @@ export function McpDetailBody({
           )}
         </div>
       </section>
+
+      {builtinParams.length > 0 && (
+        <section className="mcp-section">
+          <div className="mcp-section-head">
+            <KeyIcon size={14} />
+            <span className="mcp-section-title">参数</span>
+          </div>
+          <div className="mcp-rows">
+            {builtinParams.map((param) => {
+              const masked = server.env_preview[param.key] ?? param.masked ?? null
+              return (
+                <div className="mcp-row" key={param.key}>
+                  <span className="mcp-row-label">
+                    {param.label}
+                    {param.required && !masked ? '（必填）' : ''}
+                  </span>
+                  <span className="mcp-row-value mono">
+                    {masked ?? (param.default || '未配置')}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mcp-hint">
+            参数值加密保存，这里只显示掩码；点「编辑」可以重新填写。网关地址与模型名不写死，按你的部署填。
+          </p>
+        </section>
+      )}
 
       {secrets.length > 0 && (
         <section className="mcp-section">

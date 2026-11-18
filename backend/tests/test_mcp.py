@@ -11,6 +11,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from sqlmodel import select
+
 import app.runtime.mcp as mcp_service
 from app.agents import get_agent
 from app.agents.base import AgentContext
@@ -24,7 +26,7 @@ from app.agents.mcp import (
     to_json_config,
 )
 from app.db import SessionLocal
-from app.models import McpServer
+from app.models import AgentProfile, McpServer
 from app.settings import get_settings
 from helpers import make_gateway, make_profile
 
@@ -468,3 +470,105 @@ async def test_run_materializes_assigned_mcp_into_isolated_home(
     )).aread()
     parsed = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
     assert "mcp_servers" not in parsed
+
+
+# --- 内置服务器：开箱即用 + 参数由用户填写 -------------------------------------
+
+
+async def test_builtin_image_mcp_is_seeded_editable_and_parameterized(
+    client: httpx.AsyncClient,
+):
+    """内置「图片生成」自动播种：命令由平台维护，参数键即使空着也回给界面。"""
+    async with SessionLocal() as session:
+        assert await mcp_service.ensure_builtin_servers(session, None) == 1
+        # 幂等：重复调用不会再建一条。
+        assert await mcp_service.ensure_builtin_servers(session, None) == 0
+        row = (
+            await session.execute(
+                select(McpServer).where(McpServer.builtin_key == "image-gen")
+            )
+        ).scalars().one()
+        assert row.source_kind == "manual"
+        assert row.command and row.args
+        assert Path(row.args[0]).is_file()  # 脚本必须随包存在，否则内置服务器起不来
+        view = mcp_service.read_view(row)
+        assert view["builtin_key"] == "image-gen"
+        assert view["source_label"] == "平台内置"
+        assert view["editable"] is True
+        assert view["env_keys"] == [
+            "IMAGE_GEN_API_KEY",
+            "IMAGE_GEN_GATEWAY",
+            "IMAGE_GEN_MODEL",
+            "IMAGE_GEN_TIMEOUT",
+        ]
+        labels = {item["key"]: item["label"] for item in view["builtin_params"]}
+        assert labels["IMAGE_GEN_GATEWAY"] == "网关地址"
+        assert labels["IMAGE_GEN_MODEL"] == "模型名称"
+        assert all(item["masked"] is None for item in view["builtin_params"])
+
+    # 列表接口同样带上参数说明；没填值的参数只回键名。
+    items = (await client.get("/api/mcp-servers")).json()["items"]
+    builtin = next(item for item in items if item["builtin_key"] == "image-gen")
+    assert builtin["env_preview"]["IMAGE_GEN_GATEWAY"] is None
+    assert builtin["builtin_params"][0]["required"] is True
+
+
+async def test_builtin_mcp_accepts_params_but_platform_owns_connection(
+    client: httpx.AsyncClient,
+):
+    async with SessionLocal() as session:
+        await mcp_service.ensure_builtin_servers(session, None)
+    row = next(
+        item
+        for item in (await client.get("/api/mcp-servers")).json()["items"]
+        if item["builtin_key"] == "image-gen"
+    )
+
+    patched = await client.patch(
+        f"/api/mcp-servers/{row['id']}",
+        json={
+            "env": {
+                "IMAGE_GEN_GATEWAY": "https://gw-test-8.example.com",
+                "IMAGE_GEN_MODEL": "model-x7",
+                "IMAGE_GEN_API_KEY": "",
+                "IMAGE_GEN_TIMEOUT": "",
+            }
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["env_preview"]["IMAGE_GEN_GATEWAY"]
+    assert body["env_preview"]["IMAGE_GEN_MODEL"]
+    # 明文绝不回显（用参数说明里不会出现的值做断言）。
+    assert "gw-test-8.example.com" not in patched.text
+    assert "model-x7" not in patched.text
+
+    # 连接方式（命令 / 参数 / 传输方式）由平台维护，不能通过接口替换成别的程序。
+    assert (
+        await client.patch(f"/api/mcp-servers/{row['id']}", json={"command": "bash"})
+    ).status_code == 403
+    assert (
+        await client.patch(f"/api/mcp-servers/{row['id']}", json={"args": ["/tmp/evil.py"]})
+    ).status_code == 403
+    # 内置服务器不能被删除（删了下次启动也会重新播种）。
+    assert (await client.delete(f"/api/mcp-servers/{row['id']}")).status_code == 403
+
+
+async def test_builtin_missing_params_warn_before_run(client: httpx.AsyncClient):
+    """已分配但网关 / 模型没填：运行前给出可操作的提示，而不是等工具调用失败。"""
+    agent = await make_agent(client)
+    async with SessionLocal() as session:
+        await mcp_service.ensure_builtin_servers(session, None)
+        row = (
+            await session.execute(
+                select(McpServer).where(McpServer.builtin_key == "image-gen")
+            )
+        ).scalars().one()
+        profile = await session.get(AgentProfile, agent["id"])
+        assert profile is not None
+        await mcp_service.set_agent_mcp_servers(session, profile, [row.id])
+        warnings = await mcp_service.builtin_param_warnings(session, profile)
+
+    assert len(warnings) == 1
+    assert "网关地址" in warnings[0]
+    assert "模型名称" in warnings[0]

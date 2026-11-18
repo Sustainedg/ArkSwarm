@@ -56,6 +56,23 @@ def test_version_compare():
     assert not version_eq("V0.44", "V0.44.1")
 
 
+def test_version_compare_treats_missing_patch_as_zero():
+    """三段式版本：缺省的段补 0，``V0.44`` 与 ``V0.44.0`` 是同一个版本。
+
+    不补 0 时 ``(0, 44) < (0, 44, 0)``，更新器会认为「有新版」却永远装不上同一个版本。
+    """
+    assert version_eq("V0.44", "V0.44.0")
+    assert version_eq("V0.1", "V0.1.0")
+    assert not version_gt("V0.44", "V0.44.0")
+    assert not version_gt("V0.44.0", "V0.44")
+    # 修订号真的更大时仍然算升级。
+    assert version_gt("V0.1.1", "V0.1")
+    assert version_gt("V0.1.2", "V0.1.1")
+    assert not version_gt("V0.1", "V0.1.1")
+    # 语义化版本：第二段 1 < 11，所以 V0.1.1 小于 V0.11（不是笔误）。
+    assert not version_gt("V0.1.1", "V0.11")
+
+
 # ---------- Release JSON 解析 ----------
 
 
