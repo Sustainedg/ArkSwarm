@@ -1,3 +1,11 @@
+# 桌面版（desktop/）：Electron 构建产物与依赖，同 node_modules 一律不进仓库
+desktop/node_modules/
+desktop/dist-main/
+desktop/dist-preload/
+desktop/release/
+desktop/build/python-runtime/
+desktop/build/node-runtime/
+
 # python
 __pycache__/
 *.py[cod]

@@ -1,0 +1,31 @@
+{
+  "name": "arkswarm-desktop",
+  "productName": "ArkSwarm",
+  "private": true,
+  "version": "0.2.0",
+  "description": "ArkSwarm 桌面版 —— 把 AI 编程内核变成你的聊天同事（Windows / macOS）",
+  "main": "dist-main/index.js",
+  "author": "ArkSwarm",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "compile:main": "tsc -p tsconfig.main.json",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit",
+    "dev": "node scripts/dev.mjs",
+    "start": "electron .",
+    "compile": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "build": "npm run compile && electron-builder --publish never",
+    "fetch:python": "node scripts/fetch-python.mjs",
+    "fetch:node": "node scripts/fetch-node.mjs",
+    "dist:dir": "npm run compile && electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-updater": "6.6.2"
+  },
+  "devDependencies": {
+    "@electron/notarize": "2.5.0",
+    "@types/node": "22.10.5",
+    "electron": "33.3.2",
+    "electron-builder": "25.1.8",
+    "typescript": "5.7.2"
+  }
+}

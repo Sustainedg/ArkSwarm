@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime 下 Electron + 内嵌 Python / Node 子进程需要的豁免项。
+
+  为什么不是最小集合就够：
+  - V8 需要 JIT 与可执行内存（Electron 官方推荐项）；
+  - 内嵌的 python-build-standalone / Node 及其动态库不是用同一张 Developer ID
+    逐份签名的，hardened runtime 默认会拒绝加载，需 disable-library-validation；
+  - 后端 uvicorn 监听 127.0.0.1，属于本机网络服务；内核与更新器要出网。
+  这些是桌面形态（真正的子进程运行时）的既定组合，不是给它开万能口子：
+  shell 执行、任意脚本加载、注入都不开放。
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+  </dict>
+</plist>

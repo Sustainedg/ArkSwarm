@@ -1,0 +1,101 @@
+appId: io.github.sustainedg.arkswarm
+productName: ArkSwarm
+directories:
+  output: release
+  buildResources: build
+# 产物名固定、无空格（electron-updater 按 latest*.yml 里的文件名下载，空格要额外转义）
+# 例：ArkSwarm-0.2.0-win-x64.exe / ArkSwarm-0.2.0-mac-arm64.zip
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+files:
+  # 壳本身：编译产物 + 静态资源 + 依赖（不含 src / 不带 devDependencies）
+  - dist-main/**
+  - dist-preload/**
+  - resources/**
+  - node_modules/**
+  - package.json
+  - "!**/*.map"
+extraResources:
+  # 后端源码包：构建时由 scripts/prepare-backend.mjs 组装（backend/ + frontend/dist/），
+  # 安装后落在 resources/app-backend/，与主项目 arkswarm.tar.gz 同构。
+  # 排除清单与 scripts/release.sh 对齐：真实数据、venv、缓存、测试一律不进安装包
+  - from: ../backend
+    to: app-backend/backend
+    filter:
+      - "**/*"
+      - "!data/**"
+      - "!**/.venv/**"
+      - "!**/__pycache__/"
+      - "!**/__pycache__/**"
+      - "!**/*.py[cod]"
+      - "!.pytest_cache/**"
+      - "!tests/**"
+      - "!requirements-dev.txt"
+      - "!conftest.py"
+      - "!pytest.ini"
+  - from: ../frontend/dist
+    to: app-backend/frontend/dist
+  # embedded Python：构建时由 scripts/fetch-python.mjs 下载 python-build-standalone
+  # 按架构分目录（${arch}），mac 双架构在一次构建里各取各的解释器
+  - from: build/python-runtime/${arch}
+    to: python-runtime
+  # embedded Node（M4）：scripts/fetch-node.mjs 下载官方 Node 发行包。
+  # 内核（Claude Code / Codex / Gemini CLI）都是 npm 分发的 Node 程序，
+  # 带上这一份，用户机器上就不需要预装 Node。
+  - from: build/node-runtime/${arch}
+    to: node-runtime
+asarUnpack:
+  # 无需解包的资源（保持默认）
+  - "**/*.{node,dll}"
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # 签名：配置 CSC_LINK（.pfx 的 base64 / 路径）与 CSC_KEY_PASSWORD 后
+  # electron-builder 自动签名；未配置时照常产出未签名安装包（MVP 可用，仅 SmartScreen 提示）
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: ArkSwarm
+  # 卸载保留 userData：对话数据 / 内核安装都在那里，不能因为卸载应用就丢
+  deleteAppDataOnUninstall: false
+  # 差分更新（electron-updater 用 .blockmap 只下变化块）
+  differentialPackage: true
+mac:
+  target:
+    # zip 是 macOS 自动更新的必需产物（Squirrel.Mac 只认 zip，DMG 仅供人工安装）
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.productivity
+  # 签名 / 公证：配置 CSC_LINK + CSC_KEY_PASSWORD 后自动签名；
+  # 配置 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID 后
+  # scripts/notarize.cjs（afterSign 钩子）会自动公证。都没配时保持 unsigned 构建。
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # 内嵌 Python / Node 的签名交给 afterPack 脚本：
+  # electron-builder 会扫包内所有「看起来像二进制」的文件（内容启发式，可能把 .pyc 也算上），
+  # 而我们是按 `file` 判定 Mach-O 再逐个签，避免误签数据文件、并统一套 runtime entitlements。
+  signIgnore:
+    - Contents/Resources/python-runtime
+    - Contents/Resources/node-runtime
+dmg:
+  title: ArkSwarm ${version}
+linux:
+  # 桌面版只承诺 Win/macOS；linux 目标只是给服务器侧顺带构建，不作支持承诺
+  target: [AppImage]
+  category: Utility
+# 壳更新通道：**Generic Provider + 滚动 prerelease tag**，与后端 Release 完全隔离。
+# 详见 src/main/updater.ts 顶部注释与 docs/desktop.md。
+# 发布时由 CI 把安装包 + latest*.yml 上传到 tag `desktop-latest`（必须标记 prerelease）。
+publish:
+  provider: generic
+  url: https://github.com/Sustainedg/ArkSwarm/releases/download/desktop-latest
+# 打包后先给内嵌 Python / Node 里的 Mach-O 逐个签名（electron-builder 不扫 extraResources），
+# 再走正常签名流程，最后由 afterSign 提交公证。两个钩子在无证书环境下都会跳过。
+afterPack: scripts/sign-runtimes.cjs
+afterSign: scripts/notarize.cjs

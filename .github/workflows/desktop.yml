@@ -1,0 +1,225 @@
+name: desktop
+
+# 桌面端 CI/CD（M3）：
+#   - 普通 PR / push：只构建 + 打包版冒烟（不发布）
+#   - 打 tag `desktop-v*`（或手动触发勾选 publish）：构建并把安装包与 latest*.yml
+#     上传到滚动 Release `desktop-latest`（**prerelease**，见下方「为什么必须 prerelease」）
+#
+# 为什么壳更新用滚动 prerelease、而不是每个版本一个 Release：
+#   壳与后端共用 Sustainedg/ArkSwarm 这个仓库。后端发版走 release.sh（tag v0.1.x，
+#   资产是 arkswarm.tar.gz），后端更新器读 `/releases/latest`；electron-updater 的
+#   GitHub Provider 也认「最新 Release」，若壳的版本 Release 成了 latest，后端更新器
+#   会去里面找 arkswarm.tar.gz 落空，壳更新器也会去后端 Release 里找 latest.yml 落空。
+#   所以壳这边统一上传到一个**滚动 tag**（desktop-latest，覆盖上传），且发布为
+#   prerelease —— GitHub 的 `/releases/latest` 会跳过 prerelease，两边互不打扰。
+#   壳的 Generic Provider 直接拼下载地址，与「latest」语义无关。
+on:
+  push:
+    tags: ['desktop-v*']
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '构建后发布到滚动 Release（desktop-latest）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建与冒烟（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            args: --win --x64
+            python: win-x64
+            node: win-x64
+          - os: macos-latest
+            target: mac
+            # 双架构放在**同一次** electron-builder 调用里：latest-mac.yml 才会合并
+            # 两个架构的 zip（electron-builder 按同名 update-info 文件合并 files 列表），
+            # 拆成两次调用的话后一次会把前一次的元数据覆盖掉。
+            args: --mac --arm64 --x64
+            python: both
+            node: both
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
+
+      # 后端源码包要带 frontend/dist（prepare-backend 见它存在就不重建）
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: 安装桌面壳依赖
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: 下载 embedded Python（${{ matrix.target }}）
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${{ matrix.python }}" = "both" ]; then
+            node scripts/fetch-python.mjs mac-arm64
+            node scripts/fetch-python.mjs mac-x64
+          else
+            node scripts/fetch-python.mjs ${{ matrix.python }}
+          fi
+
+      - name: 下载 embedded Node（${{ matrix.target }}）
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${{ matrix.node }}" = "both" ]; then
+            node scripts/fetch-node.mjs mac-arm64
+            node scripts/fetch-node.mjs mac-x64
+          else
+            node scripts/fetch-node.mjs ${{ matrix.node }}
+          fi
+
+      - name: 类型检查
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: 打包（electron-builder）
+        working-directory: desktop
+        shell: bash
+        env:
+          # 签名 / 公证凭据：仓库 Secrets 配了就自动启用，没配则产出 unsigned 包
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      # 打包版冒烟：启动真实安装包（内嵌 Python 建 venv → 起后端 → 健康检查），
+      # 就绪后主进程自行退出 0。这是「窗口层之外」的完整链路验证，无头 runner 可跑。
+      - name: 冒烟启动（Windows）
+        if: matrix.target == 'win'
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $env:ARKSWARM_DESKTOP_SMOKE = '1'
+          $exe = Join-Path $PWD 'release/win-unpacked/ArkSwarm.exe'
+          Write-Host "→ $exe"
+          $p = Start-Process -FilePath $exe -PassThru -Wait `
+            -RedirectStandardOutput smoke-out.txt -RedirectStandardError smoke-err.txt
+          Write-Host "--- stdout ---"; Get-Content smoke-out.txt -ErrorAction SilentlyContinue
+          Write-Host "--- stderr ---"; Get-Content smoke-err.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "冒烟失败：退出码 $($p.ExitCode)" }
+
+      - name: 冒烟启动（macOS）
+        if: matrix.target == 'mac'
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          APP="release/mac-arm64/ArkSwarm.app/Contents/MacOS/ArkSwarm"
+          ls -l "$APP"
+          ARKSWARM_DESKTOP_SMOKE=1 "$APP" 2>&1 | tee smoke.log
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+            desktop/release/*.dmg
+            desktop/release/*.yml
+            desktop/release/*.blockmap
+
+  publish:
+    name: 发布到滚动 Release（desktop-latest）
+    needs: build
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/desktop-v') ||
+      github.event.inputs.publish == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 汇总构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: desktop-*
+          merge-multiple: true
+
+      - name: 读取桌面端版本
+        id: version
+        run: |
+          VERSION=$(node -p "require('./desktop/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "桌面端版本：$VERSION"
+
+      - name: 校验 tag 与版本号一致
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: |
+          EXPECTED="desktop-v${{ steps.version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "$EXPECTED" ]; then
+            echo "✗ tag ${GITHUB_REF_NAME} 与 desktop/package.json 的版本 $EXPECTED 不一致：先改版本号再打 tag" >&2
+            exit 1
+          fi
+
+      - name: 发布（滚动 tag + 版本 tag 都标记 prerelease）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=desktop-latest
+          # 滚动 Release：不存在就建（prerelease！），存在就直接覆盖资产
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --prerelease \
+              --target "${{ github.sha }}" \
+              --title "桌面端最新构建（滚动）" \
+              --notes "由 CI 自动维护：桌面端安装包与 latest*.yml。请勿手动编辑，壳更新读取这里。"
+          fi
+          ls -lh dist
+          gh release upload "$TAG" dist/* --clobber
+
+          # 版本 tag：给人看的版本记录，同样是 prerelease（不抢 /releases/latest）
+          VTAG="desktop-v${{ steps.version.outputs.version }}"
+          if ! gh release view "$VTAG" >/dev/null 2>&1; then
+            gh release create "$VTAG" \
+              --prerelease \
+              --target "${{ github.sha }}" \
+              --title "ArkSwarm 桌面端 ${{ steps.version.outputs.version }}" \
+              --notes "桌面端 ${{ steps.version.outputs.version }} 构建产物（壳独立版本线，与后端 V* 版本互不影响）。"
+          fi
+          gh release upload "$VTAG" dist/* --clobber
+          echo "✓ 已发布：$TAG / $VTAG"
