@@ -83,8 +83,9 @@ mac:
   signIgnore:
     - Contents/Resources/python-runtime
     - Contents/Resources/node-runtime
-dmg:
-  title: ArkSwarm ${version}
+# 不要自定义 dmg.title：electron-builder 的默认卷名带架构后缀
+# （ArkSwarm <版本>-arm64 / -x64）。自定义成 `ArkSwarm ${version}` 会让两个架构
+# 抢同一个 /Volumes 卷名，第二个 DMG 构建挂载时 hdiutil detach 反复失败。
 linux:
   # 桌面版只承诺 Win/macOS；linux 目标只是给服务器侧顺带构建，不作支持承诺
   target: [AppImage]

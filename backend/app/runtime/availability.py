@@ -26,7 +26,7 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Sequence
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlmodel import select
 
@@ -42,7 +42,12 @@ CHECK_INTERVAL = timedelta(hours=24)
 
 #: 每天全量重测的时刻（24 小时制的整点）。时区写死东八区，不依赖容器的 localtime。
 DAILY_CHECK_HOUR = 7
-LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+#: Windows 不自带 IANA 时区库，``ZoneInfo`` 会抛 ZoneInfoNotFoundError。
+#: 中国没有夏令时，固定 +08:00 与 Asia/Shanghai **完全等价**，无需额外依赖。
+try:
+    LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:  # pragma: no cover - 取决于运行环境的时区库
+    LOCAL_TZ = timezone(timedelta(hours=8))
 
 #: 调度器查看「有没有排队的补测」的间隔（秒）。请求路径只往 _pending 里登记，
 #: 真正的探测由 scheduler 消费 —— 所以请求永远不会等探测，也不会每次建一个后台任务。
