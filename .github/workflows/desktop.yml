@@ -172,7 +172,7 @@ jobs:
             desktop/release/*.exe
             desktop/release/*.zip
             desktop/release/*.dmg
-            desktop/release/*.yml
+            desktop/release/latest*.yml
             desktop/release/*.blockmap
 
   publish:
