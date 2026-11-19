@@ -41,6 +41,7 @@ from ..skills import (
 from .util import (
     as_list,
     flatten_content,
+    npm_cli,
     npm_install_argv,
     npm_prepare_argv,
     truthy,
@@ -222,8 +223,8 @@ class ClaudeCodeAgent(AgentDefinition):
         #: 用户手写的垫片）会让 npm 直接失败在 EEXIST，先把这种占位挪开。
         install_argv=npm_install_argv("@anthropic-ai/claude-code", bin_name="claude"),
         update_argv=npm_install_argv("@anthropic-ai/claude-code", bin_name="claude", latest=True),
-        uninstall_argv=["npm", "uninstall", "-g", "@anthropic-ai/claude-code"],
-        latest_argv=["npm", "view", "@anthropic-ai/claude-code", "version"],
+        uninstall_argv=npm_cli("uninstall", "-g", "@anthropic-ai/claude-code"),
+        latest_argv=npm_cli("view", "@anthropic-ai/claude-code", "version"),
         prepare_argv=npm_prepare_argv("@anthropic-ai/claude-code"),
         homepage="https://docs.claude.com/en/docs/claude-code/setup",
     )

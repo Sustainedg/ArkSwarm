@@ -8,6 +8,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from .processes import kill_tree
+
 
 @dataclass
 class ActiveRun:
@@ -124,12 +126,9 @@ class RunRegistry:
         if not run:
             return False
         run.cancel_event.set()
-        process = run.process
-        if process is not None and process.returncode is None:
-            try:
-                process.kill()
-            except ProcessLookupError:  # 进程已经退出
-                pass
+        # Windows 上内核经 .cmd 垫片启动（pid 是 cmd.exe），必须连进程树一起杀，
+        # 否则 node 内核会变成孤儿继续跑（取消等于没生效）。
+        kill_tree(run.process)
         return True
 
     def cancel_for_conversation(self, conversation_id: str) -> bool:

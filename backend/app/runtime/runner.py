@@ -5,9 +5,10 @@ import asyncio
 import contextlib
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from ..agents import AgentContext, AgentDefinition, AgentRun, Runtime
 from ..agents.events import AgentEvent, error, log, run_finished, run_started
@@ -15,6 +16,7 @@ from ..credentials import scrub_event
 from ..egress import proxy_env_for_subprocess
 from ..settings import get_settings
 from .manager import ActiveRun
+from .processes import kill_tree_async
 
 
 #: 读取子进程输出时每次取回的字节数。
@@ -47,6 +49,41 @@ _EXIT_WAIT_SECONDS = 5.0
 
 #: 写 stdin 的等待上限：内核若不读 stdin（管道塞满或卡住），不能把整轮运行挂死（铁律 10）。
 _STDIN_DRAIN_SECONDS = 5.0
+
+
+def _spawn_argv(
+    argv: list[str],
+    *,
+    os_name: str | None = None,
+    resolver: Callable[[str], str | None] | None = None,
+) -> list[str]:
+    """把 ``argv`` 整理成当前平台能真正启动的形态。
+
+    Windows 上有个容易踩的坑：npm / pipx 生成的 ``claude.cmd`` / ``codex.cmd`` 垫片，
+    ``CreateProcess`` **不能**直接执行（它只认可执行文件），必须交给
+    ``cmd.exe /d /s /c`` 解释；而 ``shutil.which("claude")`` 返回的就是
+    ``...\\claude.cmd``，原样丢给 ``create_subprocess_exec`` 会以
+    「不是有效的应用程序」失败 —— 桌面版上所有 npm 分发内核都会中招。
+    POSIX 不需要这层处理：exec 自己按 PATH 找，原样返回。
+
+    ``os_name`` / ``resolver`` 只为单测注入（在 Linux 上验证 Windows 分支），
+    生产调用不传。
+    """
+    if (os_name or os.name) != "nt" or not argv:
+        return argv
+    finder = resolver or shutil.which
+    resolved = finder(argv[0])
+    if not resolved:
+        return argv
+    if str(resolved).lower().endswith((".cmd", ".bat")):
+        return [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            subprocess.list2cmdline(argv),
+        ]
+    return [str(resolved), *argv[1:]]
 
 
 def _run_secrets(ctx: AgentContext) -> list[str]:
@@ -227,7 +264,8 @@ async def stream_cli_run(
 
     try:
         process = await asyncio.create_subprocess_exec(
-            *invocation.argv,
+            # Windows 上 .cmd 垫片要经 cmd.exe 启动（npm 分发内核的默认形态）
+            *_spawn_argv(invocation.argv),
             cwd=str(cwd),
             env=env,
             stdin=asyncio.subprocess.PIPE if invocation.stdin is not None else asyncio.subprocess.DEVNULL,
@@ -297,10 +335,10 @@ async def stream_cli_run(
         while True:
             if run.cancel_event.is_set():
                 cancelled = True
-                process.kill()
+                await kill_tree_async(process)
                 break
             if deadline is not None and asyncio.get_event_loop().time() > deadline:
-                process.kill()
+                await kill_tree_async(process)
                 yield error(f"运行已超过 {timeout_seconds} 秒上限，被强制终止")
                 break
             try:
@@ -351,14 +389,12 @@ async def stream_cli_run(
         try:
             await asyncio.wait_for(process.wait(), timeout=_EXIT_WAIT_SECONDS)
         except asyncio.TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
+            await kill_tree_async(process)
             await process.wait()
     finally:
         close_stdin()
         if process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
+            await kill_tree_async(process)
             await process.wait()
         with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
             await asyncio.wait_for(

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 
 from app.agents.base import AgentContext, AgentDefinition, Capabilities, Invocation, Runtime
 from app.agents.events import log, text_delta
-from app.runtime import runner
+from app.runtime import processes, runner
 from app.runtime.manager import registry
 from app.runtime.runner import _StreamLines
 from app.settings import get_settings
@@ -372,3 +373,51 @@ def test_collab_step_timeout_wins_over_global_default(monkeypatch):
     finally:
         registry.finish(active, "ok")
 
+
+
+# --- 平台启动形态（M4：npm 分发内核在 Windows 上的垫片）---------------------
+
+
+def test_spawn_argv_on_windows_runs_cmd_shims_through_cmd_exe(monkeypatch):
+    """Windows 上 npm 生成的 ``claude.cmd`` 不能被 CreateProcess 直接执行，必须经 cmd.exe。
+
+    ``shutil.which("claude")`` 在 Windows 返回的是 ``...\\claude.cmd``；原样交给
+    ``create_subprocess_exec`` 会以「不是有效的应用程序」失败 —— 这正是桌面版
+    在 Windows 上「装了内核却跑不起来」的根因。
+    """
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    argv = ["claude", "-p", "hello world"]
+    spawned = runner._spawn_argv(
+        argv,
+        os_name="nt",
+        resolver=lambda _name: r"C:\Users\me\AppData\Roaming\npm\claude.cmd",
+    )
+    assert spawned[:4] == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"]
+    # 整条命令作为一个参数交给 cmd.exe，参数里的空格不会被拆开
+    assert spawned[4] == subprocess.list2cmdline(argv)
+    assert '"hello world"' in spawned[4]
+
+
+def test_spawn_argv_on_windows_uses_resolved_exe_path():
+    """真正的 .exe 则换成 which 解析出的绝对路径（避免另一个同名 exe 抢先）。"""
+    spawned = runner._spawn_argv(
+        ["claude", "--version"],
+        os_name="nt",
+        resolver=lambda _name: r"C:\Tools\claude.exe",
+    )
+    assert spawned == [r"C:\Tools\claude.exe", "--version"]
+
+
+def test_spawn_argv_on_posix_is_untouched():
+    """POSIX 不做任何改写：exec 自己按 PATH 找，改写反而会破坏相对路径调用。"""
+    argv = ["claude", "-p", "hi"]
+    assert runner._spawn_argv(argv, os_name="posix", resolver=lambda _name: "/usr/bin/claude") == argv
+
+
+@pytest.mark.asyncio
+async def test_kill_tree_async_terminates_the_child_process():
+    """取消 / 超时统一走树杀：POSIX 上等价于 kill，Windows 上才会走 taskkill /T。"""
+    process = await asyncio.create_subprocess_exec("sh", "-c", "exec sleep 30")
+    await processes.kill_tree_async(process)
+    await asyncio.wait_for(process.wait(), timeout=5)
+    assert process.returncode is not None

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal
@@ -20,6 +21,7 @@ from typing import Any, AsyncIterator, Literal
 from ..agents.base import AgentDefinition, RuntimeProvisioner
 from ..settings import get_settings
 from . import availability as availability_service
+from .processes import kill_tree_async
 from .runner import _StreamLines, _redact
 
 Action = Literal["install", "update", "uninstall"]
@@ -43,13 +45,19 @@ def _event(kind: str, **payload: Any) -> dict[str, Any]:
     return {"type": f"provision.{kind}", **payload}
 
 
+#: 展示用的命令长度上限。npm 内核的安装 / 更新是内联 Node 脚本（要处理本机既有的同名
+#: 可执行文件），压成一行仍有上千字符；原样回显会把整段安装日志淹没。
+_DISPLAY_LIMIT = 300
+
+
 def _display(argv: list[str]) -> str:
     """把命令拼成一行展示。
 
-    包装命令可能是多行的 shell 脚本（例如 npm 内核的安装 / 更新命令要先处理本机既有的
-    同名可执行文件），压成一行才不会把日志与提示切断。
+    包装命令可能是多行的脚本（例如 npm 内核的安装 / 更新命令要先处理本机既有的
+    同名可执行文件），压成一行才不会把日志与提示切断；过长再截断。
     """
-    return " ".join(" ".join(argv).split())
+    text = " ".join(" ".join(argv).split())
+    return text if len(text) <= _DISPLAY_LIMIT else f"{text[:_DISPLAY_LIMIT]} …"
 
 
 def _hint(display: str) -> str:
@@ -112,6 +120,29 @@ class _CommandOutcome:
     error: str | None = None
 
 
+async def _terminate(process: asyncio.subprocess.Process) -> None:
+    """结束一条安装命令：POSIX 杀整个进程组，Windows 杀进程树。
+
+    包装命令自己会再起 npm（Node 的 ``spawnSync``），只杀直接子进程会留下仍在
+    写文件的孤儿 —— 那正是「取消之后下一次安装永久失败在 ENOTEMPTY」的来源。
+    """
+    if process.returncode is not None:
+        return
+    if os.name == "nt":
+        await kill_tree_async(process)
+        return
+    pid = process.pid
+    if pid:
+        try:
+            # start_new_session=True 建的是独立进程组，负 pid = 整组
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError):
+            pass
+    with contextlib.suppress(ProcessLookupError):
+        process.kill()
+
+
 async def _run_command(
     argv: list[str],
     env: dict[str, str],
@@ -136,6 +167,9 @@ async def _run_command(
             # 也避免两条流各自读取带来的死锁风险。
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            # 包装命令（Node）自己会再起 npm / 安装器：放进独立进程组，
+            # 取消 / 超时才能一锅端（POSIX 用 killpg，Windows 用 taskkill /T）。
+            start_new_session=(os.name != "nt"),
         )
     except FileNotFoundError:
         outcome.error = f"未找到命令 `{argv[0]}`，无法执行{label}"
@@ -150,7 +184,7 @@ async def _run_command(
         while True:
             if asyncio.get_event_loop().time() > deadline:
                 outcome.timed_out = True
-                process.kill()
+                await _terminate(process)
                 break
             try:
                 line = await asyncio.wait_for(lines.readline(), timeout=1.0)
@@ -165,8 +199,7 @@ async def _run_command(
         await process.wait()
     finally:
         if process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
+            await _terminate(process)
             with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=5)
     outcome.returncode = process.returncode

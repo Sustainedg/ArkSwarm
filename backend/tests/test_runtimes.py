@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import time
 from types import SimpleNamespace
 from typing import Any, Iterable
 
@@ -16,7 +18,7 @@ import pytest_asyncio
 
 from app.agents import AgentContext, AgentDefinition, AgentRun, Runtime, all_agents, get_agent
 from app.agents.base import RuntimeProvisioner
-from app.agents.builtin.util import npm_install_argv, npm_prepare_argv
+from app.agents.builtin.util import npm_cli, npm_install_argv, npm_prepare_argv
 from app.db import engine, init_db
 from app.main import app
 from app.models import SQLModel
@@ -98,7 +100,11 @@ def test_npm_kernels_clean_up_leftovers_before_acting():
 
 
 def test_npm_kernels_install_through_the_conflict_aware_wrapper():
-    """安装 / 更新走包装命令：本机既有的同名可执行文件会让 npm 直接失败在 EEXIST。"""
+    """安装 / 更新走包装命令：本机既有的同名可执行文件会让 npm 直接失败在 EEXIST。
+
+    包装脚本由 Node 执行（而不是 ``sh -c``）：Windows 上没有 ``sh``，
+    桌面版必须能在那台机器上装内核 —— 见 ``builtin/util.py`` 的模块注释。
+    """
     kernels = (
         ("claude-code", "@anthropic-ai/claude-code"),
         ("codex", "@openai/codex"),
@@ -108,25 +114,48 @@ def test_npm_kernels_install_through_the_conflict_aware_wrapper():
         definition = get_agent(type_id)
         provisioner = definition.provisioner
         assert provisioner is not None
-        for action, command in (
-            ("install", f"npm install -g {package}"),
-            ("update", f"npm install -g {package}@latest"),
+        for action, spec in (
+            ("install", package),
+            ("update", f"{package}@latest"),
         ):
             argv = provisioner.argv_for(action)
-            assert argv[:2] == ["sh", "-c"], f"{type_id} 的「{action}」应走包装命令"
-            assert command in argv[2], f"{type_id} 的「{action}」没跑预期的 npm 命令"
-            assert f'link="$bin/{definition.executable}"' in argv[2], f"{type_id} 的包装命令没对上可执行文件名"
+            assert argv[:2] == ["node", "-e"], f"{type_id} 的「{action}」应走 Node 包装命令"
+            script = argv[2]
+            assert f'"{spec}"' in script, f"{type_id} 的「{action}」没跑预期的 npm 命令"
+            assert "'install', '-g'" in script, f"{type_id} 的「{action}」没有走 npm 全局安装"
+            assert f'"{definition.executable}"' in script, f"{type_id} 的包装命令没对上可执行文件名"
 
 
 def test_npm_prepare_command_only_targets_its_own_leftovers():
     """清扫命令只删自己那个包的残留目录，不碰别的东西。"""
     scoped = npm_prepare_argv("@google/gemini-cli")
-    assert scoped[:2] == ["sh", "-c"]
+    assert scoped[:2] == ["node", "-e"]
     script = scoped[2]
-    assert 'root="$(npm root -g)"' in script
-    assert '"$root"/@google/.gemini-cli-*' in script
-    # 普通包没有作用域目录
-    assert '"$root"/.aider-*' in npm_prepare_argv("aider")[2]
+    assert "npm" in script and "'root', '-g'" in script
+    assert '["@google", "gemini-cli"]' in script
+    # 普通包没有作用域目录（scope 为空串）
+    plain = npm_prepare_argv("aider")
+    assert '["", "aider"]' in plain[2]
+
+
+def test_npm_cli_is_cross_platform():
+    """直连 npm 的动作（卸载 / 查最新版本）在 Windows 上要经 cmd.exe 启动 npm.cmd。"""
+    assert npm_cli("view", "@openai/codex", "version") == [
+        "npm",
+        "view",
+        "@openai/codex",
+        "version",
+    ]
+    assert npm_cli("view", "@openai/codex", "version", platform="win32") == [
+        "cmd",
+        "/d",
+        "/s",
+        "/c",
+        "npm",
+        "view",
+        "@openai/codex",
+        "version",
+    ]
 
 
 def test_provisioning_descriptor_is_serialisable():
@@ -360,11 +389,29 @@ def _pid_from(events: list[dict]) -> int:
     raise AssertionError("没有从输出里拿到子进程 PID")
 
 
+async def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
+    """等一个进程（含被 init 接管的孤儿）真正消失；僵尸会被内核很快回收。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _alive(pid):
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
 def _alive(pid: int) -> bool:
+    """进程是否还活着。僵尸算死：容器里的 PID 1 不一定回收孤儿，kill(0) 会一直 succeed。"""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            state = handle.read().rsplit(") ", 1)[1][0]
+        if state == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
     return True
 
 
@@ -466,3 +513,29 @@ async def test_check_endpoint_returns_latest(client: httpx.AsyncClient, monkeypa
     monkeypatch.setattr(runtimes_api, "get_agent", lambda _type_id: _FakeRuntime())
     payload = (await client.post("/api/runtimes/fake-runtime/check")).json()
     assert payload["supported"] is True and payload["latest"] == "9.9.9"
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_the_wrapped_child_process(monkeypatch: pytest.MonkeyPatch):
+    """安装命令是「包装脚本 → 再起 npm」：超时必须连子进程一起杀。
+
+    只杀直接子进程会把 npm 留成孤儿，它会继续写 npm 全局目录 —— 下一次安装
+    撞上 ENOTEMPTY（prepare_argv 的存在就是为了清这个，但源头要堵住）。
+    """
+    definition = _FakeRuntime()
+    definition.provisioner = RuntimeProvisioner(
+        manager="test",
+        install_argv=["sh", "-c", "sleep 30 & echo CHILD=$!; wait"],
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "get_settings",
+        lambda: SimpleNamespace(provision_timeout_seconds=1),
+    )
+
+    events = [event async for event in provisioning.stream_provision(definition, "install")]
+
+    assert events[-1]["status"] == "error"
+    match = re.search(r"CHILD=(\d+)", _texts(events))
+    assert match, _texts(events)
+    assert await _wait_dead(int(match.group(1))), "包装脚本的子进程还在跑 —— 超时没有杀进程组"

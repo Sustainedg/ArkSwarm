@@ -42,6 +42,7 @@ from ..skills import (
 from .util import (
     as_list,
     flatten_content,
+    npm_cli,
     npm_install_argv,
     npm_prepare_argv,
     truthy,
@@ -99,8 +100,8 @@ class CodexAgent(AgentDefinition):
         #: 用户手写的垫片）会让 npm 直接失败在 EEXIST，先把这种占位挪开。
         install_argv=npm_install_argv("@openai/codex", bin_name="codex"),
         update_argv=npm_install_argv("@openai/codex", bin_name="codex", latest=True),
-        uninstall_argv=["npm", "uninstall", "-g", "@openai/codex"],
-        latest_argv=["npm", "view", "@openai/codex", "version"],
+        uninstall_argv=npm_cli("uninstall", "-g", "@openai/codex"),
+        latest_argv=npm_cli("view", "@openai/codex", "version"),
         prepare_argv=npm_prepare_argv("@openai/codex"),
         homepage="https://developers.openai.com/codex/cli/",
     )

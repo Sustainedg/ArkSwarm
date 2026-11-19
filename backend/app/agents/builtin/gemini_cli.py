@@ -28,7 +28,14 @@ from ..events import (
 )
 from ..mcp import McpMount, McpServerSpec, parse_json_servers, to_json_servers
 from ..registry import register_agent
-from .util import as_list, flatten_content, npm_install_argv, npm_prepare_argv, workspace_only
+from .util import (
+    as_list,
+    flatten_content,
+    npm_cli,
+    npm_install_argv,
+    npm_prepare_argv,
+    workspace_only,
+)
 
 
 #: Gemini CLI 的 MCP 配置只认用户级 / 项目级 ``settings.json``（没有独立的配置目录开关）。
@@ -54,8 +61,8 @@ class GeminiCliAgent(AgentDefinition):
         #: 用户手写的垫片）会让 npm 直接失败在 EEXIST，先把这种占位挪开。
         install_argv=npm_install_argv("@google/gemini-cli", bin_name="gemini"),
         update_argv=npm_install_argv("@google/gemini-cli", bin_name="gemini", latest=True),
-        uninstall_argv=["npm", "uninstall", "-g", "@google/gemini-cli"],
-        latest_argv=["npm", "view", "@google/gemini-cli", "version"],
+        uninstall_argv=npm_cli("uninstall", "-g", "@google/gemini-cli"),
+        latest_argv=npm_cli("view", "@google/gemini-cli", "version"),
         prepare_argv=npm_prepare_argv("@google/gemini-cli"),
         homepage="https://github.com/google-gemini/gemini-cli",
     )
