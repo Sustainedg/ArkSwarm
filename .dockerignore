@@ -1,14 +1,19 @@
-# 构建上下文需要 entrypoint + 当前代码兜底（/image-app）+ frontend/dist；
-# 下面这些是运行期数据 / 缓存 / 依赖，
-# 送进 Docker daemon 只会拖慢构建（backend/data 里是真实对话数据库，绝不能进镜像）。
+# 构建上下文只取镜像需要的源码，避免把本地 venv / data / node_modules 打进上下文。
+# 前端在镜像构建阶段用 frontend/ 源码现构建（见 Dockerfile 的 frontend stage），
+# 所以本地的构建产物 frontend/dist 也不进上下文 —— 免得兜底 UI 与源码不一致。
 .git
-backend/data
-backend/.venv
-backend/__pycache__
+.gitignore
+**/.venv
+**/node_modules
 **/__pycache__
-*.py[cod]
-.pytest_cache
-frontend/node_modules
+**/.pytest_cache
+**/*.tsbuildinfo
+backend/data
+frontend/dist
 frontend/.vite
 attachments
 generated-images
+docs
+.claude
+# 注意：不排除 frontend/ 源码（构建阶段要用）
+# 也不排除 backend/.env.example（兜底要用）和 scripts/serve.sh

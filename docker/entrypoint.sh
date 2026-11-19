@@ -9,15 +9,21 @@
 #   /app/data/home          HOME：内核安装态、用户配置与会话（独立卷内，重建不丢）
 #
 # 启动逻辑：
-#   1. current 已指向有效版本 → 直接启动（界面里更新后 execv 重启也走这里）
-#   2. /app/releases 下有版本但没有 current → 选最高版本、建链、启动
-#   3. 空卷 → 从 GitHub 下载最新 Release 装进去（离线时给出清晰报错）
+#   1. current 已指向完整版本 → 直接启动（界面里更新后 execv 重启也走这里）
+#   2. /app/releases 下有完整版本但没有 current → 选最高版本、建链、启动
+#   3. 空卷 → 从 GitHub 下载最新 Release 装进去
+#   4. 网络不可达 / 没有 Release → 用镜像自带的 /image-app 兜底
+# 产物包按 app/selfupdate.py 的同一套安全基线处理：sha256 强校验、拒绝路径穿越与
+# 符号链接、校验标志文件；校验失败 / 包不安全时直接拒绝安装，不拿旧代码顶替。
 set -euo pipefail
 
 APP_ROOT="/app"
 RELEASES="$APP_ROOT/releases"
 DATA_DIR="${ARKSWARM_DATA_DIR:-/app/data}"
 REPO_SLUG="${ARKSWARM_UPDATE_REPO:-Sustainedg/ArkSwarm}"
+
+#: 一个版本目录算「完整」的标志文件（与 selfupdate.py 的 _PAYLOAD_MARKERS 一致）
+PAYLOAD_MARKERS=(backend/app/__init__.py backend/app/main.py frontend/dist/index.html)
 
 # HOME 指向数据卷：npm 全局包与各内核自己的 ~/.claude / ~/.codex / ~/.hermes /
 # ~/.gemini 都跟着数据卷走。允许运维覆盖 HOME / NPM_CONFIG_PREFIX，未覆盖时取默认值。
@@ -29,6 +35,8 @@ case ":${PATH:-}:" in
 esac
 
 mkdir -p "$RELEASES" "$DATA_DIR" "$HOME" "$NPM_CONFIG_PREFIX"
+# 上次被强杀（EXIT trap 没来得及跑）留下的安装临时目录
+rm -rf "$RELEASES"/.install.* "$RELEASES"/.bundled.* 2>/dev/null || true
 
 # ---- 工具函数 ----
 log() { echo "[entrypoint] $*"; }
@@ -53,16 +61,38 @@ run_with_install_proxy() {
   fi
 }
 
+#: 安装过程中的临时目录：成功路径显式清理，异常 / die 由 EXIT trap 兜底。
+CLEANUP_DIRS=()
+cleanup_add() { CLEANUP_DIRS+=("$1"); }
+cleanup_now() { rm -rf "$1" 2>/dev/null || true; }
+cleanup_all() {
+  local d
+  for d in "${CLEANUP_DIRS[@]}"; do
+    rm -rf "$d" 2>/dev/null || true
+  done
+}
+trap cleanup_all EXIT
+
 version_key() {
-  # V0.44.1 → "0 044 001"（用 0 填充对齐，sort 能直接比）
+  # V0.44.1 → "000044001"（用 0 填充对齐，sort 能直接比）
   local v="${1#V}"; v="${v#v}"
   printf '%s\n' "$v" | awk -F. '{ printf "%03d%03d%03d\n", $1+0, $2+0, $3+0 }'
+}
+
+payload_complete() {
+  local dir="$1" marker
+  for marker in "${PAYLOAD_MARKERS[@]}"; do
+    [ -f "$dir/$marker" ] || return 1
+  done
+  return 0
 }
 
 pick_latest_dir() {
   local best="" best_key="" d key
   for d in "$RELEASES"/V*; do
     [ -d "$d" ] || continue
+    # 半截解包 / 被删文件的目录不参与选择，避免选中后起不来
+    payload_complete "$d" || continue
     key="$(version_key "$(basename "$d")")"
     if [ -z "$best_key" ] || [ "$key" -gt "$best_key" ]; then
       best="$d"; best_key="$key"
@@ -71,49 +101,139 @@ pick_latest_dir() {
   [ -n "$best" ] && echo "$best" || return 1
 }
 
+# 安全解压：约束与 app/selfupdate.py:_safe_extract 同一套。
+#   拒绝绝对路径 / 父级穿越 / 符号链接 / 设备文件，限制文件数与解压体积。
+# 退出码：0 成功；65 包内容不安全；66 不是有效 tar.gz；67 超出数量 / 体积上限。
+safe_extract() {
+  local archive="$1" dest="$2"
+  python3 -I - "$archive" "$dest" <<'PY'
+import os
+import sys
+import tarfile
+
+UNSAFE, BAD, TOO_MANY = 65, 66, 67
+MAX_FILES = 20_000
+MAX_BYTES = 512 * 1024 * 1024
+
+archive, dest = sys.argv[1], sys.argv[2]
+root = os.path.realpath(dest)
+count = 0
+total = 0
+
+try:
+    tf = tarfile.open(archive, mode="r:gz")
+except (tarfile.TarError, OSError):
+    print("下载到的不是有效的 tar.gz 更新包", file=sys.stderr)
+    sys.exit(BAD)
+
+with tf:
+    for member in tf.getmembers():
+        parts = [p for p in member.name.replace("\\", "/").split("/") if p not in ("", ".")]
+        if not parts or ".." in parts or member.name.startswith(("/", "\\")):
+            print(f"更新包内路径不安全：{member.name}", file=sys.stderr)
+            sys.exit(UNSAFE)
+        if member.issym() or member.islnk():
+            print(f"更新包内含符号链接：{member.name}", file=sys.stderr)
+            sys.exit(UNSAFE)
+        if not (member.isfile() or member.isdir()):
+            print(f"更新包内含不支持的条目：{member.name}", file=sys.stderr)
+            sys.exit(UNSAFE)
+        target = os.path.realpath(os.path.join(root, *parts))
+        # resolve 后必须仍在 dest 之下（双保险，防拼接逃逸）
+        if target != root and not target.startswith(root + os.sep):
+            print(f"更新包内路径不安全：{member.name}", file=sys.stderr)
+            sys.exit(UNSAFE)
+        if member.isdir():
+            os.makedirs(target, exist_ok=True)
+            continue
+        count += 1
+        total += member.size
+        if count > MAX_FILES:
+            print("更新包内文件过多，已拒绝安装", file=sys.stderr)
+            sys.exit(TOO_MANY)
+        if total > MAX_BYTES:
+            print("更新包解压后体积过大，已拒绝安装", file=sys.stderr)
+            sys.exit(TOO_MANY)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        source = tf.extractfile(member)
+        if source is None:
+            print(f"更新包内条目无法读取：{member.name}", file=sys.stderr)
+            sys.exit(BAD)
+        with source, open(target, "wb") as out:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+PY
+}
+
 install_latest_release() {
   log "空卷：从 GitHub 下载最新 Release（$REPO_SLUG）"
   # 下载 Release 元数据（走代理：容器内访问 GitHub 常需要）
   local api="https://api.github.com/repos/$REPO_SLUG/releases/latest"
-  local curl_args=(--silent --show-error --fail --location --max-time 60)
+  local curl_args=(--silent --show-error --fail --location)
   # 代理优先级：显式 HTTP(S)_PROXY > ARKSWARM_INSTALL_PROXY（安装期代理）
   local proxy="${HTTPS_PROXY:-${HTTP_PROXY:-${https_proxy:-${http_proxy:-$(install_proxy)}}}}"
   if [ -n "$proxy" ]; then
     curl_args+=(--proxy "$proxy")
   fi
   local meta asset_url tag version
-  meta="$(curl "${curl_args[@]}" -H 'Accept: application/vnd.github+json' "$api")" \
+  meta="$(curl "${curl_args[@]}" --max-time 60 -H 'Accept: application/vnd.github+json' "$api")" \
     || { install_bundled "GitHub 不可达（$api）"; return; }
-  tag="$(printf '%s' "$meta" | grep -oP '(?<="tag_name": ")[^"]+' | head -1)"
-  asset_url="$(printf '%s' "$meta" | grep -oP '(?<="browser_download_url": ")[^"]+arkswarm\.tar\.gz' | head -1)"
+  tag="$(printf '%s' "$meta" | grep -oP '(?<="tag_name": ")[^"]+' | head -1 || true)"
+  asset_url="$(printf '%s' "$meta" | grep -oP '(?<="browser_download_url": ")[^"]+arkswarm\.tar\.gz' | head -1 || true)"
   if [ -z "$tag" ] || [ -z "$asset_url" ]; then
-    install_bundled "最新 Release（$tag）没有 arkswarm.tar.gz 产物"
+    install_bundled "最新 Release（${tag:-未知版本}）没有 arkswarm.tar.gz 产物"
     return
   fi
   version="V${tag#v}"; version="V${version#V}"
 
-  local tmp sha
+  local tmp stage rc sha actual
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  cleanup_add "$tmp"
   log "下载 $version ← $asset_url"
-  if ! curl "${curl_args[@]}" --output "$tmp/arkswarm.tar.gz" "$asset_url"; then
+  # 产物包可能几十 MB，桥接慢链路要给足时间（元数据请求才用 60 秒）
+  if ! curl "${curl_args[@]}" --max-time 600 --output "$tmp/arkswarm.tar.gz" "$asset_url"; then
+    cleanup_now "$tmp"
     install_bundled "下载产物包失败"
     return
   fi
-  # .sha256 资产存在就校验
-  if curl "${curl_args[@]}" --output "$tmp/arkswarm.tar.gz.sha256" "${asset_url}.sha256" 2>/dev/null; then
-    sha="$(grep -oE '[0-9a-f]{64}' "$tmp/arkswarm.tar.gz.sha256" | head -1 || true)"
+  # .sha256 资产存在就强制校验；取不到时只警告（与 selfupdate.py 的「无校验值则跳过」一致）
+  if curl "${curl_args[@]}" --max-time 60 --output "$tmp/arkswarm.tar.gz.sha256" "${asset_url}.sha256" 2>/dev/null; then
+    sha="$(grep -oE '[0-9a-fA-F]{64}' "$tmp/arkswarm.tar.gz.sha256" | head -1 || true)"
     if [ -n "$sha" ]; then
-      echo "$sha  $tmp/arkswarm.tar.gz" | sha256sum --check --strict - \
-        || { install_bundled "产物包 sha256 校验失败"; return; }
+      sha="${sha,,}"
+      actual="$(sha256sum "$tmp/arkswarm.tar.gz" | cut -d' ' -f1)"
+      if [ "$actual" != "$sha" ]; then
+        # 校验失败是安全信号：宁可起不来，也不悄悄退回旧代码
+        die "产物包 sha256 校验失败（期望 ${sha:0:12}…，实际 ${actual:0:12}…），拒绝安装"
+      fi
       log "sha256 校验通过"
     fi
+  else
+    log "⚠ 未取到 .sha256 资产，跳过校验"
   fi
 
-  mkdir -p "$RELEASES/$version"
-  tar -xzf "$tmp/arkswarm.tar.gz" -C "$RELEASES/$version"
-  [ -f "$RELEASES/$version/backend/app/__init__.py" ] \
-    || { install_bundled "产物包内容不完整（缺 backend/app/__init__.py）"; return; }
+  # 先解到同卷的临时目录，校验完整后再原子改名：中途失败不会留下半截版本
+  stage="$(mktemp -d "$RELEASES/.install.XXXXXX")"
+  cleanup_add "$stage"
+  rc=0
+  safe_extract "$tmp/arkswarm.tar.gz" "$stage" || rc=$?
+  case "$rc" in
+    0) ;;
+    65|67) die "产物包未通过安全校验（见上一行），拒绝安装" ;;
+    *) cleanup_now "$tmp"; cleanup_now "$stage"; install_bundled "产物包解压失败"; return ;;
+  esac
+  if ! payload_complete "$stage"; then
+    cleanup_now "$tmp"; cleanup_now "$stage"
+    install_bundled "产物包内容不完整"
+    return
+  fi
+  rm -rf "$RELEASES/$version"
+  mv "$stage" "$RELEASES/$version"
+  cleanup_now "$tmp"
+  cleanup_now "$stage"
   log "已安装 $version"
 }
 
@@ -123,18 +243,29 @@ install_latest_release() {
 install_bundled() {
   local reason="${1:-使用镜像自带代码}"
   local bundled="/image-app"
-  if [ ! -f "$bundled/backend/app/__init__.py" ]; then
-    die "$reason，但镜像里没有自带代码（/image-app）。请检查 Dockerfile 的 COPY 步骤。"
+  if ! payload_complete "$bundled"; then
+    die "$reason，且镜像没有完整的自带代码兜底（/image-app 缺少标志文件）。离线部署请先手动把版本目录放进 $RELEASES 再启动。"
   fi
-  local version
-  version="$(grep -oP '(?<=^__version__ = ")[^"]+' "$bundled/backend/app/__init__.py" 2>/dev/null || echo "V0.0.0")"
-  log "$reason → 安装 $version 到 $RELEASES/$version"
-  mkdir -p "$RELEASES/$version"
-  cp -a "$bundled/." "$RELEASES/$version/"
-  log "已安装 $version（与镜像同源；后续升级走「设置 → 关于」的更新机制）"
+  local version stage
+  version="$(grep -oP '(?<=^__version__ = ")[^"]+' "$bundled/backend/app/__init__.py" 2>/dev/null || true)"
+  [ -n "$version" ] || die "$reason，且读不到镜像自带代码的版本号（/image-app/backend/app/__init__.py）"
+  log "$reason → 用镜像自带代码 $version 兜底"
+  stage="$(mktemp -d "$RELEASES/.bundled.XXXXXX")"
+  cleanup_add "$stage"
+  cp -a "$bundled/." "$stage/"
+  payload_complete "$stage" || die "复制镜像自带代码后仍不完整，无法启动"
+  rm -rf "$RELEASES/$version"
+  mv "$stage" "$RELEASES/$version"
+  cleanup_now "$stage"
+  log "已安装 $version（兜底；有 Release 后可在界面里点击更新）"
 }
 
 # ---- 选定要运行的版本 ----
+# current 指向的版本必须完整（半截解包 / 文件被删时重新选择）
+if [ -d "$RELEASES/current/" ] && ! payload_complete "$RELEASES/current"; then
+  log "current 指向的版本不完整，重新选择"
+  rm -f "$RELEASES/current"
+fi
 if [ ! -e "$RELEASES/current" ] || [ ! -d "$RELEASES/current/" ]; then
   if ! pick_latest_dir >/dev/null 2>&1; then
     # 空卷：默认用镜像自带代码。镜像构建时已经把源码打进去了，
@@ -271,8 +402,9 @@ seed_kernel_skills() {
     fi
   fi
 }
-# npm 全局 bin 与用户 ~/.local/bin 都放进 PATH，让安装后的内核命令能被找到
-NPM_BIN="$(npm prefix -g 2>/dev/null)/bin"
+# npm 全局 bin 与用户 ~/.local/bin 都放进 PATH，让安装后的内核命令能被找到。
+# npm 缺失时不能让 `set -e` 直接退出（界面里仍可手动安装），因此 `|| true` 兜底。
+NPM_BIN="$(npm prefix -g 2>/dev/null || true)/bin"
 [ -d "$NPM_BIN" ] && case ":$PATH:" in *":$NPM_BIN:"*) ;; *) export PATH="$NPM_BIN:$PATH" ;; esac
 [ -d "$HOME/.local/bin" ] && case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 ensure_kernels

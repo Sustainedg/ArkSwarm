@@ -9,6 +9,18 @@
 # 运行：见 docker/docker-compose.yml（或手动挂载 /app 与 /app/data 两个卷）。
 # 内核安装态、用户配置与会话都在 HOME 下；这里把 HOME 指进数据卷，
 # 让 Claude Code / Codex / Hermes / Gemini 的安装与 ~/.gemini 等不再随容器重建丢失。
+
+# ---- 前端构建阶段 ----
+# frontend/dist 被 .gitignore 忽略；用源码在镜像里现构建，全新 clone 也能直接
+# docker compose up --build，不依赖本地先跑一次 npm run build。
+FROM node:20-slim AS frontend
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---- 运行阶段 ----
 FROM python:3.11-slim
 
 # curl：entrypoint 首启下载 Release 与 Node.js；git：Hermes / 部分内核的安装脚本要用；
@@ -46,9 +58,8 @@ RUN set -eux; \
 COPY backend/app /image-app/backend/app
 COPY backend/requirements.txt /image-app/backend/requirements.txt
 COPY backend/.env.example /image-app/backend/.env.example
-# 前端产物：frontend/dist 被 .gitignore 忽略，构建镜像前先 `cd frontend && npm run build`。
-# 镜像自带这份产物，首启即可出 UI。
-COPY frontend/dist /image-app/frontend/dist
+# 前端产物：由上面的 frontend 构建阶段现构建（不再依赖仓库里的 frontend/dist）。
+COPY --from=frontend /src/dist /image-app/frontend/dist
 COPY scripts/serve.sh /image-app/scripts/serve.sh
 # 平台自带的「平台通用」MCP 服务器（图片生成 / 系统管理），分配给智能体即可使用。
 COPY scripts/mcp /image-app/scripts/mcp

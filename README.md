@@ -76,14 +76,12 @@ cd ArkSwarm
 <details>
 <summary><b>🐳 用 Docker 跑（点开看完整步骤）</b></summary>
 
-镜像里封装好 Python 3.11 / Node 22 / git，源码在构建时打进去（「构建什么就运行什么」）：
+镜像里封装好 Python 3.11 / Node 22 / git，后端与前端都在构建时打进镜像
+（「构建什么就运行什么」；前端由镜像内的 node 阶段现构建，不需要本地先打包）：
 
 ```bash
 git clone https://github.com/Sustainedg/ArkSwarm.git
 cd ArkSwarm
-
-# 前端产物不进仓库，构建镜像前先打包
-(cd frontend && npm install && npm run build)
 
 docker compose -f docker/docker-compose.yml up -d --build
 # → http://<本机IP>:8010
