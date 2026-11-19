@@ -1,16 +1,20 @@
 /**
  * 输入区（**两端共享**）：对话页与协作「找 CEO 聊」都用这一份，样式与交互完全一致。
  *
- * 框里从左到右只有四样东西：附件（可选）、语音、输入框、发送（运行中变成停止）。
+ * 框里从左到右是：附件（可选，加号）、输入框、语音、设置（可选，齿轮）、发送（运行中变成停止）。
  * 输入框**没有 placeholder**：框里一长串提示文案在手机上既挤又容易跟真实输入混淆，
  * 光秃秃的输入框配图标反而更清楚。
  *
  * 附件与语音都收在这里，页面只提供数据与回调：
  * - `value` / `onChange`：草稿文字（页面持有，才能按场景清空与预填）；
  * - `attachments` / `onAttachmentsChange`：待发附件（页面持有，发送成功后由页面清空）；
- * - `onUpload`：把读好的 base64 交给页面调接口（不传就不显示回形针，也不接管粘贴）；
+ * - `onUpload`：把读好的 base64 交给页面调接口（不传就不显示加号，也不接管粘贴）；
  *   **粘贴截图走同一条路径**：输入框里粘贴图片直接变成附件（见下方 `onPaste`）；
  * - `onSend`：正文与附件都空时不触发（除非页面开了 `allowEmptySend`），页面从自己的状态里取附件。
+ *
+ * 齿轮菜单收的是**这条输入区的显示偏好**：目前一项「显示工具调用」——关掉后对话只亮
+ * 最终回复（`MessageView` 的 `finalOnly`）。开关值由页面持有（本机偏好，存 localStorage），
+ * 组件只收 `showTools` / `onShowToolsChange` 这对受控 props —— 输入区不自己长状态。
  */
 import {
   useCallback,
@@ -27,7 +31,7 @@ import {
 import type { AttachmentRef } from '../lib/types'
 import { isImagePath, useMediaUrl } from '../lib/media'
 import { describeSpeechError, finalTranscript, speechRecognitionCtor, type SpeechRecognizer } from '../lib/speech'
-import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from './Icons'
+import { CheckIcon, MicIcon, PlusIcon, SendIcon, SettingsIcon, StopIcon } from './Icons'
 import { ZoomableImage } from './ZoomableImage'
 
 /** 单个附件的上限，与服务端 `MAX_ATTACHMENT_BYTES` 保持一致（前端先拦一道，省一次往返）。 */
@@ -73,6 +77,10 @@ interface Props {
    * 不开时沿用旧行为（运行中输入框置灰，右侧只有停止）。
    */
   queueWhenBusy?: boolean
+  /** 齿轮菜单：「显示工具调用」当前值（页面持有；不传就不显示齿轮）。关掉 = 对话只亮最终回复。 */
+  showTools?: boolean
+  /** 齿轮菜单：切换「显示工具调用」。 */
+  onShowToolsChange?: (show: boolean) => void
 }
 
 /** 读成 base64（去掉 data URL 前缀），交给上传接口。 */
@@ -130,9 +138,14 @@ export function Composer({
   footer,
   className,
   queueWhenBusy = false,
+  showTools,
+  onShowToolsChange,
 }: Props) {
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
+  /** 齿轮菜单开合（只管浮层，开关值本身在页面手里）。 */
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsRef = useRef<HTMLDivElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const areaRef = useRef<HTMLTextAreaElement | null>(null)
   const voiceRef = useRef<SpeechRecognizer | null>(null)
@@ -147,6 +160,25 @@ export function Composer({
 
   // 卸载（离开页面 / 关掉弹层）时收起麦克风，别让识别在后台空转。
   useEffect(() => () => voiceRef.current?.abort(), [])
+
+  // 齿轮菜单：点外面或按 Esc 收起（与侧栏账号菜单同一套收法）。
+  // settingsRef 挂在「按钮 + 浮层」的容器上：浮层在容器内，点浮层里的勾选框
+  // 不会被当成「点外面」；点输入框其它地方、点页面别处都会收起。
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!settingsRef.current?.contains(event.target as Node)) setSettingsOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSettingsOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [settingsOpen])
 
   /**
    * 输入框随内容长高，最多 `MAX_INPUT_HEIGHT`。
@@ -306,7 +338,7 @@ export function Composer({
         </div>
       )}
 
-      <div className="composer-box">
+      <div className="composer-box" ref={settingsRef}>
         <input
           ref={fileRef}
           type="file"
@@ -326,24 +358,45 @@ export function Composer({
             aria-label="添加附件"
             title="添加附件（图片 / 文档都行，会上传到工作目录）"
           >
-            {uploading ? <span className="composer-tool-spin">◌</span> : <PaperclipIcon size={17} />}
+            {uploading ? <span className="composer-tool-spin">◌</span> : <PlusIcon size={17} />}
           </button>
         )}
-        <button
-          className={`composer-tool${listening ? ' on' : ''}${voiceSupported ? '' : ' muted'}`}
-          onClick={toggleVoice}
-          disabled={locked}
-          aria-label={listening ? '结束语音输入' : '语音输入'}
-          title={
-            voiceSupported
-              ? listening
-                ? '正在听…点一下结束'
-                : '语音输入（按浏览器识别转成文字）'
-              : '当前环境不支持语音输入，点一下看说明'
-          }
-        >
-          <MicIcon size={17} />
-        </button>
+        {/* 设置齿轮贴着输入框左侧（与加号一道在左）：显示偏好的入口。
+            气泡是白卡片 + 底部朝下的尖角，尖角正对齿轮 ——「点外面收起」的
+            判定范围也正好是按钮 + 气泡这一团。 */}
+        {typeof showTools === 'boolean' && onShowToolsChange && (
+          <div className="composer-settings" ref={settingsRef}>
+            <button
+              className={`composer-tool${settingsOpen ? ' on' : ''}`}
+              onClick={() => setSettingsOpen((open) => !open)}
+              aria-label="显示设置"
+              aria-expanded={settingsOpen}
+              aria-haspopup="menu"
+              title="显示设置（工具调用显隐等）"
+            >
+              <SettingsIcon size={17} />
+            </button>
+            {settingsOpen && (
+              <div className="composer-settings-menu" role="menu" aria-label="显示设置">
+                {/* 底部正中的朝下尖角：指向下面的齿轮按钮 */}
+                <span className="composer-settings-caret" aria-hidden />
+                <button
+                  type="button"
+                  className="composer-settings-item"
+                  role="menuitemcheckbox"
+                  aria-checked={showTools}
+                  onClick={() => onShowToolsChange(!showTools)}
+                >
+                  {/* 勾选标记：选中显示细线 ✓，未选中只留占位（文字不跳动） */}
+                  <span className={`composer-settings-check${showTools ? ' on' : ''}`}>
+                    {showTools && <CheckIcon size={16} />}
+                  </span>
+                  <span className="composer-settings-label">显示工具调用</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           ref={setAreaRef}
           rows={1}
@@ -363,6 +416,23 @@ export function Composer({
         />
         {/* 运行中只留一个按钮：框里写了东西就是「排队发送」，空着就是「停止」。
             这样手指永远落在同一个位置，也不会出现「想停止却点到发送」。 */}
+        {/* 语音紧贴发送：说完就发，这两个动作本来就是一对。
+            voice 类是对话页布局的推右锚点（右侧一组的起点），见 index.css / mobile.css。 */}
+        <button
+          className={`composer-tool voice${listening ? ' on' : ''}${voiceSupported ? '' : ' muted'}`}
+          onClick={toggleVoice}
+          disabled={locked}
+          aria-label={listening ? '结束语音输入' : '语音输入'}
+          title={
+            voiceSupported
+              ? listening
+                ? '正在听…点一下结束'
+                : '语音输入（按浏览器识别转成文字）'
+              : '当前环境不支持语音输入，点一下看说明'
+          }
+        >
+          <MicIcon size={17} />
+        </button>
         {busy && (!queueWhenBusy || !canSend) && (
           <button className="composer-tool stop" onClick={() => onStop?.()} aria-label="停止" title="停止这次运行">
             <StopIcon size={15} />

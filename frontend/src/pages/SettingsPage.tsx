@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { AccountPanel } from '../components/AccountPanel'
 import { UserAdminPanel } from '../components/UserAdminPanel'
 import { CredentialVault } from '../components/CredentialVault'
@@ -12,13 +12,14 @@ import { UpdatePanel } from '../components/UpdatePanel'
 import { api, ApiError } from '../lib/api'
 import { useAuth } from '../components/AuthGate'
 import { THEME_OPTIONS, useThemeMode } from '../lib/theme'
-import type { ActiveCollabRun, Overview } from '../lib/types'
+import type { Overview } from '../lib/types'
 
 /**
  * 设置页的标签页：**按设置类型分组**，一页只放一类设置。
  *
- * 「关于」收的是**只读信息**（系统信息 · 正在运行的智能体 · 版本记录）；
- * 「内核管理」管各 CLI 内核本身（装没装 / 什么版本 / 安装 · 更新 · 卸载）。
+ * 「关于」收的是**只读信息**（系统信息 · 版本记录）；
+ * 「内核管理」管各 CLI 内核本身（装没装 / 什么版本 / 安装 · 更新 · 卸载），
+ * 以及「正在运行」的智能体（对话域 + 协作域，每 8 秒刷新，见 `KernelManager`）。
  * 顺序按「日常会动的在前」排：外观 / 对话最常改，内核管理与关于基本只看。
  */
 const ALL_TABS = [
@@ -51,7 +52,6 @@ function isSettingsTab(value: string | null): value is SettingsTab {
  * 换页只是把它们放到不同页里。移动端的设置页**不跟这套**：它刻意只留「现在要动的开关」。
  */
 export function SettingsPage() {
-  const navigate = useNavigate()
   const { isAdmin } = useAuth()
   const { mode, setMode } = useThemeMode()
   const [params, setParams] = useSearchParams()
@@ -61,8 +61,6 @@ export function SettingsPage() {
   const tab: SettingsTab = requested === 'users' && !isAdmin ? 'appearance' : requested
   const tabs = TABS.filter((item) => item.id !== 'users' || isAdmin)
   const [overview, setOverview] = useState<Overview | null>(null)
-  /** 协作里的运行是另一张登记表（`/api/collab/active-runs`），不在 overview.active_runs 里 */
-  const [collabRuns, setCollabRuns] = useState<ActiveCollabRun[]>([])
   const [error, setError] = useState<string | null>(null)
 
   const setTab = (next: SettingsTab) => {
@@ -72,23 +70,18 @@ export function SettingsPage() {
 
   const reload = async () => {
     try {
-      // 两处一起取：对话域的运行表 + 协作域的运行表（协作的智能体不在前者里）。
-      const [info, active] = await Promise.all([api.overview(), api.listActiveCollabRuns()])
-      setOverview(info)
-      setCollabRuns(active)
+      setOverview(await api.overview())
       setError(null)
     } catch (e) {
       setError(describe(e))
     }
   }
 
-  // 「关于」要每 8 秒刷新「正在运行的智能体」（状态与时长自己在走）。
-  // 其余标签页用不到概览 —— 别在打开「外观」时白跑每 8 秒一次的请求。
+  // 「关于」需要概览（版本号 + 版本记录）：进这一页拉一次就够 ——
+  // 「正在运行的智能体」已挪去内核管理页，这里不再每 8 秒轮询。
   useEffect(() => {
     if (tab !== 'about') return
     void reload()
-    const timer = setInterval(() => void reload(), 8000)
-    return () => clearInterval(timer)
     // reload 每次渲染都是新的，这里只盯标签页
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
@@ -189,6 +182,10 @@ export function SettingsPage() {
         {tab === 'about' && (
           <>
             {isAdmin && <UpdatePanel currentVersion={overview?.version ?? '…'} />}
+
+            {/* 系统信息：只读概况（版本 / 适配器 / 数据目录 / 工作目录根）。
+                任务运行状态已挪到「内核管理」页（那里每 8 秒刷新），
+                这一页只在进入时按需拉一次概览。 */}
             <section className="stack">
               <div className="row" style={{ gap: 8 }}>
                 <h2 className="card-section-title" style={{ flex: 1 }}>
@@ -210,83 +207,47 @@ export function SettingsPage() {
               )}
             </section>
 
-            <section className="stack">
-              <h2 className="card-section-title">正在运行的智能体</h2>
-              <p className="dim small">
-                对话里的运行与协作里的运行分开登记在各自的运行表里，所以这里把两处一起列出来。
-              </p>
-              {overview && overview.active_runs.length + collabRuns.length > 0 ? (
-                <div className="grid">
-                  {overview.active_runs.map((run) => (
-                    <div className="card" key={run.id}>
-                      <div className="card-head">
-                        <div>
-                          <div className="card-title">{run.agent_name}</div>
-                          <div className="card-sub mono-sm">{run.id}</div>
-                        </div>
-                        <span className="pill ok" style={{ marginLeft: 'auto' }}>
-                          <span className="dot" />
-                          {run.status} · {run.elapsed_seconds}s
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {collabRuns.map((run) => (
-                    <button
-                      type="button"
-                      className="card card-clickable"
-                      key={`${run.kind}-${run.run_id}-${run.agent_name}`}
-                      onClick={() => navigate(`/collab/runs/${run.run_id}`)}
-                      title="打开这条协作运行"
-                    >
-                      <div className="card-head">
-                        <div style={{ minWidth: 0 }}>
-                          <div className="card-title">{run.agent_name}</div>
-                          <div className="card-sub">
-                            {run.kind === 'chat' ? '入口智能体的对话回复' : '协作工单步骤'}
-                            {run.title ? ` · ${run.title}` : ''}
-                          </div>
-                        </div>
-                        <span className="pill brand" style={{ marginLeft: 'auto' }}>
-                          <span className="dot" />
-                          协作 · {run.elapsed_seconds}s
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="dim small">当前没有运行中的任务。</p>
-              )}
-            </section>
-
             {versionHistory.length > 0 && (
               <section className="stack">
                 <h2 className="card-section-title">版本记录</h2>
-                <div className="version-timeline">
-                  {versionHistory.map((release) => (
-                    <article
-                      className={`version-item${release.version === overview?.version ? ' current' : ''}`}
-                      key={release.version}
-                    >
-                      <span className="version-marker" />
-                      <div className="version-content">
-                        <div className="version-head">
-                          <span className={`pill${release.version === overview?.version ? ' brand' : ''}`}>
-                            {release.version}
-                          </span>
-                          <span className="version-title">{release.title}</span>
-                          <span className="dim small version-date">{release.date}</span>
+                {/* 最新一版做成 hero：当前运行的就是它，值得占最大的位置。
+                    下面的历史版本走轻量时间线 —— 看一眼走过哪些里程碑就够了。 */}
+                <article className="version-hero">
+                  <div className="version-hero-head">
+                    <div className="version-hero-version">
+                      <span className="version-hero-badge">当前版本</span>
+                      <span className="version-hero-number">{versionHistory[0].version}</span>
+                    </div>
+                    <span className="version-hero-date">{versionHistory[0].date}</span>
+                  </div>
+                  <h3 className="version-hero-title">{versionHistory[0].title}</h3>
+                  <ul className="version-hero-highlights">
+                    {versionHistory[0].highlights.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </article>
+                {versionHistory.length > 1 && (
+                  <div className="version-timeline">
+                    {versionHistory.slice(1).map((release) => (
+                      <article className="version-item" key={release.version}>
+                        <span className="version-marker" />
+                        <div className="version-content">
+                          <div className="version-head">
+                            <span className="version-tag">{release.version}</span>
+                            <span className="version-title">{release.title}</span>
+                            <span className="dim small version-date">{release.date}</span>
+                          </div>
+                          <ul className="version-highlights">
+                            {release.highlights.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
                         </div>
-                        <ul className="version-highlights">
-                          {release.highlights.map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </>

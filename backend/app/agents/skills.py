@@ -2,8 +2,9 @@
 
 技能是各智能体内核自带的能力包：一个目录里含 ``SKILL.md``（YAML frontmatter
 描述元数据），以及可选的 ``scripts/`` ``references/`` ``assets/`` 等资源。
+用户也可以有自己的技能库（导入 / 市场安装 / 跨内核复制），由平台托管、按用户隔离。
 
-平台只读扫描这些目录，把各内核的技能**统一编目**、分配给智能体；运行时再由适配器
+平台扫描内核技能根与用户技能库，把技能**统一编目**、分配给智能体；运行时再由适配器
 声明「我的内核从哪里读技能」（:class:`SkillMount`），框架按这份声明把分配到的技能
 物化进该内核能发现的隔离目录，从而保证「智能体能用的技能 == 分配到的技能」。
 
@@ -67,15 +68,27 @@ class SkillSpec:
     source_slug: str | None = None
     #: 来源是「技能市场」时，市场技能页地址
     source_url: str | None = None
+    #: 所属用户 id：用户技能库里的技能按它隔离；为空表示内核自带 / 宿主机共享技能。
+    owner_id: str | None = None
+    #: 是否来自「平台托管的用户技能库」（决定 ``id`` 形状与落盘路径）。
+    library: bool = False
 
     @property
     def id(self) -> str:
-        """稳定标识：``<智能体类型>:<技能目录名>``。"""
+        """稳定标识。
+
+        共享技能（内核自带 / 宿主机）是 ``<智能体类型>:<技能目录名>``；
+        用户技能库里的技能是 ``<智能体类型>:lib:<用户 id 或 local>:<技能目录名>``，
+        这样不同用户导入同名技能也不会互相覆盖。
+        """
+        if self.library:
+            return library_skill_id(self.type_id, self.slug, self.owner_id)
         return f"{self.type_id}:{self.slug}"
 
     def to_row(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "owner_id": self.owner_id,
             "type_id": self.type_id,
             "slug": self.slug,
             "name": self.name,
@@ -118,9 +131,22 @@ class SkillMount:
     notes: list[str] = field(default_factory=list)
 
 
-#: 「技能市场」来源：平台从远程技能库下载、安装进内核原生技能根的技能。
+#: 「技能市场」来源：平台从远程技能库下载、安装的技能。
 #: 只有这种来源的技能是「由平台装入」的，可以卸载；其余来源（user/plugin/system…）只读。
 MARKET_SOURCE = "market"
+
+#: 用户技能库的标识分隔符：``<type_id>:lib:<owner 或 local>:<slug>``。
+LIBRARY_ID_MARK = ":lib:"
+
+
+def library_skill_id(type_id: str, slug: str, owner_id: str | None) -> str:
+    """用户技能库里的稳定标识（与共享技能的 ``<type>:<slug>`` 区分开）。"""
+    return f"{type_id}{LIBRARY_ID_MARK}{owner_id or 'local'}:{slug}"
+
+
+def is_library_skill_id(skill_id: str) -> bool:
+    """这个标识是否来自用户技能库（而不是内核自带 / 宿主机共享技能）。"""
+    return LIBRARY_ID_MARK in (skill_id or "")
 
 
 @dataclass(slots=True)
@@ -128,14 +154,17 @@ class SkillRoot:
     """适配器声明的「本内核的技能根」之一。
 
     这是「哪个内核把技能放在哪」的权威声明：适配器用 :meth:`AgentDefinition.skill_roots`
-    列出自己的技能根，框架据此**统一扫描**（编目）、并在安装技能时落到
-    ``installable`` 的那个根里。框架不认识任何具体内核，也不硬编码任何路径。
+    列出自己的技能根，框架据此**统一扫描**（编目）。用户技能库由平台自己托管
+    （``<数据目录>/skill-libraries/<owner>/<type>/<skill>``），不写进这些根；
+    ``installable`` 仅标记本机可写根，用于升级前老市场技能的卸载护栏。
+    框架不认识任何具体内核，也不硬编码任何路径。
 
     * ``path``：技能根目录的绝对路径（每个技能是它下面的一个子目录）。
     * ``source_kind``：从该根扫出来的技能归为什么来源（``user`` / ``plugin`` /
       ``system`` / ``market``…），用于界面分组与「能否卸载」判定。
-    * ``installable``：新技能装到这个根是否合适。插件市场那种由别人托管的目录为
-      ``False``（只读编目），平台自己的市场目录与个人技能目录为 ``True``。
+    * ``installable``：这个根是否适合直接写入（本机可写根）。插件市场那种由别人托管的
+      目录为 ``False``（只读编目）。当前平台不往这里安装新技能，该字段只用于兼容旧数据
+      与展示。
     * ``namespace``：给该根下所有技能的目录名加前缀（``<namespace>-<目录名>``）。
       不同来源可能各有一个同名技能（多个插件各带一个 ``access``），而技能的标识与
       物化后的目录名都取自目录名，不加前缀就会互相覆盖、只剩一个。

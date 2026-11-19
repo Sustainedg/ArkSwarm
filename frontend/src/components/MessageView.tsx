@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import type { MessagePart } from '../lib/types'
+import type { AuthUser, MessagePart } from '../lib/types'
 import { extractImagePaths, isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
 import { MarkdownView } from './MarkdownView'
+import { UserAvatar } from './UserAvatar'
 import { ZoomableImage } from './ZoomableImage'
 
 export interface RenderMessage {
@@ -24,7 +25,19 @@ export interface RenderMessage {
   partsCount?: number
 }
 
-export function MessageView({ message, avatar, label }: { message: RenderMessage; avatar?: string; label?: string }) {
+export function MessageView({ message, avatar, label, finalOnly = false, user }: {
+  message: RenderMessage
+  avatar?: string
+  label?: string
+  /** 当前登录用户（自己发的消息画真头像，不再用 🙋 emoji）；不传退回 🙋 */
+  user?: Pick<AuthUser, 'id' | 'avatar' | 'display_name' | 'username'> | null
+  /**
+   * 「只看最终回复」：藏起推理 / 工具调用 / 中间解说词 —— 运行中只有思考气泡，
+   * 跑完只亮时间线上**最后一段**正文（多轮「思考→调工具→解说」后的收尾总结）。
+   * 出错 / 中断的报错永远保留（错误必须显式暴露，不能藏成「转完就没了」的黑盒）。
+   */
+  finalOnly?: boolean
+}) {
   const isUser = message.role === 'user'
   // 发消息时附件被后端写进正文末尾的「📎 附件」清单；这里把它拆出来，图片画缩略图，
   // 正文照常渲染 —— 否则自己发出去的图，在气泡里只剩一行看不到的路径。
@@ -63,9 +76,18 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
   // 历史消息（parts 懒加载）点开时才去拉完整工具流水。
   const blocks = groupTimeline(timeline, message)
 
+  // 纯净模式下 AI 消息的最终正文：时间线上最后一段 text（多轮思考后的收尾总结）。
+  // 旧消息没有内联正文段时上面的兜底已经把 content 合成了一段，行为一致。
+  const finalTextPart = finalOnly && !isUser ? findFinalText(timeline) : null
+  // 最终正文里提到的生成图片：只从这一段提取（图片属于回复内容，不算「过程」）。
+  const finalImagePaths = finalTextPart ? extractImagePaths(finalTextPart.text ?? '') : []
+
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
-      <div className={`avatar${isUser ? ' user' : ''}`}>{isUser ? '🙋' : (avatar ?? '🤖')}</div>
+      <div className={`avatar${isUser ? ' user' : ''}`}>
+        {/* 自己的消息画真头像（有图显示图，没图自动退回显示名首字母）；AI 侧仍是智能体 emoji */}
+        {isUser ? (user ? <UserAvatar user={user} className="avatar-user" /> : '🙋') : (avatar ?? '🤖')}
+      </div>
       <div className="bubble">
         <div className="bubble-head">
           <span>{isUser ? '你' : (label ?? '智能体')}</span>
@@ -73,47 +95,91 @@ export function MessageView({ message, avatar, label }: { message: RenderMessage
           {message.status === 'interrupted' && <span className="pill warn">已中断</span>}
         </div>
 
-        {blocks.map((block) =>
-          block.kind === 'text' ? (
-            <div
-              key={`text-${block.index}`}
-              className={`bubble-body${
-                Boolean(message.streaming) && block.index === lastIndex ? ' streaming' : ''
-              }`}
-            >
-              <MarkdownView text={block.part.text ?? ''} />
-            </div>
-          ) : (
-            <ProcessFold
-              key={`process-${block.items[0]?.index ?? 'lazy'}`}
-              items={block.items}
-              lazy={block.lazy}
-              loadParts={message.loadParts}
-              partsCount={message.partsCount}
-            />
-          ),
+        {finalOnly && !isUser ? (
+          <>
+            {/* 运行中：无论正在推理 / 调工具 / 吐字，一律只有思考气泡 ——
+                中途亮字再消失会像出了 bug，索性等跑完一次性亮最终回复。 */}
+            {message.streaming && <ThinkingBubble />}
+            {!message.streaming && finalTextPart && (
+              <>
+                {/* 被藏起来的段落统计：让用户知道有东西被藏了（答案偶尔落在中间段），一键可切回。
+                    只有最后一段时整条时间线就是「纯正文」，没必要报数。 */}
+                {timeline.length > 1 && (
+                  <div className="final-only-note dim small">
+                    已隐藏 {timeline.length - 1} 段过程与说明
+                  </div>
+                )}
+                <div className="bubble-body">
+                  <MarkdownView text={finalTextPart.text ?? ''} />
+                </div>
+                {/* 最终正文里提到的生成图片照常画出：图片属于回复内容，不算「过程」 */}
+                {finalImagePaths.length > 0 && <AttachmentGallery paths={finalImagePaths} />}
+              </>
+            )}
+            {/* 跑完了却没有任何正文（纯调工具的一轮）：占位一行，别让气泡变成空气 */}
+            {!message.streaming && !finalTextPart && !message.error && (
+              <div className="bubble-body dim">（这一轮没有正文输出）</div>
+            )}
+            {/* 出错 / 中断的报错永远保留：藏了用户会以为 AI 在摸鱼 */}
+            {message.error && <div className="banner err" style={{ marginTop: 8 }}>{message.error}</div>}
+          </>
+        ) : (
+          <>
+            {blocks.map((block) =>
+              block.kind === 'text' ? (
+                <div
+                  key={`text-${block.index}`}
+                  className={`bubble-body${
+                    Boolean(message.streaming) && block.index === lastIndex ? ' streaming' : ''
+                  }`}
+                >
+                  <MarkdownView text={block.part.text ?? ''} />
+                </div>
+              ) : (
+                <ProcessFold
+                  key={`process-${block.items[0]?.index ?? 'lazy'}`}
+                  items={block.items}
+                  lazy={block.lazy}
+                  loadParts={message.loadParts}
+                  partsCount={message.partsCount}
+                />
+              ),
+            )}
+
+            {showThinking && <ThinkingBubble />}
+
+            {attachmentPaths.length > 0 && <AttachmentGallery paths={attachmentPaths} />}
+            {bodyImagePaths.length > 0 && <AttachmentGallery paths={bodyImagePaths} />}
+
+            {message.logs && message.logs.length > 0 && (
+              <details className="tool-card">
+                <summary>
+                  <DisclosureCaret />
+                  <span className="tool-chip">日志</span>
+                  <span className="dim">{message.logs.length} 条运行日志</span>
+                </summary>
+                <pre>{message.logs.join('\n')}</pre>
+              </details>
+            )}
+
+            {message.error && <div className="banner err" style={{ marginTop: 8 }}>{message.error}</div>}
+          </>
         )}
-
-        {showThinking && <ThinkingBubble />}
-
-        {attachmentPaths.length > 0 && <AttachmentGallery paths={attachmentPaths} />}
-        {bodyImagePaths.length > 0 && <AttachmentGallery paths={bodyImagePaths} large />}
-
-        {message.logs && message.logs.length > 0 && (
-          <details className="tool-card">
-            <summary>
-              <DisclosureCaret />
-              <span className="tool-chip">日志</span>
-              <span className="dim">{message.logs.length} 条运行日志</span>
-            </summary>
-            <pre>{message.logs.join('\n')}</pre>
-          </details>
-        )}
-
-        {message.error && <div className="banner err" style={{ marginTop: 8 }}>{message.error}</div>}
       </div>
     </div>
   )
+}
+
+/**
+ * 时间线上最后一段正文：后端落库时相邻同类文本合并、中间夹了思考 / 工具就分段
+ * （`_merge_part` 的规则），所以「思考→调工具→解说→……→收尾」的多轮回复里，
+ * 最后一段 text 就是最终回复 —— 倒序找第一段 text 即可，不需要任何智能识别。
+ */
+function findFinalText(timeline: MessagePart[]): MessagePart | null {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    if (timeline[i].kind === 'text' && (timeline[i].text ?? '').trim()) return timeline[i]
+  }
+  return null
 }
 
 type TimelineItem = { part: MessagePart; index: number }
@@ -260,29 +326,34 @@ function ToolCard({ part }: { part: MessagePart }) {
 }
 
 /**
- * 一条消息带过的附件：图片画成可点开放大的缩略图，其余（文档等）显示文件名胶囊。
- * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）；拿不到解析器时退化成文件名，不至于空白。
+ * 一条消息带过的附件：与正文里「📎 附件（已存入工作目录，可直接读取）：」清单同构 ——
+ * 一行说明头 + 每个附件一行**完整相对路径**（路径是「智能体能直接读」的关键信息，
+ * 只给文件名的话用户没法把它与工作目录里的文件对上号）。
+ * 图片附件在路径旁配可点开放大的缩略图；非图片（文档等）就是纯路径行。
+ * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）；拿不到解析器时只显示路径，不至于空白。
  */
-function AttachmentGallery({ paths, large = false }: { paths: string[]; large?: boolean }) {
+function AttachmentGallery({ paths }: { paths: string[] }) {
   const mediaUrl = useMediaUrl()
   const [failed, setFailed] = useState<string[]>([])
   return (
     <div className="bubble-attachments">
+      <div className="bubble-attachments-head">📎 附件（已存入工作目录，可直接读取）：</div>
       {paths.map((relPath) => {
         const name = relPath.split('/').pop() ?? relPath
         const url = mediaUrl?.(relPath) ?? null
-        return url && isImagePath(relPath) && !failed.includes(relPath) ? (
-          <ZoomableImage
-            key={relPath}
-            className={large ? 'md-image' : 'bubble-attachment-thumb'}
-            src={url}
-            alt={name}
-            onError={() => setFailed((current) => (current.includes(relPath) ? current : [...current, relPath]))}
-          />
-        ) : (
-          <span className="bubble-attachment-chip" key={relPath}>
-            {name}
-          </span>
+        const thumb = url && isImagePath(relPath) && !failed.includes(relPath)
+        return (
+          <div className="bubble-attachment-row" key={relPath}>
+            <span className="bubble-attachment-path" title={relPath}>- {relPath}</span>
+            {thumb ? (
+              <ZoomableImage
+                className="bubble-attachment-thumb"
+                src={url ?? undefined}
+                alt={name}
+                onError={() => setFailed((current) => (current.includes(relPath) ? current : [...current, relPath]))}
+              />
+            ) : null}
+          </div>
         )
       })}
     </div>

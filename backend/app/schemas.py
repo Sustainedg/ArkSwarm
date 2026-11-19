@@ -124,6 +124,14 @@ class AgentCredentialInput(BaseModel):
     value: str | None = None
 
 
+class AvatarUpload(BaseModel):
+    """上传头像（用户头像与智能体头像共用）：base64 图片（前端 `FileReader` 读出来直接发）。"""
+
+    content_base64: str = Field(min_length=1)
+    #: 客户端给的原始文件名，只用于报错信息，不参与落盘命名
+    name: str | None = Field(default=None, max_length=200)
+
+
 class AgentCredentialBrief(BaseModel):
     """智能体卡片 / 弹窗上展示的凭据摘要。"""
 
@@ -198,6 +206,8 @@ class AgentProfileRead(BaseModel):
     id: str
     name: str
     avatar: str
+    #: 自定义头像文件名；有值时前端拼 ``/api/agents/{id}/avatar?v=<它>`` 取图，优先于 emoji
+    avatar_file: str | None = None
     tagline: str | None = None
     description: str | None = None
     system_prompt: str
@@ -278,10 +288,16 @@ class SkillRead(BaseModel):
     used_by_agents: int = 0
     #: 由「技能市场」装入的技能为 True（可在市场页卸载），其余只读
     is_market: bool = False
-    #: 能否从技能页删除：内核自带（system）之外的技能都可以
+    #: 能否从技能页删除：内核自带（system）之外，还要是自己库里的技能（管理员不限）
     deletable: bool = False
     #: 市场技能对应的市场页地址
     source_url: str | None = None
+    #: 归属用户 id；为空表示内核自带 / 宿主机共享技能
+    owner_id: str | None = None
+    #: 归属用户的展示名（管理员查看全量目录时用）
+    owner_name: str | None = None
+    #: 这条技能是否在当前用户自己的技能库里
+    is_own: bool = False
 
 
 class SkillDetail(SkillRead):
@@ -302,6 +318,28 @@ class SkillRescanResult(BaseModel):
     updated: int = 0
     missing: int = 0
     total: int = 0
+
+
+class SkillImportIn(BaseModel):
+    """把一个技能压缩包导入指定内核。
+
+    内容走 base64 而不是 multipart：与附件上传同一套做法，不必引入
+    ``python-multipart`` 依赖（见 AGENTS.md「不要新增依赖」）。
+    """
+
+    #: 目标内核 id（如 claude-code / codex）；导入到该内核的用户技能根
+    type_id: str
+    #: zip 的原始文件名；压缩包没有顶层目录时用它推导技能目录名
+    name: str | None = Field(default=None, max_length=200)
+    #: zip 的字节内容（base64，不带 data: 前缀）
+    content_base64: str = Field(min_length=1)
+
+
+class SkillCopyIn(BaseModel):
+    """把一个技能复制到另一个内核。"""
+
+    #: 目标内核 id；与技能所属内核相同时接口会拒绝
+    type_id: str
 
 
 # --- 技能市场（SkillHub）-----------------------------------------------------
@@ -456,7 +494,11 @@ class ConversationRead(BaseModel):
     updated_at: datetime
     agent_name: str | None = None
     agent_avatar: str | None = None
+    #: 智能体自定义头像文件名（快照；有值时前端取 /api/agents/{agent_profile_id}/avatar 显示）
+    agent_avatar_file: str | None = None
     agent_type_id: str | None = None
+    #: 智能体配置的默认模型（对话未单独指定时，输入框上显示它 + 「默认」标签）
+    agent_model: str | None = None
     message_count: int = 0
     #: 最后一条是**已完成**的助手回复、且晚于用户最后一次打开这条对话的时间
     unread: bool = False

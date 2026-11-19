@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { useAuth } from './AuthGate'
 import type { MarketKernel, MarketSkill, MarketSkillList } from '../lib/types'
 
 /** 排序方式：与后端 `sort_by` 对齐。 */
@@ -16,7 +15,8 @@ const PAGE_SIZE = 24
 /**
  * 技能市场：浏览并安装腾讯 SkillHub（skillhub.cn）上的技能。
  *
- * 安装后技能落在对应内核的技能根里，仍需到「智能体 → 技能」分配才会在运行时生效。
+ * 安装后技能落在**当前用户**在对应内核下的技能库（按用户隔离），仍需到
+ * 「智能体 → 技能」分配才会在运行时生效。
  * 组件本身只负责市场侧交互，安装成功通过 `onInstalled` 回给页面（用于刷新本地列表）。
  */
 export function SkillsMarket({
@@ -26,7 +26,6 @@ export function SkillsMarket({
   onInstalled?: (message: string) => void | Promise<void>
   variant?: 'desktop' | 'mobile'
 }) {
-  const { isAdmin } = useAuth()
   const [data, setData] = useState<MarketSkillList | null>(null)
   const [kernels, setKernels] = useState<MarketKernel[]>([])
   const [kernel, setKernel] = useState('')
@@ -69,6 +68,7 @@ export function SkillsMarket({
       const map: Record<string, string> = {}
       for (const row of rows) {
         if (!row.available) continue // 已卸载（目录没了）的技能不算已安装
+        if (!row.is_own) continue // 只看自己技能库里的安装；共享的老市场技能不算
         // 按「内核 + slug」记录：同一技能装到不同内核是各自独立的安装。
         map[installKey(row.type_id, row.slug)] = row.id
       }
@@ -218,9 +218,7 @@ export function SkillsMarket({
                   <div className="card-sub">{skill.author ? `作者 ${skill.author}` : skill.owner ?? ''}</div>
                 </div>
                 <div className="card-actions">
-                  {!isAdmin ? (
-                    <span className="dim small">仅管理员可安装 / 卸载</span>
-                  ) : installed[installKey(kernel, skill.slug)] ? (
+                  {installed[installKey(kernel, skill.slug)] ? (
                     <button
                       className="btn danger"
                       disabled={installing === skill.slug}

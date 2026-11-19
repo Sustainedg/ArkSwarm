@@ -221,16 +221,24 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 
 ### 3.8 技能契约（`agents/skills.py`）
 - `SkillSpec`：一个技能的只读描述（`type_id` / `slug` / `name` / `description` / `source_kind` / `path` /
-  `fingerprint` / `files` …），`id` 固定为 `<type_id>:<slug>`。
+  `fingerprint` / `files` / `owner_id` …）。共享技能（内核自带 / 宿主机）的 `id` 是
+  `<type_id>:<slug>`；用户技能库里的技能是 `<type_id>:lib:<owner_id 或 local>:<slug>`，
+  同名技能在不同用户下互不冲突。
+- **用户技能库按用户隔离**：内核自带 / 宿主机上已有的技能由适配器扫描，`owner_id` 为空、
+  全平台共享只读；导入、市场安装、跨内核复制都落在平台数据目录
+  `<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>`，归属到当前用户。列表 / 详情 /
+  分配 / 导出 / 删除 / 用量都只对「共享 + 自己」生效；管理员可看全部并带归属用户名。
+  **禁止**把用户技能写进内核的全局技能目录（那会让所有人共享）。
 - `SkillMount`：适配器声明的**物化计划**（`home_name`、`skills_subdir`、`carry` 要携带的配置文件、
   `patch` 配置文件补丁、`notes` 用户提示）。框架只按这份声明执行，不认识具体内核。
-- 适配器钩子：`skill_roots()`（声明本内核的技能根：路径 + 来源 + 是否可安装；框架据此
-  统一扫描与安装技能）、`discover_skills()`（只读扫描，尽力而为、不得抛错；常见实现是
+- 适配器钩子：`skill_roots()`（声明本机原生技能根：路径 + 来源 + 是否可安装；框架据此
+  统一扫描宿主机技能；用户技能库由框架自己托管，不写进这些根）、`discover_skills()`（只读扫描，尽力而为、不得抛错；常见实现是
   `scan_skill_roots(self.skill_roots(), ...)`）、`skill_mount(ctx)`（返回 `None` 表示该内核不支持技能）
   与 `skill_invocation(tool_name, tool_input)`（把一次工具调用识别成技能调用时返回技能 slug，
   供「用量」页统计调用次数；默认不识别——「技能调用长什么样」是适配器的知识）。
-  技能可来自「技能市场」（`source_kind=market`，装在 `skill_roots()` 里 `installable` 的根下，可卸载），
-  但落盘路径仍由适配器声明、框架不硬编码。
+  技能可来自「技能市场」（`source_kind=market`），但它和用户导入的技能一样装进
+  `<数据目录>/skill-libraries/<owner_id>/<type_id>/`（可卸载）；不再写进内核的全局技能目录。
+  适配器只负责「本机原生技能根在哪」，平台托管的用户库路径由框架统一维护。
 - **插件技能只认「已安装」**：内核自带的插件市场目录（如 Claude Code 的
   `plugins/marketplaces/<市场>/`）只是**可浏览的货架**，里面的技能并没有安装。插件技能必须来自
   该内核自己的「已安装清单」（Claude Code 是 `plugins/installed_plugins.json` 里登记的
@@ -255,7 +263,8 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   里改写 `source_kind`；不允许只靠目录路径推断。
 - **删除语义**：用户显式删除（`DELETE /api/skills/{id}`）或从市场卸载
   （`POST /api/skillhub/uninstall`）时，先断开 `agent_skills` 分配、再删编目行 —— 这是唯一的
-  「删行」入口，磁盘目录删不掉要抛错，不能静默当作成功。扫描时发现技能目录**意外消失**
+  「删行」入口，磁盘目录删不掉要抛错，不能静默当作成功。用户只能删自己技能库里的技能；
+  共享技能与插件技能只读（管理员可以删共享 / 他人的技能）。扫描时发现技能目录**意外消失**
   （不是用户操作）仍只把 `available` 置 False，保住分配关系。
 - `AgentContext.skills` / `AgentContext.home_dir`：框架注入的「本次运行生效的技能」与
   「物化好的隔离目录」（技能与 MCP 共用同一个「家」），适配器在 `build_invocation()` 里据此

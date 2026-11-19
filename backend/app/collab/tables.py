@@ -14,10 +14,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Column, ForeignKey, JSON, String, Text
 from sqlmodel import Field, SQLModel
 
-from ..models import new_id, utcnow
+from ..models import UTCDateTime, new_id, utcnow
 
 
 #: 协作域**后来新增的可选列**：SQLite 的 ``create_all`` 只建新表、**不会给已存在的表补列**，
@@ -69,8 +69,8 @@ class CollabTeam(SQLModel, table=True):
     budget: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -102,8 +102,8 @@ class CollabRun(SQLModel, table=True):
     steps_used: int = Field(default=0)
     tickets_used: int = Field(default=0)
     error: str | None = Field(default=None, sa_column=Column(Text))
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 所属用户 id；与所属协作组一致，冗余存一份是为了列表查询不必先 join team。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -159,13 +159,13 @@ class CollabTicket(SQLModel, table=True):
     escalation: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    closed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    closed_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
 
     #: 把「收尾汇报」交回入口智能体的时间；为空表示还没汇报过。
     #: 根工单每次收尾只汇报一次，用户追问重新开启后会清零（见 ``engine.prepare_turn``）。
-    report_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    report_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
 
 
 class CollabStep(SQLModel, table=True):
@@ -218,8 +218,8 @@ class CollabStep(SQLModel, table=True):
     audit: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    started_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    started_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
 
 
 class CollabMessage(SQLModel, table=True):
@@ -260,5 +260,5 @@ class CollabMessage(SQLModel, table=True):
     meta: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))

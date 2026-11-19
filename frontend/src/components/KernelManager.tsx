@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { RefreshIcon } from './Icons'
 import { KernelLogo } from './KernelLogo'
 import { Modal } from './Modal'
@@ -6,7 +7,9 @@ import { useAuth } from './AuthGate'
 import { api, ApiError } from '../lib/api'
 import { formatListTime } from '../lib/datetime'
 import type {
+  ActiveCollabRun,
   AgentRuntime,
+  Overview,
   ProvisionEvent,
   ProvisionJobInfo,
   RuntimeAction,
@@ -18,6 +21,14 @@ const ACTION_LABELS: Record<RuntimeAction, string> = {
   update: '更新',
   uninstall: '卸载',
 }
+
+/**
+ * 这两个「内核」没有可管理的实体，不该出现在内核管理列表里：
+ * - `custom-cli`：用户自备可执行文件，装没装、在哪平台无从探测；
+ * - `openai-harness`：进程内 API 内核，不存在本机安装这一说。
+ * 它们仍可在智能体配置里被选用（只是「内核管理」不展示卡片）。
+ */
+const HIDDEN_RUNTIME_IDS = new Set(['custom-cli', 'openai-harness'])
 
 interface LogLine {
   text: string
@@ -44,6 +55,7 @@ interface Job {
  */
 export function KernelManager() {
   const { isAdmin } = useAuth()
+  const navigate = useNavigate()
   const [runtimes, setRuntimes] = useState<AgentRuntime[]>([])
   const [latest, setLatest] = useState<Record<string, RuntimeLatest>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
@@ -54,6 +66,9 @@ export function KernelManager() {
   const [provisionJobs, setProvisionJobs] = useState<Record<string, ProvisionJobInfo>>({})
   /** 正在看详情的内核 id（点卡片打开） */
   const [openId, setOpenId] = useState<string | null>(null)
+  /** 「正在运行」：对话域的运行表（overview.active_runs）+ 协作域的运行表（另一张表）一起列出 */
+  const [activeRuns, setActiveRuns] = useState<Overview['active_runs']>([])
+  const [collabRuns, setCollabRuns] = useState<ActiveCollabRun[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
 
@@ -105,7 +120,8 @@ export function KernelManager() {
 
   const reload = async () => {
     try {
-      const items = await api.listRuntimes()
+      // 无实体的内核（自定义 CLI / OpenAI 兼容）不进列表 —— 见 HIDDEN_RUNTIME_IDS 的说明。
+      const items = (await api.listRuntimes()).filter((item) => !HIDDEN_RUNTIME_IDS.has(item.id))
       setRuntimes(items)
       setError(null)
       // 「检查更新」是每个内核一次远端查询（npm view 之类），不能挡住首屏：
@@ -130,6 +146,22 @@ export function KernelManager() {
   useEffect(() => {
     void reload()
     return () => abortRef.current?.abort()
+  }, [])
+
+  /** 「正在运行」每 8 秒刷新：状态与时长自己在走，开着这页就能盯着任务跑完。 */
+  useEffect(() => {
+    const loadRuns = async () => {
+      try {
+        const [info, collab] = await Promise.all([api.overview(), api.listActiveCollabRuns()])
+        setActiveRuns(info.active_runs)
+        setCollabRuns(collab)
+      } catch {
+        /* 运行表拉不到不影响内核列表：下一轮再试 */
+      }
+    }
+    void loadRuns()
+    const timer = setInterval(() => void loadRuns(), 8000)
+    return () => clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -263,6 +295,53 @@ export function KernelManager() {
     <>
       <div className="stack">
         {error && <div className="banner err">{error}</div>}
+
+        {/* 正在运行：跑着的智能体一眼可见（对话域 + 协作域两张运行表合在一起）；
+            有活儿在干时才显示这一段，空闲时整个板块不出现。 */}
+        {activeRuns.length + collabRuns.length > 0 && (
+          <section className="stack">
+            <h2 className="card-section-title">正在运行</h2>
+            <div className="grid">
+              {activeRuns.map((run) => (
+                <div className="card" key={run.id}>
+                  <div className="card-head">
+                    <div>
+                      <div className="card-title">{run.agent_name}</div>
+                      <div className="card-sub mono-sm">{run.id}</div>
+                    </div>
+                    <span className="pill ok" style={{ marginLeft: 'auto' }}>
+                      <span className="dot" />
+                      {run.status} · {run.elapsed_seconds}s
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {collabRuns.map((run) => (
+                <button
+                  type="button"
+                  className="card card-clickable"
+                  key={`${run.kind}-${run.run_id}-${run.agent_name}`}
+                  onClick={() => navigate(`/collab/runs/${run.run_id}`)}
+                  title="打开这条协作运行"
+                >
+                  <div className="card-head">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="card-title">{run.agent_name}</div>
+                      <div className="card-sub">
+                        {run.kind === 'chat' ? '入口智能体的对话回复' : '协作工单步骤'}
+                        {run.title ? ` · ${run.title}` : ''}
+                      </div>
+                    </div>
+                    <span className="pill brand" style={{ marginLeft: 'auto' }}>
+                      <span className="dot" />
+                      协作 · {run.elapsed_seconds}s
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className="row" style={{ gap: 8 }}>
           <span className="dim small" style={{ flex: 1 }}>

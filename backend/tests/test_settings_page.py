@@ -1,7 +1,8 @@
 """桌面端设置页的信息架构守卫。
 
-设置按**类型**分标签页：一页只放一类设置，只读信息（版本记录 / 系统信息 / 正在运行的智能体）
-收进「关于」。分页只是分组 —— 各项设置的组件与文档语义都没变，这条守卫防的是后续改动
+设置按**类型**分标签页：一页只放一类设置，只读信息（系统信息 / 版本记录）收进「关于」；
+「正在运行的智能体」与内核本身同属「内核管理」（那里每 8 秒刷新运行状态）。
+分页只是分组 —— 各项设置的组件与文档语义都没变，这条守卫防的是后续改动
 把分页拆掉、或又把只读信息摊回每个标签页里。
 
 **移动端设置页不跟这套**（它刻意只留「现在要动的开关」，见 AGENTS.md），因此这里只读桌面端那一份。
@@ -69,5 +70,13 @@ def test_version_history_and_system_info_live_in_the_about_tab():
     parts = page.split("tab === 'about'", 1)
     assert len(parts) == 2, "设置页里找不到「关于」标签页"
     about = parts[1]
-    for marker in ("系统信息", "正在运行的智能体", "版本记录", "version-timeline"):
+    for marker in ("系统信息", "版本记录", "version-timeline"):
         assert marker in about, f"「关于」标签页里少了{marker}"
+
+    # 「正在运行的智能体」随内核一起收进「内核管理」：那里既管安装态，也盯着跑着的任务。
+    kernel = (FRONTEND / "src" / "components" / "KernelManager.tsx").read_text(encoding="utf-8")
+    assert "正在运行" in kernel, "「内核管理」里缺少「正在运行」板块"
+    assert "setInterval(() => void loadRuns(), 8000)" in kernel, (
+        "「正在运行」要每 8 秒刷新（状态与时长自己在走）"
+    )
+    assert "正在运行" not in about, "「正在运行」已挪去内核管理页，不该在「关于」里重复出现"

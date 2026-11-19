@@ -112,11 +112,32 @@ export function ShareIcon(props: IconProps) {
   )
 }
 
-/** 附件：回形针。 */
-export function PaperclipIcon(props: IconProps) {
+/** 附件：加号（原回形针换成加号 —— 「往这条消息里添点东西」的语义更直白）。 */
+export function PlusIcon(props: IconProps) {
   return (
     <Icon {...props}>
-      <path d="M20 11.5 12 19.5a4.9 4.9 0 0 1-7-7l8-8a3.2 3.2 0 0 1 4.6 4.6l-8 7.9a1.6 1.6 0 0 1-2.3-2.3l7.2-7.2" />
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </Icon>
+  )
+}
+
+/** 汉堡三横线：展开 / 折叠侧栏抽屉（顶栏左上角）。 */
+export function MenuIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 7h16" />
+      <path d="M4 12h16" />
+      <path d="M4 17h16" />
+    </Icon>
+  )
+}
+
+/** 细线对勾：勾选型气泡里的选中标记（选中显示、未选中隐藏）。 */
+export function CheckIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
     </Icon>
   )
 }

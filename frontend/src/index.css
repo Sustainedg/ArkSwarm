@@ -53,6 +53,9 @@
   --office-map-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
   /* 小人腿与手里的杯子：只在抖腿 / 休息喝咖啡时才现形，浅色外壳在下面覆盖 */
   --office-leg-a: #4a4380;
+
+  /* 「设置」勾选气泡（输入框那颗）：macOS 式白卡 + 轻阴影；深色下面板用深色、阴影加重一档 */
+  --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   --office-leg-b: #211d3a;
   --office-cup: #b93ab0;
   --office-cup-a: rgba(255, 255, 255, 0.16);
@@ -145,6 +148,9 @@
   --office-inset: rgba(255, 255, 255, 0.7);
   --office-map-shadow: 0 18px 44px rgba(58, 48, 96, 0.16);
   --office-leg-a: #6b639c;
+
+  /* 浅色下的勾选气泡：设计稿的柔和阴影（深色里那支 0.45 在白底上会脏） */
+  --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
   --office-leg-b: #37315c;
   --office-cup: #c14ab8;
   --office-cup-a: rgba(255, 255, 255, 0.35);
@@ -320,9 +326,10 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .brand-sub { font-size: calc(11px * var(--sbs)); color: var(--text-dim); }
 
-/* 主导航：与移动端抽屉的 `.m-drawer-link` 同一套行样式（图标 · 文字 · 右侧箭头）。 */
+/* 主导航：与移动端抽屉的 `.m-drawer-link` 同一套行样式（图标 · 文字 · 右侧箭头）。
+   行距收得紧（padding 7px + 容器 gap 2px）：一屏要塞下导航 + 对话列表，导航别占太高。 */
 .nav-link {
-  display: flex; align-items: center; gap: calc(10px * var(--sbs)); padding: calc(10px * var(--sbs)) calc(12px * var(--sbs));
+  display: flex; align-items: center; gap: calc(10px * var(--sbs)); padding: calc(7px * var(--sbs)) calc(12px * var(--sbs));
   border-radius: var(--radius-sm); color: var(--text-muted); font-size: calc(14px * var(--sbs)); font-weight: 550;
   transition: background 0.15s, color 0.15s;
 }
@@ -368,6 +375,7 @@ code, pre, .mono { font-family: var(--mono); }
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
   border: 1px solid var(--border); border-radius: 12px;
   background: var(--bg-panel); box-shadow: 0 16px 40px rgb(0 0 0 / 35%);
+  min-width: 132px;
 }
 /* 账号菜单里的「设置 / 退出登录」：文字与图标同一档放大 8%（--um-scale），
    图标是 Icons.tsx 的线条 SVG，颜色跟文字走，深浅两套外观都不用换图。 */
@@ -384,7 +392,7 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .sidebar-user-menu-icon svg { display: block; width: calc(14px * var(--um-scale)); height: calc(14px * var(--um-scale)); }
 
-/* 折叠按钮：点一下在「图标 + 文字」与「只有图标」之间切换（宽度跟着侧边栏走，状态记在本机） */
+/* 折叠按钮：侧栏自带的一处折叠入口（对话页顶栏还有汉堡按钮，同一份状态） */
 .sidebar-toggle {
   margin-left: auto; flex: none; width: calc(26px * var(--sbs)); height: calc(26px * var(--sbs));
   display: grid; place-items: center;
@@ -394,16 +402,42 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .sidebar-toggle:hover { background: var(--bg-hover); color: var(--text); }
 
-/* 折叠态：只剩一列图标。与窄屏（≤980px）那份布局同构，只是由用户手动触发。 */
+/* 折叠 / 展开的入口在对话页顶栏（汉堡按钮），侧栏不再自带按钮。
+   折叠态：只剩一列图标，行距放大、hover 时图标弹起来一档并显示名字气泡。 */
 .app-shell.collapsed { grid-template-columns: 68px 1fr; }
 .app-shell.collapsed .brand { flex-direction: column; gap: calc(8px * var(--sbs)); padding: calc(4px * var(--sbs)) 0 calc(14px * var(--sbs)); }
 .app-shell.collapsed .sidebar-toggle { margin-left: 0; }
+/* 折叠态的账号区：只留头像（居中），用户名藏起来；点开菜单改为从头像右上方弹出
+   （原 left:0 right:0 铺满会把菜单挤成 68px 宽的一列）。 */
+.app-shell.collapsed .sidebar-user-name { display: none; }
+.app-shell.collapsed .sidebar-user-btn { justify-content: center; padding: calc(7px * var(--sbs)) 0; }
+.app-shell.collapsed .sidebar-user-wrap .sidebar-user-menu {
+  left: calc(100% + 10px); right: auto; bottom: auto; top: 50%; transform: translateY(-50%);
+}
 .app-shell.collapsed .brand-text,
 .app-shell.collapsed .nav-link .nav-label,
 .app-shell.collapsed .nav-chevron,
-.app-shell.collapsed .sidebar-conversations,
-.app-shell.collapsed .sidebar-footer { display: none; }
-.app-shell.collapsed .nav-link { justify-content: center; padding: calc(10px * var(--sbs)) calc(8px * var(--sbs)); }
+.app-shell.collapsed .sidebar-conversations { display: none; }
+/* 折叠态的导航图标：行距放大（呼吸感），图标 hover 弹大一档，名字气泡从右侧滑入。
+   气泡平时藏在图标左边外侧（看不见），hover 时滑到右侧并淡入 —— 不用 JS，纯 CSS。 */
+/* 折叠态的导航图标：比展开态大 10%（19px vs 17px，窄栏里更好点）、行距再放宽一档 */
+.app-shell.collapsed .nav-link { justify-content: center; padding: calc(11px * var(--sbs)) calc(8px * var(--sbs)); }
+.app-shell.collapsed .nav-link .nav-icon { font-size: calc(19px * var(--sbs)); transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.app-shell.collapsed .nav-link:hover .nav-icon { transform: scale(1.28); }
+.nav-tip {
+  display: none; position: absolute; left: calc(100% + 10px); top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  padding: 4px 10px; border-radius: 8px; white-space: nowrap;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  color: var(--text); font-size: 12px; font-weight: 550; pointer-events: none;
+  opacity: 0; transition: opacity 0.15s, transform 0.15s;
+  z-index: 50;
+}
+.app-shell.collapsed .nav-link { position: relative; }
+.app-shell.collapsed .nav-link:hover .nav-tip {
+  display: block; opacity: 1; transform: translateY(-50%) translateX(0);
+}
 
 .main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 
@@ -486,27 +520,20 @@ code, pre, .mono { font-family: var(--mono); }
 /* 撑满外层高度：消息区自己滚，输入区因此永远贴在窗口底部（否则短对话里输入框浮在半空）。 */
 .chat-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .chat-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); }
-/* 对话页的顶栏：只有一行居中的对话名称 + 右侧分享 / 朗读。三栏 grid，左右两栏各占等宽，
-   标题因此永远落在正中（左边那栏留空 —— 不再显示智能体名与内核说明）。
-   用修饰类而不是直接改 `.chat-topbar`：协作岗位面板（`.collab-agent-panel-head`）复用了同一个
-   顶栏，它是「头像 + 标题 + 状态 + 关闭」的 flex 排布，不能被这里的 grid 顶掉。 */
-.chat-topbar.center-title {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-}
-.chat-topbar-title {
-  grid-column: 2; min-width: 0; text-align: center;
-  font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.chat-topbar-actions { grid-column: 3; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+/* 对话页顶栏的左上角：折叠侧栏 + 新建对话两个图标（与移动端顶栏同一套布局）；
+   中间不放标题 —— 对话名左侧栏里一直看得见。 */
+.chat-topbar-lead { display: flex; align-items: center; gap: 8px; }
+/* 右侧操作把余下的空间占满，分享 / 朗读贴右。 */
+.chat-topbar-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-left: auto; }
 .chat-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
 /* ---------- 对话：全局唯一一份气泡布局 ----------
    单聊、协作主对话、协作岗位实时对话都渲染同一个 `ConversationThread`，
    这里定义的 `.conversation-*` / `.bubble-*` 就是它们共同的外观，禁止在别处再写一份。 */
 .conversation-thread { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
 /* 居中限宽：单聊与协作主对话用；岗位进度面板铺满整个面板所以不加这个类。
-   桌面端窗口很宽：限太窄会让整段对话挤在中间（输入框还比消息窄），所以放到 1600px ——
-   常见的 1440 / 1920 窗口就是铺满内容区，只有超宽屏才收一点边。 */
-.conversation-thread.centered { width: 100%; max-width: 1600px; margin: 0 auto; }
+   消息聚拢在中间一列（max-width 1080px），两侧留白大 —— 阅读长回复时视线
+   不用横跨整块屏幕；与输入区同宽（.chat-composer-inner），上下一条线。 */
+.conversation-thread.centered { width: 100%; max-width: 1080px; margin: 0 auto; }
 .conversation-turn { display: flex; flex-direction: column; align-items: stretch; gap: 9px; min-width: 0; }
 .conversation-turn-meta {
   display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
@@ -517,10 +544,12 @@ code, pre, .mono { font-family: var(--mono); }
 .bubble-row { display: flex; gap: 12px; align-items: flex-start; }
 .bubble-row.user { flex-direction: row-reverse; }
 .avatar {
-  width: 32px; height: 32px; border-radius: 10px; flex: none; display: grid; place-items: center;
+  width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center;
   font-size: 15px; background: var(--bg-panel); border: 1px solid var(--border);
 }
 .avatar.user { background: linear-gradient(135deg, #3b3760, #2b2844); }
+/* 自己的消息画真头像（UserAvatar）：撑满 avatar 圆框，与 AI 侧的 emoji 头像同尺寸 */
+.avatar .avatar-user { --avatar-size: 100%; width: 100%; height: 100%; }
 .bubble { min-width: 0; }
 .bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 11.5px; color: var(--text-dim); }
 .bubble-row.user .bubble-head { justify-content: flex-end; }
@@ -532,8 +561,8 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* 对话线程里的气泡：只占内容宽度，发送方靠右并换底色，形成「微信」式对话。
    上限跟着限宽一起放宽，长回复才能铺到两边，而不是缩在中间一小列。 */
-.conversation-thread .bubble { flex: 0 1 auto; max-width: min(82%, 880px); }
-.conversation-thread .bubble-row.user .bubble { max-width: min(76%, 740px); }
+.conversation-thread .bubble { flex: 0 1 auto; max-width: 92%; }
+.conversation-thread .bubble-row.user .bubble { max-width: 86%; }
 .conversation-thread .bubble-body {
   border-radius: 4px 15px 15px 15px; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
@@ -567,6 +596,8 @@ code, pre, .mono { font-family: var(--mono); }
   0%, 60%, 100% { transform: translateY(0) scale(1); opacity: 0.4; }
   30% { transform: translateY(-5px) scale(1.08); opacity: 1; }
 }
+/* 「只看最终回复」：最终正文上方那行「已隐藏 N 段」提示 —— 贴着气泡顶部，比正文矮一头。 */
+.final-only-note { margin-bottom: 7px; }
 @media (prefers-reduced-motion: reduce) {
   .thinking-dot { animation: none; opacity: 0.7; }
   .bubble-body.streaming::after { animation: none; opacity: 0.85; }
@@ -826,7 +857,51 @@ code, pre, .mono { font-family: var(--mono); }
   transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 .composer-scope-btn:hover { border-color: var(--border-strong); color: var(--text); }
+/* 开关类胶囊（「只看最终回复」）点亮时的样子：品牌色描边加淡底，跟普通跳转胶囊区分开 */
+.composer-scope-btn.on {
+  border-color: var(--brand); background: var(--brand-soft); color: var(--brand); font-weight: 600;
+}
 .composer-scope-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 胶囊里的小标签（「默认」模型）：跟着模型名后面，说明这个值是智能体配置的默认而不是专门选的 */
+.composer-scope-tag {
+  flex: none; margin-left: 4px; padding: 0 6px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand);
+  font-size: 10px; font-weight: 600; line-height: 1.7; white-space: nowrap;
+}
+/* 设置齿轮与它的勾选气泡：macOS 式的极简提示气泡 —— 白卡片、无边框、
+   柔阴影，底部伸出一个朝下的尖角正对按钮。齿轮按钮本体走 .composer-tool
+   （与语音 / 发送同尺寸同观感），这里只管气泡。 */
+.composer-settings { position: relative; flex: none; }
+/* 勾选气泡：纯白卡片 + 圆角 14px + 轻阴影，无边框；悬在按钮正上方 */
+.composer-settings-menu {
+  position: absolute; bottom: calc(100% + 12px); left: 50%; transform: translateX(-50%);
+  z-index: 60; padding: 16px 20px; border: none; border-radius: 14px;
+  background: var(--bg-elevated);
+  box-shadow: var(--popover-shadow, 0 8px 24px rgba(0, 0, 0, 0.08));
+  white-space: nowrap;
+}
+/* 底部正中的朝下尖角：与卡片同色同阴影感，指向下面的「设置」按钮 */
+.composer-settings-caret {
+  position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+  width: 16px; height: 8px;
+  background: var(--bg-elevated);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  /* 尖角自己不带阴影（卡片阴影盖不到尖角），补一层同强度的投影让它不像「贴上去的」 */
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.06));
+}
+/* 勾选项：细线 ✓ + 文字，点整行切换 */
+.composer-settings-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0; border: none; background: none; cursor: pointer; user-select: none;
+  color: var(--text); font: inherit;
+}
+.composer-settings-check {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none;
+  color: var(--composer-ico, #4a4a4a);
+}
+.composer-settings-label {
+  font-size: 14px; font-weight: 400; color: var(--text); letter-spacing: 0.3px;
+}
 /* 输入框下面那一条（用量统计等）：贴着框的下沿 */
 .composer-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
 .composer-foot .usage-bar { margin-top: 0; }
@@ -834,19 +909,22 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---------- 桌面端：输入区寄在会话栏底部 ---------- */
 .chat-composer { border-top: 1px solid var(--border); padding: 14px 26px 18px; }
 /* 输入区与上面的消息共用同一列宽：两边不一样宽会显得消息被挤在中间。 */
-.chat-composer-inner { max-width: 1600px; margin: 0 auto; }
+.chat-composer-inner { max-width: 1080px; margin: 0 auto; }
 /* 鼠标点得中：框和按钮都放大一档，字号回到桌面端的 14px */
 .composer-box { gap: 8px; padding: 8px 10px; border-radius: var(--radius-lg); }
 .composer textarea { padding: 6px 4px; font-size: 14px; line-height: 1.6; max-height: 220px; }
 .composer-tool { width: 36px; height: 36px; }
 
-/* 对话页的输入区：宽屏 + 鼠标，所以文字单独占上面一行，附件 / 语音在左下、发送 / 停止在右下，
-   框也加高一档（移动端对话页同样把文字放到图标上面，见 mobile.css 的微调段；协作运行页的输入框
-   没有附件 / 语音，用的是「一行 + 右侧按钮」，别被这里的换行规则带跑）。 */
+/* 对话页的输入区：宽屏 + 鼠标，所以文字单独占上面一行；下一行加号 + 齿轮贴左，
+   语音 + 发送（停止）贴右 —— 语音紧贴发送（说完就发）。
+   推右的是「右侧一组」的**起点**：语音按钮（.composer-tool.voice）。
+   别给发送也加 auto：两个推力会平分剩余空间，把按钮组挤到中间；
+   协作页的输入框没有语音（不传 onUpload 时麦克风仍在，但那边不加 .chat-composer，不受影响）。 */
 .chat-composer .composer-box { flex-wrap: wrap; align-items: center; }
 .chat-composer .composer textarea { order: -1; flex: 0 0 100%; min-height: 68px; }
+.chat-composer .composer-tool.voice { margin-left: auto; }
 .chat-composer .composer-tool.send,
-.chat-composer .composer-tool.stop { margin-left: auto; }
+.chat-composer .composer-tool.stop { margin-left: 0; }
 
 /* AI 回复期间排队的那条消息：贴在输入框上方，本轮结束自动发出，✕ 取消整段队列 */
 .chat-queued-row {
@@ -915,7 +993,195 @@ code, pre, .mono { font-family: var(--mono); }
 .card-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
 .card-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); font-weight: 600; }
 
+/* ---------- 智能体头像选择器（编辑表单第一位） ---------- */
+/* 布局：左边大头像预览（64px 圆），右边「随机生成 / 上传 / 移除」按钮竖排；emoji 快选在下一行 */
+.agent-avatar-picker { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.agent-avatar-preview {
+  flex: none; width: 64px; height: 64px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--brand-soft), var(--accent-soft));
+  border: 1px solid var(--border-strong);
+}
+.agent-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+.agent-avatar-emoji { font-size: 34px; line-height: 1; }
+.agent-avatar-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+/* 随机生成的可爱头像「会动」：三套小动作（摇摆 / 浮动 / 蹦跳），挑一套随机配上 */
+.agent-avatar-preview.live-swing .agent-avatar-emoji { animation: avatar-swing 2.6s ease-in-out infinite; display: inline-block; }
+.agent-avatar-preview.live-float .agent-avatar-emoji { animation: avatar-float 3s ease-in-out infinite; display: inline-block; }
+.agent-avatar-preview.live-bounce .agent-avatar-emoji { animation: avatar-bounce 2.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite; display: inline-block; }
+@keyframes avatar-swing {
+  0%, 100% { transform: rotate(-9deg); }
+  50% { transform: rotate(9deg); }
+}
+@keyframes avatar-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes avatar-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  40% { transform: translateY(-7px) scale(1.06); }
+  60% { transform: translateY(0) scale(0.97); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-avatar-preview[class*='live-'] .agent-avatar-emoji { animation: none; }
+}
+/* emoji 快选：一排圆形小按钮，选中的描边点亮 */
+.agent-avatar-emoji-btn {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 19px; line-height: 1;
+  border: 1px solid var(--border); background: none; cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.agent-avatar-emoji-btn:hover { border-color: var(--border-strong); transform: scale(1.1); }
+.agent-avatar-emoji-btn.picked { border-color: var(--brand); background: var(--brand-soft); }
+/* 分组输入框的下拉建议：锚在 field 上（relative），已有分组一行一个，点击即填 */
+.group-suggest-wrap { position: relative; }
+.group-suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 40;
+  display: flex; flex-direction: column; gap: 2px; padding: 5px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-panel); box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+}
+.group-suggest-item {
+  padding: 6px 10px; border: none; border-radius: 7px; background: none;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.group-suggest-item:hover { background: var(--bg-hover); }
+
+/* ---------- 版本更新（设置 → 关于） ---------- */
+/* 一张卡一行布局：当前版本号 ·（有更新：→ 新版本号）·（已最新：✓）· 按钮组靠右。
+   说明性文字一概不进这张卡 —— 想知道部署形态的人自会去看文档。 */
+.update-card {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+.update-card-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.update-current { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.update-up-to-date {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--ok); font-weight: 500;
+}
+/* 有新版本：中间箭头品牌→青色渐变流动（文字渐变），新版本号跟着亮一档 */
+.update-arrow { flex: none; font-size: 16px; color: var(--text-dim); line-height: 1; }
+.update-arrow.hot {
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--brand), var(--accent), var(--brand));
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  animation: update-arrow-flow 2.4s linear infinite;
+}
+@keyframes update-arrow-flow { to { background-position: 200% 0; } }
+.update-next { font-size: 20px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; }
+/* 按钮组贴右：检测 / 更新 / 回滚挤在一起，视觉上就是「对着版本号做的动作」 */
+.update-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+/* 源码模式的一行提示：只在「源码 + 有新版本」时出现（托管模式不显示） */
+.update-source-hint { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); }
+/* 动作进行中：卡片顶部跑一条流动光条（渐变光斑从左到右循环） */
+.update-card-progress {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--brand), var(--accent), transparent);
+  background-size: 50% 100%; background-repeat: no-repeat;
+  animation: update-progress-run 1.6s ease-in-out infinite;
+}
+@keyframes update-progress-run {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+/* 完成横幅：左侧一个打钩圆标，进来时轻轻弹一下 */
+.update-done { display: flex; align-items: center; gap: 8px; }
+.update-done-check {
+  flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(74, 222, 128, 0.18); color: var(--ok);
+  animation: update-check-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes update-check-pop {
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+/* 日志小窗：终端风 —— 深底、等宽、圆角带内边距，自动滚到底（JS 侧控制 scrollTop）。
+   只在有动作时渲染：静悄悄的界面不留一块空终端。 */
+.update-log {
+  margin: 0; padding: 12px 14px;
+  max-height: 200px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: #0e0d17; color: var(--code-text, #d8d4e8);
+  font-size: 12px; line-height: 1.75;
+  white-space: pre-wrap; word-break: break-all;
+}
+[data-theme='light'] .update-log { background: #f7f6fb; }
+/* 更新设置（齿轮）：贴在动作按钮堆里的图标按钮 —— 与「检测更新 / 更新 / 回滚」
+   一道构成「对版本号做的事」这一组，不再孤零零挂在卡片下面。 */
+.update-settings-btn {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px;
+  border: none; border-radius: 9px; background: none; color: var(--text-muted); cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.update-settings-btn:hover { color: var(--text); background: var(--bg-hover); }
+/* 更新设置弹窗：主开关一行（标题 + 说明在左、勾选框在右），时刻选择做成卡片块 */
+.update-toggle {
+  display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none;
+}
+.update-toggle-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.update-toggle-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.update-toggle-sub { font-size: 12px; color: var(--text-dim); }
+.update-toggle input[type='checkbox'] { flex: none; accent-color: var(--brand); cursor: pointer; }
+/* 时刻卡片：标签一行 + 大字时刻与左右步进按钮居中，看着像「闹钟」而不是表单 */
+.update-hour-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.update-hour-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); font-weight: 600; }
+.update-hour-picker { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.update-hour-value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
+.update-hour-step {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: none; color: var(--text-muted); font-size: 15px; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.update-hour-step:hover { color: var(--text); border-color: var(--border-strong); }
+/* 降低动效：动画一律停下（无障碍） */
+@media (prefers-reduced-motion: reduce) {
+  .update-card-progress,
+  .update-arrow.hot { animation: none; }
+  .update-arrow.hot { color: var(--brand); }
+}
+
 /* ---------- 版本记录 ---------- */
+/* 最新一版的 hero 卡：品牌色渐变光晕从左上角晕开，当前版本号大字排开 ——
+   「现在跑的是哪版、带来了什么」一眼看完，历史版本走下面的轻量时间线。 */
+.version-hero {
+  position: relative; overflow: hidden;
+  padding: 20px 22px; border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 170% at 0% 0%, var(--brand-soft), transparent 58%),
+    var(--bg-panel);
+}
+.version-hero-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.version-hero-version { display: inline-flex; align-items: baseline; gap: 10px; }
+.version-hero-badge {
+  padding: 2px 9px; border-radius: 999px;
+  background: var(--brand); color: #fff; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
+}
+.version-hero-number { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+.version-hero-date { margin-left: auto; font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.version-hero-title { margin: 10px 0 0; font-size: 14.5px; font-weight: 600; }
+.version-hero-highlights {
+  margin: 12px 0 0; padding: 0; list-style: none;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.version-hero-highlights li {
+  position: relative; padding-left: 18px; color: var(--text-muted); font-size: 12.5px; line-height: 1.7;
+}
+.version-hero-highlights li::before {
+  content: ''; position: absolute; left: 2px; top: 0.62em;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+}
+/* 历史版本：轻量时间线（左侧竖线 + 小圆点），别跟 hero 抢戏 */
 .version-timeline { position: relative; display: flex; flex-direction: column; gap: 10px; padding-left: 18px; }
 .version-timeline::before {
   content: ''; position: absolute; left: 5px; top: 7px; bottom: 7px; width: 1px; background: var(--border-strong);
@@ -925,13 +1191,15 @@ code, pre, .mono { font-family: var(--mono); }
   position: absolute; left: -18px; top: 13px; width: 11px; height: 11px; border-radius: 50%;
   background: var(--bg-panel); border: 2px solid var(--border-strong);
 }
-.version-item.current .version-marker { background: var(--brand); border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
 .version-content {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 14px;
 }
-.version-item.current .version-content { border-color: rgba(217, 79, 208, 0.36); }
 .version-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.version-tag {
+  padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-strong);
+  color: var(--text-muted); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
 .version-title { font-size: 13.5px; font-weight: 600; }
 .version-date { margin-left: auto; }
 .version-highlights { margin: 8px 0 0; padding-left: 1.15em; list-style: disc; color: var(--text-muted); font-size: 12.5px; line-height: 1.72; }
@@ -1161,7 +1429,12 @@ code, pre, .mono { font-family: var(--mono); }
     radial-gradient(120% 160% at 0% 0%, var(--brand-soft), transparent 60%),
     linear-gradient(135deg, var(--bg-panel), var(--bg-elevated));
 }
+.skill-detail-hero-top {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px;
+}
 .skill-detail-eyebrow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* 详情右上角的动作条：导出 / 分配 / 复制 / 删除 */
+.skill-detail-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .skill-detail-kernel { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
 .skill-detail-title {
   margin: 8px 0 0; font-size: 22px; line-height: 1.3; font-weight: 680; letter-spacing: -0.01em;
@@ -1941,10 +2214,17 @@ code, pre, .mono { font-family: var(--mono); }
 
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 68px 1fr; }
-  .brand-text, .nav-link .nav-label, .nav-chevron, .sidebar-footer { display: none; }
-  .nav-link { justify-content: center; padding: calc(10px * var(--sbs, 1)) calc(8px * var(--sbs, 1)); }
-  /* 这么窄的窗口本来就只剩图标，折叠按钮没有意义 */
-  .sidebar-toggle { display: none; }
+  .brand-text, .nav-link .nav-label, .nav-chevron { display: none; }
+  /* 窄屏与折叠态同构：图标大 10% + 行距放宽 + hover 弹大 + 名字气泡
+     （见 .app-shell.collapsed 那段）；账号区同样只留头像。 */
+  .nav-link { justify-content: center; padding: calc(11px * var(--sbs, 1)) calc(8px * var(--sbs, 1)); }
+  .nav-link .nav-icon { font-size: calc(19px * var(--sbs, 1)); transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .nav-link:hover .nav-icon { transform: scale(1.28); }
+  .sidebar-user-name { display: none; }
+  .sidebar-user-btn { justify-content: center; padding: 7px 0; }
+  .sidebar-user-wrap .sidebar-user-menu {
+    left: calc(100% + 10px); right: auto; bottom: auto; top: 50%; transform: translateY(-50%);
+  }
   .chat-shell { grid-template-columns: 1fr; }
   .skill-shell { grid-template-columns: 1fr; }
   .collab-shell, .collab-settings { grid-template-columns: 1fr; }
@@ -2466,14 +2746,17 @@ code, pre, .mono { font-family: var(--mono); }
 .img-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
 
 /* 一条消息带过的附件：图片是缩略图，文档等是文件名胶囊 */
-.bubble-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.zoomable.bubble-attachment-thumb { width: 108px; height: 108px; overflow: hidden; border: 1px solid var(--border); }
-.zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.bubble-attachment-chip {
-  display: inline-flex; align-items: center; max-width: 240px; padding: 5px 10px;
-  border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; color: var(--text-muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 附件清单：与消息正文里的「📎 附件」块同构 —— 说明头一行 + 每个附件一行完整路径，
+   图片附件在路径旁配缩略图。路径是「智能体能直接读」的关键信息，必须完整可读。 */
+.bubble-attachments { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.bubble-attachments-head { font-size: 12px; color: var(--text-muted); }
+.bubble-attachment-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bubble-attachment-path {
+  min-width: 0; flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
+.zoomable.bubble-attachment-thumb { flex: none; width: 64px; height: 64px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
 /* 正文里嵌的图（Markdown ![]()）：按**预览尺寸**显示，点开看原图。
    不直接铺满气泡：生图动辄 1024px，铺满后一条消息就占掉大半屏；宽度封顶后

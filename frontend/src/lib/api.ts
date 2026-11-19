@@ -13,7 +13,8 @@ import type {
   MarketSkillList,
   MessagePart,
   SkillDetail,
-  SkillRescanResult, TestResult,
+  SkillRescanResult,
+  SkillTransferResult, TestResult,
   TitleSettings,
   UsageOverview,
   AuthUser,
@@ -215,13 +216,22 @@ export const api = {
     request<GatewayProbeResult>(`/api/gateways/${id}/refresh-models`, { method: 'POST' }),
 
   // --- 智能体（人格 + 内核 + 网关 + 模型 + 技能）-----------------------------
-  listAgents: () => request<{ items: AgentProfile[] }>('/api/agents').then((r) => r.items),
+  /** 列表 + 已有分组名（编辑表单的「分组」快捷选项）。 */
+  listAgents: () =>
+    request<{ items: AgentProfile[]; groups: string[] }>('/api/agents').then((r) => r.items),
+  listAgentGroups: () => request<{ items: AgentProfile[]; groups: string[] }>('/api/agents').then((r) => r.groups),
   createAgent: (body: unknown) => request<AgentProfile>('/api/agents', { method: 'POST', body: JSON.stringify(body) }),
   updateAgent: (id: string, body: unknown) =>
     request<AgentProfile>(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteAgent: (id: string) => request<void>(`/api/agents/${id}`, { method: 'DELETE' }),
   duplicateAgent: (id: string) => request<AgentProfile>(`/api/agents/${id}/duplicate`, { method: 'POST' }),
   testAgent: (id: string) => request<TestResult>(`/api/agents/${id}/test`, { method: 'POST' }),
+  /** 上传 / 替换智能体的自定义头像（base64，PNG / JPEG / WebP ≤2MB）。 */
+  uploadAgentAvatar: (id: string, body: { content_base64: string; name?: string }) =>
+    request<AgentProfile>(`/api/agents/${id}/avatar`, { method: 'PUT', body: JSON.stringify(body) }),
+  /** 清掉智能体的自定义头像，回退到 emoji。 */
+  deleteAgentAvatar: (id: string) =>
+    request<AgentProfile>(`/api/agents/${id}/avatar`, { method: 'DELETE' }),
   // 凭据库（全局一份，智能体按引用使用）
   listCredentials: () => request<{ items: Credential[] }>('/api/credentials'),
   createCredential: (body: unknown) =>
@@ -288,6 +298,30 @@ export const api = {
       method: 'DELETE',
     }),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
+  /** 导出技能：拿回 zip 的原始字节（接口要鉴权，不能直接塞进 <a href>）。 */
+  exportSkill: async (id: string): Promise<Blob> => {
+    const response = await fetch(`${BASE}/api/skills/${encodeURIComponent(id)}/export`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) {
+      if (response.status === 401) notifyUnauthorized()
+      const body = await readBody(response)
+      throw new ApiError(response.status, describeBody(response, body))
+    }
+    return response.blob()
+  },
+  /** 导入技能：内容走 base64（与附件上传同一套做法，避免 multipart 依赖）。 */
+  importSkill: (body: { type_id: string; name?: string; content_base64: string }) =>
+    request<SkillTransferResult>('/api/skills/import', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  /** 复制技能到另一个内核（只复制文件，不复制智能体分配）。 */
+  copySkill: (id: string, typeId: string) =>
+    request<SkillTransferResult>(`/api/skills/${encodeURIComponent(id)}/copy`, {
+      method: 'POST',
+      body: JSON.stringify({ type_id: typeId }),
+    }),
 
   // --- MCP 服务器（统一编目 + 通过智能体分配生效）-----------------------------
   listMcpServers: (params?: {

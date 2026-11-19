@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
 
@@ -35,9 +36,16 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "is_default": "BOOLEAN NOT NULL DEFAULT 0",
         "group_name": "VARCHAR(60) NOT NULL DEFAULT ''",
         "owner_id": "VARCHAR(64)",
+        # 「智能体自定义头像文件」是后加的：老行留空，界面回退到 emoji 头像。
+        "avatar_file": "VARCHAR(120)",
     },
-    # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）
-    "skills": {"source_url": "VARCHAR(500) NOT NULL DEFAULT ''"},
+    # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）。
+    # owner_id 是「按用户隔离技能库」后加的：老行留空 = 全平台共享（内核自带 / 宿主机技能）；
+    # 平台导入、市场安装的技能都属于某个用户，按 owner_id 隔离。
+    "skills": {
+        "source_url": "VARCHAR(500) NOT NULL DEFAULT ''",
+        "owner_id": "VARCHAR(64)",
+    },
     # 「这条对话单独指定的模型」是后加的；为空表示跟随智能体的默认模型。
     # 老行留空即可，不需要回填。
     # 「最后已读时间」是后加的；为空表示升级前的旧对话，一律当已读（否则升级后满屏未读）。
@@ -57,8 +65,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "builtin_mcp_pat_issued_at": "DATETIME",
     },
     # ---- 多用户系统：每张「用户资产」表加 owner_id（可空，老库由 bootstrap 回填给首任管理员）。
-    # 技能（skills）、运行时状态（runtime_status）、平台设置（platform_settings）是平台级
-    # 共享数据，不加 owner_id。网关含 API 密钥，按用户私有；管理员可看全部。
+    # 运行时状态（runtime_status）、平台设置（platform_settings）是平台级共享数据，不加 owner_id。
+    # 网关含 API 密钥，按用户私有；管理员可看全部。
     "gateways": {"owner_id": "VARCHAR(64)"},
     "credentials": {"owner_id": "VARCHAR(64)"},
     # builtin_key 是「平台内置服务器」后加的稳定标识（例如 image-gen）；普通服务器为空。
@@ -73,6 +81,41 @@ def new_id() -> str:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """统一按 UTC 存取的 ``datetime`` 列。
+
+    SQLite 没有原生时区类型：``DateTime(timezone=True)`` 在 SQLite 下**不会**保留
+    ``tzinfo``，取出来是「裸 UTC 墙钟时间」。Pydantic 序列化裸时间时不带偏移量
+    （``2026-11-18T15:45:41`` 而不是 ``...+00:00``），浏览器会按**本地时区**解析 ——
+    东八区用户看到的时间整整少 8 小时。
+
+    所以在这一层统一兜底：
+
+    * **入库**：带时区的值先换算到 UTC 再抹掉 ``tzinfo``（库里的存储格式与历史数据完全一致，
+      仍是 ``YYYY-MM-DD HH:MM:SS.ffffff`` 的裸 UTC，不需要迁移）；
+    * **出库**：补回 ``tzinfo=UTC``，于是 ``isoformat()`` 一定带 ``+00:00``，
+      前端 ``new Date(...)`` 能正确换算到用户本地时间。
+
+    历史数据（本来就是裸 UTC）出库时同样被补上 UTC，无需回填。
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: Any) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            # 裸时间按「已经是 UTC」处理：调用方忘了带时区时也绝不能当成本地时间存进去。
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def process_result_value(self, value: datetime | None, dialect: Any) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class Gateway(SQLModel, table=True):
@@ -108,12 +151,12 @@ class Gateway(SQLModel, table=True):
     extra_headers: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    last_probed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    last_probed_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     enabled: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 软删除时间戳：仍被未删除的智能体引用时只打标记；历史对话照旧可解析到它。
-    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。官方网关（kind=official）也归属到
     #: 创建它的那次播种的用户，但所有用户都能选用官方链路（见 api/gateways 的过滤）。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
@@ -127,6 +170,9 @@ class AgentProfile(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     name: str = Field(sa_column=Column(String(120), nullable=False))
     avatar: str = Field(default="🛠️", sa_column=Column(String(16), nullable=False))
+    #: 自定义头像文件名（``<智能体id>-<内容摘要>.<png|jpg|webp>``，文件在 ``<数据目录>/avatars/``，
+    #: 与用户头像同一个目录与校验管线）。有值时界面优先显示它，否则回退到 emoji 头像。
+    avatar_file: str | None = Field(default=None, sa_column=Column(String(120)))
     #: 一句话简介（列表卡片用）
     tagline: str | None = Field(default=None, sa_column=Column(String(200)))
     #: 备注
@@ -151,25 +197,30 @@ class AgentProfile(SQLModel, table=True):
     is_default: bool = Field(default=False)
     #: 分组名：智能体页按它折叠分组展示（空串 = 未分组，永远排在最后）。
     group_name: str = Field(default="", sa_column=Column(String(60), nullable=False))
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 软删除时间戳：删除智能体时只打标记（历史对话仍引用它）。打了标记的智能体从所有
     #: 可选列表里消失，但历史对话仍能显示当时的名字与头像、也仍可继续。
-    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
 
 class Skill(SQLModel, table=True):
-    """从各智能体内核的技能根扫描出来的技能。
+    """统一编目的技能。
 
-    ``id`` 是稳定标识 ``<type_id>:<slug>``：技能目录暂时消失时只把 ``available``
-    置为 False，不删行，这样历史分配关系不会断。
+    * 内核自带 / 宿主机上已有的技能：``owner_id`` 为空，全平台共享、只读；
+    * 用户自己的技能库（导入、市场安装、跨内核复制）落在
+      ``<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>``，按 ``owner_id`` 隔离。
+
+    ``id`` 是稳定标识：共享技能为 ``<type_id>:<slug>``，用户技能为
+    ``<type_id>:lib:<owner_id 或 local>:<slug>``（同一 slug 在不同用户下互不冲突）。
+    技能目录暂时消失时只把 ``available`` 置为 False，不删行，这样历史分配关系不会断。
     """
 
     __tablename__ = "skills"
 
-    id: str = Field(sa_column=Column(String(200), primary_key=True))
+    id: str = Field(sa_column=Column(String(260), primary_key=True))
     type_id: str = Field(sa_column=Column(String(64), nullable=False, index=True))
     slug: str = Field(sa_column=Column(String(120), nullable=False))
     name: str = Field(sa_column=Column(String(160), nullable=False))
@@ -194,10 +245,12 @@ class Skill(SQLModel, table=True):
     note: str | None = Field(default=None, sa_column=Column(String(400)))
     #: 来源是「技能市场」时，市场技能页地址；其余来源为空
     source_url: str = Field(default="", sa_column=Column(String(500), nullable=False))
+    #: 所属用户 id：用户技能库里的技能按它隔离；为空表示内核自带 / 宿主机共享技能。
+    owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
     discovered_at: datetime = Field(
-        default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
+        default_factory=utcnow, sa_column=Column(UTCDateTime)
     )
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
 
 
 class AgentSkill(SQLModel, table=True):
@@ -212,7 +265,7 @@ class AgentSkill(SQLModel, table=True):
     )
     skill_id: str = Field(
         sa_column=Column(
-            String(200), ForeignKey("skills.id", ondelete="RESTRICT"), primary_key=True
+            String(260), ForeignKey("skills.id", ondelete="RESTRICT"), primary_key=True
         )
     )
     position: int = Field(default=0)
@@ -267,11 +320,11 @@ class McpServer(SQLModel, table=True):
     builtin_key: str | None = Field(default=None, sa_column=Column(String(64), index=True))
     note: str | None = Field(default=None, sa_column=Column(String(400)))
     discovered_at: datetime = Field(
-        default_factory=utcnow, sa_column=Column(DateTime(timezone=True))
+        default_factory=utcnow, sa_column=Column(UTCDateTime)
     )
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 软删除时间戳：仅平台新建的服务器可删；历史对话与协作历史照旧可读
-    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 所属用户 id；扫描来的（source_kind=user）也归属到那次扫描的用户。老库回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -311,10 +364,10 @@ class Credential(SQLModel, table=True):
     #: 用途说明（给人和模型看的「名字清单」用）
     description: str | None = Field(default=None, sa_column=Column(String(200)))
     value_encrypted: str | None = Field(default=None, sa_column=Column(Text))
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 软删除：仍被未删除的智能体引用时只打标记（历史运行照旧可解析）
-    deleted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    deleted_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -353,11 +406,11 @@ class Conversation(SQLModel, table=True):
     #: 这条对话单独指定的模型；为空表示跟随智能体的默认模型（换模型不影响会话记忆）
     model: str | None = Field(default=None, sa_column=Column(String(160)))
     archived: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 用户最后一次看这条对话的时间；列表据此判断「AI 回复完了但还没读」。
     #: 为空表示升级前的旧对话 —— 一律当已读，避免升级后所有历史对话都亮未读。
-    last_read_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    last_read_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -373,7 +426,7 @@ class Message(SQLModel, table=True):
     usage: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict))
     status: str = Field(default="complete", sa_column=Column(String(16), nullable=False))
     error: str | None = Field(default=None, sa_column=Column(Text))
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), index=True))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime, index=True))
 
 
 class RuntimeStatus(SQLModel, table=True):
@@ -393,7 +446,7 @@ class RuntimeStatus(SQLModel, table=True):
     #: 已安装时是可执行文件路径，未安装时是原因（与 ``Availability.detail`` 同义）。
     detail: str | None = Field(default=None, sa_column=Column(Text))
     #: 本次检测的时间（UTC）。超过 ``runtime.availability.CHECK_INTERVAL`` 即视为过期。
-    checked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    checked_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
 
 
 class PlatformSetting(SQLModel, table=True):
@@ -408,7 +461,7 @@ class PlatformSetting(SQLModel, table=True):
 
     key: str = Field(sa_column=Column(String(64), primary_key=True))
     value: str | None = Field(default=None, sa_column=Column(Text))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
 
 
 class User(SQLModel, table=True):
@@ -446,13 +499,13 @@ class User(SQLModel, table=True):
     #: 只存 sha256 哈希（明文仅在签发时返回一次，平台不再能看到）；为空表示还没生成过。
     pat_hash: str | None = Field(default=None, sa_column=Column(String(64)))
     #: PAT 的签发时间（给界面展示「生成于 …」用）；为空表示还没生成过。
-    pat_issued_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    pat_issued_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime))
     #: 系统管理 MCP 专用的 PAT 哈希：平台自动生成并写进该用户的内置 MCP 配置，
     #: 与用户手动生成的 ``pat_hash`` 互不影响。只存哈希，明文只在配置里加密保存。
     builtin_mcp_pat_hash: str | None = Field(default=None, sa_column=Column(String(64)))
     #: 系统管理 MCP 专用 PAT 的签发时间。
     builtin_mcp_pat_issued_at: datetime | None = Field(
-        default=None, sa_column=Column(DateTime(timezone=True))
+        default=None, sa_column=Column(UTCDateTime)
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))

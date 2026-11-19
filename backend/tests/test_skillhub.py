@@ -139,12 +139,9 @@ def skills_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         return {spec.id: spec for spec in specs}
 
     monkeypatch.setattr(skill_service, "skill_roots_for_type", lambda type_id: roots)
-    monkeypatch.setattr(skill_service, "install_root_for_type", lambda type_id: roots[1])
-    monkeypatch.setattr(
-        skill_service, "market_install_root", lambda type_id: str(root / ".skillhub")
-    )
     monkeypatch.setattr(skill_service, "discover_catalog", fake_catalog)
-    return root
+    # 市场技能现在装进「当前用户技能库」（鉴权关闭时是 local），返回该目录方便断言。
+    return skill_service.get_settings().skill_libraries_root / "local" / "claude-code"
 
 
 async def test_market_list_parsing(market):
@@ -176,11 +173,11 @@ async def test_install_then_appears_and_uninstall(client, market, skills_home: P
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["skill_id"] == "claude-code:market-skill"
+    assert body["skill_id"] == "claude-code:lib:local:market-skill"
     assert body["requires_api_key"] is True
 
     # 落盘位置正确，且带上了市场安装标记
-    installed = skills_home / ".skillhub" / "market-skill"
+    installed = skills_home / "market-skill"
     assert (installed / "SKILL.md").is_file()
     assert (installed / ".skillhub.json").is_file()
 
@@ -192,7 +189,7 @@ async def test_install_then_appears_and_uninstall(client, market, skills_home: P
 
     # 卸载：目录消失、编目里也不再保留这条技能
     removed = await client.post(
-        "/api/skillhub/uninstall", json={"skill_id": "claude-code:market-skill"}
+        "/api/skillhub/uninstall", json={"skill_id": "claude-code:lib:local:market-skill"}
     )
     assert removed.status_code == 200, removed.text
     assert not installed.exists()
@@ -220,11 +217,12 @@ async def test_installed_market_skill_can_be_assigned(client, market, skills_hom
     agent = await make_profile(
         client, name="Claude 智能体", type_id="claude-code", gateway_id=gateway["id"], model=None
     )
+    market_skill_id = "claude-code:lib:local:market-skill"
     assigned = await client.put(
-        f"/api/agents/{agent['id']}/skills", json={"skill_ids": ["claude-code:market-skill"]}
+        f"/api/agents/{agent['id']}/skills", json={"skill_ids": [market_skill_id]}
     )
     assert assigned.status_code == 200, assigned.text
-    assert assigned.json()["skill_ids"] == ["claude-code:market-skill"]
+    assert assigned.json()["skill_ids"] == [market_skill_id]
 
     # 运行层（skills_for_agent）能按分配取到这个市场技能
     from sqlmodel import select

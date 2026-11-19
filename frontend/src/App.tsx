@@ -5,6 +5,11 @@ import { UserAvatar } from './components/UserAvatar'
 import { LogoutIcon, SettingsIcon } from './components/Icons'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
+import {
+  readSidebarCollapsed,
+  subscribeSidebarCollapsed,
+  toggleSidebarCollapsed,
+} from './lib/sidebarCollapsed'
 import { useAuth } from './components/AuthGate'
 import { ChatPage } from './pages/ChatPage'
 import { CollabPage } from './pages/CollabPage'
@@ -24,18 +29,6 @@ const NAV = [
   { to: '/mcp', icon: '🔌', label: 'MCP' },
   { to: '/usage', icon: '📊', label: '用量' },
 ]
-
-/** 侧边栏是否折叠存在 localStorage：折叠是这台设备的个人偏好，跟主题一样只影响本机。 */
-const SIDEBAR_KEY = 'arkswarm.sidebar'
-
-function readSidebarCollapsed(): boolean {
-  try {
-    return localStorage.getItem(SIDEBAR_KEY) === 'collapsed'
-  } catch {
-    /* 隐私模式下 localStorage 可能不可用：默认展开 */
-    return false
-  }
-}
 
 /** 老的「协作设置」深链 → 智能体页的协作组标签，并尽量保留原来选中的那条协作组。 */
 function CollabSettingsRedirect() {
@@ -82,16 +75,10 @@ export default function App() {
 
   const displayName = user?.display_name || user?.username || '系统'
 
-  const toggleSidebar = () =>
-    setCollapsed((current) => {
-      const next = !current
-      try {
-        localStorage.setItem(SIDEBAR_KEY, next ? 'collapsed' : 'open')
-      } catch {
-        /* 存不进去也不影响本次会话 */
-      }
-      return next
-    })
+  const toggleSidebar = () => setCollapsed(toggleSidebarCollapsed())
+
+  // 别的入口（对话页顶栏的汉堡按钮）折叠侧栏：订阅共享模块的变化跟上同一份真值。
+  useEffect(() => subscribeSidebarCollapsed(() => setCollapsed(readSidebarCollapsed())), [])
 
   useEffect(() => {
     // 侧边栏只要一个版本号：走最轻的 /api/health，别让每次打开页面都去汇总系统信息。
@@ -115,6 +102,8 @@ export default function App() {
             </div>
             <div className="brand-sub">多智能体控制台</div>
           </div>
+          {/* 折叠入口有两处：这里的 ‹/› 与对话页顶栏的汉堡（同一份状态，见 lib/sidebarCollapsed）。
+              非对话页面没有顶栏汉堡，这里的按钮是它们唯一的折叠出口。 */}
           <button
             type="button"
             className="sidebar-toggle"
@@ -127,17 +116,17 @@ export default function App() {
             {collapsed ? '›' : '‹'}
           </button>
         </div>
-        <nav className="stack" style={{ gap: 4 }}>
+        <nav className="stack" style={{ gap: 2 }}>
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-              /* 折叠后只剩图标：鼠标停上去给名字 */
-              title={collapsed ? item.label : undefined}
             >
               <span className="nav-icon">{item.icon}</span>
               <span className="nav-label">{item.label}</span>
+              {/* 折叠后只剩图标：hover 时从图标右侧弹出名字气泡（CSS 控制，只在折叠态显示） */}
+              <span className="nav-tip">{item.label}</span>
               <span className="nav-chevron">›</span>
             </NavLink>
           ))}

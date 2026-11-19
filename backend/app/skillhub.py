@@ -286,7 +286,8 @@ def extract_skill_archive(archive: bytes, target: str | Path) -> int:
     """把技能 zip 安全解压到 ``target``（先清空再解压），返回写入的文件数。
 
     安全约束：拒绝绝对路径 / 父级穿越（zip-slip）、跳过符号链接、限制文件数与总字节数。
-    结构上要求压缩包内**恰好一层顶层目录**（SkillHub 的导出就是这个形状）。
+    常见形状是**恰好一层顶层目录**（SkillHub 的导出就是这样）；这时剥掉顶层目录，
+    让技能文件直接落在 ``target`` 下。没有顶层目录（技能文件在压缩包根部）也支持。
     """
     dest = Path(target)
     try:
@@ -305,12 +306,16 @@ def extract_skill_archive(archive: bytes, target: str | Path) -> int:
             raise SkillHubError("技能解压后体积过大，已拒绝安装")
 
         tops: set[str] = set()
+        nested = False
         for info in infos:
             parts = [part for part in Path(info.filename).parts if part not in ("", ".")]
             if not parts or ".." in parts or Path(info.filename).is_absolute():
                 raise SkillHubError(f"压缩包内路径不安全：{info.filename}")
             tops.add(parts[0])
-        strip = len(tops) == 1
+            nested = nested or len(parts) > 1
+        # 只有一个顶层条目时剥掉它（SkillHub 导出的形状）；但顶层若是「一个文件」
+        # （例如压缩包里只有 SKILL.md），剥掉就什么都不剩了 —— 那种情况原样解压。
+        strip = len(tops) == 1 and nested
 
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)

@@ -57,8 +57,10 @@ def _now() -> datetime:
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
-    """SQLite 取回的时间是不带时区的 UTC 墙钟时间，这里补上时区。
+    """把时间统一成带 UTC 时区的 ``datetime``（``None`` 原样返回）。
 
+    正常情况下 ``models.UTCDateTime`` 出库时已经补好了 ``tzinfo``，这里只是**幂等兜底**：
+    老版本写进库的裸时间、或测试里手工构造的 naive 值，也都按 UTC 解释，绝不按本地时区。
     不补的话 ``isoformat()`` 会省掉偏移量，浏览器按本地时间解析，界面上的
     「检测于 …」会整体偏移一个时区。
     """

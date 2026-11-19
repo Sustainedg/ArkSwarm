@@ -94,6 +94,16 @@ class Settings(BaseSettings):
         return (self.data_dir / "agent-homes").resolve()
 
     @property
+    def skill_libraries_root(self) -> Path:
+        """用户技能库的根目录（``<用户>/<内核>/<技能>``）。
+
+        技能由平台统一托管而不是写进内核的原生技能目录：多用户下必须按用户隔离，
+        而内核目录是全机器共享的。运行时再按「智能体分配」把技能物化进隔离目录，
+        因此内核照旧只看得到分配给它的那几份。
+        """
+        return (self.data_dir / "skill-libraries").resolve()
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
@@ -109,6 +119,7 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspaces_root.mkdir(parents=True, exist_ok=True)
         self.agent_homes_root.mkdir(parents=True, exist_ok=True)
+        self.skill_libraries_root.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

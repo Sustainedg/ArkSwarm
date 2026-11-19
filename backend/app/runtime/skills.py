@@ -1,16 +1,23 @@
 """技能：统一编目、智能体分配与运行时物化。
 
-各智能体内核的技能目录由适配器的 :meth:`AgentDefinition.discover_skills` 只读扫描，
-这里把它们汇成一份统一目录（``skills`` 表），并按智能体的分配结果在运行时物化到
-该内核的隔离目录，从而保证「智能体能用的技能 == 分配到的技能」。
+* 内核自带 / 宿主机上的技能由适配器的 :meth:`AgentDefinition.discover_skills` 只读扫描，
+  全平台共享；
+* 用户自己的技能（导入 / 市场安装 / 跨内核复制）存放在
+  ``<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>``，按用户隔离；
+* 两类技能都汇进 ``skills`` 表，并按智能体的分配结果在运行时物化到该内核的隔离目录，
+  从而保证「智能体能用的技能 == 分配到的技能」。
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
+import re
 import shutil
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,20 +28,26 @@ from sqlmodel import select
 
 from ..agents import AgentContext, AgentDefinition, all_agents, get_agent
 from ..agents.skills import (
+    LIBRARY_ID_MARK,
+    MARKET_MARKER_FILE,
     MARKET_SOURCE,
     MAX_SKILL_BYTES,
     SKILL_FILE,
+    SKIP_DIRS,
     MarketInstallInfo,
     SkillMount,
     SkillRoot,
     SkillSpec,
+    is_library_skill_id,
+    library_skill_id,
     read_market_marker,
     safe_skill_dirname,
+    scan_skill_root,
     write_market_marker,
 )
 from ..models import AgentProfile, AgentSkill, Skill
 from ..settings import get_settings
-from ..skillhub import extract_skill_archive
+from ..skillhub import MAX_ARCHIVE_BYTES, SkillHubError, extract_skill_archive
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
 logger = logging.getLogger("arkswarm")
@@ -62,8 +75,79 @@ SOURCE_PRECEDENCE = {
 #: 详情页读取 SKILL.md 正文的上限
 MAX_BODY_BYTES = 200_000
 
+#: 没有真实用户（鉴权关闭的单用户部署）时，用户技能库用的目录键。
+LOCAL_OWNER_KEY = "local"
+_OWNER_KEY = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def owner_key(owner_id: str | None) -> str:
+    """把用户 id 变成安全的目录名；没有用户时落到 ``local``（单用户部署）。"""
+    if not owner_id:
+        return LOCAL_OWNER_KEY
+    if not _OWNER_KEY.match(owner_id):
+        raise SkillError(f"用户标识不合法：{owner_id}")
+    return owner_id
+
+
+def library_root(owner_id: str | None, type_id: str) -> Path:
+    """某个用户的某个内核的技能库目录（平台托管，按用户隔离）。"""
+    return get_settings().skill_libraries_root / owner_key(owner_id) / type_id
+
+
+def is_library_row(row: Skill) -> bool:
+    """这一行是否是平台托管的用户技能（区别于内核自带 / 宿主机共享技能）。"""
+    return is_library_skill_id(row.id)
+
 
 # --- 编目 -------------------------------------------------------------------
+
+
+def _annotate_library_spec(spec: SkillSpec, *, owner_id: str | None) -> SkillSpec:
+    """给从用户技能库扫出来的技能补上归属与来源。
+
+    库里带市场安装标记（``.skillhub.json``）的是「市场技能」，其余是用户自己放的「个人技能」。
+    """
+    spec.owner_id = owner_id
+    spec.library = True
+    info = read_market_marker(spec.path)
+    if info is not None:
+        spec.source_kind = MARKET_SOURCE
+        spec.source_slug = info.slug or spec.slug
+        spec.source_url = info.source_url
+    else:
+        spec.source_kind = "user"
+    return spec
+
+
+def discover_library_skills(owners: Iterable[str | None]) -> dict[str, SkillSpec]:
+    """扫描这些用户的技能库（``<用户>/<内核>/<技能>``），返回按标识去重后的技能。
+
+    目录布局是平台自己的约定，所以按目录名发现内核、再用 ``skill_roots_for_type``
+    校验它确实支持技能；单个用户 / 内核目录出错不影响其它目录。
+    """
+    catalog: dict[str, SkillSpec] = {}
+    for owner_id in owners:
+        owner_dir = get_settings().skill_libraries_root / owner_key(owner_id)
+        try:
+            type_dirs = sorted(
+                child for child in owner_dir.iterdir() if child.is_dir()
+            )
+        except OSError:
+            continue
+        for type_dir in type_dirs:
+            try:
+                skill_roots_for_type(type_dir.name)
+            except SkillError:
+                continue
+            try:
+                specs = scan_skill_root(type_dir, type_id=type_dir.name, source_kind="user")
+            except Exception as exc:  # noqa: BLE001 - 单个内核目录坏了不能拖垮整个目录
+                logger.warning("扫描用户技能库 %s 失败：%s", type_dir, exc)
+                continue
+            for spec in specs:
+                spec = _annotate_library_spec(spec, owner_id=owner_id)
+                catalog[spec.id] = spec
+    return catalog
 
 
 def discover_catalog() -> dict[str, SkillSpec]:
@@ -86,12 +170,38 @@ def _rank(spec: SkillSpec) -> int:
     return SOURCE_PRECEDENCE.get(spec.source_kind, 9)
 
 
+async def _library_owners(session: AsyncSession) -> list[str | None]:
+    """要扫描哪些用户的技能库：磁盘上的目录 + 数据库里登记过的归属。"""
+    keys: set[str] = set()
+    root = get_settings().skill_libraries_root
+    try:
+        if root.is_dir():
+            keys.update(
+                child.name
+                for child in root.iterdir()
+                if child.is_dir() and _OWNER_KEY.match(child.name)
+            )
+    except OSError:
+        pass
+    # 目录暂时不见、但库里还登记着的技能也要扫一次（这样它们才会被标记为失效）；
+    # 不扫的话它们会永远停在「可用」状态。
+    statement = select(Skill.owner_id).where(Skill.id.like(f"%{LIBRARY_ID_MARK}%")).distinct()
+    for (owner_id,) in (await session.execute(statement)).all():
+        try:
+            keys.add(owner_key(owner_id))
+        except SkillError:
+            # 库里的归属被改坏时跳过这一行，不能让整个编目失败。
+            continue
+    return [None if key == LOCAL_OWNER_KEY else key for key in sorted(keys)]
+
+
 async def rescan(session: AsyncSession) -> dict[str, int]:
-    """重新扫描所有内核的技能目录，并同步到 ``skills`` 表。
+    """重新扫描内核技能目录与各用户的技能库，并同步到 ``skills`` 表。
 
     目录消失的技能只标记 ``available=False``，不删除记录，避免智能体分配断链。
     """
     discovered = discover_catalog()
+    discovered.update(discover_library_skills(await _library_owners(session)))
     rows = {row.id: row for row in (await session.execute(select(Skill))).scalars().all()}
     now = datetime.now(timezone.utc)
     added = updated = 0
@@ -129,8 +239,18 @@ async def list_rows(
     source_kind: str | None = None,
     available: bool | None = None,
     query: str | None = None,
+    owner_id: str | None = None,
+    all_owners: bool = False,
 ) -> list[Skill]:
+    """列出技能；``all_owners=False`` 时只返回共享技能 + 指定用户自己的技能。"""
     statement = select(Skill).order_by(Skill.type_id, Skill.source_kind, Skill.name)
+    if not all_owners:
+        if owner_id is None:
+            statement = statement.where(Skill.owner_id.is_(None))
+        else:
+            statement = statement.where(
+                or_(Skill.owner_id.is_(None), Skill.owner_id == owner_id)
+            )
     if type_id:
         statement = statement.where(Skill.type_id == type_id)
     if source_kind:
@@ -183,26 +303,37 @@ def is_deletable(row: Skill) -> bool:
     return row.source_kind not in READONLY_SOURCES
 
 
-async def usage_counts(session: AsyncSession) -> dict[str, int]:
-    """每个技能被多少个智能体使用（已软删除的智能体不再算"使用中"）。"""
+async def usage_counts(
+    session: AsyncSession, owner_id: str | None = None
+) -> dict[str, int]:
+    """每个技能被多少个智能体使用（已软删除的智能体不再算"使用中"）。
+
+    ``owner_id`` 非空时只数该用户的智能体（成员看自己的用量，管理员传 ``None`` 看全局）。
+    """
     statement = (
         select(AgentSkill.skill_id)
         .join(AgentProfile, AgentProfile.id == AgentSkill.agent_profile_id)
         .where(AgentProfile.deleted_at.is_(None))
     )
+    if owner_id is not None:
+        statement = statement.where(AgentProfile.owner_id == owner_id)
     counts: dict[str, int] = {}
     for skill_id in (await session.execute(statement)).scalars().all():
         counts[skill_id] = counts.get(skill_id, 0) + 1
     return counts
 
 
-async def agents_using(session: AsyncSession, skill_id: str) -> list[AgentProfile]:
+async def agents_using(
+    session: AsyncSession, skill_id: str, owner_id: str | None = None
+) -> list[AgentProfile]:
     statement = (
         select(AgentProfile)
         .join(AgentSkill, AgentSkill.agent_profile_id == AgentProfile.id)
         .where(AgentSkill.skill_id == skill_id, AgentProfile.deleted_at.is_(None))
         .order_by(AgentProfile.created_at)
     )
+    if owner_id is not None:
+        statement = statement.where(AgentProfile.owner_id == owner_id)
     return list((await session.execute(statement)).scalars().all())
 
 
@@ -251,6 +382,9 @@ async def set_agent_skills(
                 f"技能「{row.name}」属于 {row.type_id}，"
                 f"与该智能体的内核（{profile.type_id}）不匹配"
             )
+        # 用户技能库按用户隔离：智能体只能分配「共享技能 + 自己主人的技能」。
+        if row.owner_id is not None and row.owner_id != profile.owner_id:
+            raise ValueError(f"技能「{row.name}」不在该智能体的技能库里，无法分配")
 
     for link in (
         await session.execute(select(AgentSkill).where(AgentSkill.agent_profile_id == profile.id))
@@ -276,6 +410,9 @@ async def skills_for_agent(session: AsyncSession, profile: AgentProfile) -> list
         row = by_id.get(skill_id)
         if row is None or not row.available or row.type_id != profile.type_id:
             continue
+        # 旧分配关系如果指向了别人的技能，运行时也必须挡住（按用户隔离）。
+        if row.owner_id is not None and row.owner_id != profile.owner_id:
+            continue
         specs.append(spec_from_row(row))
     return specs
 
@@ -285,6 +422,8 @@ def spec_from_row(row: Skill) -> SkillSpec:
         type_id=row.type_id,
         slug=row.slug,
         name=row.name,
+        owner_id=row.owner_id,
+        library=is_library_row(row),
         description=row.description or "",
         source_kind=row.source_kind,
         path=row.path,
@@ -492,23 +631,12 @@ def skill_roots_for_type(type_id: str) -> list[SkillRoot]:
     return roots
 
 
-def install_root_for_type(type_id: str) -> SkillRoot:
-    """某个内核用来安装「市场技能」的技能根（`installable` 中最靠前的一个）。"""
-    roots = skill_roots_for_type(type_id)
-    for root in roots:
-        if root.installable:
-            return root
-    raise SkillError(f"该内核（{type_id}）没有可写入的技能目录，无法安装技能")
+def market_install_root(type_id: str, owner_id: str | None) -> str:
+    """市场技能要落到的目录：当前用户的该内核技能库。
 
-
-def market_install_root(type_id: str) -> str:
-    """市场技能要落到的目录（按内核声明的技能根解析；找不到时按 ``<可写根>/.skillhub``）。"""
-    roots = skill_roots_for_type(type_id)
-    for root in roots:
-        if root.source_kind == MARKET_SOURCE and root.installable:
-            return root.path
-    base = install_root_for_type(type_id).path
-    return str(Path(base) / ".skillhub")
+    技能库由平台托管（不再写进内核全局目录），这样市场安装天然按用户隔离。
+    """
+    return str(library_root(owner_id, type_id))
 
 
 def _is_under(root: Path, candidate: Path) -> bool:
@@ -549,18 +677,23 @@ def _remove_installed_skill(type_id: str, row: Skill) -> None:
         raise SkillError(
             f"「{row.name}」缺少市场安装标记，拒绝删除（可能不是平台安装的技能）"
         )
-    if not any(
-        root.installable and _is_under(Path(root.path), target)
-        for root in skill_roots_for_type(type_id)
-    ):
+    if is_library_row(row):
+        allowed = _is_declared_skill_dir(row, target)
+    else:
+        # 兼容升级前装进内核原生目录的老市场技能：仍按适配器声明的可写根校验。
+        allowed = any(
+            root.installable and _is_under(Path(root.path), target)
+            for root in skill_roots_for_type(type_id)
+        )
+    if not allowed:
         raise SkillError(f"「{row.name}」不在可写入的技能目录内，拒绝删除")
     _delete_tree(target, row.name)
 
 
-def _remove_skill_directory(type_id: str, row: Skill) -> None:
-    """删掉技能自己的源目录；只允许删该内核声明过的技能根之下的目录。
+def _remove_skill_directory(row: Skill) -> None:
+    """删掉技能自己的源目录；只允许删该技能所属技能根 / 用户技能库之下的目录。
 
-    这是技能页「删除」的磁盘侧护栏：数据库里的路径即便被改坏，也只能删到技能根内部，
+    这是技能页「删除」的磁盘侧护栏：数据库里的路径即便被改坏，也只能删到允许的目录内部，
     并且目标必须真的像一个技能目录（含 ``SKILL.md``、不是符号链接、不是技能根本身）。
     """
     target = Path(row.path)
@@ -570,17 +703,9 @@ def _remove_skill_directory(type_id: str, row: Skill) -> None:
         raise SkillError(f"「{row.name}」的路径不是一个技能目录，拒绝删除")
     if not (target / SKILL_FILE).is_file():
         raise SkillError(f"「{row.name}」目录内没有 {SKILL_FILE}，拒绝删除")
-    for root in skill_roots_for_type(type_id):
-        base = Path(root.path)
-        try:
-            if target.resolve() == base.resolve():
-                continue
-        except OSError:
-            continue
-        if _is_under(base, target):
-            _delete_tree(target, row.name)
-            return
-    raise SkillError(f"「{row.name}」不在内核声明的技能目录内，拒绝删除")
+    if not _is_declared_skill_dir(row, target):
+        raise SkillError(f"「{row.name}」不在它所属的技能目录内，拒绝删除")
+    _delete_tree(target, row.name)
 
 
 async def _drop_skill_row(session: AsyncSession, row: Skill) -> None:
@@ -603,7 +728,7 @@ async def delete_skill(session: AsyncSession, skill_id: str) -> str:
             )
         raise SkillError(f"「{row.name}」是内核自带技能，不能删除")
     name = row.name
-    _remove_skill_directory(row.type_id, row)
+    _remove_skill_directory(row)
     await _drop_skill_row(session, row)
     return name
 
@@ -627,18 +752,20 @@ async def install_market_skill(
     slug: str,
     version: str | None,
     archive: bytes,
+    owner_id: str | None = None,
     source_url: str | None = None,
     display_slug: str | None = None,
 ) -> dict[str, Any]:
-    """把一个市场技能的 zip 落盘到内核的原生技能根，并把它同步进统一编目。
+    """把一个市场技能的 zip 落盘到**当前用户**的技能库，并同步进统一编目。
 
-    步骤：安全解压到 ``<market_root>/<slug>`` → 写入市场安装标记 → 触发一次重扫。
+    步骤：安全解压到 ``<技能库>/<type_id>/<slug>`` → 写入市场安装标记 → 触发一次重扫。
     返回 ``{"skill_id", "name", "warnings"}``；失败抛 :class:`SkillError`。
     """
     safe = safe_skill_dirname(slug)
     if safe is None:
         raise SkillError(f"技能标识不合法：{slug}")
-    root = Path(market_install_root(type_id))
+    skill_roots_for_type(type_id)  # 未知内核 / 不支持技能的内核先挡住
+    root = Path(market_install_root(type_id, owner_id))
     target = root / safe
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -657,7 +784,7 @@ async def install_market_skill(
     )
 
     await rescan(session)
-    skill_id = f"{type_id}:{safe}"
+    skill_id = library_skill_id(type_id, safe, owner_id)
     row = await wait_for_market_registration(session, skill_id)
     if row is None:
         # 目录已落盘，但编目还没收录（通常是该目录被别的技能根重复覆盖）——给出可操作提示。
@@ -679,3 +806,320 @@ async def uninstall_market_skill(session: AsyncSession, skill_id: str) -> str:
     # 再删编目行。否则技能会以「目录已消失」的形式继续留在技能页与市场已装列表里。
     await _drop_skill_row(session, row)
     return name
+
+
+# --- 导出 / 导入 / 跨内核复制 -------------------------------------------------
+#
+# 三个动作都只动「技能目录」，不碰智能体分配：
+# * 导出是把源目录打成 zip（只读）；
+# * 导入是把一个 zip 解压进「当前用户的技能库」，然后重扫收录；
+# * 复制是把一个已登记技能的目录拷到「当前用户」另一个内核的技能库，再重扫收录。
+# 导入 / 复制后的新技能仍要「智能体分配」才在运行时生效（与市场安装同一套规则）。
+
+#: 导入 / 复制时单个技能允许的体积上限（与技能市场下载对齐）
+MAX_TRANSFER_BYTES = MAX_ARCHIVE_BYTES
+
+
+def import_root_for_type(type_id: str, owner_id: str | None) -> Path:
+    """导入 / 复制技能时落到哪里：当前用户在该内核下的技能库目录。
+
+    先校验内核确实声明了技能（未知内核 / 不支持技能的内核直接报错），
+    再返回平台托管的用户库路径 —— 不再写进内核的全局技能目录，保证按用户隔离。
+    """
+    skill_roots_for_type(type_id)
+    return library_root(owner_id, type_id)
+
+
+async def _same_slug_conflict(
+    session: AsyncSession,
+    *,
+    type_id: str,
+    slug: str,
+    owner_id: str | None,
+    new_id: str,
+) -> bool:
+    """导入 / 复制前检查「同内核 + 同 slug」是否已被共享技能或自己的技能占用。
+
+    占用时拒绝：同一个内核下两份同名技能，物化到隔离目录会互相覆盖，调用名也会撞车。
+    """
+    statement = select(Skill.id).where(
+        Skill.type_id == type_id,
+        Skill.slug == slug,
+        Skill.available == True,  # noqa: E712
+    )
+    if owner_id is None:
+        statement = statement.where(Skill.owner_id.is_(None))
+    else:
+        statement = statement.where(
+            or_(Skill.owner_id.is_(None), Skill.owner_id == owner_id)
+        )
+    return any(skill_id != new_id for (skill_id,) in (await session.execute(statement)).all())
+
+
+def _type_label(type_id: str) -> str:
+    try:
+        return get_agent(type_id).name
+    except KeyError:
+        return type_id
+
+
+def _name_taken(type_id: str, slug: str, action: str) -> SkillError:
+    """同名技能的报错（导入 / 复制共用，避免两边文案走样）。
+
+    同名可能来自共享技能（用户删不掉），所以提示里给出「换目录名」这条路。
+    """
+    return SkillError(
+        f"{_type_label(type_id)} 下已有同名技能「{slug}」，"
+        f"请先删除同名技能或换个目录名后再{action}"
+    )
+
+
+def _safe_slug(text: str) -> str | None:
+    """尽量把一段文字变成安全的技能目录名；中文等无法直接使用时返回 ``None``。"""
+    raw = "".join(
+        ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "-" for ch in (text or "")
+    )
+    raw = re.sub(r"-{2,}", "-", raw).strip("-._")
+    return safe_skill_dirname(raw)
+
+
+def _is_declared_skill_dir(row: Skill, target: Path) -> bool:
+    """``target`` 是否是该技能允许被操作的目录（技能根内部，且不是根本身）。
+
+    * 用户技能库里的技能只能落在「该用户 + 该内核」的库目录内部；
+    * 共享技能只能落在适配器声明过的技能根内部。
+
+    导出 / 复制 / 删除前用它挡掉「数据库里的路径被改坏」的情况。
+    """
+    if is_library_row(row):
+        bases = [library_root(row.owner_id, row.type_id)]
+    else:
+        bases = [Path(root.path) for root in skill_roots_for_type(row.type_id)]
+    for base in bases:
+        try:
+            if target.resolve() == base.resolve():
+                continue
+        except OSError:
+            continue
+        if _is_under(base, target):
+            return True
+    return False
+
+
+def _archive_top_dir(archive: bytes) -> str | None:
+    """压缩包是否「恰好一层顶层目录」；是则返回该目录名，否则 ``None``。"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            tops: set[str] = set()
+            nested = False
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                parts = [part for part in Path(info.filename).parts if part not in ("", ".")]
+                if not parts:
+                    continue
+                tops.add(parts[0])
+                if len(parts) > 1:
+                    nested = True
+    except (zipfile.BadZipFile, OSError):
+        return None
+    if len(tops) == 1 and nested:
+        return next(iter(tops))
+    return None
+
+
+def export_skill_archive(row: Skill) -> bytes:
+    """把一个技能的源目录打包成 zip（顶层目录名用技能 slug）。
+
+    只读导出：不跟随符号链接、不改源目录；体积超过上限直接报错，
+    免得生成一个自己都导不回来的压缩包。
+    """
+    base = Path(row.path)
+    if not base.is_dir():
+        raise SkillError(f"「{row.name}」的目录已不存在，无法导出")
+    if not (base / SKILL_FILE).is_file():
+        raise SkillError(f"「{row.name}」目录内没有 {SKILL_FILE}，无法导出")
+    # 与删除同一道护栏：数据库里的路径即便被改坏，也只能碰内核声明过的技能根内部。
+    if not _is_declared_skill_dir(row, base):
+        raise SkillError(f"「{row.name}」不在它所属的技能目录内，拒绝导出")
+    top = safe_skill_dirname(row.slug) or "skill"
+    buffer = io.BytesIO()
+    total = 0
+    try:
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+                current = Path(dirpath)
+                dirnames[:] = [
+                    name
+                    for name in sorted(dirnames)
+                    if name not in SKIP_DIRS and not (current / name).is_symlink()
+                ]
+                for filename in sorted(filenames):
+                    path = current / filename
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        continue
+                    total += size
+                    if total > MAX_TRANSFER_BYTES:
+                        raise SkillError(
+                            f"「{row.name}」超过单个技能 {MAX_TRANSFER_BYTES // 1024 // 1024} MB 的导出上限"
+                        )
+                    zf.write(path, arcname=f"{top}/{path.relative_to(base).as_posix()}")
+    except OSError as exc:
+        raise SkillError(f"打包「{row.name}」失败：{exc}") from exc
+    return buffer.getvalue()
+
+
+def _find_extracted_skill_dir(payload: Path) -> Path:
+    """在解压结果里找到技能目录：根目录本身就是技能，或恰好一个子目录是技能。"""
+    if (payload / SKILL_FILE).is_file():
+        return payload
+    candidates = [
+        child
+        for child in sorted(payload.iterdir())
+        if child.is_dir() and (child / SKILL_FILE).is_file()
+    ]
+    if not candidates:
+        raise SkillError(f"压缩包里没有 {SKILL_FILE}，不是可导入的技能包")
+    if len(candidates) > 1:
+        raise SkillError("压缩包里有多份技能（多个 SKILL.md），请一次只导入一个")
+    return candidates[0]
+
+
+async def import_skill_archive(
+    session: AsyncSession,
+    *,
+    type_id: str,
+    archive: bytes,
+    owner_id: str | None = None,
+    filename: str | None = None,
+) -> dict[str, str]:
+    """把一个技能压缩包导入**当前用户**的技能库，并同步进统一编目。
+
+    返回 ``{"skill_id", "name", "slug", "type_id"}``；失败抛 :class:`SkillError`。
+    同名技能不会覆盖（避免悄悄改掉正在被调用的技能）：先删掉旧的再导入。
+    """
+    if not archive:
+        raise SkillError("压缩包内容为空")
+    if len(archive) > MAX_TRANSFER_BYTES:
+        raise SkillError(
+            f"压缩包超过 {MAX_TRANSFER_BYTES // 1024 // 1024} MB，已拒绝导入"
+        )
+    base = import_root_for_type(type_id, owner_id)
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SkillError(f"无法创建技能目录 {base}：{exc}") from None
+
+    staging = Path(tempfile.mkdtemp(prefix="arkswarm-skill-import-"))
+    try:
+        payload = staging / "payload"
+        try:
+            extract_skill_archive(archive, payload)
+        except SkillHubError as exc:
+            raise SkillError(f"导入失败：{exc}") from None
+        skill_dir = _find_extracted_skill_dir(payload)
+
+        # 目录名优先级：压缩包里的顶层技能目录名 → 上传文件名 → 兜底名。
+        # 目录名就是内核调用技能时用的名字，不能带路径分隔符或非 ASCII 字符。
+        # 解压时单层顶层目录已被剥掉，所以这里优先看压缩包原始结构。
+        slug = (
+            _safe_slug(_archive_top_dir(archive) or "")
+            or _safe_slug(skill_dir.name if skill_dir != payload else "")
+            or _safe_slug(Path(filename or "").stem)
+            or "imported-skill"
+        )
+        target = base / slug
+        new_id = library_skill_id(type_id, slug, owner_id)
+        if target.exists() or await _same_slug_conflict(
+            session, type_id=type_id, slug=slug, owner_id=owner_id, new_id=new_id
+        ):
+            raise _name_taken(type_id, slug, "导入")
+        # 导入的是「用户技能」：市场安装标记不应跟着搬过来，否则会被误认成市场安装。
+        (skill_dir / MARKET_MARKER_FILE).unlink(missing_ok=True)
+        try:
+            # copy 而不是 move：copytree 在目标已存在时直接报错，不会把技能塞进别人的目录里。
+            shutil.copytree(skill_dir, target, symlinks=False)
+        except FileExistsError:
+            raise _name_taken(type_id, slug, "导入") from None
+        except OSError as exc:
+            shutil.rmtree(target, ignore_errors=True)
+            raise SkillError(f"导入失败：无法写入技能目录（{exc}）") from None
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    await rescan(session)
+    row = await wait_for_market_registration(session, new_id)
+    if row is None:
+        raise SkillError(
+            f"技能已导入到 {target}，但编目未收录；请到「技能」页点一次「重新扫描」"
+        )
+    return {"skill_id": row.id, "name": row.name, "slug": row.slug, "type_id": type_id}
+
+
+def _ignore_copy_symlinks(directory: str, names: list[str]) -> set[str]:
+    """复制技能时跳过符号链接与市场安装标记（不把链接指向的外部文件带进目标内核）。"""
+    base = Path(directory)
+    ignored = {name for name in names if (base / name).is_symlink()}
+    if MARKET_MARKER_FILE in names:
+        ignored.add(MARKET_MARKER_FILE)
+    return ignored
+
+
+async def copy_skill_to_kernel(
+    session: AsyncSession, *, skill_id: str, type_id: str, owner_id: str | None = None
+) -> dict[str, str]:
+    """把一个已登记技能的目录复制到**当前用户**在另一个内核下的技能库。
+
+    源可以是共享技能（复制后成为自己的个人技能），也可以是自己库里的技能；
+    只复制文件，不复制智能体分配。同名技能不覆盖。
+    """
+    row = await get_row(session, skill_id)
+    if row is None:
+        raise SkillNotFound(f"技能不存在：{skill_id}")
+    if row.type_id == type_id:
+        raise SkillError("目标内核与技能所属内核相同，无需复制")
+    base = import_root_for_type(type_id, owner_id)
+    source = Path(row.path)
+    if not source.is_dir() or not (source / SKILL_FILE).is_file():
+        raise SkillError(f"「{row.name}」的源目录已不存在，无法复制")
+    if not _is_declared_skill_dir(row, source):
+        raise SkillError(f"「{row.name}」不在它所属的技能目录内，拒绝复制")
+    slug = safe_skill_dirname(row.slug)
+    if slug is None:
+        raise SkillError(f"「{row.name}」的目录名不安全，无法复制")
+
+    target = base / slug
+    new_id = library_skill_id(type_id, slug, owner_id)
+    if target.exists() or await _same_slug_conflict(
+        session, type_id=type_id, slug=slug, owner_id=owner_id, new_id=new_id
+    ):
+        raise _name_taken(type_id, slug, "复制")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SkillError(f"无法创建技能目录 {base}：{exc}") from None
+    try:
+        shutil.copytree(source, target, symlinks=False, ignore=_ignore_copy_symlinks)
+    except FileExistsError:
+        # 检查与复制之间目标被另一个请求建出来了：不能把别人的目录删掉。
+        raise _name_taken(type_id, slug, "复制") from None
+    except OSError as exc:
+        shutil.rmtree(target, ignore_errors=True)
+        raise SkillError(f"复制「{row.name}」失败：{exc}") from None
+
+    await rescan(session)
+    new_row = await wait_for_market_registration(session, new_id)
+    if new_row is None:
+        raise SkillError(
+            f"技能已复制到 {target}，但编目未收录；请到「技能」页点一次「重新扫描」"
+        )
+    return {
+        "skill_id": new_row.id,
+        "name": new_row.name,
+        "slug": new_row.slug,
+        "type_id": type_id,
+    }

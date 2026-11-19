@@ -317,21 +317,35 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 ## 5. 技能（Skill）
 
 技能是各智能体内核的能力包（一个目录 + ``SKILL.md``）。平台把它们**统一编目**，
-再通过**智能体分配**决定某个智能体能用哪些技能。技能在磁盘上是**按内核就地维护**的：
+再通过**智能体分配**决定某个智能体能用哪些技能。技能分两类：
+
+* **共享技能**：内核自带 / 宿主机上已有的技能，由适配器 ``skill_roots()`` 只读扫描，
+  ``owner_id`` 为空，全平台可见、只读；
+* **用户技能库**：导入、市场安装、跨内核复制产生的技能，落在
+  ``<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>``，按用户隔离。
+
 一份技能只对写它的那个内核成立（`allowed-tools`、`scripts/`、依赖的插件都是内核特有的），
-因此平台不存储技能内容，只做编目与分配，外加一个「技能市场」把远程技能**装进对应内核**。
+运行时再按「智能体分配」物化进隔离目录。
 
 ```
-各内核技能根 ──discover_skills()──▶ 统一目录(skills 表) ──分配──▶ agent_skills ──▶ 运行时物化
-  ~/.claude/skills(+ .skillhub)            （只读索引）       （智能体弹窗）      agent-homes/<对话>/…
+内核技能根（共享） ──discover_skills()──┐
+                                        ├─▶ 统一目录(skills 表) ──分配──▶ agent_skills ──▶ 运行时物化
+用户技能库（按 owner） ──library scan────┘   （owner_id 隔离）   （智能体弹窗）      agent-homes/<对话>/…
+  ~/.claude/skills
   ~/.claude/plugins/cache（已安装插件）
-  $CODEX_HOME/skills(+ .skillhub)
+  $CODEX_HOME/skills
+  <数据目录>/skill-libraries/<用户>/<内核>/<技能>
 ```
 
 - **编目**：适配器用 `skill_roots()` 声明自己的技能根（路径 + 来源 + 是否可安装），框架用
   `scan_skill_roots()` 统一扫描，去重（同一个 slug 按「平台技能 > 市场技能 > 个人 > 项目 > 插件 > 系统」
-  取优先级最高的一份）后写入 `skills` 表。目录消失时只把 `available` 置 False，**不删行**，
-  智能体分配不会断链。来源标签见 `runtime/skills.py:SOURCE_LABELS`。
+  取优先级最高的一份）后写入 `skills` 表；同时扫描各用户的技能库
+  （`<数据目录>/skill-libraries/<owner>/<内核>/<技能>`），`owner_id` 记归属。
+  目录消失时只把 `available` 置 False，**不删行**，智能体分配不会断链。
+  来源标签见 `runtime/skills.py:SOURCE_LABELS`。
+- **按用户隔离**：共享技能（`owner_id` 为空）所有人可见只读；用户技能只有主人与管理员可见，
+  标识带归属（`<type>:lib:<owner 或 local>:<slug>`），因此不同用户导入同名技能不会冲掉对方。
+  列表 / 详情 / 分配 / 用量 / 删除全链路按这条规则过滤。
 - **插件技能只认「已安装」**：`plugins/marketplaces/<市场>/` 只是市场目录的克隆（可浏览、未安装），
   真正的插件技能在 `plugins/cache/<市场>/<插件>/<版本>/`，由 `installed_plugins.json` 指向。
   插件技能只读（卸载走插件管理器），目录消失后不在列表里留失效行。
@@ -339,7 +353,12 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
   `access` 时，`SkillRoot.namespace` 会把它变成 `<插件名>-access`，原始目录名记在
   `SkillSpec.extra["original_slug"]`，展示名带上来源（`access · telegram`）。
 - **分配**：`agent_skills` 是智能体能用的技能的**唯一来源**；`PUT /api/agents/{id}/skills` 整表替换。
-  类型与智能体的内核不一致的技能，界面直接禁止选择，服务端再兜底返回 422。
+  类型与智能体的内核不一致、或技能不在该智能体主人可见范围（别人的用户技能）时，
+  界面直接禁止选择，服务端再兜底返回 422。
+- **导入 / 导出 / 跨内核复制**：技能页可以把一个技能导出成 zip（`GET /api/skills/{id}/export`，只读），
+  把 zip 导入自己的技能库（`POST /api/skills/import`，内容走 base64，同名不覆盖），
+  或把技能目录复制到自己另一个内核的技能库（`POST /api/skills/{id}/copy`）。三者都只动技能目录，
+  导入 / 复制后仍需「智能体分配」才会在运行时生效；共享技能可以被复制成自己的个人技能。
 - **物化（严格仅分配）**：适配器的 `skill_mount(ctx)` 声明「我的内核从哪里读技能」——
   例如 Claude Code 用 `CLAUDE_CONFIG_DIR` 指向一个只含「分配到的技能 + 本机 settings」的隔离
   配置目录，并关闭内核自带的 bundled 技能与内置插件；Codex 用 `CODEX_HOME`。
@@ -359,25 +378,26 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 
 ### 5.1 技能市场（SkillHub）
 
-平台的「技能」页可以把**腾讯 SkillHub**（[skillhub.cn](https://skillhub.cn)）的技能**装进某个内核**：
+平台的「技能」页可以把**腾讯 SkillHub**（[skillhub.cn](https://skillhub.cn)）的技能**装进自己的技能库**：
 
 ```
 skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏览
-           └─/api/v1/download?slug=…（zip）──▶ 安全解压到 <内核技能根>/<slug>
+           └─/api/v1/download?slug=…（zip）──▶ 安全解压到
+                <数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>
 ```
 
-- **安装 = 写内核的原生技能根**（不是物化隔离目录）：Claude Code 落到 `~/.claude/skills/.skillhub/`，
-  Codex 落到 `$CODEX_HOME/skills/.skillhub/`。落地点来自适配器声明的、`installable` 的那个
-  `SkillRoot`，框架不硬编码路径。
-- **装完仍需分配**：安装只是把技能放进了内核的编目范围（`source_kind=market`），要
+- **安装 = 写当前用户的技能库**（不是内核全局目录）：落点是平台托管的
+  `skill_libraries_root/<owner>/<内核>/<技能>`，天然按用户隔离；适配器只负责声明
+  「本机原生技能根在哪」，不参与用户库路径。
+- **装完仍需分配**：安装只是把技能放进了该用户的编目范围（`source_kind=market`），要
   智能体真正用上，还得在「智能体 → 技能」里分配——与内核自带技能同一套「严格仅分配」规则。
 - **可卸载，但有护栏**：市场页卸载要求目录内有市场安装标记（``.skillhub.json``）**且**目录落在
-  `installable` 技能根内；内核自带技能永远不会被市场卸载接口删掉。
+  当前用户该内核的技能库内；别人的技能、内核自带技能永远不会被市场卸载接口删掉。
   卸载会同时断开「智能体 → 技能」分配并删掉编目记录——已卸载的技能不再出现在技能页/市场列表里
   （目录被外部删掉的旧记录也会被列表过滤掉）。
-- **技能页可删非内核技能**：`DELETE /api/skills/{id}` 允许删除个人 / 项目 / 插件 / 市场等
-  **非内核自带**技能（`source_kind != system`），同样断开分配、删编目记录；磁盘侧只允许删
-  该内核声明的技能根之内、含 `SKILL.md` 的目录，越界路径一律拒绝。
+- **技能页可删自己的技能**：`DELETE /api/skills/{id}` 允许删除自己技能库里、非内核自带
+  （`source_kind != system`）的技能；管理员可以删共享 / 他人的技能。删除同样断开分配、删编目记录；
+  磁盘侧只允许删用户技能库（或内核技能根）之内、含 `SKILL.md` 的目录，越界路径一律拒绝。
 - **解压安全**：拒绝 zip-slip（绝对路径 / `..`）、跳过符号链接、限制文件数与解压后总字节数。
 - **接口**：`GET/POST /api/skillhub/*`（列表 / 内核 / 详情 / 安装 / 卸载），见 ``api/skillhub.py``。
 
@@ -799,12 +819,13 @@ frontend/
   （`pages/SettingsPage.tsx` 的 `TABS`），当前页写在 `?tab=` 上（刷新、分享链接、老地址重定向
   都能落到正确的页）。标签栏独占一行（页头只留标题，分割线交给标签栏），7 个标签才有整行的宽度。
   分页只是分组 —— 各项设置的组件与语义没变，每个组件仍自带标题与说明；**只读信息收进「关于」**
-  （系统信息 · 正在运行的智能体 · 版本记录）；「内核管理」直接给内核卡片
+  （系统信息 · 版本记录）；「内核管理」直接给内核卡片
   （`components/KernelManager.tsx`，点卡片进详情），**不再嵌套一个「运行时」入口 + 适配器清单**。
-  概览只在「关于」按需拉取并每 8 秒刷新，别的标签页不做无谓轮询。
-- **「正在运行的智能体」要问两处**：对话的运行登记在 `runtime.manager.registry`（`GET /api/system/overview`
+  概览只在「关于」按需拉一次（进去时拉，不轮询），别的标签页不做无谓请求。
+- **「正在运行」随内核进「内核管理」**：任务运行状态与内核安装态同页展示，每 8 秒刷新。
+  它要问两处：对话的运行登记在 `runtime.manager.registry`（`GET /api/system/overview`
   的 `active_runs`），协作的岗位与入口对话登记在**协作域自己**的句柄表里
-  （`collab/execution.py` 的 `registry` / `chat_registry`）—— 两套表互不相通，所以设置页的「关于」
+  （`collab/execution.py` 的 `registry` / `chat_registry`）—— 两套表互不相通，所以「内核管理」
   同时取 `overview.active_runs` 与 `GET /api/collab/active-runs` 再合并展示（后者由协作域自己给，
   框架层不反向依赖协作域）。**只查一处就会漏掉另一半正在跑的智能体。**
 - **标签页只有一份样式**：`.tabs` / `.tab`（设置 / 技能 / 用量 / 协作导航共用，两端各写一份、

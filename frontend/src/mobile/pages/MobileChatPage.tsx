@@ -11,6 +11,7 @@ import { useMarkConversationRead } from '../../lib/readReceipts'
 import { shareConversationImage } from '../../lib/shareImage'
 import { useThemeMode } from '../../lib/theme'
 import { useSpeechOutput } from '../../lib/tts'
+import { useShowTools } from '../../lib/finalOnly'
 import type {
   ActiveRunInfo,
   AgentEvent,
@@ -23,9 +24,10 @@ import type {
 } from '../../lib/types'
 import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
-import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
+import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, PlusIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
+import { useAuth } from '../../components/AuthGate'
 import { Composer } from '../../components/Composer'
-import { useMobileMenu } from '../components/MobileMenuButton'
+import { MobileMenuButton, useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
 import { MobileTopBar } from '../components/MobileTopBar'
 import { describeError, short } from '../util'
@@ -60,7 +62,11 @@ export function MobileChatPage() {
   const location = useLocation()
   const openMenu = useMobileMenu()
   const speech = useSpeechOutput()
+  /** 当前用户：自己发的消息画真头像（见 MessageView 的 user prop） */
+  const { user } = useAuth()
   const { theme } = useThemeMode()
+  /** 「显示工具调用」（输入区齿轮菜单）：关掉后对话只亮最终回复（本机偏好，默认显示） */
+  const { showTools, setShowTools } = useShowTools()
   /** 打开 / 轮询到已完成的回复时，把这条对话标为已读（抽屉里的未读点据此消失） */
   const markRead = useMarkConversationRead()
 
@@ -89,6 +95,8 @@ export function MobileChatPage() {
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   /** 正在生成长图（生成要几百毫秒，期间按钮置灰，避免连点出两张） */
   const [sharing, setSharing] = useState(false)
+  /** 顶栏「新建对话」正在创建（期间按钮置灰，避免连点开出两条） */
+  const [creating, setCreating] = useState(false)
   /** 输入框上方那几个小图标打开的面板：工作目录 / 智能体 / 模型 */
   const [scopePanel, setScopePanel] = useState<'workspace' | 'agent' | 'model' | null>(null)
   const [scopeAgents, setScopeAgents] = useState<AgentProfile[]>([])
@@ -97,6 +105,8 @@ export function MobileChatPage() {
   const [scopeSaving, setScopeSaving] = useState(false)
   const [modelOptions, setModelOptions] = useState<ConversationModelOptions | null>(null)
   const [modelDraft, setModelDraft] = useState('')
+  /** 模型面板里的搜索词：白名单一长串时按名字过滤，省得从头翻到尾 */
+  const [modelQuery, setModelQuery] = useState('')
   /** 一次性的提示（分享图已下载之类），与错误分开显示 */
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -510,6 +520,26 @@ export function MobileChatPage() {
     await api.cancelRun(active.id).catch(() => undefined)
   }
 
+  /**
+   * 顶栏的「新建对话」：与抽屉里「＋ 新建」同一条路 —— 用默认智能体开一条新对话，
+   * 工作目录留空（进去后随时改）；还没设过默认智能体时打开抽屉让用户挑一个。
+   */
+  const startConversation = async () => {
+    if (creating) return
+    setCreating(true)
+    setError(null)
+    try {
+      const conversation = await api.createConversation({})
+      navigate(`/chat/${conversation.id}`)
+    } catch (e) {
+      // 抽屉的「选智能体新建」就是为这个兜底准备的：把用户送去那儿挑一个。
+      setError(describeError(e))
+      openMenu()
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const shareChat = async () => {
     if (!active || messages.length === 0) return
     setSharing(true)
@@ -642,6 +672,7 @@ export function MobileChatPage() {
   const openModelPanel = () => {
     if (!active) return
     setModelDraft(active.model ?? '')
+    setModelQuery('')
     setModelOptions(null)
     setScopePanel('model')
     void api
@@ -723,8 +754,23 @@ export function MobileChatPage() {
     <MediaUrlProvider resolver={resolveMediaUrl}>
       <div className="m-page">
       <MobileTopBar
-        centered
-        title={active ? active.title : resolving ? '正在加载…' : 'ArkSwarm'}
+        title=""
+        leading={
+          <>
+            {/* 折叠按钮（汉堡）旁直接放「新建对话」：新建是最高频动作，
+                别让用户每次都进抽屉里找「＋ 新建」。 */}
+            <MobileMenuButton />
+            <button
+              className="m-icon-btn"
+              onClick={() => void startConversation()}
+              disabled={creating}
+              aria-label="新建对话"
+              title="用默认智能体开一条新对话（智能体与工作目录进去后还能改）"
+            >
+              <PlusIcon size={19} />
+            </button>
+          </>
+        }
         actions={
           <>
             <button
@@ -786,6 +832,8 @@ export function MobileChatPage() {
             message={message}
             avatar={active?.agent_avatar ?? undefined}
             label={active?.agent_name ?? undefined}
+            finalOnly={!showTools}
+            user={user}
           />
         ))}
 
@@ -799,11 +847,17 @@ export function MobileChatPage() {
               parts: [],
               status: 'complete',
             }}
+            user={user}
           />
         )}
 
         {liveMessage && (
-          <MessageView message={liveMessage} avatar={active?.agent_avatar ?? undefined} label={active?.agent_name ?? undefined} />
+          <MessageView
+            message={liveMessage}
+            avatar={active?.agent_avatar ?? undefined}
+            label={active?.agent_name ?? undefined}
+            finalOnly={!showTools}
+          />
         )}
       </div>
 
@@ -838,6 +892,9 @@ export function MobileChatPage() {
         busy={runActive}
         disabled={!active}
         queueWhenBusy
+        // 齿轮菜单里的「显示工具调用」：关掉 = 对话只亮最终回复（本机偏好）。
+        showTools={showTools}
+        onShowToolsChange={setShowTools}
         onNotice={setError}
         // 输入框上方：工作目录 + 智能体两个小图标（新建对话时不用先选，这里随时改）。
         header={
@@ -866,10 +923,12 @@ export function MobileChatPage() {
                   type="button"
                   className="composer-scope-btn"
                   onClick={openModelPanel}
-                  title={`模型：${active.model ?? '跟随智能体默认'}（点一下换）`}
+                  title={`模型：${active.model ?? active.agent_model ?? '由内核决定'}（点一下换）`}
                 >
                   <ModelIcon size={15} />
-                  <span>{active.model ?? '默认模型'}</span>
+                  <span>{active.model ?? active.agent_model ?? '默认模型'}</span>
+                  {/* 没单独指定模型时用的是智能体默认：旁边点个标签，免得以为是专门选的 */}
+                  {!active.model && active.agent_model && <span className="composer-scope-tag">默认</span>}
                 </button>
               </div>
               {queue.length > 0 && (
@@ -893,18 +952,18 @@ export function MobileChatPage() {
             </>
           ) : null
         }
-        // 用量统计挪到输入框「下面」：贴底的是输入框。
+        // 用量统计挪到输入框「下面」：贴底的是输入框。固定 2×2 网格（四项两行，不再随手换行）。
         footer={
           usage.messages > 0 ? (
             <div className="m-usage">
               <span>
-                读取 <b>{usage.input.toLocaleString()}</b> tok
+                读取 <b>{usage.input.toLocaleString()}</b> tokens
               </span>
               <span>
-                输出 <b>{usage.output.toLocaleString()}</b> tok
+                输出 <b>{usage.output.toLocaleString()}</b> tokens
               </span>
               <span>
-                总计 <b>{usage.total.toLocaleString()}</b> tok
+                总计 <b>{usage.total.toLocaleString()}</b> tokens
               </span>
               <span>
                 缓存命中 <b>{usage.cacheRatio === null ? '—' : `${Math.round(usage.cacheRatio * 100)}%`}</b>
@@ -1047,39 +1106,69 @@ export function MobileChatPage() {
             <p className="dim small">正在加载可选模型…</p>
           ) : modelOptions.models.length > 0 ? (
             <div className="stack" style={{ gap: 8 }}>
-              <button
-                type="button"
-                className={`agent-pick${modelDraft ? '' : ' active'}`}
-                onClick={() => setModelDraft('')}
-              >
-                <span className="agent-pick-main">
-                  <span className="agent-pick-name">跟随智能体默认</span>
-                  <span className="card-sub">{modelOptions.default ?? '由内核决定'}</span>
-                </span>
-                {!modelDraft && <span className="pill ok">当前</span>}
-              </button>
-              {modelOptions.models.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={`agent-pick${modelDraft === item ? ' active' : ''}`}
-                  onClick={() => setModelDraft(item)}
-                >
-                  <span className="agent-pick-main">
-                    <span className="agent-pick-name mono-sm">{item}</span>
-                  </span>
-                  {modelDraft === item && <span className="pill ok">当前</span>}
-                </button>
-              ))}
-              {modelDraft && !modelOptions.models.includes(modelDraft) && (
-                <button type="button" className="agent-pick active">
-                  <span className="agent-pick-main">
-                    <span className="agent-pick-name mono-sm">{modelDraft}</span>
-                    <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
-                  </span>
-                  <span className="pill ok">当前</span>
-                </button>
-              )}
+              {/* 搜索框：白名单一长串时按名字过滤（大小写不敏感，子串匹配） */}
+              <input
+                className="input"
+                type="search"
+                value={modelQuery}
+                onChange={(event) => setModelQuery(event.target.value)}
+                placeholder="搜索模型…"
+                aria-label="搜索模型"
+              />
+              {/* 默认模型排第一（带「默认」标签）：选中它 = 跟随智能体默认。
+                  搜索时按词过滤：默认模型也得搜得到（它就是个模型名）。 */}
+              {(() => {
+                const query = modelQuery.trim().toLowerCase()
+                const matches = (name: string) => !query || name.toLowerCase().includes(query)
+                return (
+                  <>
+                    {modelOptions.default && matches(modelOptions.default) && (
+                      <button
+                        type="button"
+                        className={`agent-pick${!modelDraft || modelDraft === modelOptions.default ? ' active' : ''}`}
+                        onClick={() => setModelDraft('')}
+                      >
+                        <span className="agent-pick-main">
+                          <span className="agent-pick-name mono-sm">
+                            {modelOptions.default}
+                            <span className="composer-scope-tag">默认</span>
+                          </span>
+                        </span>
+                        {(!modelDraft || modelDraft === modelOptions.default) && <span className="pill ok">当前</span>}
+                      </button>
+                    )}
+                    {modelOptions.models.filter(matches).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={`agent-pick${modelDraft === item ? ' active' : ''}`}
+                        onClick={() => setModelDraft(item)}
+                      >
+                        <span className="agent-pick-main">
+                          <span className="agent-pick-name mono-sm">{item}</span>
+                        </span>
+                        {modelDraft === item && <span className="pill ok">当前</span>}
+                      </button>
+                    ))}
+                    {/* 正在用的名字不在白名单里（且被搜到）也照样显示，别让当前选择凭空消失 */}
+                    {modelDraft && !modelOptions.models.includes(modelDraft) && matches(modelDraft) && (
+                      <button type="button" className="agent-pick active">
+                        <span className="agent-pick-main">
+                          <span className="agent-pick-name mono-sm">{modelDraft}</span>
+                          <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
+                        </span>
+                        <span className="pill ok">当前</span>
+                      </button>
+                    )}
+                    {/* 一个都没搜到：明说，别给一张空列表 */}
+                    {!modelOptions.models.some(matches) &&
+                      !(modelOptions.default && matches(modelOptions.default)) &&
+                      !(modelDraft && !modelOptions.models.includes(modelDraft) && matches(modelDraft)) && (
+                        <p className="dim small">没有匹配「{modelQuery.trim()}」的模型</p>
+                      )}
+                  </>
+                )
+              })()}
             </div>
           ) : (
             <div className="field">

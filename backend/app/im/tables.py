@@ -16,10 +16,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Column, ForeignKey, JSON, String, Text
 from sqlmodel import Field, SQLModel
 
-from ..models import new_id, utcnow
+from ..models import UTCDateTime, new_id, utcnow
 
 #: **后来新增的可选列**：SQLite 的 ``create_all`` 只建新表、不会给已存在的表补列，
 #: 所以在这里登记一次，由 ``db.init_db`` 幂等补齐（见 ``db._add_missing_columns``）。
@@ -77,8 +77,8 @@ class ImConnection(SQLModel, table=True):
     options: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False, default=dict)
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     #: 所属用户 id；老库由 bootstrap 回填给首任管理员。
     owner_id: str | None = Field(default=None, sa_column=Column(String(64), index=True))
 
@@ -106,8 +106,8 @@ class ImPeer(SQLModel, table=True):
     chat_key: str = Field(default="", sa_column=Column(String(200), nullable=False))
     chat_kind: str = Field(default="direct", sa_column=Column(String(16), nullable=False))
     chat_title: str = Field(default="", sa_column=Column(String(200), nullable=False))
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
 
 
 class ImChat(SQLModel, table=True):
@@ -139,8 +139,8 @@ class ImChat(SQLModel, table=True):
             String(64), ForeignKey("conversations.id", ondelete="SET NULL")
         ),
     )
-    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
-    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
 
 
 __all__ = ["ADDITIVE_COLUMNS", "ImChat", "ImConnection", "ImPeer"]

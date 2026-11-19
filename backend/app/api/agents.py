@@ -9,15 +9,18 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import FileResponse
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from .. import avatars
 from ..agents import AgentContext, get_agent as get_definition
 from ..agents.base import Availability
 from ..credentials import CredentialError
 from ..credentials import reads as credential_reads
-from ..db import get_session
+from ..db import SessionLocal, get_session
+from ..settings import get_settings
 from ..models import (
     AgentCredential,
     AgentMcpServer,
@@ -45,6 +48,7 @@ from ..schemas import (
     AgentSkillBrief,
     AgentSkillsUpdate,
     AgentTestResult,
+    AttachmentUpload as AvatarUpload,
 )
 from .auth import current_user, owner_id_for, require_owned
 
@@ -65,7 +69,9 @@ async def _gateway_for(profile: AgentProfile, session: AsyncSession) -> Gateway 
     return await session.get(Gateway, profile.gateway_id)
 
 
-async def _skill_briefs(profile_id: str, session: AsyncSession) -> list[AgentSkillBrief]:
+async def _skill_briefs(
+    profile_id: str, session: AsyncSession, owner_id: str | None = None
+) -> list[AgentSkillBrief]:
     links = (
         await session.execute(
             select(AgentSkill).where(AgentSkill.agent_profile_id == profile_id).order_by(AgentSkill.position)
@@ -82,6 +88,9 @@ async def _skill_briefs(profile_id: str, session: AsyncSession) -> list[AgentSki
     for skill_id in ids:
         row = rows.get(skill_id)
         if row is None:
+            continue
+        # 用户技能库按用户隔离：旧分配关系里指向别人技能的条目不再展示。
+        if row.owner_id is not None and row.owner_id != owner_id:
             continue
         briefs.append(
             AgentSkillBrief(
@@ -148,13 +157,14 @@ async def _to_read(
     except KeyError:
         availability = None
     gateway = await _gateway_for(profile, session)
-    briefs = await _skill_briefs(profile.id, session)
+    briefs = await _skill_briefs(profile.id, session, profile.owner_id)
     mcp_briefs = await _mcp_briefs(profile.id, session)
     credentials = await _credential_briefs(profile.id, session)
     return AgentProfileRead(
         id=profile.id,
         name=profile.name,
         avatar=profile.avatar,
+        avatar_file=profile.avatar_file,
         tagline=profile.tagline,
         description=profile.description,
         system_prompt=profile.system_prompt,
@@ -264,7 +274,12 @@ async def list_agents(
     ).scalars().all()
     # 可用性按 type_id 批量取一次，避免「每行都探测一遍」。
     statuses = await availability_service.for_types(row.type_id for row in rows)
-    return {"items": [(await _to_read(row, session, statuses.get(row.type_id))).model_dump() for row in rows]}
+    # 已有分组名（去重、排序）：编辑表单的「分组」输入框点开时给这些快捷选项。
+    groups = sorted({row.group_name for row in rows if row.group_name})
+    return {
+        "items": [(await _to_read(row, session, statuses.get(row.type_id))).model_dump() for row in rows],
+        "groups": groups,
+    }
 
 
 @router.post("", status_code=201)
@@ -373,6 +388,75 @@ async def update_agent(
     await session.refresh(profile)
     statuses = await availability_service.for_types([profile.type_id])
     return (await _to_read(profile, session, statuses.get(profile.type_id))).model_dump()
+
+
+@router.put("/{profile_id}/avatar")
+async def upload_agent_avatar(
+    profile_id: str,
+    payload: AvatarUpload,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    """上传 / 替换智能体的自定义头像（优先于 emoji 头像显示）。
+
+    与用户头像同一条管线（``app/avatars``）：只收位图（PNG / JPEG / WebP，≤2 MB），
+    文件名 = 智能体 id + 内容摘要，落在 ``<数据目录>/avatars/`` —— 智能体 id 与用户 id
+    一样是 32 位 hex，同一套文件名规则直接复用。编辑表单「先建后传」：新建的智能体
+    保存后前端立刻补一次上传。
+    """
+    profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
+    try:
+        raw, extension = avatars.decode_avatar(payload.content_base64)
+    except avatars.AvatarError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    data_dir = get_settings().data_dir
+    try:
+        stored = avatars.store_avatar(data_dir, profile.id, raw, extension)
+    except avatars.AvatarError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    profile.avatar_file = stored.filename
+    profile.updated_at = datetime.now(timezone.utc)
+    session.add(profile)
+    await session.commit()
+    statuses = await availability_service.for_types([profile.type_id])
+    return (await _to_read(profile, session, statuses.get(profile.type_id))).model_dump()
+
+
+@router.delete("/{profile_id}/avatar")
+async def delete_agent_avatar(
+    profile_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: Annotated[User, Depends(current_user)] = None,
+) -> dict:
+    """清掉智能体的自定义头像，界面回退到 emoji 头像。"""
+    profile = await _active_profile(profile_id, session)
+    require_owned(profile, user)
+    previous = profile.avatar_file
+    profile.avatar_file = None
+    profile.updated_at = datetime.now(timezone.utc)
+    session.add(profile)
+    await session.commit()
+    avatars.remove_avatar(get_settings().data_dir, previous)
+    statuses = await availability_service.for_types([profile.type_id])
+    return (await _to_read(profile, session, statuses.get(profile.type_id))).model_dump()
+
+
+@router.get("/{profile_id}/avatar")
+async def get_agent_avatar(
+    profile_id: str,
+    user: Annotated[User, Depends(current_user)] = None,
+) -> FileResponse:
+    """取智能体的自定义头像（任何登录用户都能看 —— 对话气泡里也要显示）。"""
+    # 只读头像文件本身，不要求归属：别的用户建的智能体发来的消息也要能显示头像。
+    async with SessionLocal() as session:
+        profile = await session.get(AgentProfile, profile_id)
+    if profile is None or not profile.avatar_file:
+        raise HTTPException(status_code=404, detail="该智能体没有自定义头像")
+    target = avatars.resolve_avatar(get_settings().data_dir, profile.avatar_file)
+    if target is None:
+        raise HTTPException(status_code=404, detail="该智能体没有自定义头像")
+    return FileResponse(target, media_type=avatars.guess_media_type(target.name))
 
 
 @router.delete("/{profile_id}", status_code=204)
@@ -509,6 +593,10 @@ async def duplicate_agent(
         )
     ).scalars().all()
     for link in links:
+        skill = await session.get(Skill, link.skill_id)
+        # 用户技能库按用户隔离：复制别人的智能体时，不能把他库里的私有技能带过来。
+        if skill is None or (skill.owner_id is not None and skill.owner_id != clone.owner_id):
+            continue
         session.add(
             AgentSkill(agent_profile_id=clone.id, skill_id=link.skill_id, position=link.position)
         )

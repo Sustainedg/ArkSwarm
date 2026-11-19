@@ -4,7 +4,10 @@
 """
 from __future__ import annotations
 
+import base64
+import io
 import json
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -508,7 +511,7 @@ async def test_skills_api_lists_rescans_and_shows_detail(client: httpx.AsyncClie
 
     items = (await client.get("/api/skills")).json()["items"]
     assert [item["slug"] for item in items] == ["alpha", "beta"]
-    assert items[0]["source_label"] == "个人技能"
+    assert items[0]["source_label"] == "个人技能（共享）"
     assert items[0]["file_count"] == 3
     assert items[0]["used_by_agents"] == 0
 
@@ -907,3 +910,253 @@ def test_seed_skills_never_raises_when_binary_missing(tmp_path: Path, monkeypatc
     monkeypatch.setattr(codex_mod.shutil, "which", lambda _: None)
 
     assert get_agent("codex").seed_skills() == []
+
+
+# --- 导出 / 导入 / 跨内核复制 -------------------------------------------------
+
+
+def _make_zip(files: dict[str, str], *, top: str | None = "demo") -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for name, body in files.items():
+            zf.writestr(f"{top}/{name}" if top else name, body)
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def transfer_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """两个内核各有一个临时技能根；编目直接扫这两个根，不碰开发机上的真实技能。"""
+    from app.agents.skills import SkillRoot, scan_skill_roots
+
+    roots = {
+        "custom-cli": [SkillRoot(str(tmp_path / "custom" / "skills"), source_kind="user")],
+        "claude-code": [SkillRoot(str(tmp_path / "claude" / "skills"), source_kind="user")],
+    }
+
+    def fake_roots(type_id: str) -> list[SkillRoot]:
+        return roots[type_id]
+
+    def fake_catalog() -> dict[str, SkillSpec]:
+        catalog: dict[str, SkillSpec] = {}
+        for type_id, items in roots.items():
+            for spec in scan_skill_roots(items, type_id=type_id):
+                catalog[spec.id] = spec
+        return catalog
+
+    monkeypatch.setattr(skill_service, "skill_roots_for_type", fake_roots)
+    monkeypatch.setattr(skill_service, "discover_catalog", fake_catalog)
+    return tmp_path
+
+
+async def test_export_skill_returns_zip(client: httpx.AsyncClient, transfer_home: Path):
+    """导出是只读的：把源目录原样打包，顶层目录名用技能 slug。"""
+    write_skill(transfer_home / "custom" / "skills", "alpha")
+    await client.post("/api/skills/rescan")
+
+    response = await client.get("/api/skills/custom-cli:alpha/export")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    assert 'filename="alpha.zip"' in response.headers["content-disposition"]
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        names = set(zf.namelist())
+        assert "alpha/SKILL.md" in names
+        assert "alpha/scripts/run.sh" in names
+        assert "alpha/references/note.md" in names
+
+    # 导出不删除源目录
+    assert (transfer_home / "custom" / "skills" / "alpha" / "SKILL.md").is_file()
+
+
+async def test_export_missing_directory_is_reported(client: httpx.AsyncClient, catalog: Path):
+    await client.post("/api/skills/rescan")
+    skill_service.shutil.rmtree(catalog / "alpha")
+    await client.post("/api/skills/rescan")
+
+    response = await client.get("/api/skills/custom-cli:alpha/export")
+    assert response.status_code == 422
+    assert "目录已不存在" in response.json()["detail"]
+
+
+async def test_import_skill_extracts_into_user_root(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """导入的 zip 落在目标内核的用户技能根，并立刻进入统一编目。"""
+    archive = _make_zip(
+        {
+            "SKILL.md": SKILL_MD.format(name="导入技能", description="导入的示例", extra=""),
+            "scripts/run.sh": "echo hi\n",
+        },
+        top="imported-skill",
+    )
+    response = await client.post(
+        "/api/skills/import",
+        json={
+            "type_id": "custom-cli",
+            "name": "随便起的名字.zip",
+            "content_base64": base64.b64encode(archive).decode(),
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # 目录名取压缩包里的顶层目录，而不是上传时的文件名；落点是当前用户的技能库。
+    assert body["skill_id"] == "custom-cli:lib:local:imported-skill"
+    assert body["slug"] == "imported-skill"
+    library = skill_service.get_settings().skill_libraries_root / "local" / "custom-cli"
+    assert (library / "imported-skill" / "SKILL.md").is_file()
+
+    items = (await client.get("/api/skills")).json()["items"]
+    assert [item["slug"] for item in items] == ["imported-skill"]
+    assert items[0]["available"] is True
+    assert items[0]["is_own"] is True
+
+
+async def test_import_flat_archive_uses_filename_as_slug(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """压缩包没有顶层目录（SKILL.md 就在根部）时，用上传文件名推导目录名。"""
+    archive = _make_zip(
+        {"SKILL.md": SKILL_MD.format(name="扁平技能", description="扁平", extra="")}, top=None
+    )
+    response = await client.post(
+        "/api/skills/import",
+        json={
+            "type_id": "custom-cli",
+            "name": "flat-skill.zip",
+            "content_base64": base64.b64encode(archive).decode(),
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["slug"] == "flat-skill"
+    library = skill_service.get_settings().skill_libraries_root / "local" / "custom-cli"
+    assert (library / "flat-skill" / "SKILL.md").is_file()
+
+
+async def test_import_rejects_bad_archive_and_missing_skill_md(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    bad = await client.post(
+        "/api/skills/import",
+        json={
+            "type_id": "custom-cli",
+            "content_base64": base64.b64encode(b"not a zip").decode(),
+        },
+    )
+    assert bad.status_code == 422
+
+    no_skill = await client.post(
+        "/api/skills/import",
+        json={
+            "type_id": "custom-cli",
+            "content_base64": base64.b64encode(_make_zip({"readme.md": "hi"}, top="pkg")).decode(),
+        },
+    )
+    assert no_skill.status_code == 422
+    assert "SKILL.md" in no_skill.json()["detail"]
+
+    not_base64 = await client.post(
+        "/api/skills/import", json={"type_id": "custom-cli", "content_base64": "!!!"}
+    )
+    assert not_base64.status_code == 422
+
+
+async def test_import_refuses_same_name_without_overwriting(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    write_skill(transfer_home / "custom" / "skills", "alpha")
+    await client.post("/api/skills/rescan")
+    original = (transfer_home / "custom" / "skills" / "alpha" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    archive = _make_zip(
+        {"SKILL.md": SKILL_MD.format(name="覆盖版", description="覆盖", extra="")}, top="alpha"
+    )
+    response = await client.post(
+        "/api/skills/import",
+        json={"type_id": "custom-cli", "content_base64": base64.b64encode(archive).decode()},
+    )
+    assert response.status_code == 422
+    assert "同名技能" in response.json()["detail"]
+    # 旧技能原样保留
+    assert (transfer_home / "custom" / "skills" / "alpha" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == original
+
+
+async def test_copy_skill_to_another_kernel(client: httpx.AsyncClient, transfer_home: Path):
+    """复制只搬文件：源技能还在，目标内核多出一条同 slug 的技能。"""
+    write_skill(transfer_home / "custom" / "skills", "alpha")
+    await client.post("/api/skills/rescan")
+
+    response = await client.post(
+        "/api/skills/custom-cli:alpha/copy", json={"type_id": "claude-code"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["skill_id"] == "claude-code:lib:local:alpha"
+    library = skill_service.get_settings().skill_libraries_root / "local" / "claude-code"
+    assert (library / "alpha" / "SKILL.md").is_file()
+    assert (transfer_home / "custom" / "skills" / "alpha" / "SKILL.md").is_file()
+
+    slugs = {item["id"] for item in (await client.get("/api/skills")).json()["items"]}
+    assert {"custom-cli:alpha", "claude-code:lib:local:alpha"} <= slugs
+
+
+async def test_copy_rejects_same_kernel_and_existing_target(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    write_skill(transfer_home / "custom" / "skills", "alpha")
+    write_skill(transfer_home / "claude" / "skills", "alpha")
+    await client.post("/api/skills/rescan")
+
+    same = await client.post("/api/skills/custom-cli:alpha/copy", json={"type_id": "custom-cli"})
+    assert same.status_code == 422
+    assert "相同" in same.json()["detail"]
+
+    conflict = await client.post(
+        "/api/skills/custom-cli:alpha/copy", json={"type_id": "claude-code"}
+    )
+    assert conflict.status_code == 422
+    assert "同名技能" in conflict.json()["detail"]
+
+    missing = await client.post(
+        "/api/skills/custom-cli:missing/copy", json={"type_id": "claude-code"}
+    )
+    assert missing.status_code == 404
+
+
+async def test_export_and_copy_refuse_paths_outside_declared_roots(
+    client: httpx.AsyncClient, catalog: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """数据库里的路径越出适配器声明的技能根时，导出 / 复制都要拒绝（与删除同一道护栏）。"""
+    from app.models import Skill
+
+    monkeypatch.setattr(
+        skill_service,
+        "skill_roots_for_type",
+        lambda _type_id: [skill_service.SkillRoot(str(catalog))],
+    )
+    outside = write_skill(tmp_path / "outside-root", "outside")
+    async with SessionLocal() as session:
+        session.add(
+            Skill(
+                id="custom-cli:outside",
+                type_id="custom-cli",
+                slug="outside",
+                name="越界技能",
+                source_kind="user",
+                path=str(outside),
+            )
+        )
+        await session.commit()
+
+    exported = await client.get("/api/skills/custom-cli:outside/export")
+    assert exported.status_code == 422
+    assert "不在它所属的技能目录内" in exported.json()["detail"]
+
+    copied = await client.post(
+        "/api/skills/custom-cli:outside/copy", json={"type_id": "claude-code"}
+    )
+    assert copied.status_code == 422
+    assert "不在它所属的技能目录内" in copied.json()["detail"]

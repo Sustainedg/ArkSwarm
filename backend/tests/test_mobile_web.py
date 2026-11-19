@@ -559,7 +559,7 @@ def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
     # 输入区的样子只有一份实现（对话页与协作对话共用）：线条图标长在框里、没有背景提示文字。
     composer = (FRONTEND / "src" / "components" / "Composer.tsx").read_text(encoding="utf-8")
     assert not re.search(r"placeholder\s*=", composer), "输入框不该再有背景提示文字"
-    for symbol in ("PaperclipIcon", "MicIcon", "SendIcon", "StopIcon"):
+    for symbol in ("PlusIcon", "MicIcon", "SendIcon", "StopIcon", "SettingsIcon"):
         assert symbol in composer, f"输入区应当用 {symbol} 这类线条图标"
     for emoji in ("📎", "🎤", "🔊", "🔈", "➤", "■"):
         assert emoji not in composer, f"图标不该再用 emoji / 文字符号：{emoji}"
@@ -732,3 +732,79 @@ def test_main_nav_is_the_same_menu_on_both_ends():
     assert desktop and mobile, "两端的主导航都要能被解析出来"
     assert desktop == mobile, "两端主导航必须是同一份菜单（顺序 / 图标 / 命名对齐）"
     assert "/mcp" in {item["to"] for item in desktop}, "MCP 页要在主导航里占一项（两端一致）"
+
+
+@needs_frontend
+def test_final_only_view_is_one_switch_on_both_ends():
+    """「显示工具调用」开关（输入区齿轮菜单）：只有一份实现（lib/finalOnly），两端对话页都接上。
+
+    行为约定：勾选 = 完整视图；**取消勾选 = 纯净视图**（`MessageView` 的 `finalOnly`）——
+    运行中只显示思考气泡，跑完只亮时间线上最后一段正文，出错 / 中断的报错永远保留。
+    开关值是本机偏好：页面持有、存 localStorage（默认显示），输入区组件只收受控 props。
+    """
+    lib = (FRONTEND / "src" / "lib" / "finalOnly.ts").read_text(encoding="utf-8")
+    for symbol in (
+        "TOOLS_VISIBILITY_STORAGE_KEY", "arkswarm.tools-hidden", "readShowTools",
+        "storeShowTools", "useShowTools",
+    ):
+        assert symbol in lib, f"lib/finalOnly.ts 缺少 {symbol}"
+    # 默认显示：只有显式关过才藏；回到显示要把键删掉（「默认显示」只有一个真值来源）。
+    assert "!== 'off'" in lib, "读开关要按「键存在且为 off 才藏」判断（默认显示）"
+    assert "removeItem" in lib, "回到显示要把存储键删掉"
+
+    # 输入区组件：齿轮按钮与勾选气泡是受控的（值在页面手里），不传这对 props 就不显示。
+    composer = (FRONTEND / "src" / "components" / "Composer.tsx").read_text(encoding="utf-8")
+    for symbol in ("showTools", "onShowToolsChange", "SettingsIcon", "显示工具调用"):
+        assert symbol in composer, f"输入区设置按钮 / 勾选气泡缺少 {symbol}"
+    assert "typeof showTools === 'boolean'" in composer, "设置按钮要按「传了这对 props 才显示」"
+    # 勾选项是 menuitemcheckbox（无原生 checkbox），选中态走 aria-checked。
+    assert 'role="menuitemcheckbox"' in composer, "勾选项要声明 menuitemcheckbox 角色"
+    assert "aria-checked={showTools}" in composer, "勾选项的选中态要走 aria-checked"
+    # 菜单收起：点外面 / Esc（与侧栏账号菜单同一套收法）。
+    assert "Escape" in composer, "设置气泡要支持 Esc 收起"
+    # 附件是加号、语音挪到发送左侧：布局约定固化在图标引用里。
+    assert "PlusIcon" in composer, "附件按钮应当用加号图标"
+    assert "PaperclipIcon" not in composer, "附件按钮不再用回形针"
+    icons = (FRONTEND / "src" / "components" / "Icons.tsx").read_text(encoding="utf-8")
+    assert "export function PlusIcon" in icons, "Icons.tsx 缺少加号图标"
+    assert "PaperclipIcon" not in icons, "回形针已无引用，别留死代码"
+    # 语音在发送左边：textarea 之后、停止/发送按钮之前出现麦克风按钮。
+    # 布局：加号、齿轮贴输入框左侧；语音紧贴发送（textarea 之后、停止 / 发送之前）。
+    voice_pos = composer.find("toggleVoice")
+    mic_pos = composer.find("<MicIcon")
+    stop_pos = composer.find("composer-tool stop")
+    send_pos = composer.find("composer-tool send")
+    textarea_pos = composer.find("onPaste={handlePaste}")
+    assert 0 < textarea_pos < mic_pos < stop_pos < send_pos, "语音按钮要放在发送按钮左侧（textarea 之后）"
+    assert 0 < voice_pos, "语音按钮的 toggleVoice 逻辑缺失"
+
+    # 两端对话页都要接同一份开关，并把它取反传给消息渲染。
+    for page in (
+        FRONTEND / "src" / "pages" / "ChatPage.tsx",
+        MOBILE_SRC / "pages" / "MobileChatPage.tsx",
+    ):
+        text = page.read_text(encoding="utf-8")
+        assert "useShowTools" in text, f"{page.name} 应当接 lib/finalOnly 的开关"
+        assert "showTools={showTools}" in text, f"{page.name} 要把开关传给输入区齿轮菜单"
+        assert "finalOnly={!showTools}" in text, f"{page.name} 要把开关取反传给消息渲染"
+
+    # MessageView 的纯净分支：藏过程、亮最后一段正文、保留报错。
+    view = (FRONTEND / "src" / "components" / "MessageView.tsx").read_text(encoding="utf-8")
+    assert "finalOnly" in view, "MessageView 要支持 finalOnly prop"
+    assert "findFinalText" in view, "纯净视图要按「时间线上最后一段正文」取最终回复"
+    assert "ThinkingBubble" in view, "纯净视图运行中要有思考气泡兜底"
+    # 透传组件也要有出口（桌面端经 ConversationThread 装配）。
+    thread = (FRONTEND / "src" / "components" / "ConversationThread.tsx").read_text(encoding="utf-8")
+    assert "finalOnly" in thread, "ConversationThread 要能透传 finalOnly"
+
+    # 「设置」勾选气泡的样式写在输入区共享段里：两端逐字一致（守卫同 test_composer_styles… 的口径）。
+    desktop = _shared_style_block(
+        FRONTEND / "src" / "index.css", COMPOSER_STYLE_BANNER, DESKTOP_COMPOSER_TUNING
+    )
+    mobile = _shared_style_block(
+        MOBILE_SRC / "mobile.css", COMPOSER_STYLE_BANNER, MOBILE_COMPOSER_TUNING
+    )
+    for selector in (".composer-settings-menu", ".composer-settings-caret"):
+        assert selector in desktop, f"输入区共享段里缺少 {selector}"
+        assert selector in mobile, f"移动端输入区共享段里缺少 {selector}"
+    assert desktop == mobile, "输入区样式两端不一致：改了一边记得同步另一边"

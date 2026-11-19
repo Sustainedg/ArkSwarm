@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 import pytest_asyncio
 
 from app.db import engine, init_db
@@ -17,6 +18,26 @@ async def client():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _isolated_skill_libraries(tmp_path, monkeypatch):
+    """每个用例一份独立的用户技能库目录。
+
+    技能库是平台数据目录里的真实文件，跨用例复用会让「导入的技能还在」干扰下一次
+    扫描与同名判断。这里只替换 ``runtime.skills`` 看到的 ``skill_libraries_root``，
+    其余配置（智能体隔离目录等）沿用真实设置。
+    """
+    from types import SimpleNamespace
+
+    import app.runtime.skills as skill_service
+
+    real = skill_service.get_settings()
+    stub = SimpleNamespace(
+        skill_libraries_root=(tmp_path / "skill-libraries").resolve(),
+        agent_homes_root=real.agent_homes_root,
+    )
+    monkeypatch.setattr(skill_service, "get_settings", lambda: stub)
 
 
 @pytest_asyncio.fixture(autouse=True)

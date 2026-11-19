@@ -65,6 +65,9 @@
   --office-cup-a: rgba(255, 255, 255, 0.16);
   --office-cup-b: rgba(255, 255, 255, 0.03);
 
+  /* 「设置」勾选气泡（输入框那颗）：macOS 式白卡 + 轻阴影；深色下面板用深色、阴影加重一档 */
+  --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
   /* 「推进任务」决策卡：品牌青调，与「需要你决定」的紫调卡片区分（浅色在下面覆盖） */
   --advance-border: rgba(94, 158, 255, 0.34);
   --advance-bg: linear-gradient(135deg, rgba(94, 158, 255, 0.1), rgba(123, 92, 255, 0.06));
@@ -147,6 +150,9 @@
   --office-cup-b: rgba(255, 255, 255, 0.08);
   --advance-border: rgba(59, 130, 246, 0.42);
   --advance-bg: linear-gradient(135deg, rgba(59, 130, 246, 0.09), rgba(123, 92, 255, 0.07));
+
+  /* 浅色下的勾选气泡：设计稿的柔和阴影（深色里那支 0.45 在白底上会脏） */
+  --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 
   --shadow: 0 18px 48px rgba(37, 31, 68, 0.18);
 }
@@ -278,12 +284,6 @@ code, pre, .mono { font-family: var(--mono); }
 }
 /* 品牌标是内联 SVG（components/BrandMark.tsx）：图形随 currentColor 走。 */
 .m-brand-mark .brand-mark-glyph { display: block; }
-
-/* 顶栏左上角的品牌 logo（菜单按钮）：点它打开左侧抽屉（导航 + 对话列表）。 */
-.m-logo-btn {
-  flex: none; padding: 0; border: none; background: none; cursor: pointer; line-height: 0;
-}
-.m-logo-btn:active { opacity: 0.72; }
 
 .m-icon-btn {
   flex: none; width: 38px; height: 38px; border-radius: 12px; border: 1px solid transparent;
@@ -494,6 +494,8 @@ code, pre, .mono { font-family: var(--mono); }
   border: 1px solid var(--border-strong);
 }
 .avatar.user { background: linear-gradient(135deg, #3b3760, #2b2844); }
+/* 自己的消息画真头像（UserAvatar）：撑满 avatar 圆框，与 AI 侧的 emoji 头像同尺寸 */
+.avatar .avatar-user { --avatar-size: 100%; width: 100%; height: 100%; }
 
 .form-grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
 .form-grid .span-2 { grid-column: span 1; }
@@ -1063,6 +1065,8 @@ code, pre, .mono { font-family: var(--mono); }
   0%, 60%, 100% { transform: translateY(0) scale(1); opacity: 0.4; }
   30% { transform: translateY(-5px) scale(1.08); opacity: 1; }
 }
+/* 「只看最终回复」：最终正文上方那行「已隐藏 N 段」提示 —— 贴着气泡顶部，比正文矮一头。 */
+.final-only-note { margin-bottom: 7px; }
 @media (prefers-reduced-motion: reduce) {
   .thinking-dot { animation: none; opacity: 0.7; }
   .bubble-body.streaming::after { animation: none; opacity: 0.85; }
@@ -1301,7 +1305,51 @@ code, pre, .mono { font-family: var(--mono); }
   transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 .composer-scope-btn:hover { border-color: var(--border-strong); color: var(--text); }
+/* 开关类胶囊（「只看最终回复」）点亮时的样子：品牌色描边加淡底，跟普通跳转胶囊区分开 */
+.composer-scope-btn.on {
+  border-color: var(--brand); background: var(--brand-soft); color: var(--brand); font-weight: 600;
+}
 .composer-scope-btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 胶囊里的小标签（「默认」模型）：跟着模型名后面，说明这个值是智能体配置的默认而不是专门选的 */
+.composer-scope-tag {
+  flex: none; margin-left: 4px; padding: 0 6px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand);
+  font-size: 10px; font-weight: 600; line-height: 1.7; white-space: nowrap;
+}
+/* 设置齿轮与它的勾选气泡：macOS 式的极简提示气泡 —— 白卡片、无边框、
+   柔阴影，底部伸出一个朝下的尖角正对按钮。齿轮按钮本体走 .composer-tool
+   （与语音 / 发送同尺寸同观感），这里只管气泡。 */
+.composer-settings { position: relative; flex: none; }
+/* 勾选气泡：纯白卡片 + 圆角 14px + 轻阴影，无边框；悬在按钮正上方 */
+.composer-settings-menu {
+  position: absolute; bottom: calc(100% + 12px); left: 50%; transform: translateX(-50%);
+  z-index: 60; padding: 16px 20px; border: none; border-radius: 14px;
+  background: var(--bg-elevated);
+  box-shadow: var(--popover-shadow, 0 8px 24px rgba(0, 0, 0, 0.08));
+  white-space: nowrap;
+}
+/* 底部正中的朝下尖角：与卡片同色同阴影感，指向下面的「设置」按钮 */
+.composer-settings-caret {
+  position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+  width: 16px; height: 8px;
+  background: var(--bg-elevated);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  /* 尖角自己不带阴影（卡片阴影盖不到尖角），补一层同强度的投影让它不像「贴上去的」 */
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.06));
+}
+/* 勾选项：细线 ✓ + 文字，点整行切换 */
+.composer-settings-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0; border: none; background: none; cursor: pointer; user-select: none;
+  color: var(--text); font: inherit;
+}
+.composer-settings-check {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none;
+  color: var(--composer-ico, #4a4a4a);
+}
+.composer-settings-label {
+  font-size: 14px; font-weight: 400; color: var(--text); letter-spacing: 0.3px;
+}
 /* 输入框下面那一条（用量统计等）：贴着框的下沿 */
 .composer-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
 .composer-foot .usage-bar { margin-top: 0; }
@@ -1319,9 +1367,10 @@ code, pre, .mono { font-family: var(--mono); }
 /* 输入框高度上限按可视视口算：小屏上别让输入区把整屏吃掉 */
 .composer textarea { max-height: 34vh; max-height: 34dvh; }
 
-/* 对话页的输入框：文字单独占上面一行，框整体提一档高度；附件 / 语音在左下，发送在右下。
-   框变得像「文字 + 操作条」两层，手指打字时不再和图标抢一行。
-   协作运行页的输入框不加 .m-chat-composer：那边没有附件、文字短，挤在一行更省地方。 */
+/* 对话页的输入框：文字单独占上面一行；下一行加号 + 齿轮贴左，语音 + 发送（停止）贴右 ——
+   语音紧贴发送（说完就发）。推右的是「右侧一组」的起点：语音按钮（.composer-tool.voice）；
+   别给发送也加 auto：两个推力会平分剩余空间，把按钮组挤到中间。
+   协作运行页的输入框不加 .m-chat-composer，不受这里影响。 */
 .m-chat-composer .composer-box {
   flex-wrap: wrap; align-items: center;
   padding: 4px 8px 5px; row-gap: 2px;
@@ -1329,8 +1378,9 @@ code, pre, .mono { font-family: var(--mono); }
 /* 类名和 .composer 落在同一个元素上：选择器别写成 `.m-chat-composer .composer textarea`，
    那样要求嵌套的 .composer，永远匹配不到（textarea 会继续和图标挤一行）。 */
 .m-chat-composer.composer textarea { order: -1; flex: 0 0 100%; min-height: 51px; }
+.m-chat-composer .composer-tool.voice { margin-left: auto; }
 .m-chat-composer .composer-tool.send,
-.m-chat-composer .composer-tool.stop { margin-left: auto; }
+.m-chat-composer .composer-tool.stop { margin-left: 0; }
 
 /* AI 回复期间排队的那条消息：贴在输入框上方，本轮结束自动发出，✕ 取消整段队列 */
 .m-queued-row {
@@ -1350,7 +1400,8 @@ code, pre, .mono { font-family: var(--mono); }
 }
 
 /* token 用量在输入框「下面」（贴底的是输入框本体）；开关那排在输入框上面 */
-.m-usage { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); margin-bottom: 7px; flex-wrap: wrap; }
+/* 对话页输入框下方的用量统计：固定 2×2 网格 —— 四项正好两行两列，窄屏也不挤成一条长龙 */
+.m-usage { display: grid; grid-template-columns: repeat(2, auto); justify-content: start; column-gap: 14px; row-gap: 2px; font-size: 11px; color: var(--text-dim); margin-bottom: 7px; }
 .m-usage b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .composer-foot .m-usage { margin-bottom: 0; }
 
@@ -1550,14 +1601,17 @@ code, pre, .mono { font-family: var(--mono); }
 .img-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
 
 /* 一条消息带过的附件：图片是缩略图，文档等是文件名胶囊 */
-.bubble-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.zoomable.bubble-attachment-thumb { width: 108px; height: 108px; overflow: hidden; border: 1px solid var(--border); }
-.zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.bubble-attachment-chip {
-  display: inline-flex; align-items: center; max-width: 240px; padding: 5px 10px;
-  border: 1px solid var(--border); border-radius: 999px; font-size: 11.5px; color: var(--text-muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 附件清单：与消息正文里的「📎 附件」块同构 —— 说明头一行 + 每个附件一行完整路径，
+   图片附件在路径旁配缩略图。路径是「智能体能直接读」的关键信息，必须完整可读。 */
+.bubble-attachments { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.bubble-attachments-head { font-size: 12px; color: var(--text-muted); }
+.bubble-attachment-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.bubble-attachment-path {
+  min-width: 0; flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
+.zoomable.bubble-attachment-thumb { flex: none; width: 64px; height: 64px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
 /* 正文里嵌的图（Markdown ![]()）：按**预览尺寸**显示，点开看原图。
    不直接铺满气泡：生图动辄 1024px，铺满后一条消息就占掉大半屏；宽度封顶后

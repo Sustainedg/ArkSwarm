@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Composer } from '../components/Composer'
 import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
-import { AgentIcon, FolderIcon, ModelIcon, ShareIcon, SpeakerIcon } from '../components/Icons'
+import { AgentIcon, FolderIcon, MenuIcon, ModelIcon, PlusIcon, ShareIcon, SpeakerIcon } from '../components/Icons'
 import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
+import { useAuth } from '../components/AuthGate'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../lib/api'
 import { useComposerDraft } from '../lib/composerDraft'
@@ -14,8 +15,14 @@ import { MediaUrlProvider, composeWithAttachments } from '../lib/media'
 import { shortPath } from '../lib/paths'
 import { useMarkConversationRead } from '../lib/readReceipts'
 import { shareConversationImage } from '../lib/shareImage'
+import {
+  readSidebarCollapsed,
+  subscribeSidebarCollapsed,
+  toggleSidebarCollapsed,
+} from '../lib/sidebarCollapsed'
 import { useThemeMode } from '../lib/theme'
 import { useSpeechOutput } from '../lib/tts'
+import { useShowTools } from '../lib/finalOnly'
 import type {
   ActiveRunInfo,
   AgentEvent,
@@ -59,6 +66,14 @@ export function ChatPage() {
   const location = useLocation()
   const speech = useSpeechOutput()
   const { theme } = useThemeMode()
+  /** 当前用户：自己发的消息画真头像（见 MessageView 的 user prop） */
+  const { user } = useAuth()
+  /** 侧栏折叠：与外壳（App）共用同一份真值（顶栏的折叠按钮也能折，见 lib/sidebarCollapsed） */
+  const sidebarCollapsed = useSyncExternalStore(subscribeSidebarCollapsed, readSidebarCollapsed)
+  /** 顶栏「新建对话」正在创建（期间按钮置灰，避免连点开出两条） */
+  const [creating, setCreating] = useState(false)
+  /** 「显示工具调用」（输入区齿轮菜单）：关掉后对话只亮最终回复（本机偏好，默认显示） */
+  const { showTools, setShowTools } = useShowTools()
   /** 打开 / 轮询到已完成的回复时，把这条对话标为已读（左侧栏的未读点据此消失） */
   const markRead = useMarkConversationRead()
 
@@ -97,6 +112,8 @@ export function ChatPage() {
   /** 换模型面板：可选清单 / 当前填写的值 */
   const [modelOptions, setModelOptions] = useState<ConversationModelOptions | null>(null)
   const [modelDraft, setModelDraft] = useState('')
+  /** 模型面板里的搜索词：白名单一长串时按名字过滤，省得从头翻到尾 */
+  const [modelQuery, setModelQuery] = useState('')
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -526,6 +543,24 @@ export function ChatPage() {
     await api.cancelRun(active.id).catch(() => undefined)
   }
 
+  /**
+   * 顶栏的「新建对话」：与侧栏「＋ 新建」同一条路 —— 用默认智能体开一条新对话，
+   * 工作目录留空（进去后随时改）；还没设过默认智能体时把错误亮出来，让用户去侧栏挑一个。
+   */
+  const startConversation = async () => {
+    if (creating) return
+    setCreating(true)
+    setError(null)
+    try {
+      const conversation = await api.createConversation({})
+      navigate(`/chat/${conversation.id}`)
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   /** 输入区共享组件把读好的 base64 交回来，这里只负责调接口。 */
   const uploadAttachment = async (name: string, contentBase64: string): Promise<AttachmentRef> => {
     if (!active) throw new Error('先选一段对话，再添加附件')
@@ -660,6 +695,7 @@ export function ChatPage() {
   const openModelPanel = () => {
     if (!active) return
     setModelDraft(active.model ?? '')
+    setModelQuery('')
     setModelOptions(null)
     setScopePanel('model')
     void api
@@ -772,10 +808,27 @@ export function ChatPage() {
       <section className="chat-pane">
         {active ? (
           <>
-            {/* 顶栏只有一行对话名称（居中）+ 右侧分享 / 朗读：不再显示智能体名与内核说明。 */}
-            <div className="chat-topbar center-title">
-              <div className="chat-topbar-title" title={active.title}>
-                {active.title}
+            {/* 顶栏左侧：折叠侧栏 + 新建对话（与移动端顶栏同一套布局）；中间不放标题 ——
+                对话名左侧栏一直看得见，顶栏不重复它。右侧仍是分享 / 朗读。 */}
+            <div className="chat-topbar">
+              <div className="chat-topbar-lead">
+                <button
+                  className="icon-btn"
+                  onClick={toggleSidebarCollapsed}
+                  aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                  title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                >
+                  <MenuIcon size={18} />
+                </button>
+                <button
+                  className="icon-btn"
+                  onClick={() => void startConversation()}
+                  disabled={creating}
+                  aria-label="新建对话"
+                  title="用默认智能体开一条新对话（智能体与工作目录进去后还能改）"
+                >
+                  <PlusIcon size={18} />
+                </button>
               </div>
               <div className="chat-topbar-actions">
                 <button
@@ -813,6 +866,8 @@ export function ChatPage() {
             <div className="chat-scroll" ref={scrollRef} onScroll={onThreadScroll}>
               <ConversationThread
                 centered
+                finalOnly={!showTools}
+                user={user}
                 items={threadItems}
                 empty={chatMessages.length === 0 && !liveMessage ? (
                   <div className="empty">
@@ -860,6 +915,9 @@ export function ChatPage() {
                   busy={runActive}
                   queueWhenBusy
                   submitOnEnter
+                  // 齿轮菜单里的「显示工具调用」：关掉 = 对话只亮最终回复（本机偏好）。
+                  showTools={showTools}
+                  onShowToolsChange={setShowTools}
                   inputRef={inputRef}
                   onNotice={setError}
                   inputLabel={`发消息给 ${active.agent_name}`}
@@ -888,10 +946,12 @@ export function ChatPage() {
                           type="button"
                           className="composer-scope-btn"
                           onClick={openModelPanel}
-                          title={`模型：${active.model ?? '跟随智能体默认'}（点一下换）`}
+                          title={`模型：${active.model ?? active.agent_model ?? '由内核决定'}（点一下换）`}
                         >
                           <ModelIcon size={15} />
-                          <span>{active.model ?? '默认模型'}</span>
+                          <span>{active.model ?? active.agent_model ?? '默认模型'}</span>
+                          {/* 没单独指定模型时用的是智能体默认：旁边点个标签，免得以为是专门选的 */}
+                          {!active.model && active.agent_model && <span className="composer-scope-tag">默认</span>}
                         </button>
                       </div>
                       {queue.length > 0 && (
@@ -1095,39 +1155,69 @@ export function ChatPage() {
               <p className="dim small">正在加载可选模型…</p>
             ) : modelOptions.models.length > 0 ? (
               <div className="stack" style={{ gap: 6 }}>
-                <button
-                  type="button"
-                  className={`agent-pick${modelDraft ? '' : ' active'}`}
-                  onClick={() => setModelDraft('')}
-                >
-                  <span className="agent-pick-main">
-                    <span className="agent-pick-name">跟随智能体默认</span>
-                    <span className="card-sub">{modelOptions.default ?? '由内核决定'}</span>
-                  </span>
-                  {!modelDraft && <span className="pill ok">当前</span>}
-                </button>
-                {modelOptions.models.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`agent-pick${modelDraft === item ? ' active' : ''}`}
-                    onClick={() => setModelDraft(item)}
-                  >
-                    <span className="agent-pick-main">
-                      <span className="agent-pick-name mono-sm">{item}</span>
-                    </span>
-                    {modelDraft === item && <span className="pill ok">当前</span>}
-                  </button>
-                ))}
-                {modelDraft && !modelOptions.models.includes(modelDraft) && (
-                  <button type="button" className="agent-pick active" onClick={() => setModelDraft(modelDraft)}>
-                    <span className="agent-pick-main">
-                      <span className="agent-pick-name mono-sm">{modelDraft}</span>
-                      <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
-                    </span>
-                    <span className="pill ok">当前</span>
-                  </button>
-                )}
+                {/* 搜索框：白名单一长串时按名字过滤（大小写不敏感，子串匹配） */}
+                <input
+                  className="input"
+                  type="search"
+                  value={modelQuery}
+                  onChange={(event) => setModelQuery(event.target.value)}
+                  placeholder="搜索模型…"
+                  aria-label="搜索模型"
+                />
+                {/* 默认模型排第一（带「默认」标签）：选中它 = 跟随智能体默认。
+                    搜索时按词过滤：默认模型也得搜得到（它就是个模型名）。 */}
+                {(() => {
+                  const query = modelQuery.trim().toLowerCase()
+                  const matches = (name: string) => !query || name.toLowerCase().includes(query)
+                  return (
+                    <>
+                      {modelOptions.default && matches(modelOptions.default) && (
+                        <button
+                          type="button"
+                          className={`agent-pick${!modelDraft || modelDraft === modelOptions.default ? ' active' : ''}`}
+                          onClick={() => setModelDraft('')}
+                        >
+                          <span className="agent-pick-main">
+                            <span className="agent-pick-name mono-sm">
+                              {modelOptions.default}
+                              <span className="composer-scope-tag">默认</span>
+                            </span>
+                          </span>
+                          {(!modelDraft || modelDraft === modelOptions.default) && <span className="pill ok">当前</span>}
+                        </button>
+                      )}
+                      {modelOptions.models.filter(matches).map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`agent-pick${modelDraft === item ? ' active' : ''}`}
+                          onClick={() => setModelDraft(item)}
+                        >
+                          <span className="agent-pick-main">
+                            <span className="agent-pick-name mono-sm">{item}</span>
+                          </span>
+                          {modelDraft === item && <span className="pill ok">当前</span>}
+                        </button>
+                      ))}
+                      {/* 正在用的名字不在白名单里（且被搜到）也照样显示，别让当前选择凭空消失 */}
+                      {modelDraft && !modelOptions.models.includes(modelDraft) && matches(modelDraft) && (
+                        <button type="button" className="agent-pick active" onClick={() => setModelDraft(modelDraft)}>
+                          <span className="agent-pick-main">
+                            <span className="agent-pick-name mono-sm">{modelDraft}</span>
+                            <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
+                          </span>
+                          <span className="pill ok">当前</span>
+                        </button>
+                      )}
+                      {/* 一个都没搜到：明说，别给一张空列表 */}
+                      {!modelOptions.models.some(matches) &&
+                        !(modelOptions.default && matches(modelOptions.default)) &&
+                        !(modelDraft && !modelOptions.models.includes(modelDraft) && matches(modelDraft)) && (
+                          <p className="dim small">没有匹配「{modelQuery.trim()}」的模型</p>
+                        )}
+                    </>
+                  )
+                })()}
               </div>
             ) : (
               <div className="stack" style={{ gap: 8 }}>

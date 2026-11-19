@@ -26,6 +26,7 @@ from sqlmodel import select
 from starlette.concurrency import run_in_threadpool
 
 from .. import avatars
+from ..schemas import AvatarUpload
 from ..auth import hash_password, issue_token, verify_password
 from ..auth import issue_pat as auth_issue_pat
 from ..auth_deps import _SYSTEM_USER, current_user, owner_id_for, require_admin, require_owned
@@ -238,14 +239,6 @@ async def update_me(
         await session.commit()
         await session.refresh(row)
     return _to_read(row)
-
-
-class AvatarUpload(BaseModel):
-    """上传头像：base64 图片（前端 `FileReader` 读出来直接发）。"""
-
-    content_base64: str = Field(min_length=1)
-    #: 客户端给的原始文件名，只用于报错信息，不参与落盘命名
-    name: str | None = Field(default=None, max_length=200)
 
 
 # --- 个人访问令牌（PAT）------------------------------------------------------

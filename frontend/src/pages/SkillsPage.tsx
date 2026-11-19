@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
-import { useAuth } from '../components/AuthGate'
 import { CollapsibleGroup } from '../components/CollapsibleGroup'
+import { Modal } from '../components/Modal'
+import { SkillAssignPanel } from '../components/SkillAssignPanel'
+import { SkillCopyForm } from '../components/SkillCopyForm'
+import { SkillImportForm } from '../components/SkillImportForm'
 import { useExpandMap } from '../lib/collapse'
-import type { Skill, SkillDetail } from '../lib/types'
+import { downloadBlob } from '../lib/skillFiles'
+import type { AgentProfile, Skill, SkillDetail, SkillTransferResult } from '../lib/types'
 import { SkillsMarket } from '../components/SkillsMarket'
 import { MarkdownView } from '../components/MarkdownView'
 import { stripFrontmatter } from '../lib/skillBody'
 
 /**
  * 技能页：把各智能体内核的技能目录统一编目后集中展示。
- * 技能只能通过「智能体 → 技能」的分配被某个智能体使用，这里只负责查看与重新扫描。
+ * 技能只能通过「智能体 → 技能」的分配被某个智能体使用，这里负责查看、导入 / 导出、
+ * 复制到别的内核与重新扫描。
  */
 export function SkillsPage() {
   const [tab, setTab] = useState<'local' | 'market'>('local')
@@ -23,6 +28,12 @@ export function SkillsPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  // 三个弹层：导入（列表顶部）、分配与复制（详情右上角）
+  const [importing, setImporting] = useState(false)
+  const [assigning, setAssigning] = useState<SkillDetail | null>(null)
+  const [copying, setCopying] = useState<SkillDetail | null>(null)
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   /** 按内核分组默认折叠：技能多的时候先给一份目录，要看谁点开谁。 */
   const { isExpanded, toggle } = useExpandMap()
 
@@ -104,6 +115,44 @@ export function SkillsPage() {
     }
   }
 
+  const exportSkill = async (skill: SkillDetail) => {
+    setExporting(true)
+    setNotice(null)
+    setError(null)
+    try {
+      const blob = await api.exportSkill(skill.id)
+      downloadBlob(blob, `${skill.slug}.zip`)
+      setNotice(`已导出「${skill.name}」`)
+    } catch (e) {
+      setError(describe(e))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const openAssign = async (skill: SkillDetail) => {
+    setError(null)
+    try {
+      setAgents(await api.listAgents())
+      setAssigning(skill)
+    } catch (e) {
+      setError(describe(e))
+    }
+  }
+
+  const afterTransfer = async (
+    action: string,
+    result: SkillTransferResult,
+    kernelName: string,
+  ) => {
+    setImporting(false)
+    setCopying(null)
+    setAssigning(null)
+    setNotice(`${action}「${result.name}」到 ${kernelName}；分配给智能体后才会在运行时生效`)
+    await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+    setSelected(result.skill_id)
+  }
+
   const groups = groupByType(skills)
 
   return (
@@ -112,9 +161,8 @@ export function SkillsPage() {
         <div>
           <h1 className="page-title">技能</h1>
           <p className="page-desc">
-            各智能体内核自带的技能在这里统一编目。技能通过「智能体分配」生效；
-            腾讯 SkillHub 安装的技能与自行放进技能目录的技能都可以删除，
-            内核自带技能与已安装插件里的技能只读。
+            内核自带的技能全平台共享；导入、市场安装与跨内核复制的技能属于你自己的技能库，
+            只有你能看到和管理。技能通过「智能体分配」生效，管理员可以查看全部用户的技能库。
           </p>
         </div>
         <div className="spacer" />
@@ -163,6 +211,13 @@ export function SkillsPage() {
           <button className="btn" onClick={() => void rescan()} disabled={scanning}>
             {scanning ? '扫描中…' : '重新扫描'}
           </button>
+          <button
+            className="btn primary"
+            onClick={() => setImporting(true)}
+            title="把自己的技能压缩包导入技能库"
+          >
+            导入技能
+          </button>
           </>
         )}
       </header>
@@ -204,6 +259,9 @@ export function SkillsPage() {
                     <span className={`pill${skill.available ? '' : ' err'}`}>
                       {skill.available ? skill.source_label : '目录已消失'}
                     </span>
+                    {skill.owner_name && !skill.is_own && (
+                      <span className="pill">用户 {skill.owner_name}</span>
+                    )}
                     {skill.used_by_agents > 0 && (
                       <span className="pill brand">被 {skill.used_by_agents} 个智能体使用</span>
                     )}
@@ -219,6 +277,10 @@ export function SkillsPage() {
             <SkillDetailPane
               skill={detail}
               deleting={deleting}
+              exporting={exporting}
+              onExport={() => void exportSkill(detail)}
+              onAssign={() => void openAssign(detail)}
+              onCopy={() => setCopying(detail)}
               onDelete={() => void removeSkill(detail)}
             />
           ) : (
@@ -230,6 +292,48 @@ export function SkillsPage() {
         </div>
       </div>
       )}
+
+      {importing && (
+        <Modal title="导入技能" onClose={() => setImporting(false)}>
+          <SkillImportForm
+            onCancel={() => setImporting(false)}
+            onImported={(result, kernelName) =>
+              void afterTransfer('已导入', result, kernelName)
+            }
+          />
+        </Modal>
+      )}
+
+      {assigning && (
+        <Modal title={`分配「${assigning.name}」`} onClose={() => setAssigning(null)}>
+          <SkillAssignPanel
+            skill={assigning}
+            agents={agents}
+            onChanged={async () => {
+              const [freshDetail, freshAgents] = await Promise.all([
+                api.getSkill(assigning.id),
+                api.listAgents(),
+              ])
+              setAssigning(freshDetail)
+              setDetail(freshDetail)
+              setAgents(freshAgents)
+              await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+            }}
+          />
+        </Modal>
+      )}
+
+      {copying && (
+        <Modal title={`复制「${copying.name}」到别的内核`} onClose={() => setCopying(null)}>
+          <SkillCopyForm
+            skill={copying}
+            onCancel={() => setCopying(null)}
+            onCopied={(result, kernelName) =>
+              void afterTransfer('已复制', result, kernelName)
+            }
+          />
+        </Modal>
+      )}
     </>
   )
 }
@@ -237,21 +341,66 @@ export function SkillsPage() {
 function SkillDetailPane({
   skill,
   deleting,
+  exporting,
+  onExport,
+  onAssign,
+  onCopy,
   onDelete,
 }: {
   skill: SkillDetail
   deleting: boolean
+  exporting: boolean
+  onExport: () => void
+  onAssign: () => void
+  onCopy: () => void
   onDelete: () => void
 }) {
-  const { isAdmin } = useAuth()
   const kernel = skill.type_name ?? skill.type_id
   return (
     <div className="skill-detail">
       <header className="skill-detail-hero">
-        <div className="skill-detail-eyebrow">
-          <span className="pill brand">{skill.source_label}</span>
-          <span className="skill-detail-kernel">{kernel}</span>
-          {!skill.available && <span className="pill err">目录已消失</span>}
+        <div className="skill-detail-hero-top">
+          <div className="skill-detail-eyebrow">
+            <span className="pill brand">{skill.source_label}</span>
+            <span className="skill-detail-kernel">{kernel}</span>
+            {!skill.available && <span className="pill err">目录已消失</span>}
+          </div>
+          <div className="skill-detail-buttons">
+            <button
+              className="btn sm"
+              onClick={onExport}
+              disabled={exporting || !skill.available}
+              title="把技能目录打包成 zip 下载"
+            >
+              {exporting ? '导出中…' : '导出'}
+            </button>
+            <button
+              className="btn sm"
+              onClick={onAssign}
+              disabled={!skill.available}
+              title="把这个技能分配给同内核的智能体"
+            >
+              分配
+            </button>
+            <button
+              className="btn sm"
+              onClick={onCopy}
+              disabled={!skill.available}
+              title="把技能文件复制到自己另一个内核的技能库"
+            >
+              复制到内核
+            </button>
+            {skill.deletable && (
+              <button
+                className="btn sm danger"
+                onClick={onDelete}
+                disabled={deleting}
+                title="会删除它的源目录，并解除所有智能体对它的分配"
+              >
+                {deleting ? '删除中…' : '删除'}
+              </button>
+            )}
+          </div>
         </div>
         <h2 className="skill-detail-title">{skill.name}</h2>
         {skill.description && <p className="skill-detail-desc">{skill.description}</p>}
@@ -270,14 +419,6 @@ function SkillDetailPane({
             </a>
           )}
         </div>
-        {isAdmin && skill.deletable && (
-          <div className="skill-detail-actions">
-            <button className="btn danger" onClick={onDelete} disabled={deleting}>
-              {deleting ? '删除中…' : '删除技能'}
-            </button>
-            <span>会删除它的源目录，并解除所有智能体对它的分配。</span>
-          </div>
-        )}
       </header>
 
       {skill.note && <div className="banner info">{skill.note}</div>}
@@ -309,6 +450,8 @@ function SkillDetailPane({
           <dl className="skill-detail-kv">
             <dt>所属内核</dt>
             <dd>{kernel}</dd>
+            <dt>所属用户</dt>
+            <dd>{skill.owner_name || (skill.owner_id ? '其他用户' : '全平台共享')}</dd>
             <dt>来源</dt>
             <dd>{skill.source_label}</dd>
             <dt>版本</dt>

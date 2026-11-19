@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -22,7 +23,7 @@ from ..agents import get_agent
 from ..db import get_session
 from ..models import AgentProfile, Conversation, Message, Skill, User
 from ..runtime import skills as skill_service
-from .auth import current_user
+from .auth import current_user, owner_id_for
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -152,18 +153,40 @@ def _count_skill_calls(parts: Any, type_id: str, counts: dict[str, int]) -> None
             counts[skill_id] = counts.get(skill_id, 0) + 1
 
 
-async def _skills_summary(session: AsyncSession, calls: dict[str, int]) -> dict[str, Any]:
-    """技能用量：所选范围内的调用总次数，以及被调用最多的技能。"""
-    rows = {row.id: row for row in (await session.execute(select(Skill))).scalars().all()}
+async def _skills_summary(
+    session: AsyncSession, calls: dict[str, int], user: User
+) -> dict[str, Any]:
+    """技能用量：所选范围内的调用总次数，以及被调用最多的技能。
+
+    工具调用只带得出 ``<内核>:<目录名>``，同一内核下共享技能与个人技能可能同名：
+    这里只在「共享 + 当前用户」的可见范围内解析，并优先取用户自己的那一份。
+    """
+    statement = select(Skill)
+    if user.role != "admin":
+        owner = owner_id_for(user)
+        if owner is None:
+            statement = statement.where(Skill.owner_id.is_(None))
+        else:
+            statement = statement.where(
+                or_(Skill.owner_id.is_(None), Skill.owner_id == owner)
+            )
+    rows = (await session.execute(statement)).scalars().all()
+    by_key: dict[tuple[str, str], Skill] = {}
+    for row in rows:
+        key = (row.type_id, row.slug)
+        current = by_key.get(key)
+        # 自己的库优先于共享技能。
+        if current is None or (current.owner_id is None and row.owner_id is not None):
+            by_key[key] = row
     labels = skill_service.SOURCE_LABELS
 
     items: list[dict[str, Any]] = []
     for skill_id, count in calls.items():
         type_id, _, slug = skill_id.partition(":")
-        row = rows.get(skill_id)
+        row = by_key.get((type_id, slug))
         items.append(
             {
-                "id": skill_id,
+                "id": row.id if row else skill_id,
                 "name": row.name if row else slug,
                 "type_id": type_id,
                 "type_name": _type_name(type_id),
@@ -291,5 +314,5 @@ async def usage_overview(
         "by_agent": by_agent,
         "by_conversation": by_conversation[:TOP_CONVERSATIONS],
         "daily": daily,
-        "skills": await _skills_summary(session, skill_calls),
+        "skills": await _skills_summary(session, skill_calls, user),
     }

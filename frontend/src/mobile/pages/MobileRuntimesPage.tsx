@@ -14,6 +14,13 @@ const ACTION_LABELS: Record<RuntimeAction, string> = {
   uninstall: '卸载',
 }
 
+/**
+ * 这两个「内核」没有可管理的实体，不该出现在内核管理列表里（与桌面端 KernelManager 同一规则）：
+ * - `custom-cli`：用户自备可执行文件，装没装、在哪平台无从探测；
+ * - `openai-harness`：进程内 API 内核，不存在本机安装这一说。
+ */
+const HIDDEN_RUNTIME_IDS = new Set(['custom-cli', 'openai-harness'])
+
 interface LogLine {
   text: string
   level?: string
@@ -94,7 +101,8 @@ export function MobileRuntimesPage() {
 
   const reload = async () => {
     try {
-      const items = await api.listRuntimes()
+      // 无实体的内核（自定义 CLI / OpenAI 兼容）不进列表 —— 见 HIDDEN_RUNTIME_IDS 的说明。
+      const items = (await api.listRuntimes()).filter((item) => !HIDDEN_RUNTIME_IDS.has(item.id))
       setRuntimes(items)
       setError(null)
       // 「检查更新」是每个内核一次远端查询，不能挡住首屏：卡片先出来，结果到了再补。

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
-import { useAuth } from '../../components/AuthGate'
 import { CollapsibleGroup } from '../../components/CollapsibleGroup'
+import { SkillAssignPanel } from '../../components/SkillAssignPanel'
+import { SkillCopyForm } from '../../components/SkillCopyForm'
+import { SkillImportForm } from '../../components/SkillImportForm'
 import { useExpandMap } from '../../lib/collapse'
-import type { Skill, SkillDetail } from '../../lib/types'
+import { downloadBlob } from '../../lib/skillFiles'
+import type { AgentProfile, Skill, SkillDetail, SkillTransferResult } from '../../lib/types'
 import { SkillsMarket } from '../../components/SkillsMarket'
 import { MarkdownView } from '../../components/MarkdownView'
 import { stripFrontmatter } from '../../lib/skillBody'
@@ -49,7 +52,6 @@ export function MobileSkillsPage() {
 
 /** 本地技能：各内核自带技能的统一编目视图（原来的实现）。 */
 function MobileSkillsLocal() {
-  const { isAdmin } = useAuth()
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [sourceKind, setSourceKind] = useState('')
@@ -58,7 +60,13 @@ function MobileSkillsLocal() {
   const [notice, setNotice] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [loading, setLoading] = useState(true)
+  // 三个弹层：导入（列表顶部）、分配与复制（详情页动作条）
+  const [importing, setImporting] = useState(false)
+  const [assigning, setAssigning] = useState<SkillDetail | null>(null)
+  const [copying, setCopying] = useState<SkillDetail | null>(null)
+  const [agents, setAgents] = useState<AgentProfile[]>([])
   /** 按内核分组默认折叠：先给一份目录，要看哪个内核点开哪个。 */
   const { isExpanded, toggle } = useExpandMap()
 
@@ -125,6 +133,50 @@ function MobileSkillsLocal() {
     }
   }
 
+  const exportSelected = async () => {
+    if (!selected) return
+    setExporting(true)
+    setNotice(null)
+    try {
+      const blob = await api.exportSkill(selected.id)
+      downloadBlob(blob, `${selected.slug}.zip`)
+      setNotice(`已导出「${selected.name}」`)
+    } catch (e) {
+      setError(describeError(e))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const openAssign = async () => {
+    if (!selected) return
+    setError(null)
+    try {
+      setAgents(await api.listAgents())
+      setAssigning(selected)
+    } catch (e) {
+      setError(describeError(e))
+    }
+  }
+
+  const afterTransfer = async (
+    action: string,
+    result: SkillTransferResult,
+    kernelName: string,
+  ) => {
+    setImporting(false)
+    setCopying(null)
+    setAssigning(null)
+    setNotice(`${action}「${result.name}」到 ${kernelName}；分配给智能体后才会在运行时生效`)
+    await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+    try {
+      setSelected(await api.getSkill(result.skill_id))
+    } catch (e) {
+      // 新技能已经落盘并刷新过列表；详情读不到只是这一步失败，照常提示用户。
+      setError(describeError(e))
+    }
+  }
+
   // 按内核分组展示：同类技能放在一起，方便按内核核对。
   const groups = useMemo(() => {
     const map = new Map<string, { typeName: string; items: Skill[] }>()
@@ -144,6 +196,9 @@ function MobileSkillsLocal() {
         </span>
         <button className="btn" onClick={() => void rescan()} disabled={scanning}>
           {scanning ? '扫描中…' : '重新扫描'}
+        </button>
+        <button className="btn primary" onClick={() => setImporting(true)}>
+          导入
         </button>
       </div>
       <div className="stack">
@@ -198,6 +253,9 @@ function MobileSkillsLocal() {
                       <span className="m-item-sub">{skill.description || '（无描述）'}</span>
                     </span>
                     <span className="pill">{skill.available ? skill.source_label : '目录已消失'}</span>
+                    {skill.owner_name && !skill.is_own && (
+                      <span className="pill">用户 {skill.owner_name}</span>
+                    )}
                     <span className="m-item-chevron">›</span>
                   </button>
                 ))}
@@ -211,8 +269,9 @@ function MobileSkillsLocal() {
           full
           title="技能详情"
           onClose={() => setSelected(null)}
+          escapeDisabled={Boolean(assigning || copying)}
           footer={
-            isAdmin && selected.deletable ? (
+            selected.deletable ? (
               <button
                 className="btn danger block"
                 onClick={() => void deleteSelected()}
@@ -234,10 +293,37 @@ function MobileSkillsLocal() {
               {selected.description && <p className="m-skill-desc">{selected.description}</p>}
               <div className="m-skill-chips">
                 <span className="m-skill-chip">{selected.file_count} 个文件</span>
+                {selected.owner_name && !selected.is_own && (
+                  <span className="m-skill-chip">用户 {selected.owner_name}</span>
+                )}
                 {selected.version && <span className="m-skill-chip">v{selected.version}</span>}
                 {selected.author && <span className="m-skill-chip">作者 {selected.author}</span>}
               </div>
             </header>
+
+            <div className="row wrap" style={{ gap: 8 }}>
+              <button
+                className="btn sm"
+                onClick={() => void exportSelected()}
+                disabled={exporting || !selected.available}
+              >
+                {exporting ? '导出中…' : '导出'}
+              </button>
+              <button
+                className="btn sm"
+                onClick={() => void openAssign()}
+                disabled={!selected.available}
+              >
+                分配
+              </button>
+              <button
+                className="btn sm"
+                onClick={() => setCopying(selected)}
+                disabled={!selected.available}
+              >
+                复制到内核
+              </button>
+            </div>
 
             {selected.note && <div className="banner info">{selected.note}</div>}
 
@@ -322,6 +408,54 @@ function MobileSkillsLocal() {
               </section>
             )}
           </div>
+        </MobileSheet>
+      )}
+
+      {importing && (
+        <MobileSheet title="导入技能" onClose={() => setImporting(false)}>
+          <SkillImportForm
+            onCancel={() => setImporting(false)}
+            onImported={(result, kernelName) =>
+              void afterTransfer('已导入', result, kernelName)
+            }
+          />
+        </MobileSheet>
+      )}
+
+      {assigning && (
+        <MobileSheet
+          title={`分配「${assigning.name}」`}
+          onClose={() => setAssigning(null)}
+        >
+          <SkillAssignPanel
+            skill={assigning}
+            agents={agents}
+            onChanged={async () => {
+              const [freshDetail, freshAgents] = await Promise.all([
+                api.getSkill(assigning.id),
+                api.listAgents(),
+              ])
+              setAssigning(freshDetail)
+              setSelected(freshDetail)
+              setAgents(freshAgents)
+              await reload({ source_kind: sourceKind || undefined, q: query || undefined })
+            }}
+          />
+        </MobileSheet>
+      )}
+
+      {copying && (
+        <MobileSheet
+          title={`复制「${copying.name}」到别的内核`}
+          onClose={() => setCopying(null)}
+        >
+          <SkillCopyForm
+            skill={copying}
+            onCancel={() => setCopying(null)}
+            onCopied={(result, kernelName) =>
+              void afterTransfer('已复制', result, kernelName)
+            }
+          />
         </MobileSheet>
       )}
     </div>

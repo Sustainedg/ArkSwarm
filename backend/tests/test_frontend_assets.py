@@ -253,12 +253,16 @@ def test_brand_mark_is_one_inline_svg_on_both_ends():
         FRONTEND / "src" / "App.tsx",
         FRONTEND / "src" / "components" / "LoginScreen.tsx",
         MOBILE_SRC / "components" / "MobileDrawer.tsx",
-        MOBILE_SRC / "components" / "MobileMenuButton.tsx",
     ]
     for path in users:
         text = path.read_text(encoding="utf-8")
         assert "BrandMark" in text, f"{path.name} 应当用共享的品牌标组件"
         assert "✦" not in text, f"{path.name} 里还留着旧的 ✦ 字符"
+
+    # 顶栏左上角不再是品牌 logo 而是汉堡折叠按钮（用户指定的导航入口形态），
+    # 品牌标留在侧栏 / 抽屉 / 登录页；这里锁住「汉堡用共享的线条图标」。
+    menu = (MOBILE_SRC / "components" / "MobileMenuButton.tsx").read_text(encoding="utf-8")
+    assert "MenuIcon" in menu, "顶栏菜单按钮应当用 Icons 里的汉堡线条图标"
 
 
 @needs_frontend

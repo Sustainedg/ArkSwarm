@@ -262,6 +262,8 @@ export interface AgentProfile {
   id: string
   name: string
   avatar: string
+  /** 自定义头像文件名；有值时取 /api/agents/{id}/avatar 显示，优先于 emoji */
+  avatar_file?: string | null
   tagline?: string | null
   description?: string | null
   system_prompt: string
@@ -329,10 +331,16 @@ export interface Skill {
   used_by_agents: number
   /** 由「技能市场」装入的技能为 true（可在市场页卸载），其余只读 */
   is_market: boolean
-  /** 能否从技能页删除：内核自带（system）之外的技能都可以 */
+  /** 能否从技能页删除：自己的技能库、且不是内核自带 / 插件只读技能 */
   deletable: boolean
   /** 市场技能对应的市场页地址 */
   source_url?: string | null
+  /** 归属用户 id；为空表示内核自带 / 宿主机共享技能 */
+  owner_id?: string | null
+  /** 归属用户展示名（管理员查看全量目录时用） */
+  owner_name?: string | null
+  /** 这条技能是否在当前用户自己的技能库里 */
+  is_own: boolean
 }
 
 export interface SkillDetail extends Skill {
@@ -352,6 +360,14 @@ export interface SkillRescanResult {
   updated: number
   missing: number
   total: number
+}
+
+/** 导入 / 复制技能后的结果：新技能的标识与落点内核。 */
+export interface SkillTransferResult {
+  skill_id: string
+  name: string
+  slug: string
+  type_id: string
 }
 
 /** 内置 MCP 的一个业务参数（平台地址、令牌、网关地址、模型名…）；值只回掩码。 */
@@ -533,6 +549,8 @@ export interface Conversation {
   agent_name?: string | null
   agent_avatar?: string | null
   agent_type_id?: string | null
+  /** 智能体配置的默认模型（对话未单独指定时，输入框上显示它 + 「默认」标签） */
+  agent_model?: string | null
   message_count: number
   /** 最后一条是已完成的 AI 回复、且晚于用户最后一次打开它的时间（列表接口算出来） */
   unread?: boolean
