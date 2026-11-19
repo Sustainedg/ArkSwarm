@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { BrandMark } from './components/BrandMark'
 import { UserAvatar } from './components/UserAvatar'
@@ -6,8 +6,10 @@ import { LogoutIcon, SettingsIcon } from './components/Icons'
 import { ConversationList } from './components/ConversationList'
 import { api } from './lib/api'
 import {
+  isSidebarForcedCollapsed,
   readSidebarCollapsed,
   subscribeSidebarCollapsed,
+  subscribeSidebarViewport,
   toggleSidebarCollapsed,
 } from './lib/sidebarCollapsed'
 import { useAuth } from './components/AuthGate'
@@ -52,7 +54,11 @@ export default function App() {
   const { user, authEnabled, logout } = useAuth()
   const navigate = useNavigate()
   const [version, setVersion] = useState('')
-  const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
+  /** 用户手动折叠的本机偏好（宽窗时生效） */
+  const manualCollapsed = useSyncExternalStore(subscribeSidebarCollapsed, readSidebarCollapsed)
+  /** 窗口窄到放不下展开的侧栏：强制折叠，避免对话列表被挤变形 */
+  const narrow = useSyncExternalStore(subscribeSidebarViewport, isSidebarForcedCollapsed)
+  const collapsed = narrow || manualCollapsed
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
 
@@ -75,10 +81,10 @@ export default function App() {
 
   const displayName = user?.display_name || user?.username || '系统'
 
-  const toggleSidebar = () => setCollapsed(toggleSidebarCollapsed())
-
-  // 别的入口（对话页顶栏的汉堡按钮）折叠侧栏：订阅共享模块的变化跟上同一份真值。
-  useEffect(() => subscribeSidebarCollapsed(() => setCollapsed(readSidebarCollapsed())), [])
+  // 折叠真值在 store 里，切换后由 useSyncExternalStore 触发重渲染
+  const toggleSidebar = () => {
+    toggleSidebarCollapsed()
+  }
 
   useEffect(() => {
     // 侧边栏只要一个版本号：走最轻的 /api/health，别让每次打开页面都去汇总系统信息。
@@ -104,17 +110,19 @@ export default function App() {
           </div>
           {/* 折叠入口有两处：这里的 ‹/› 与对话页顶栏的汉堡（同一份状态，见 lib/sidebarCollapsed）。
               非对话页面没有顶栏汉堡，这里的按钮是它们唯一的折叠出口。 */}
-          <button
-            type="button"
-            className="sidebar-toggle"
-            onClick={toggleSidebar}
-            aria-expanded={!collapsed}
-            aria-controls="app-sidebar"
-            aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'}
-            title={collapsed ? '展开侧边栏' : '折叠侧边栏'}
-          >
-            {collapsed ? '›' : '‹'}
-          </button>
+          {!narrow && (
+            <button
+              type="button"
+              className="sidebar-toggle"
+              onClick={toggleSidebar}
+              aria-expanded={!collapsed}
+              aria-controls="app-sidebar"
+              aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'}
+              title={collapsed ? '展开侧边栏' : '折叠侧边栏'}
+            >
+              {collapsed ? '›' : '‹'}
+            </button>
+          )}
         </div>
         <nav className="stack" style={{ gap: 2 }}>
           {NAV.map((item) => (

@@ -58,18 +58,17 @@ function trayIconPath(): string {
 function desktopChromeCss(): string {
   return `
 body.arkswarm-desktop { overflow: hidden; }
-body.arkswarm-desktop .app-shell {
-  height: calc(100vh - ${TITLEBAR_HEIGHT}px);
-  margin-top: ${TITLEBAR_HEIGHT}px;
+/* 内容**直接铺到窗口边缘**：顶部 36px 靠侧栏 / 主区各自的内边距让出来，
+   背景（侧栏渐变、主区径向渐变）一路延伸到顶，不会出现一条横向色带。
+   控制按钮浮在这块背景上，看起来就是应用自带的顶栏。 */
+body.arkswarm-desktop .sidebar {
+  padding-top: calc(18px * var(--sbs) + ${TITLEBAR_HEIGHT}px);
 }
+body.arkswarm-desktop .main { padding-top: ${TITLEBAR_HEIGHT}px; }
 #arkswarm-titlebar {
   position: fixed; top: 0; left: 0; right: 0; height: ${TITLEBAR_HEIGHT}px;
   -webkit-app-region: drag; z-index: 20; background: transparent;
   display: flex; align-items: stretch; justify-content: flex-end;
-}
-#arkswarm-titlebar::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
-  background: var(--border, rgba(255, 255, 255, 0.08));
 }
 /* Windows 自绘窗口按钮：颜色跟随页面主题变量，不再有系统浅色条 */
 .arkswarm-win-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
@@ -294,13 +293,64 @@ function createWindow(): void {
   });
 }
 
-/** 启动页（等待后端就绪时显示）。 */
+/** 把应用图标读成 data URI（启动页是 data: 页面，不能直接引用本地文件）。 */
+function splashIconDataUri(): string {
+  try {
+    const png = fs.readFileSync(path.join(iconsDir(), 'icon.png'));
+    return `data:image/png;base64,${png.toString('base64')}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 启动页（等待后端就绪时显示）：品牌图标 + 呼吸光晕 + 环形进度。 */
 async function loadSplash(): Promise<void> {
-  const html = `<html><body style="margin:0;background:#0f1117;color:#e8eaf0;font-family:system-ui;
-    display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px">
-    <div style="font-size:42px">🐝</div>
-    <div id="msg" style="font-size:14px;color:#9aa0b0">正在初始化…</div>
-    </body></html>`;
+  const icon = splashIconDataUri();
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background:
+        radial-gradient(620px 420px at 50% 16%, rgba(224, 83, 214, 0.16), transparent 70%),
+        radial-gradient(520px 380px at 82% 88%, rgba(107, 76, 240, 0.12), transparent 72%),
+        #0b0a12;
+      color: #e8eaf0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                   "Microsoft YaHei", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-font-smoothing: antialiased; user-select: none; overflow: hidden;
+    }
+    .wrap {
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      padding-bottom: 36px; animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    .logo-ring { position: relative; display: grid; place-items: center; }
+    .logo-ring::before {
+      content: ""; position: absolute; inset: -14px; border-radius: 34px;
+      background: radial-gradient(closest-side, rgba(217, 79, 208, 0.28), transparent 78%);
+      filter: blur(6px); animation: breathe 3.2s ease-in-out infinite;
+    }
+    .logo { width: 84px; height: 84px; border-radius: 22px; display: block; position: relative;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08) inset; }
+    .name { margin-top: 6px; font-size: 17px; font-weight: 600; letter-spacing: 0.06em; }
+    .sub { font-size: 10.5px; letter-spacing: 0.22em; color: #7d7899; text-transform: uppercase; }
+    .spinner {
+      width: 22px; height: 22px; margin-top: 10px; border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.09); border-top-color: #e053d6;
+      animation: spin 0.85s linear infinite;
+    }
+    #msg { font-size: 12.5px; color: #9aa0b0; min-height: 18px; letter-spacing: 0.02em; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes breathe { 0%, 100% { opacity: 0.55; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.04); } }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  </style></head><body>
+    <div class="wrap">
+      <div class="logo-ring"><img class="logo" src="${icon}" alt="" /></div>
+      <div class="name">ArkSwarm</div>
+      <div class="sub">多智能体控制台</div>
+      <div class="spinner"></div>
+      <div id="msg">正在初始化…</div>
+    </div>
+  </body></html>`;
   await mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 

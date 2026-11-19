@@ -16,8 +16,10 @@ import { shortPath } from '../lib/paths'
 import { useMarkConversationRead } from '../lib/readReceipts'
 import { shareConversationImage } from '../lib/shareImage'
 import {
+  isSidebarForcedCollapsed,
   readSidebarCollapsed,
   subscribeSidebarCollapsed,
+  subscribeSidebarViewport,
   toggleSidebarCollapsed,
 } from '../lib/sidebarCollapsed'
 import { useThemeMode } from '../lib/theme'
@@ -71,7 +73,9 @@ export function ChatPage() {
   /** 当前用户：自己发的消息画真头像（见 MessageView 的 user prop） */
   const { user } = useAuth()
   /** 侧栏折叠：与外壳（App）共用同一份真值（顶栏的折叠按钮也能折，见 lib/sidebarCollapsed） */
-  const sidebarCollapsed = useSyncExternalStore(subscribeSidebarCollapsed, readSidebarCollapsed)
+  const manualCollapsed = useSyncExternalStore(subscribeSidebarCollapsed, readSidebarCollapsed)
+  const sidebarNarrow = useSyncExternalStore(subscribeSidebarViewport, isSidebarForcedCollapsed)
+  const sidebarCollapsed = sidebarNarrow || manualCollapsed
   /** 顶栏「新建对话」正在创建（期间按钮置灰，避免连点开出两条） */
   const [creating, setCreating] = useState(false)
   /** 「显示工具调用」（输入区齿轮菜单）：关掉后对话只亮最终回复（本机偏好，默认显示） */
@@ -905,14 +909,16 @@ export function ChatPage() {
                 对话名左侧栏一直看得见，顶栏不重复它。右侧仍是分享 / 朗读。 */}
             <div className="chat-topbar">
               <div className="chat-topbar-lead">
-                <button
-                  className="icon-btn"
-                  onClick={toggleSidebarCollapsed}
-                  aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-                  title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-                >
-                  <MenuIcon size={18} />
-                </button>
+                {!sidebarNarrow && (
+                  <button
+                    className="icon-btn"
+                    onClick={toggleSidebarCollapsed}
+                    aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                    title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                  >
+                    <MenuIcon size={18} />
+                  </button>
+                )}
                 <button
                   className="icon-btn"
                   onClick={() => void startConversation()}

@@ -44,3 +44,28 @@ export function subscribeSidebarCollapsed(onChange: () => void): () => void {
     window.removeEventListener('storage', onChange)
   }
 }
+
+/** 窄窗断点：侧栏（232px）与内容再挤下去就会变形，低于此宽度强制折叠。 */
+const NARROW_QUERY = '(max-width: 1100px)'
+
+/** 当前窗口是否窄到「放不下展开的侧栏」。 */
+export function isSidebarForcedCollapsed(): boolean {
+  try {
+    return window.matchMedia(NARROW_QUERY).matches
+  } catch {
+    /* 老环境没有 matchMedia：按展开处理 */
+    return false
+  }
+}
+
+/** 订阅窗口宽度跨越断点（`useSyncExternalStore` 的 subscribe 形态）。 */
+export function subscribeSidebarViewport(onChange: () => void): () => void {
+  let media: MediaQueryList
+  try {
+    media = window.matchMedia(NARROW_QUERY)
+  } catch {
+    return () => undefined
+  }
+  media.addEventListener('change', onChange)
+  return () => media.removeEventListener('change', onChange)
+}
