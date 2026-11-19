@@ -135,10 +135,15 @@ function registerWindowControls(): void {
   });
 }
 
-/** 每次页面加载（含后端自更新后的重载）都把桌面外壳装回去。 */
+/**
+ * 每次页面加载（含后端自更新后的重载）都把桌面外壳装回去。
+ *
+ * 用 dom-ready 而不是 did-finish-load：后者要等 React 与静态资源全部加载完，
+ * 页面会先按 100vh 渲染、再往下跳 36px；dom-ready 在挂载前就位，不会看到跳动。
+ */
 function installDesktopChrome(win: BrowserWindow): void {
   if (!customTitlebar) return;
-  win.webContents.on('did-finish-load', () => {
+  win.webContents.on('dom-ready', () => {
     if (win.isDestroyed()) return;
     void win.webContents.insertCSS(desktopChromeCss()).catch(() => undefined);
     void win.webContents.executeJavaScript(desktopChromeScript()).catch(() => undefined);
