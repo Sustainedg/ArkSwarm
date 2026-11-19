@@ -16,7 +16,12 @@ import { spawnBackend, watchBackendRestart, type BackendHandle } from './backend
 import { ensurePythonRuntime } from './pythonRuntime';
 import { bootstrapBundledBackend } from './bootstrap';
 import { ensureLayout, dataDir } from './paths';
-import { checkForUpdatesManually, disposeAutoUpdate, setupAutoUpdate } from './updater';
+import {
+  checkForUpdatesManually,
+  disposeAutoUpdate,
+  registerUpdateIpc,
+  setupAutoUpdate,
+} from './updater';
 
 /**
  * CI 冒烟模式（M3）：只跑「运行时 → 后端 → 健康检查」这条链路，不建窗口、不建托盘，
@@ -174,6 +179,8 @@ async function main(): Promise<void> {
   await app.whenReady();
   ensureLayout();
   registerWindowControls();
+  // 「设置 → 关于」的更新入口：与托盘菜单共用 electron-updater（下载完整安装包）
+  registerUpdateIpc();
 
   if (smokeMode) {
     // 不建窗口；只给整条链路一个总时限（依赖安装 + 首启可能花几分钟）

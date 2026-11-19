@@ -1,5 +1,7 @@
 """自更新 API：检测新版本、一键更新、回滚。
 
+服务对象是 **Docker / 网页部署**：桌面端的更新由 Electron 壳的完整安装包通道接管，
+不再经过这里（见 ``desktop/src/main/updater.ts``）。
 界面入口在「设置 → 关于」：检测更新（查 GitHub 最新 Release）→ 更新（下载、解压、
 切指针、原地重启）。本层保持薄：动作全在 :mod:`app.selfupdate`，这里只做状态码
 翻与 SSE 封装。

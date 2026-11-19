@@ -10,6 +10,7 @@ import { ProxySettings } from '../components/ProxySettings'
 import { TitleSettingsSection } from '../components/TitleSettings'
 import { UpdatePanel } from '../components/UpdatePanel'
 import { api, ApiError } from '../lib/api'
+import { desktopUpdates } from '../lib/desktop'
 import { useAuth } from '../components/AuthGate'
 import { THEME_OPTIONS, useThemeMode } from '../lib/theme'
 import type { Overview } from '../lib/types'
@@ -181,7 +182,11 @@ export function SettingsPage() {
 
         {tab === 'about' && (
           <>
-            {isAdmin && <UpdatePanel currentVersion={overview?.version ?? '…'} />}
+            {/* 桌面端的更新是本地壳操作（下载完整安装包），不要求管理员；
+                网页 / Docker 的一键更新是平台级动作，仍只给管理员。 */}
+            {(isAdmin || desktopUpdates()) && (
+              <UpdatePanel currentVersion={overview?.version ?? '…'} />
+            )}
 
             {/* 系统信息：只读概况（版本 / 适配器 / 数据目录 / 工作目录根）。
                 任务运行状态已挪到「内核管理」页（那里每 8 秒刷新），

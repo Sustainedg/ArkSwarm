@@ -10,14 +10,15 @@
 
 ```
 Electron 主进程（薄壳）
- ├─ 首启物化：安装包内代码 → userData/releases/<版本>/ + current 软链（bootstrap.ts）
+ ├─ 首启 / 整包升级物化：安装包内代码 → userData/releases/<版本>/ + current 软链（bootstrap.ts）
  ├─ 选端口：8010 优先，被占退随机（ports.ts）
- ├─ Python 运行时：内嵌解释器 → venv → pip 装依赖（pythonRuntime.ts，首启联网）
+ ├─ Python 运行时：内嵌解释器 → venv → pip 装依赖（pythonRuntime.ts；按 requirements 的
+ │    sha256 指纹判断，变了才重装 —— 整包升级引入新依赖时不会漏装）
  ├─ Node 运行时：内嵌 Node + npm，全局前缀钉在 userData（runtimeEnv.ts，M4）
  ├─ spawn 后端：uvicorn --host 127.0.0.1 --app-dir releases/current/backend
  ├─ 健康检查门控 → loadURL(127.0.0.1:<port>)
- ├─ execv 看门狗：后端界面内自更新后同 PID 换血 → 刷新窗口
- ├─ 壳自更新：electron-updater + 滚动 Release（updater.ts，M3）
+ ├─ execv 看门狗：后端同 PID 换血后刷新窗口（兼容旧版 / 直接调用自更新 API）
+ ├─ 壳自更新：electron-updater + 滚动 Release（updater.ts；托盘与「设置 → 关于」共用）
  └─ 托盘常驻：关窗 = 隐藏，后端继续跑（IM / 协作 / 生成不中断）
 ```
 
@@ -47,7 +48,8 @@ Electron 主进程（薄壳）
 | 产物 | `arkswarm.tar.gz` + `.sha256` | NSIS / DMG / zip + `latest*.yml` |
 | 发布 tag | `v0.1.3`（普通 Release，含网页/后端源码） | 安装包**追加到同一个 `v0.1.3` Release**；另有 `desktop-latest`（**滚动**，prerelease，壳自更新读它） |
 | 更新器 | `backend/app/selfupdate.py`，读 `/releases/latest` | `electron-updater`，Generic Provider 直读滚动 tag 下的 `latest*.yml` |
-| 生效方式 | 下载 → `releases/<版本>/` → 切 current → `os.execv` 同 PID 重启 | 下载安装包 → 重启 App（NSIS / Squirrel.Mac） |
+| 生效方式 | 下载 → `releases/<版本>/` → 切 current → `os.execv` 同 PID 重启 | 下载**完整安装包** → 重启 App（NSIS / Squirrel.Mac）；启动时把新安装包里的后端物化并切 current |
+| 界面入口 | Docker / 网页部署：「设置 → 关于」 | 桌面端：「设置 → 关于」**与托盘菜单共用** electron-updater（不再走后端 tar.gz 通道） |
 
 **为什么必须隔离**：两条通道都跑在 `Sustainedg/ArkSwarm`，而 GitHub 的 `/releases/latest`
 是「全仓库最新一个非 prerelease 非 draft 的 Release」。如果壳的版本 Release 成了 latest：
@@ -63,6 +65,13 @@ Electron 主进程（薄壳）
    `https://github.com/Sustainedg/ArkSwarm/releases/download/desktop-latest/`，与 latest 语义无关；
 3. 滚动 tag `desktop-latest` 的资产由 CI **覆盖上传**（`gh release upload --clobber`）；
 4. fork / 私有部署可用 `ARKSWARM_DESKTOP_UPDATE_URL` 覆盖更新源。
+
+**桌面端只有一条更新通道**：托盘「检查桌面端更新…」与「设置 → 关于 → 检测更新」共用
+`updater.ts` 的同一套状态机，下载的都是**完整安装包**（Windows 走 `.blockmap` 差分，
+只传变化的数据块，但拼出来的仍是完整安装包）。新安装包自带的后端代码由 `bootstrap.ts`
+在下次启动时物化成 `releases/<新版本>` 并切 `current`；若 `requirements.txt` 内容变了
+（sha256 指纹不同），`pythonRuntime.ts` 会重装 venv 依赖。后端的「一键更新」
+（`arkswarm.tar.gz` + `os.execv`）只服务 Docker / 网页部署，桌面端界面不再暴露。
 
 **macOS 前提**：Squirrel.Mac 只接受已签名应用。未签名构建里 `updater.ts` 会识别
 （优先 `app.getCodeSigningInfo()`，Electron 33 没有该 API 时用 `codesign -dv` 探测

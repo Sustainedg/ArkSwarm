@@ -11,17 +11,19 @@
 
 ```
 Electron 主进程（薄壳，TypeScript）
- ├─ ⓪ 首启物化：安装包内置代码 → releases/<版本>/ + current 软链（bootstrap.ts，
- │    复刻 Docker entrypoint 的托管模式布局 —— selfupdate.py 靠它识别「可一键更新」）
+ ├─ ⓪ 首启 / 整包升级物化：安装包内置代码 → releases/<版本>/ + current 软链（bootstrap.ts，
+ │    复刻 Docker entrypoint 的托管模式布局；新安装包里的后端版本更新时会切到新版本）
  ├─ ① 选端口：8010 优先，被占退随机（ports.ts）
- ├─ ② Python 运行时：embedded 解释器 → venv → pip 装依赖（pythonRuntime.ts，首启联网，之后零网络）
+ ├─ ② Python 运行时：embedded 解释器 → venv → pip 装依赖（pythonRuntime.ts；按
+ │    requirements 的 sha256 指纹判断，依赖清单变了才重装，整包升级不漏装）
  ├─ ②' Node 运行时：embedded Node + npm，全局前缀 / 缓存在 userData（runtimeEnv.ts，M4）
  ├─ ③ spawn 后端：uvicorn --host 127.0.0.1 --app-dir releases/current/backend（backend.ts，只听本机）
  ├─ ④ 健康检查门控：轮询 /api/health（health.ts）
  ├─ ⑤ BrowserWindow.loadURL(127.0.0.1:<port>)（index.ts）
  ├─ ⑥ 托盘常驻 + 单实例锁（关窗 = 隐藏，后端继续跑）
- ├─ ⑦ execv 看门狗：后端界面内自更新后同 PID 换血 → 自动刷新窗口（backend.ts:watchBackendRestart）
- └─ ⑧ 壳自更新：electron-updater + 滚动 Release `desktop-latest`（updater.ts，M3）
+ ├─ ⑦ execv 看门狗：后端同 PID 换血后自动刷新窗口（backend.ts:watchBackendRestart）
+ └─ ⑧ 壳自更新：electron-updater + 滚动 Release `desktop-latest`（updater.ts）；
+     托盘「检查桌面端更新…」与「设置 → 关于 → 检测更新」共用，下载完整安装包
 ```
 
 **目录布局**（安装后 userData，与 Docker 卷设计对齐）：
@@ -85,7 +87,7 @@ prerelease。细节与设计原因见 `docs/desktop.md` §2。
 | 后端改动 | 桌面版需要的后端适配（若有）走主项目正常 PR 流程，桌面壳只读仓库 `backend/` 源码 |
 | 测试 | `desktop/` 不进 `scripts/test.sh`；本目录 `npm run typecheck` 自证，CI 另跑打包版冒烟 |
 | 文档 | 长期文档进 `docs/`（`docs/desktop.md`）；`desktop/README.md` 保持自包含 |
-| 版本 | 壳版本（package.json `version`）**与后端 `__version__` 同号**（V0.1.3 ↔ 0.1.3），发布时 CI 双向校验；后端更新走主项目 releases 机制（界面内一键升级） |
+| 版本 | 壳版本（package.json `version`）**与后端 `__version__` 同号**（V0.1.3 ↔ 0.1.3），发布时 CI 双向校验；桌面端更新统一走**完整安装包**（electron-updater），新安装包里的后端代码在启动时物化并切 current |
 
 ## 里程碑
 

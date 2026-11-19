@@ -12,8 +12,9 @@
  *   2. execv 重启后 cwd 停在旧版本目录 → 必须由「current 指针 + 重新进 backend」解决；
  *   3. releases/ 布局给了回滚能力：保留旧版本目录，切指针即回滚。
  *
- * 首启只做一次拷贝（安装包内代码 → releases/<内置版本>），之后完全由
- * 界面里的「检测更新」接管（selfupdate.py 下载 → releases/<新版本> → execv）。
+ * **整包升级也要更新后端代码**：桌面端的更新通道是「下载完整安装包」（electron-updater），
+ * 新安装包里自带的后端代码比 `releases/` 里现有的新时，必须物化成新版本目录并切
+ * `current`，否则壳升级了、后端还跑着旧代码（两条版本线会错位）。
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -67,6 +68,38 @@ function versionGt(a: string, b: string): boolean {
   return false;
 }
 
+/** releases/ 里所有完整版本（不跟随 current 指向；降序）。 */
+function installedVersions(): string[] {
+  const releases = releasesDir();
+  if (!fs.existsSync(releases)) return [];
+  return fs
+    .readdirSync(releases)
+    .filter((name) => /^V[\d.]+$/.test(name) && payloadComplete(path.join(releases, name)))
+    .sort((a, b) => (versionGt(a, b) ? -1 : 1));
+}
+
+/**
+ * 目录链接类型：Windows 普通用户没有创建目录符号链接的权限（需要管理员 /
+ * 开发者模式），junction 不需要提权且同样能被 realpath 解析。
+ */
+const DIR_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
+
+/** 把 current 原子地指到目标版本目录（临时链接 + rename）。 */
+function switchCurrent(targetDir: string): void {
+  const releases = releasesDir();
+  const current = path.join(releases, 'current');
+  const tmp = path.join(releases, '.current.tmp');
+  fs.rmSync(tmp, { force: true });
+  fs.symlinkSync(targetDir, tmp, DIR_LINK_TYPE);
+  try {
+    fs.renameSync(tmp, current);
+  } catch {
+    // Windows / 某些文件系统上目标已存在时 rename 会失败：先删再改名。
+    fs.rmSync(current, { force: true });
+    fs.renameSync(tmp, current);
+  }
+}
+
 /**
  * 选择要运行的版本目录：current 完整就直接用；否则挑最高完整版本并建链。
  * 返回 current 最终指向的版本目录（绝对路径）。
@@ -83,50 +116,65 @@ export function resolveRunDir(): string {
   fs.rmSync(current, { force: true });
 
   // 挑 releases/ 里最高的完整版本
-  const versions = fs
-    .readdirSync(releases)
-    .filter((name) => /^V[\d.]+$/.test(name) && payloadComplete(path.join(releases, name)))
-    .sort((a, b) => (versionGt(a, b) ? -1 : 1));
+  const versions = installedVersions();
   if (versions.length === 0) {
     throw new Error('releases/ 里没有任何可用版本（内置代码物化失败？）');
   }
-  fs.symlinkSync(versions[0], current, 'dir');
+  switchCurrent(path.join(releases, versions[0]));
   return fs.realpathSync(current);
 }
 
 /**
- * 首启物化：安装包内置代码 → releases/<内置版本>/（幂等，只做一次）。
- * 返回「是否发生了物化」（首次 vs 已有版本）。
+ * 首启 / 整包升级后的物化：安装包内置代码 → releases/<内置版本>/。
+ *
+ * - 首次安装：物化内置版本并建 current；
+ * - 整包升级（新安装包覆盖旧安装）：内置版本比 releases/ 里的都新时，物化新版本
+ *   并切 current —— 否则壳更新了、后端还跑旧代码；
+ * - 重装旧安装包：releases/ 里已有更新版本时不动，避免把用户降级。
  */
 export function bootstrapBundledBackend(): { ranDir: string; firstBoot: boolean } {
   const releases = releasesDir();
   fs.mkdirSync(releases, { recursive: true });
 
-  // 已有完整版本就不动（升级走 selfupdate.py；重装应用时也保留用户已有版本）
-  const existing = fs
-    .readdirSync(releases)
-    .filter((name) => /^V[\d.]+$/.test(name) && payloadComplete(path.join(releases, name)));
-  let firstBoot = existing.length === 0;
-  if (existing.length > 0) {
-    const ranDir = resolveRunDir();
-    return { ranDir, firstBoot: false };
-  }
-
-  // 首启：把内置代码拷贝成第一个版本目录
-  const version = bundledVersion();
   if (!app.isPackaged) {
     // 开发模式不物化：直接用仓库源码跑（源码模式），一键更新按设计禁用
     const devBackend = path.join(app.getAppPath(), '..', 'backend');
     return { ranDir: path.dirname(devBackend), firstBoot: true };
   }
+
+  const existing = installedVersions();
+  const firstBoot = existing.length === 0;
+  const version = bundledVersion();
+
+  // 内置版本已完整落地：不重复拷贝。只要内置版本是（并列）最高版本，它就是
+  // 安装包的权威代码 —— current 若停在别处（例如旧版手动切过指针），指回来。
+  // 仅当用户已有更高的历史版本（旧版后端自更新留下的）时才保持现状，不降级。
   const target = path.join(releases, version);
+  if (payloadComplete(target)) {
+    if (!existing[0] || !versionGt(existing[0], version)) {
+      const current = path.join(releases, 'current');
+      const running =
+        fs.existsSync(current) && payloadComplete(current)
+          ? path.basename(fs.realpathSync(current))
+          : null;
+      if (running !== version) switchCurrent(target);
+    }
+    return { ranDir: resolveRunDir(), firstBoot };
+  }
+
+  // 内置版本比用户已有版本旧：不降级（用户可能通过后端自更新昇过级）
+  if (existing.length > 0 && !versionGt(version, existing[0])) {
+    return { ranDir: resolveRunDir(), firstBoot: false };
+  }
+
+  // 物化内置代码成新版本目录
   if (!payloadComplete(bundledBackendDir())) {
     throw new Error('安装包内自带代码不完整（缺少标志文件），请重新下载安装包');
   }
   fs.rmSync(target, { recursive: true, force: true });
   copyDir(bundledBackendDir(), target);
-  const ranDir = resolveRunDir();
-  return { ranDir, firstBoot };
+  switchCurrent(target);
+  return { ranDir: resolveRunDir(), firstBoot };
 }
 
 /** 递归拷贝目录。 */

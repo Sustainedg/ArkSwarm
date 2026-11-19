@@ -8,6 +8,7 @@
  * 下载动作只在首启 / 显式重建时发生，日常启动零网络依赖。
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { app } from 'electron';
@@ -86,11 +87,38 @@ export async function ensurePythonRuntime(onProgress: (p: Progress) => void): Pr
     await runCommand(basePython, ['-m', 'venv', venvDir]);
   }
 
-  // ---- 3. 装依赖（只在首建 venv 时联网；升级后由「重建 venv」入口触发） ----
-  if (!fs.existsSync(path.join(venvDir, '.deps-installed'))) {
-    onProgress({ stage: 'deps', message: '安装后端依赖（首次需要联网）…' });
-    await runCommand(venvPython(), ['-m', 'pip', 'install', '-r', path.join(backendRoot(), 'requirements.txt'), '-q']);
-    fs.writeFileSync(path.join(venvDir, '.deps-installed'), new Date().toISOString());
+  // ---- 3. 装依赖：requirements.txt 内容变了就必须重装 ----
+  // 判据是**内容指纹**而不是「装过一次」：桌面端整包升级会换掉
+  // releases/current/backend 里的 requirements.txt，旧实现只写个时间戳，
+  // 新版本加了依赖也永远发现不了（后端起来直接 ImportError）。
+  const requirements = path.join(backendRoot(), 'requirements.txt');
+  const wanted = requirementsStamp(requirements);
+  if (!wanted) {
+    throw new Error(`后端依赖清单缺失或不可读：${requirements}`);
+  }
+  const stampFile = path.join(venvDir, '.requirements-stamp');
+  const installed = fs.existsSync(stampFile) ? fs.readFileSync(stampFile, 'utf8').trim() : '';
+  if (installed !== wanted) {
+    onProgress({
+      stage: 'deps',
+      message: installed ? '后端依赖有变化，正在更新…' : '安装后端依赖（首次需要联网）…',
+    });
+    await runCommand(venvPython(), [
+      '-m', 'pip', 'install', '-q',
+      // 与 Docker entrypoint 对齐：快失败、别被 pip 自身的版本检查拖住
+      '--disable-pip-version-check', '--retries', '2', '--timeout', '15',
+      '-r', requirements,
+    ]);
+    fs.writeFileSync(stampFile, wanted);
+  }
+}
+
+/** requirements.txt 的 sha256；文件缺失时返回空串（调用方据此报错）。 */
+function requirementsStamp(file: string): string {
+  try {
+    return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  } catch {
+    return '';
   }
 }
 

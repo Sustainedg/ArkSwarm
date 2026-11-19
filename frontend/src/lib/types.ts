@@ -736,6 +736,42 @@ export type UpdateEvent =
   | { type: 'update.restarting'; action: 'update' | 'rollback'; version: string; restarting: boolean }
   | { type: 'update.error'; message: string }
 
+/**
+ * 桌面端更新状态机的阶段（与 `desktop/src/main/updater.ts` 保持同形）。
+ * 桌面端只有「下载完整安装包」这一种更新形态，没有后端自更新的轻量通道。
+ */
+export type DesktopUpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'downloading'
+  | 'downloaded'
+  | 'up-to-date'
+  | 'error'
+  | 'unsupported'
+
+/** 桌面壳更新状态（preload 的 `desktop-update:status` 返回形状）。 */
+export interface DesktopUpdateState {
+  /** 当前构建是否具备自动更新能力（开发模式 / macOS 未签名 / 不支持的平台为 false）。 */
+  supported: boolean
+  /** 壳自身版本（desktop/package.json 的 version，形如 0.1.3）。 */
+  current_version: string
+  phase: DesktopUpdatePhase
+  /** 远端可用的新版本；没发现 / 已是最新时为 null。 */
+  available_version: string | null
+  /** 下载进度（0-100）。 */
+  percent: number
+  /** 失败原因（phase 为 error / unsupported 时给出）。 */
+  error: string | null
+}
+
+/** preload 暴露的壳更新 API（`window.arkswarmDesktop.updates`）。 */
+export interface DesktopUpdateBridge {
+  status: () => Promise<DesktopUpdateState>
+  check: () => Promise<DesktopUpdateState>
+  install: () => Promise<void>
+  onState: (callback: (state: DesktopUpdateState) => void) => () => void
+}
+
 export interface TestResult {
   ok: boolean
   message: string

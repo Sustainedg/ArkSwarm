@@ -2,23 +2,39 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, updateStream } from '../lib/api'
 import { isNetworkError } from '../lib/api'
 import { DEFAULT_CHECK_HOUR, useAutoCheckUpdates } from '../lib/autoCheckUpdates'
+import { desktopUpdates } from '../lib/desktop'
 import { CheckIcon, SettingsIcon } from './Icons'
 import { Modal } from './Modal'
-import type { UpdateStatus } from '../lib/types'
+import type { DesktopUpdateBridge, DesktopUpdateState, UpdateStatus } from '../lib/types'
 
 /**
- * 「设置 → 关于」的版本更新面板：检测更新（GitHub Release）→ 一键更新 / 回滚。
+ * 「设置 → 关于」的版本更新面板。按运行形态分成两套：
  *
- * 流程（安装 / 回滚是 SSE 长动作，最后进程会原地重启）：
+ * - **桌面端**（`window.arkswarmDesktop.updates` 存在）：与托盘「检查桌面端更新…」
+ *   共用 electron-updater，下载的是**完整安装包**，下载完点「重启安装」。
+ * - **网页 / Docker 部署**：走后端 GitHub Release 通道（`arkswarm.tar.gz`）。
+ *
+ * 后端通道的流程（安装 / 回滚是 SSE 长动作，最后进程会原地重启）：
  *   1. `POST /api/update/install` 逐条收 `update.*` 事件；
  *   2. 收到 `update.restarting` 后进入「等待服务回来」——轮询 `/api/health`，
  *      exec 重启有几秒不可用窗口，接口 200 且版本号变化即成功；
  *   3. 刷新整页（`location.reload()`）：前端产物也换新了，必须重载才拿到。
  *
- * 界面刻意只留三个元素：版本号、状态、按钮 —— 部署形态 / 更新来源这些说明
+ * 界面刻意只留版本号、状态、按钮 —— 部署形态 / 更新来源这些说明
  * 一律不写在这里（想知道的人自会去看文档）。日志小窗只在有动作时出现。
  */
 export function UpdatePanel({ currentVersion }: { currentVersion: string }) {
+  // 桌面端只有一条更新通道：下载**完整安装包**（与托盘菜单同一个 electron-updater）。
+  // 浏览器 / Docker 部署仍走后端 `/api/update/*`（`arkswarm.tar.gz` 一键更新）。
+  return desktopUpdates() ? (
+    <DesktopUpdatePanel />
+  ) : (
+    <ServerUpdatePanel currentVersion={currentVersion} />
+  )
+}
+
+/** 网页 / Docker 部署的版本更新面板（后端 Release 通道）。 */
+function ServerUpdatePanel({ currentVersion }: { currentVersion: string }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [checking, setChecking] = useState(false)
   /** 「更新设置」弹窗开合 */
@@ -230,6 +246,105 @@ export function UpdatePanel({ currentVersion }: { currentVersion: string }) {
       )}
     </section>
   )
+}
+
+/**
+ * 桌面端的版本更新面板：与托盘「检查桌面端更新…」共用同一个 electron-updater 状态机。
+ *
+ * 更新形态只有一种 —— **下载完整安装包**（Windows NSIS / macOS zip；Windows 支持
+ * `.blockmap` 差分，只传变化的数据块）。不存在「只换后端源码」的轻量通道：
+ * 新安装包里的后端代码会在下次启动时由 bootstrap.ts 物化并切 current。
+ */
+function DesktopUpdatePanel() {
+  // 初始化时抓一次桥对象：contextBridge 的嵌套对象不保证引用稳定，
+  // 直接放进 useEffect 依赖会导致每轮渲染都重新订阅。
+  const [bridge] = useState(() => desktopUpdates() as DesktopUpdateBridge);
+  const [state, setState] = useState<DesktopUpdateState | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void bridge
+      .status()
+      .then((next) => {
+        if (alive) setState(next);
+      })
+      .catch(() => undefined);
+    // 后台检查 / 下载的进度由主进程推送，页面实时刷新
+    const off = bridge.onState((next) => setState(next));
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [bridge]);
+
+  const check = async () => {
+    setChecking(true);
+    try {
+      setState(await bridge.check());
+    } catch {
+      // IPC 层失败（主进程异常 / 桥不可用）：进度事件拿不到时至少别让按钮卡死
+      setState((prev) =>
+        prev ? { ...prev, phase: 'error', error: '更新检查失败，请稍后重试' } : prev,
+      );
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const phase = state?.phase ?? 'idle';
+  const percent = state?.percent ?? 0;
+  const downloaded = phase === 'downloaded';
+  const updating = checking || phase === 'checking' || phase === 'downloading';
+  const unsupported = phase === 'unsupported';
+  const upToDate = phase === 'up-to-date';
+  const updateAvailable = Boolean(
+    state?.available_version && state.available_version !== state.current_version,
+  );
+
+  return (
+    <section className="stack">
+      <h2 className="card-section-title">版本更新</h2>
+
+      {state?.error && <div className="banner err">{state.error}</div>}
+
+      <div className={`update-card${updating ? ' busy' : ''}`}>
+        {updating && <span className="update-card-progress" aria-hidden />}
+        <div className="update-card-row">
+          <span className="update-current">{state?.current_version || '…'}</span>
+          {updateAvailable && (
+            <>
+              <span className="update-arrow hot" aria-hidden>
+                →
+              </span>
+              <span className="update-next">{state?.available_version}</span>
+            </>
+          )}
+          {upToDate && (
+            <span className="update-up-to-date">
+              <CheckIcon size={13} /> 已是最新
+            </span>
+          )}
+          {phase === 'downloading' && <span className="dim small">下载中 {percent}%</span>}
+          {downloaded && <span className="dim small">安装包已下载</span>}
+          <span className="update-actions">
+            <button className="btn sm" disabled={updating || unsupported} onClick={() => void check()}>
+              {updating ? '检测中…' : '检测更新'}
+            </button>
+            {downloaded && (
+              <button className="btn sm primary" onClick={() => void bridge.install()}>
+                重启安装
+              </button>
+            )}
+          </span>
+        </div>
+        <p className="update-source-hint">
+          桌面端更新会下载完整安装包（Windows 支持差分下载，只传变化的数据块）；
+          下载完成后点「重启安装」生效。
+        </p>
+      </div>
+    </section>
+  );
 }
 
 /** 更新设置弹窗：开关一行 + 时刻选择做成卡片（大字时刻 + 说明），排版分主次。 */
