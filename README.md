@@ -341,7 +341,7 @@ class AcmeAgent(AgentDefinition):
 | GET | `/api/runtimes` | 各运行时的安装状态、版本与维护方式 |
 | POST | `/api/runtimes/{id}/install` · `/update` · `/uninstall` | **SSE** 安装 / 更新 / 卸载 |
 | GET/POST | `/api/conversations` | 对话管理 |
-| POST | `/api/conversations/{id}/messages` | **SSE** 发送消息并流式接收回复 |
+| POST | `/api/conversations/{id}/messages` | **SSE** 发送消息并流式接收回复；请求体带 `summon_profile_id` 时为 **@ 召唤**：被召唤的智能体只回答这一轮（共享对话历史，不共享主场会话 / 技能 / MCP） |
 | POST | `/api/conversations/{id}/regenerate` · `/cancel` | 重跑最后一轮 / 中断运行 |
 | GET | `/api/system/overview` · `/api/runs` | 运行状态与实时任务 |
 | GET | `/api/usage/overview` | 用量汇总：token 消耗与技能分配 |

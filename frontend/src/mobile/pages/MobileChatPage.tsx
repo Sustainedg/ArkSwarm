@@ -36,6 +36,8 @@ interface LiveTurn extends AgentStreamState {
   userText: string
   /** 这一轮用户消息带上的附件（rel_path）：落库前先把缩略图画进「你」的气泡里 */
   userAttachments: string[]
+  /** @ 召唤轮：正在回答的智能体名（气泡上亮「✦ 某某正在回答」） */
+  summonName?: string
 }
 
 /** 待发送消息：AI 回复期间先攒着，本轮结束后按顺序自动发出。 */
@@ -107,6 +109,10 @@ export function MobileChatPage() {
   const [modelDraft, setModelDraft] = useState('')
   /** 模型面板里的搜索词：白名单一长串时按名字过滤，省得从头翻到尾 */
   const [modelQuery, setModelQuery] = useState('')
+  /** @ 召唤：输入 @ 后弹出的智能体选择浮层（null = 关闭），值为 @ 后的过滤词 */
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+  /** 本轮召唤的智能体 id：随下一条消息发出，发送即清空（一次性语义） */
+  const [summonId, setSummonId] = useState<string | null>(null)
   /** 一次性的提示（分享图已下载之类），与错误分开显示 */
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -407,10 +413,15 @@ export function MobileChatPage() {
     attachedRunIdRef.current = null
     attachedLiveRef.current = false
     stickRef.current = true
+    // @ 召唤的一轮：只在「这次发送」带上，发出去就清掉（一次性语义，下一轮回到主场智能体）。
+    const summon = summonId
+    setSummonId(null)
+    const summonAgent = summon ? scopeAgents.find((a) => a.id === summon) : undefined
     setLive({
       ...emptyAgentStream(),
       userText: regenerate ? '' : content,
       userAttachments: regenerate ? [] : pending.map((item) => item.rel_path),
+      summonName: summonAgent?.name,
     })
 
     const controller = new AbortController()
@@ -425,7 +436,13 @@ export function MobileChatPage() {
         regenerate
           ? `/api/conversations/${conversationId}/regenerate`
           : `/api/conversations/${conversationId}/messages`,
-        regenerate ? {} : { content, attachments: pending.map((item) => item.rel_path) },
+        regenerate
+          ? {}
+          : {
+              content,
+              attachments: pending.map((item) => item.rel_path),
+              ...(summon ? { summon_profile_id: summon } : {}),
+            },
         (event) => {
           if (!announced) {
             announced = true
@@ -479,6 +496,12 @@ export function MobileChatPage() {
     if (!active) return
     if (!draft.trim() && attachments.length === 0) return
     if (runActive) {
+      // @ 召唤不支持排队：正在回复时按发送会取消召唤并提示，不悄悄丢掉用户的选择。
+      if (summonId) {
+        setSummonId(null)
+        setError('正在回复时不能 @ 召唤：等这一轮结束再发')
+        return
+      }
       setQueue((prev) => [...prev, { content: draft, attachments, conversationId: active.id }])
       setDraft('')
       setAttachments([])
@@ -492,7 +515,50 @@ export function MobileChatPage() {
   // 换到别的对话时清空队列：上一段对话的消息不能发进新对话。
   useEffect(() => {
     setQueue([])
+    // 召唤目标也跟着作废：那是针对上一段对话的一次性选择。
+    setSummonId(null)
+    setMentionQuery(null)
   }, [conversationId])
+
+  /**
+   * @ 提及过滤词变化时按需加载智能体清单（只在第一次弹浮层时拉一次）。
+   */
+  useEffect(() => {
+    if (mentionQuery === null || scopeAgents.length > 0) return
+    void api
+      .listAgents()
+      .then(setScopeAgents)
+      .catch(() => undefined)
+  }, [mentionQuery, scopeAgents.length])
+
+  /** @ 浮层里可见的智能体：按过滤词匹配名字，主场智能体与停用的不参与召唤。 */
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null || !active) return []
+    const query = mentionQuery.toLowerCase()
+    return scopeAgents.filter(
+      (agent) =>
+        agent.enabled &&
+        agent.id !== active.agent_profile_id &&
+        (!query || agent.name.toLowerCase().includes(query)),
+    )
+  }, [mentionQuery, scopeAgents, active])
+
+  /**
+   * 在 @ 浮层里选中一个智能体：把草稿里的 `@过滤词` 替换成 `@名字 `，
+   * 记下召唤目标并收起浮层。召唤只在下一条消息生效（发送时清空）。
+   */
+  const pickMention = (agent: AgentProfile) => {
+    if (!draft) return
+    const caret = draft.length
+    const at = draft.slice(0, caret).lastIndexOf('@')
+    if (at < 0) {
+      setMentionQuery(null)
+      return
+    }
+    setDraft(`${draft.slice(0, at)}@${agent.name} ${draft.slice(caret)}`)
+    setSummonId(agent.id)
+    setMentionQuery(null)
+  }
 
   // 待发送队列：本轮回复结束后按顺序自动发出。
   useEffect(() => {
@@ -831,7 +897,12 @@ export function MobileChatPage() {
             key={message.id}
             message={message}
             avatar={active?.agent_avatar ?? undefined}
-            label={active?.agent_name ?? undefined}
+            // @ 召唤轮的回复：名字一行亮出被召唤者，一眼分清不是主场智能体说的
+            label={
+              message.role === 'assistant' && message.agent_profile_id
+                ? `✦ ${scopeAgents.find((a) => a.id === message.agent_profile_id)?.name ?? '被召唤智能体'}（@ 召唤）`
+                : (active?.agent_name ?? undefined)
+            }
             finalOnly={!showTools}
             user={user}
           />
@@ -855,7 +926,7 @@ export function MobileChatPage() {
           <MessageView
             message={liveMessage}
             avatar={active?.agent_avatar ?? undefined}
-            label={active?.agent_name ?? undefined}
+            label={live?.summonName ? `✦ ${live.summonName} 正在回答（@ 召唤）` : (active?.agent_name ?? undefined)}
             finalOnly={!showTools}
           />
         )}
@@ -896,10 +967,55 @@ export function MobileChatPage() {
         showTools={showTools}
         onShowToolsChange={setShowTools}
         onNotice={setError}
+        // 输入 @ 时弹智能体选择浮层（@ 召唤）
+        onMentionChange={setMentionQuery}
         // 输入框上方：工作目录 + 智能体两个小图标（新建对话时不用先选，这里随时改）。
         header={
           active ? (
             <>
+              {/* @ 召唤：正在输入 @ 时弹出的智能体选择（一次性，不影响对话归属） */}
+              {mentionQuery !== null && mentionCandidates.length > 0 && (
+                <div className="chat-mention-list" role="listbox" aria-label="选择要召唤的智能体">
+                  {mentionCandidates.slice(0, 6).map((agent) => (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      className="agent-pick"
+                      onClick={() => pickMention(agent)}
+                      title={`让「${agent.name}」回答这一轮（共享对话记忆，不影响本对话的智能体）`}
+                    >
+                      <span className="avatar" style={{ width: 26, height: 26, fontSize: 14 }}>
+                        {agent.avatar}
+                      </span>
+                      <span className="agent-pick-main">
+                        <span className="agent-pick-name">{agent.name}</span>
+                        <span className="card-sub">{agent.type_name ?? agent.type_id}</span>
+                      </span>
+                      {summonId === agent.id && <span className="pill ok">已选</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {/* 已选了召唤目标：贴一条提示，发送即生效、即失效 */}
+              {summonId && mentionQuery === null && (
+                <div className="m-summon-row" title="发送这条消息后由被召唤的智能体回答，之后回到本对话的智能体">
+                  <span className="m-summon-tag">✦ 召唤</span>
+                  <span className="m-summon-text">
+                    {scopeAgents.find((a) => a.id === summonId)?.name ?? '已选择的智能体'} 将回答这一轮
+                  </span>
+                  <button
+                    type="button"
+                    className="m-summon-cancel"
+                    onClick={() => setSummonId(null)}
+                    aria-label="取消召唤"
+                    title="取消召唤"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               <div className="composer-scope">
                 <button
                   type="button"
