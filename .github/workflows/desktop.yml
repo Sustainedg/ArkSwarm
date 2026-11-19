@@ -112,6 +112,12 @@ jobs:
         working-directory: desktop
         run: npm run typecheck
 
+      # electron-builder 直接读 dist-main/dist-preload；typecheck 是 --noEmit，
+      # 漏掉这一步就会报「Application entry file dist-main/index.js does not exist」
+      - name: 编译主进程
+        working-directory: desktop
+        run: npm run compile
+
       - name: 打包（electron-builder）
         working-directory: desktop
         shell: bash

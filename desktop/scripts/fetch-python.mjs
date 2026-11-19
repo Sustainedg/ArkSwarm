@@ -21,7 +21,7 @@ const VERSION = '3.11.12';
 
 const PLATFORMS = {
   'win-x64': {
-    url: `https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/cpython-${VERSION}+${TAG}-x86_64-pc-windows-msvc-shared-pgo.tar.gz`,
+    url: `https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/cpython-${VERSION}+${TAG}-x86_64-pc-windows-msvc-install_only.tar.gz`,
     marker: 'python/python.exe',
     arch: 'x64',
   },
