@@ -116,8 +116,8 @@ def _api_base(gateway: str) -> str:
     base = (gateway or "").rstrip("/")
     if not base:
         raise ConfigError(
-            f"还没有配置生图网关：请在「MCP」页编辑这个服务器，"
-            f"在环境变量 {ENV_GATEWAY} 里填写网关地址（例如 https://api.example.com）"
+            f"还没有配置生图网关：请在「MCP」页编辑服务器「图片生成」，"
+            f"在参数「网关地址」里填写（对应环境变量 {ENV_GATEWAY}，例如 https://api.example.com）"
         )
     if base.endswith("/v1"):
         return base
@@ -489,8 +489,8 @@ def generate_image(arguments: dict[str, Any], config: dict[str, Any]) -> str:
     config = config or load_config()
     if not config["model"]:
         raise ConfigError(
-            f"还没有配置生图模型：请在「MCP」页编辑这个服务器，"
-            f"在环境变量 {ENV_MODEL} 里填写模型名"
+            f"还没有配置生图模型：请在「MCP」页编辑服务器「图片生成」，"
+            f"在参数「模型名称」里填写（对应环境变量 {ENV_MODEL}）"
         )
     size = str(arguments.get("size") or "").strip()
     if size and not _SIZE_RE.match(size):

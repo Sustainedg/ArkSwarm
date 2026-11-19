@@ -256,8 +256,19 @@ def installed_versions() -> list[str]:
 
 
 def _version_sort_key(version: str) -> tuple[int, ...]:
-    """``V0.43`` → ``(0, 43)``，用于版本排序。"""
-    return tuple(int(part) for part in version.lstrip("vV").split("."))
+    """``V0.43`` → ``(0, 43)``、``V0.1.1`` → ``(0, 1, 1)``，用于版本排序。
+
+    按语义化版本逐段比较，但**缺失的段补 0**：``V0.44`` 与 ``V0.44.0`` 视为同一个版本。
+    不补 0 的话 ``(0, 44) < (0, 44, 0)``，同一个版本会被判成「旧版」，更新器会反复
+    提示有新版却装不上。
+
+    注意：``V0.1.1`` 的数值小于 ``V0.11``（第二段 1 < 11），这是语义化版本的既定规则。
+    """
+    parts = [int(part) for part in version.lstrip("vV").split(".")]
+    # 去掉末尾的 0 段，让 V0.44 与 V0.44.0 得到同一个键；全是 0 时保留一段。
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
 
 
 def version_gt(a: str, b: str) -> bool:
