@@ -81,6 +81,11 @@ interface Props {
   showTools?: boolean
   /** 齿轮菜单：切换「显示工具调用」。 */
   onShowToolsChange?: (show: boolean) => void
+  /**
+   * 草稿里 @ 提及的变化（@ 召唤）：值为 null = 当前没有正在输入的提及，
+   * 非 null = 光标前刚打了 @（可带过滤词，如「@小」）。页面据此弹出智能体选择浮层。
+   */
+  onMentionChange?: (query: string | null) => void
 }
 
 /** 读成 base64（去掉 data URL 前缀），交给上传接口。 */
@@ -140,6 +145,7 @@ export function Composer({
   queueWhenBusy = false,
   showTools,
   onShowToolsChange,
+  onMentionChange,
 }: Props) {
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -210,6 +216,41 @@ export function Composer({
     },
     [inputRef],
   )
+
+  /**
+   * 检测光标处是否正在输入 @ 提及（@ 召唤）：
+   * 从光标往前找最近的 `@`，它与光标之间只允许「中文 / 字母 / 数字 / 下划线 / 连字符」
+   * （不含空格与换行 —— 遇到即视作普通文本），且 `@` 前面必须是行首或空白
+   * （否则「a@b.com」这类邮箱也会误触发）。没有命中就回报 null。
+   */
+  const detectMention = useCallback(
+    (text: string, caret: number) => {
+      if (!onMentionChange) return
+      const before = text.slice(0, caret)
+      const at = before.lastIndexOf('@')
+      if (at < 0) {
+        onMentionChange(null)
+        return
+      }
+      const word = before.slice(at + 1)
+      if (!/^[\w一-鿿-]*$/.test(word)) {
+        onMentionChange(null)
+        return
+      }
+      const prev = at === 0 ? '' : before[at - 1]
+      if (prev && !/\s/.test(prev)) {
+        onMentionChange(null)
+        return
+      }
+      onMentionChange(word)
+    },
+    [onMentionChange],
+  )
+
+  /** 草稿被页面清空 / 替换时（发送、切对话），提及浮层也要收起。 */
+  useEffect(() => {
+    if (value === '' && onMentionChange) onMentionChange(null)
+  }, [value, onMentionChange])
 
   const notify = useCallback(
     (text: string) => {
@@ -404,9 +445,17 @@ export function Composer({
           aria-label={inputLabel}
           disabled={locked}
           // 高度不在这里量：草稿可能由页面清空（发送 / 换对话），只有盯着 `value` 的 effect 才收得回来。
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            onChange(event.target.value)
+            detectMention(event.target.value, event.target.selectionStart ?? 0)
+          }}
           // 粘贴截图 → 直接变成待发附件（走与回形针同一条上传路径）。
           onPaste={handlePaste}
+          // 光标移动（点击 / 方向键）后重算 @ 提及：浮层要跟着光标走。
+          onSelect={(event) => {
+            const node = event.currentTarget
+            detectMention(node.value, node.selectionStart ?? 0)
+          }}
           onKeyDown={(event) => {
             if (!submitOnEnter) return
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return

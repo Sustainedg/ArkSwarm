@@ -26,9 +26,13 @@
  │         ├─ 智能体技能：agent_skills → skills 表 → 物化到 agent-homes/<对话>/<内核配置目录>
  │         ├─ 智能体 MCP：agent_mcp_servers → mcp_servers 表 → 解密后按内核形状写进同一个隔离目录
  │         ├─ capability 决策：
- │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接
+ │         │    支持 session  → 只发本轮 prompt，靠智能体自己的记忆续接；
+ │         │                   断档那轮（换智能体/目录、重置记忆）用最近几轮最终回复兜底，不失忆
  │         │    不支持 session → 回放数据库里的最近 N 轮（transcript）
  │         │    无原生人格   → 把 system prompt 折进 prompt
+ │         ├─ @ 召唤（可选）：消息带 summon_profile_id 时，这一轮换被召唤的智能体作答
+ │         │    —— 共享对话历史（最终回复前置上下文），但不续接主场会话、不共用隔离目录，
+ │         │       技能 / MCP 按召唤者自己的分配物化到一次性 summon- 目录；归属与记忆不动
  │         ├─ 附件（可选）：先 POST /{id}/attachments 存进工作目录，这里把相对路径并进 prompt
  │         ├─ 落库 user message + 占位 assistant message(status=streaming)
  │         ├─ 自动为首轮对话生成标题
@@ -141,7 +145,10 @@ class AgentDefinition(ABC):
 
 `capabilities` 决定了平台在框架层面**如何**照顾这个智能体：
 
-- `sessions=True` → 平台把 `session_id` 存到对话上，下一轮只发增量。
+- `sessions=True` → 平台把 `session_id` 存到对话上，下一轮只发增量；没有可续接会话的那一轮
+  （新对话、刚换智能体 / 工作目录、手动重置记忆、隔离目录重建），平台把库里最近几轮的
+  **最终回复**（`_clip_history` 的产物，不含工具调用与推理过程）作为前置上下文拼进 prompt，
+  一旦本轮建立新的内核会话，下一轮自动恢复原生续接 —— 换智能体不再失忆。
 - `native_system_prompt=False` → 平台把人格折进 prompt（或按适配器自己的方式注入）。
 - `working_directory=True` → 为每个对话分配独立工作目录作为 cwd。
 - `permission_modes / tools` → 供前端展示能力徽标，并按需渲染对应配置项。
@@ -532,7 +539,9 @@ credentials(id, name, description, value_encrypted, created_at, updated_at, dele
 agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
 conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived,
               last_read_at, owner_id)   # last_read_at 为空 = 升级前的旧对话，一律当已读
-messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error)
+messages(id, conversation_id→conversations, role, content, parts JSON, usage JSON, status, error,
+         agent_profile_id)   # agent_profile_id 为空 = 对话归属的智能体；非空 = @ 召唤的智能体
+                               # 回答的那一轮（消息仍在对话流里，归属与主场会话记忆不变）
 skills(id="<type_id>:<slug>", type_id, slug, name, description, source_kind, path, fingerprint,
        version, author, when_to_use, allowed_tools JSON, files JSON, total_bytes, meta JSON,
        available, note, source_url)   # source_kind 含 market（市场技能，可卸载）

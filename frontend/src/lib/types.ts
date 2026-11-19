@@ -598,6 +598,8 @@ export interface Message {
   status: string
   error?: string | null
   created_at: string
+  /** 这条回复由哪个智能体产出；为空 = 对话归属的智能体，非空 = @ 召唤的 */
+  agent_profile_id?: string | null
 }
 
 export type AgentEventType =

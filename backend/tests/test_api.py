@@ -760,6 +760,165 @@ async def test_conversation_scope_change_resets_the_session(client: httpx.AsyncC
     ] == other["id"]
 
 
+async def _send_and_read(client: httpx.AsyncClient, conversation_id: str, body: dict) -> list[dict]:
+    """发一条消息并把 SSE 事件读完（fake 内核秒回，读完即整轮结束）。"""
+    async with client.stream(
+        "POST", f"/api/conversations/{conversation_id}/messages", json=body
+    ) as response:
+        assert response.status_code == 200, (await response.aread()).decode()
+        return await read_sse(response)
+
+
+async def test_switching_agent_keeps_history_in_prompt(client: httpx.AsyncClient):
+    """换智能体不再失忆：session 被清掉的那一轮，prompt 里带着此前几轮的最终回复。
+
+    fake 内核会回显 prompt 的前 40 个字符，据此断言历史真的进了上下文。
+    """
+    agent = await make_agent(client)
+    other = await make_profile(client, gateway_id=agent["gateway_id"], name="另一个")
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    await _send_and_read(client, conversation["id"], {"content": "第一条重要事实"})
+    # 换智能体（session_id 被有意清空）
+    await client.patch(f"/api/conversations/{conversation['id']}", json={"agent_profile_id": other["id"]})
+
+    async with client.stream(
+        "POST", f"/api/conversations/{conversation['id']}/messages", json={"content": "接着说"}
+    ) as response:
+        events = await read_sse(response)
+
+    # 回显的 prompt 里能看到前置上下文的提示语与上一轮最终回复的开头
+    # （fake 内核只回显前 40 字符，暗号全文落不进窗口，断言窗口内的片段）。
+    text = "".join(
+        e.get("text", "") for e in events if e.get("type") == "message.delta"
+    )
+    assert "交流记录" in text
+    assert "第一条重要" in text
+
+
+async def test_summon_answers_one_turn_and_keeps_ownership(client: httpx.AsyncClient):
+    """@ 召唤：被召唤的智能体回答这一轮，对话归属与主场会话记忆都不动。"""
+    agent = await make_agent(client)
+    other = await make_profile(client, gateway_id=agent["gateway_id"], name="被召唤者")
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    # 先用主场智能体跑一轮，确立 session 记忆
+    await _send_and_read(client, conversation["id"], {"content": "主场第一轮"})
+
+    # @ 召唤另一名智能体回答这一轮
+    await _send_and_read(
+        client,
+        conversation["id"],
+        {"content": "轮到你了", "summon_profile_id": other["id"]},
+    )
+
+    detail = (await client.get(f"/api/conversations/{conversation['id']}")).json()
+    # 对话归属不变
+    assert detail["conversation"]["agent_profile_id"] == agent["id"]
+    # 主场的 session 记忆不被召唤轮回报的 session_id 顶掉（fake 内核会回报 sess-42）
+    assert detail["conversation"]["session_id"] == "sess-42"
+    # 召唤轮的回复标记了产出者
+    summon_reply = next(
+        m for m in detail["messages"] if m["role"] == "assistant" and m["agent_profile_id"] == other["id"]
+    )
+    assert summon_reply["status"] == "complete"
+    # 主场轮的回复没有归属标记
+    home_reply = next(
+        m for m in detail["messages"] if m["role"] == "assistant" and not m["agent_profile_id"]
+    )
+    assert home_reply is not None
+
+
+async def test_summon_shares_history_but_not_session(client: httpx.AsyncClient):
+    """召唤轮共享对话历史（前置上下文里能看到主场的回复），但不续接主场会话。"""
+    agent = await make_agent(client)
+    other = await make_profile(client, gateway_id=agent["gateway_id"], name="被召唤者")
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    await _send_and_read(client, conversation["id"], {"content": "主场说了个暗号：企鹅爱吃鱼"})
+
+    events = await _send_and_read(
+        client,
+        conversation["id"],
+        {"content": "暗号是什么", "summon_profile_id": other["id"]},
+    )
+    text = "".join(e.get("text", "") for e in events if e.get("type") == "message.delta")
+    # fake 内核回显 prompt 前 40 字符：前置上下文的提示语或暗号本身都应落在窗口里
+    assert "交流记录" in text or "企鹅爱吃鱼" in text
+
+
+async def test_summon_rejects_invalid_targets(client: httpx.AsyncClient):
+    """召唤不存在的 / 对话本身的智能体：422 / 409，拒绝得干净。"""
+    agent = await make_agent(client)
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    # 不存在的智能体
+    response = await client.post(
+        f"/api/conversations/{conversation['id']}/messages",
+        json={"content": "召唤", "summon_profile_id": "ghost"},
+    )
+    assert response.status_code == 422
+
+    # 召唤对话自己的智能体：没有意义，409
+    response = await client.post(
+        f"/api/conversations/{conversation['id']}/messages",
+        json={"content": "召唤自己", "summon_profile_id": agent["id"]},
+    )
+    assert response.status_code == 409
+
+
+async def test_summon_uses_isolated_home_and_leaves_main_home_alone(
+    client: httpx.AsyncClient,
+):
+    """召唤轮的隔离目录是一次性作用域：即使与主场智能体同内核，也不碰主场的家。
+
+    用 claude-code 内核（声明 skills，物化必然建 ``claude-home``）做同内核对照：
+    主场的家先建好，召唤同内核的智能体跑一轮 —— 主场的家必须保持原样，
+    召唤轮的家另立 ``summon-`` 目录。
+    """
+    from app.settings import get_settings
+
+    agent = await make_agent(client, type_id="claude-code", name="主场")
+    other = await make_profile(
+        client,
+        gateway_id=agent["gateway_id"],
+        type_id="claude-code",
+        name="同内核被召唤者",
+    )
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    # 主场先跑一轮：主场的隔离目录（claude-home）就此建立
+    await _send_and_read(client, conversation["id"], {"content": "主场第一轮"})
+    homes_root = get_settings().agent_homes_root
+    main_home = homes_root / conversation["id"]
+    assert main_home.is_dir(), "主场先跑一轮应该建立自己的隔离目录"
+    main_before = sorted(str(p.relative_to(homes_root)) for p in main_home.rglob("*"))
+
+    # 同内核召唤一轮
+    await _send_and_read(
+        client,
+        conversation["id"],
+        {"content": "召唤轮", "summon_profile_id": other["id"]},
+    )
+
+    # 主场的家一个字节都没动
+    main_after = sorted(str(p.relative_to(homes_root)) for p in main_home.rglob("*"))
+    assert main_after == main_before
+    # 召唤轮的家另立门户（summon- 前缀的作用域），不落在对话 id 下
+    summon_homes = [p for p in homes_root.iterdir() if p.name.startswith("summon-")]
+    assert summon_homes, "召唤轮应该有自己的隔离目录"
+
+
 async def test_running_conversation_refuses_scope_change(client: httpx.AsyncClient):
     """正在跑的对话不让中途换智能体 / 换目录（换了会把这一轮带偏）。"""
     agent = await make_agent(client)

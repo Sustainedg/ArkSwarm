@@ -468,6 +468,14 @@ async def send_message(
     user: Annotated[User, Depends(current_user)] = None,
 ) -> StreamingResponse:
     await _owned_conversation(conversation_id, session, user)
+    # @ 召唤的智能体也是用户资产：启动运行前先过归属校验（与换智能体同一口径）。
+    if payload.summon_profile_id:
+        summon = await session.get(AgentProfile, payload.summon_profile_id)
+        if summon is None or summon.deleted_at is not None:
+            raise HTTPException(status_code=422, detail="指定的智能体不存在")
+        if not summon.enabled:
+            raise HTTPException(status_code=422, detail="指定的智能体已停用")
+        require_owned(summon, user)
     try:
         prepared = await prepare_run(session, conversation_id, payload)
     except ConfigurationError as exc:

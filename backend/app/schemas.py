@@ -516,6 +516,8 @@ class MessageRead(BaseModel):
     status: str
     error: str | None = None
     created_at: datetime
+    #: 这条回复由哪个智能体产出；为空 = 对话归属的智能体（主场），非空 = @ 召唤的
+    agent_profile_id: str | None = None
 
 
 class AttachmentUpload(BaseModel):
@@ -537,6 +539,9 @@ class SendMessage(BaseModel):
     #: 可选的单轮覆盖项
     workspace_dir: str | None = None
     reset_session: bool = False
+    #: @ 召唤：让指定的智能体只回答这一轮（共享对话历史，但不共享主场智能体的
+    #: 会话记忆 / 技能 / MCP —— 它用自己的配置独立作答）。不改变对话归属。
+    summon_profile_id: str | None = None
 
     @field_validator("content")
     @classmethod

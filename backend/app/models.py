@@ -72,6 +72,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     # builtin_key 是「平台内置服务器」后加的稳定标识（例如 image-gen）；普通服务器为空。
     # 老行留空即可，不需要回填；内置服务器由启动播种逐用户补齐。
     "mcp_servers": {"owner_id": "VARCHAR(64)", "builtin_key": "VARCHAR(64)"},
+    # 「这条回复由哪个智能体产出」是后加的：为空 = 对话归属的智能体（主场）；
+    # 非空 = 用户 @ 召唤的智能体。老行留空即可，不需要回填。
+    "messages": {"agent_profile_id": "VARCHAR(64)"},
 }
 
 
@@ -427,6 +430,9 @@ class Message(SQLModel, table=True):
     status: str = Field(default="complete", sa_column=Column(String(16), nullable=False))
     error: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime, index=True))
+    #: 这条回复实际由哪个智能体产出。为空 = 对话归属的智能体（主场）；
+    #: 非空 = 用户在对话里 @ 召唤的智能体（只回答这一轮，不改变对话归属）。
+    agent_profile_id: str | None = Field(default=None, sa_column=Column(String(64)))
 
 
 class RuntimeStatus(SQLModel, table=True):

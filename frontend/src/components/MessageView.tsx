@@ -23,6 +23,8 @@ export interface RenderMessage {
   loadParts?: () => Promise<MessagePart[]>
   /** 懒加载模式下这一步有多少过程片段（折叠行上显示「工具调用 N」）。 */
   partsCount?: number
+  /** 这条回复由哪个智能体产出；为空 = 对话归属的智能体，非空 = @ 召唤的 */
+  agent_profile_id?: string | null
 }
 
 export function MessageView({ message, avatar, label, finalOnly = false, user }: {

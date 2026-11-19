@@ -50,6 +50,9 @@ class PreparedRun:
     mcp_warnings: list[str] = field(default_factory=list)
     #: 这条对话是不是「刚开头」（标题还是兜底值）：是就交给调用方安排一次自动起标题
     title_pending: bool = False
+    #: 是否把内核回报的 session_id 写回对话。主场运行为 True；@ 召唤轮恒为 False
+    #: （召唤的智能体只回答这一轮，绝不续接 / 污染主场内核的会话记忆）。
+    persist_session: bool = True
 
 
 class ConfigurationError(Exception):
@@ -94,6 +97,12 @@ def resolve_runtime(
     return binding.url, binding.api_key, binding.auth_style, model
 
 
+#: 召唤轮的模型哨兵：召唤的智能体不认这条对话单独指定的模型（那是为主场
+#: 智能体的网关挑的），用 ``None`` 之外的一个不可能值告诉 ``build_context``
+#: 「显式忽略对话级模型」，与「主场没有对话级模型」（同为 None）区分开。
+SUMMON_IGNORE_MODEL = "__summon_ignore_model__"
+
+
 async def build_context(
     session: AsyncSession,
     definition: AgentDefinition,
@@ -103,9 +112,24 @@ async def build_context(
     prompt: str,
     history: list[dict[str, str]],
     workspace: str,
+    *,
+    model_override: str | None = None,
+    session_id: str | None = None,
 ) -> AgentContext:
+    """组装一次运行的 :class:`AgentContext`。
+
+    ``model_override`` / ``session_id`` 只在召唤轮使用：召唤的智能体不认这条对话
+    单独指定的模型（那是为主场智能体的网关挑的），传 :data:`SUMMON_IGNORE_MODEL`
+    表示显式忽略之（落回召唤者自己的默认模型）；也绝不续接主场内核的会话。
+    主场运行不传 ``model_override``，沿用对话级模型 → 智能体默认 → 内核默认的优先级。
+    """
+    # 召唤轮的哨兵 = 显式忽略对话级模型（见 SUMMON_IGNORE_MODEL）。
+    if model_override == SUMMON_IGNORE_MODEL:
+        model_override = None
+    else:
+        model_override = model_override or conversation.model
     gateway_url, api_key, auth_style, model = resolve_runtime(
-        definition, profile, gateway, conversation.model
+        definition, profile, gateway, model_override
     )
     options = definition.coerce_options(profile.options or {})
     if model:
@@ -123,7 +147,7 @@ async def build_context(
         system_prompt=with_notice(profile.system_prompt or None, credentials),
         credentials=credentials,
         workspace_dir=workspace,
-        session_id=conversation.session_id,
+        session_id=conversation.session_id if session_id is None else session_id,
         history=history,
         prompt=prompt,
     )
@@ -183,6 +207,25 @@ def transcript_prompt(system_prompt: str | None, history: list[dict[str, str]], 
     return "\n\n".join(lines)
 
 
+def prior_context_prompt(history: list[dict[str, str]], prompt: str) -> str:
+    """session 型内核没有可续接会话时，把库里的最近几轮最终回复作为前置上下文。
+
+    触发场景：刚换了智能体 / 工作目录（会话记忆被有意清掉）、手动重置记忆、
+    隔离目录重建。历史只含每轮的最终回复（``_clip_history`` 的产物），
+    工具调用与推理过程不进上下文。一旦本轮跑出新的 session_id，下一轮就恢复
+    内核原生续接，此注入自动退场。
+    """
+    if not history:
+        return prompt
+    lines = ["以下是本对话此前的交流记录（你尚未参与，作为背景参考）："]
+    for turn in history:
+        label = "用户" if turn["role"] == "user" else "智能体"
+        lines.append(f"[{label}]\n{turn['content']}")
+    lines.append("—— 请基于以上背景，回应用户下面这条最新的话：")
+    lines.append(prompt)
+    return "\n\n".join(lines)
+
+
 async def load_profile(
     session: AsyncSession, profile_id: str
 ) -> tuple[AgentProfile, Gateway | None, AgentDefinition]:
@@ -225,7 +268,24 @@ async def pick_default_profile(
 
 async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any) -> PreparedRun:
     conversation = await _load(session, Conversation, conversation_id)
-    profile, gateway, definition = await load_profile(session, conversation.agent_profile_id)
+
+    # —— @ 召唤：这一轮换被召唤的智能体作答，对话归属与会话记忆保持主场 ——————————
+    # 召唤轮的三条铁规矩（都在下面逐条落实）：
+    #   1. 不续接主场内核的会话（session_id=None），自己回报的 session_id 也不写回对话；
+    #   2. 技能与 MCP 按「严格仅分配」物化到独立的一次性隔离目录（作用域带 run 前缀），
+    #      绝不碰主场智能体在这条对话里的隔离目录 —— 同内核时两边会共用目录名；
+    #   3. 不用这条对话单独指定的模型（那是为主场智能体的网关挑的），跟召唤者自己的默认。
+    summon_profile_id = getattr(payload, "summon_profile_id", None)
+    if summon_profile_id:
+        if summon_profile_id == conversation.agent_profile_id:
+            raise ConfigurationError("这个智能体就是本对话的智能体，直接发消息即可")
+        profile, gateway, definition = await load_profile(session, summon_profile_id)
+        persist_session = False
+        home_scope = f"summon-{uuid.uuid4().hex}"
+    else:
+        profile, gateway, definition = await load_profile(session, conversation.agent_profile_id)
+        persist_session = True
+        home_scope = None
 
     workspace = payload.workspace_dir or resolve_workspace(conversation)
     if payload.reset_session:
@@ -246,17 +306,38 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     session.add(user_message)
 
     history = _clip_history(list(existing))
-    ctx = await build_context(session, definition, profile, gateway, conversation, content, history, workspace)
-    skill_warnings = await prepare_skill_home(session, definition, profile, conversation, ctx)
-    mcp_warnings = await prepare_mcp_home(session, definition, profile, conversation, ctx)
-    if not supports_sessions(definition, ctx):
+    if summon_profile_id:
+        # 召唤轮：无可续接会话是常态，共享对话历史（只含最终回复）作为前置上下文。
+        ctx = await build_context(
+            session, definition, profile, gateway, conversation, content, history, workspace,
+            model_override=SUMMON_IGNORE_MODEL, session_id=None,
+        )
+        ctx.prompt = prior_context_prompt(history, ctx.prompt)
+    else:
+        ctx = await build_context(session, definition, profile, gateway, conversation, content, history, workspace)
+    skill_warnings = await prepare_skill_home(
+        session, definition, profile, conversation, ctx, scope_id=home_scope
+    )
+    mcp_warnings = await prepare_mcp_home(
+        session, definition, profile, conversation, ctx, scope_id=home_scope
+    )
+    if not summon_profile_id and not supports_sessions(definition, ctx):
         ctx.session_id = None
         if not definition.capabilities.native_system_prompt:
             ctx.prompt = transcript_prompt(ctx.system_prompt, history, content)
             ctx.system_prompt = None
+    elif not summon_profile_id and ctx.session_id is None:
+        # session 型内核但没有可续接的会话（刚换智能体 / 换目录 / 重置记忆 / 隔离目录重建）：
+        # 把库里的最近几轮最终回复作为前置上下文兜底，杜绝换智能体后彻底失忆。
+        # 一旦本轮建立新的内核会话，下一轮自动恢复原生续接。
+        ctx.prompt = prior_context_prompt(history, ctx.prompt)
 
     assistant_message = Message(
-        conversation_id=conversation.id, role="assistant", content="", status="streaming"
+        conversation_id=conversation.id,
+        role="assistant",
+        content="",
+        status="streaming",
+        agent_profile_id=summon_profile_id,
     )
     session.add(assistant_message)
 
@@ -286,6 +367,7 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
         skill_warnings=skill_warnings,
         mcp_warnings=mcp_warnings,
         title_pending=title_pending,
+        persist_session=persist_session,
     )
 
 
@@ -401,8 +483,12 @@ async def consume_run(session: AsyncSession, prepared: PreparedRun) -> AsyncIter
             elif event.type is EventType.USAGE:
                 usage_totals.update({k: v for k, v in (event.payload or {}).items() if v is not None})
             elif event.type is EventType.SESSION:
-                prepared.conversation.session_id = event.payload.get("session_id")
-                session.add(prepared.conversation)
+                # 只有主场运行才把内核回报的会话 id 写回对话；@ 召唤轮回报的
+                # session_id 属于召唤者自己的一次性会话，写回去会让主场内核下一轮
+                # 拿别人的会话 id 去 resume（直接报错或张冠李戴）。
+                if prepared.persist_session:
+                    prepared.conversation.session_id = event.payload.get("session_id")
+                    session.add(prepared.conversation)
             elif event.type is EventType.ERROR:
                 status = "error"
                 # 适配器把错误文案放在事件的 ``text`` 上（``events.error()``）；只有个别
@@ -491,6 +577,9 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
         if not definition.capabilities.native_system_prompt:
             ctx.prompt = transcript_prompt(ctx.system_prompt, history, last_user.content)
             ctx.system_prompt = None
+    elif ctx.session_id is None:
+        # 与 prepare_run 同一条兜底：无可续接会话时用最终回复做前置上下文，防止重生成失忆。
+        ctx.prompt = prior_context_prompt(history, ctx.prompt)
 
     assistant_message = Message(
         conversation_id=conversation.id, role="assistant", content="", status="streaming"
