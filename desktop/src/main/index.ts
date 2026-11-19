@@ -51,9 +51,10 @@ function trayIconPath(): string {
 /**
  * 给页面注入「桌面外壳」样式与拖拽条（只在 Electron 里执行，浏览器访问完全不受影响）。
  *
- * 为什么改 `.app-shell` 而不是给 body 加 padding：`.app-shell` 写死了 `height: 100vh`，
- * body 加 padding 只会把它顶出屏幕；这里改成「上边距 + 扣掉标题栏的高度」，
- * 整页仍然正好一屏。拖拽条本身透明，露出的是页面自己的背景渐变，所以明暗主题都对得上。
+ * 为什么给 `.sidebar` / `.main` 分别加内边距、而不是给 `.app-shell` 加 margin：
+ * 加 margin 会在顶部留下一条背景色带（侧栏渐变到那里断掉），看起来就是「一条横边」；
+ * 改成各自内边距后，两块背景都铺到窗口最上沿，控制按钮浮在应用自己的背景上。
+ * 拖拽条本身透明，露出的是页面背景渐变，明暗主题都自动对得上。
  */
 function desktopChromeCss(): string {
   return `
