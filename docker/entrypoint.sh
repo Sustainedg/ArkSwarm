@@ -403,9 +403,12 @@ seed_kernel_skills() {
   fi
 }
 # npm 全局 bin 与用户 ~/.local/bin 都放进 PATH，让安装后的内核命令能被找到。
-# npm 缺失时不能让 `set -e` 直接退出（界面里仍可手动安装），因此 `|| true` 兜底。
-NPM_BIN="$(npm prefix -g 2>/dev/null || true)/bin"
-[ -d "$NPM_BIN" ] && case ":$PATH:" in *":$NPM_BIN:"*) ;; *) export PATH="$NPM_BIN:$PATH" ;; esac
+# npm 缺失时不能让 `set -e` 直接退出（界面里仍可手动安装），因此先取前缀再判断。
+NPM_PREFIX="$(npm prefix -g 2>/dev/null || true)"
+if [ -n "$NPM_PREFIX" ]; then
+  NPM_BIN="$NPM_PREFIX/bin"
+  [ -d "$NPM_BIN" ] && case ":$PATH:" in *":$NPM_BIN:"*) ;; *) export PATH="$NPM_BIN:$PATH" ;; esac
+fi
 [ -d "$HOME/.local/bin" ] && case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 ensure_kernels
 seed_kernel_skills
