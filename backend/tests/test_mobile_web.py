@@ -604,6 +604,16 @@ def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
         for body in blocks
     ), "移动端 .composer 要用 calc(基础收边 + var(--safe-bottom)) 补底部安全区，别让用量条被 Home 条盖住"
 
+    # 抽屉的底部安全区只能算一次：`.m-drawer` 与它最下面的 `.m-drawer-account` 都补一遍的话，
+    # 账号头像会被顶到离屏幕底边 ~78px（两遍 34px + 10px 间距），看起来「没到底」。
+    drawer_blocks = [
+        body for selector, body in re.findall(r"([^{}]*)\{([^}]*)\}", plain) if selector.strip() == ".m-drawer"
+    ]
+    assert drawer_blocks, "mobile.css 缺少 .m-drawer 样式"
+    assert not any(
+        re.search(r"padding-bottom\s*:", body) and "safe-bottom" in body for body in drawer_blocks
+    ), "抽屉底部安全区重复计算：.m-drawer 不要再留 padding-bottom（底部交给 .m-drawer-account）"
+
 
 @needs_frontend
 def test_lists_show_dates_with_a_single_time_source():

@@ -306,7 +306,10 @@ code, pre, .mono { font-family: var(--mono); }
   display: flex; flex-direction: column;
   background: var(--bg-elevated); border-right: 1px solid var(--border-strong);
   box-shadow: var(--shadow);
-  padding-top: var(--safe-top); padding-bottom: var(--safe-bottom);
+  /* 顶部安全区留在这里（头部是第一个块）；**底部不再留** —— 最下面的
+     `.m-drawer-account` 已经自己补过一次 `env(safe-area-inset-bottom)`，
+     两处都加会把底部安全区算两遍，账号头像被顶到离屏幕底边 ~78px 的地方。 */
+  padding-top: var(--safe-top);
   animation: m-drawer-in 0.18s ease-out;
 }
 @keyframes m-drawer-in { from { transform: translateX(-14px); opacity: 0.6; } to { transform: none; opacity: 1; } }
