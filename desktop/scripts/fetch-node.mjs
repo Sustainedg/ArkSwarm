@@ -105,14 +105,15 @@ if (actual !== expected) {
 console.log('→ 解压');
 const extractDir = path.join(outDir, 'extract');
 fs.mkdirSync(extractDir, { recursive: true });
+// 相对路径 + cwd：Windows 的 GNU tar 会把 `D:\...` 当成远程主机（Cannot connect to D:）
 if (spec.kind === 'tar') {
-  execFileSync('tar', ['-xzf', archive, '-C', extractDir]);
+  execFileSync('tar', ['-xzf', spec.file, '-C', 'extract'], { cwd: outDir });
 } else {
   // Windows 包是 zip：用 PowerShell 解（GitHub windows runner 上可用）
   execFileSync(
     'powershell',
-    ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${extractDir}'`],
-    { stdio: 'inherit' },
+    ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${spec.file}' -DestinationPath 'extract'`],
+    { cwd: outDir, stdio: 'inherit' },
   );
 }
 fs.rmSync(archive);

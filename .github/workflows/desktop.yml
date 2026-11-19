@@ -128,7 +128,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        run: |
+          # secrets 未配置时 GitHub 仍会把变量设为空串。electron-builder 把空的
+          # CSC_LINK 当成证书路径（解析成项目目录 → "not a file"），必须先清掉。
+          if [ -z "${CSC_LINK:-}" ]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
+          if [ -z "${APPLE_ID:-}" ]; then unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; fi
+          npx electron-builder ${{ matrix.args }} --publish never
 
       # 打包版冒烟：启动真实安装包（内嵌 Python 建 venv → 起后端 → 健康检查），
       # 就绪后主进程自行退出 0。这是「窗口层之外」的完整链路验证，无头 runner 可跑。

@@ -72,7 +72,8 @@ const tarPath = path.join(outDir, 'runtime.tar.gz');
 await pipeline(resp.body, createWriteStream(tarPath));
 console.log('→ 解压');
 fs.mkdirSync(path.join(outDir, 'extract'), { recursive: true });
-execFileSync('tar', ['-xzf', tarPath, '-C', path.join(outDir, 'extract')]);
+// 用相对路径 + cwd：Windows 的 GNU tar 会把 `D:\...` 当成远程主机（Cannot connect to D:）
+execFileSync('tar', ['-xzf', 'runtime.tar.gz', '-C', 'extract'], { cwd: outDir });
 fs.rmSync(tarPath);
 // install_only 包解开就是 python/ 目录；把它挪到 build/python-runtime/<arch>/python
 const extracted = path.join(outDir, 'extract', 'python');
