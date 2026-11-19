@@ -139,6 +139,7 @@ jobs:
       # 就绪后主进程自行退出 0。这是「窗口层之外」的完整链路验证，无头 runner 可跑。
       - name: 冒烟启动（Windows）
         if: matrix.target == 'win'
+        working-directory: desktop
         shell: pwsh
         timeout-minutes: 20
         run: |
@@ -153,6 +154,7 @@ jobs:
 
       - name: 冒烟启动（macOS）
         if: matrix.target == 'mac'
+        working-directory: desktop
         shell: bash
         timeout-minutes: 20
         run: |
