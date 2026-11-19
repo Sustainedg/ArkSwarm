@@ -367,7 +367,7 @@ export function Composer({
         {typeof showTools === 'boolean' && onShowToolsChange && (
           <div className="composer-settings" ref={settingsRef}>
             <button
-              className={`composer-tool${settingsOpen ? ' on' : ''}`}
+              className={`composer-tool${settingsOpen ? ' open' : ''}`}
               onClick={() => setSettingsOpen((open) => !open)}
               aria-label="显示设置"
               aria-expanded={settingsOpen}

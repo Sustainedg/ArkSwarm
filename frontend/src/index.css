@@ -828,6 +828,10 @@ code, pre, .mono { font-family: var(--mono); }
   color: #fff; background: rgba(248, 113, 113, 0.22); border-color: rgba(248, 113, 113, 0.5);
   animation: composer-recording 1.6s ease-in-out infinite;
 }
+/* 齿轮展开时只要一个静态的「按下」态：不呼吸、不渐变，气泡开着就行 */
+.composer-tool.open {
+  color: var(--brand); background: var(--brand-soft); border-color: transparent;
+}
 /* 发送 / 停止：框内右侧那一个图标按钮 */
 .composer-tool.send { color: #fff; background: var(--brand); font-size: 15px; }
 .composer-tool.send:disabled { background: var(--bg-hover); color: var(--text-dim); }
@@ -872,10 +876,11 @@ code, pre, .mono { font-family: var(--mono); }
    柔阴影，底部伸出一个朝下的尖角正对按钮。齿轮按钮本体走 .composer-tool
    （与语音 / 发送同尺寸同观感），这里只管气泡。 */
 .composer-settings { position: relative; flex: none; }
-/* 勾选气泡：纯白卡片 + 圆角 14px + 轻阴影，无边框；悬在按钮正上方 */
+/* 勾选气泡：纯白卡片 + 圆角 12px + 轻阴影，无边框；悬在按钮正上方。
+   内边距收紧到 10/12：气泡里只有一行勾选项，原来的 16/20 撑得太宽。 */
 .composer-settings-menu {
   position: absolute; bottom: calc(100% + 12px); left: 50%; transform: translateX(-50%);
-  z-index: 60; padding: 16px 20px; border: none; border-radius: 14px;
+  z-index: 60; padding: 10px 12px; border: none; border-radius: 12px;
   background: var(--bg-elevated);
   box-shadow: var(--popover-shadow, 0 8px 24px rgba(0, 0, 0, 0.08));
   white-space: nowrap;
@@ -891,7 +896,7 @@ code, pre, .mono { font-family: var(--mono); }
 }
 /* 勾选项：细线 ✓ + 文字，点整行切换 */
 .composer-settings-item {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 9px;
   padding: 0; border: none; background: none; cursor: pointer; user-select: none;
   color: var(--text); font: inherit;
 }

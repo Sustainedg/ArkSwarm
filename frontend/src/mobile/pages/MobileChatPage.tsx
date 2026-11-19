@@ -1116,7 +1116,8 @@ export function MobileChatPage() {
                 aria-label="搜索模型"
               />
               {/* 默认模型排第一（带「默认」标签）：选中它 = 跟随智能体默认。
-                  搜索时按词过滤：默认模型也得搜得到（它就是个模型名）。 */}
+                  搜索时按词过滤：默认模型也得搜得到（它就是个模型名）。
+                  白名单里本来就会含默认模型，下面列表要把它滤掉，否则同一个名字出现两次。 */}
               {(() => {
                 const query = modelQuery.trim().toLowerCase()
                 const matches = (name: string) => !query || name.toLowerCase().includes(query)
@@ -1137,29 +1138,36 @@ export function MobileChatPage() {
                         {(!modelDraft || modelDraft === modelOptions.default) && <span className="pill ok">当前</span>}
                       </button>
                     )}
-                    {modelOptions.models.filter(matches).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        className={`agent-pick${modelDraft === item ? ' active' : ''}`}
-                        onClick={() => setModelDraft(item)}
-                      >
-                        <span className="agent-pick-main">
-                          <span className="agent-pick-name mono-sm">{item}</span>
-                        </span>
-                        {modelDraft === item && <span className="pill ok">当前</span>}
-                      </button>
-                    ))}
-                    {/* 正在用的名字不在白名单里（且被搜到）也照样显示，别让当前选择凭空消失 */}
-                    {modelDraft && !modelOptions.models.includes(modelDraft) && matches(modelDraft) && (
-                      <button type="button" className="agent-pick active">
-                        <span className="agent-pick-main">
-                          <span className="agent-pick-name mono-sm">{modelDraft}</span>
-                          <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
-                        </span>
-                        <span className="pill ok">当前</span>
-                      </button>
-                    )}
+                    {modelOptions.models
+                      .filter((item) => item !== modelOptions.default)
+                      .filter(matches)
+                      .map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`agent-pick${modelDraft === item ? ' active' : ''}`}
+                          onClick={() => setModelDraft(item)}
+                        >
+                          <span className="agent-pick-main">
+                            <span className="agent-pick-name mono-sm">{item}</span>
+                          </span>
+                          {modelDraft === item && <span className="pill ok">当前</span>}
+                        </button>
+                      ))}
+                    {/* 正在用的名字不在白名单里（且被搜到）也照样显示，别让当前选择凭空消失。
+                        等于默认模型时不重复列：上面那条「默认」已经代表它了。 */}
+                    {modelDraft &&
+                      modelDraft !== modelOptions.default &&
+                      !modelOptions.models.includes(modelDraft) &&
+                      matches(modelDraft) && (
+                        <button type="button" className="agent-pick active">
+                          <span className="agent-pick-main">
+                            <span className="agent-pick-name mono-sm">{modelDraft}</span>
+                            <span className="card-sub">不在网关白名单里，保存后仍会按这个名字运行</span>
+                          </span>
+                          <span className="pill ok">当前</span>
+                        </button>
+                      )}
                     {/* 一个都没搜到：明说，别给一张空列表 */}
                     {!modelOptions.models.some(matches) &&
                       !(modelOptions.default && matches(modelOptions.default)) &&
