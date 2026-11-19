@@ -26,6 +26,13 @@ if [ "$NORMALIZED" != "$APP_VERSION" ]; then
   exit 1
 fi
 
+# ---- 桌面端与后端/网页同版本发布：安装包会追加到同一个 Release ----
+DESKTOP_VERSION="$(node -p "require('./desktop/package.json').version" 2>/dev/null || true)"
+if [ "$DESKTOP_VERSION" != "${APP_VERSION#V}" ]; then
+  echo "✗ 桌面端版本 ${DESKTOP_VERSION:-<读取失败>} 与后端 $APP_VERSION 不一致：先改 desktop/package.json" >&2
+  exit 1
+fi
+
 # ---- 工作区必须干净（已提交的内容才构成一个版本）----
 if [ -n "$(git status --porcelain)" ]; then
   echo "✗ 工作区不干净：先提交再发版" >&2

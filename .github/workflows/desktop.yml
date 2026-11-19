@@ -2,8 +2,12 @@ name: desktop
 
 # 桌面端 CI/CD（M3）：
 #   - 普通 PR / push：只构建 + 打包版冒烟（不发布）
-#   - 打 tag `desktop-v*`（或手动触发勾选 publish）：构建并把安装包与 latest*.yml
-#     上传到滚动 Release `desktop-latest`（**prerelease**，见下方「为什么必须 prerelease」）
+#   - 打后端版本 tag `v*`（与网页/后端一起发版；或手动触发勾选 publish）：
+#     构建并把安装包追加到**同一个 Release** `v<版本>`，同时刷新滚动 Release
+#     `desktop-latest`（**prerelease**，壳自更新读这里，见下方说明）
+#
+# 版本口径：桌面壳与后端/网页**同一个版本号**（desktop/package.json 的 0.1.3 ↔
+# backend/app/__init__.py 的 V0.1.3），发布时 CI 会双向校验，不一致直接失败。
 #
 # 为什么壳更新用滚动 prerelease、而不是每个版本一个 Release：
 #   壳与后端共用 Sustainedg/ArkSwarm 这个仓库。后端发版走 release.sh（tag v0.1.x，
@@ -15,7 +19,7 @@ name: desktop
 #   壳的 Generic Provider 直接拼下载地址，与「latest」语义无关。
 on:
   push:
-    tags: ['desktop-v*']
+    tags: ['v*']
     branches: [main]
     paths:
       - 'desktop/**'
@@ -180,7 +184,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: >-
-      startsWith(github.ref, 'refs/tags/desktop-v') ||
+      startsWith(github.ref, 'refs/tags/v') ||
       github.event.inputs.publish == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -192,47 +196,49 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
 
-      - name: 读取桌面端版本
+      - name: 读取并校验版本（桌面端 ↔ 后端）
         id: version
         run: |
           VERSION=$(node -p "require('./desktop/package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "桌面端版本：$VERSION"
-
-      - name: 校验 tag 与版本号一致
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        run: |
-          EXPECTED="desktop-v${{ steps.version.outputs.version }}"
-          if [ "${GITHUB_REF_NAME}" != "$EXPECTED" ]; then
-            echo "✗ tag ${GITHUB_REF_NAME} 与 desktop/package.json 的版本 $EXPECTED 不一致：先改版本号再打 tag" >&2
+          BACKEND_VERSION=$(grep -oP '(?<=^__version__ = ")[^"]+' backend/app/__init__.py)
+          echo "桌面端：$VERSION · 后端：$BACKEND_VERSION"
+          if [ "$BACKEND_VERSION" != "V$VERSION" ]; then
+            echo "✗ 桌面端版本（$VERSION）与后端 $BACKEND_VERSION 不一致：两边必须同版本发布" >&2
             exit 1
           fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v$VERSION" ]; then
+              echo "✗ tag ${GITHUB_REF_NAME} 与版本 v$VERSION 不一致：先改版本号再打 tag" >&2
+              exit 1
+            fi
+          fi
 
-      - name: 发布（滚动 tag + 版本 tag 都标记 prerelease）
+      - name: 发布（追加到 v<版本> Release + 刷新滚动 Release）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG=desktop-latest
-          # 滚动 Release：不存在就建（prerelease！），存在就直接覆盖资产
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
+          VTAG="v${{ steps.version.outputs.version }}"
+
+          # 桌面安装包与网页/后端源码**同一个 Release**。Release 必须已由
+          # scripts/release.sh 创建（里面才有 arkswarm.tar.gz），这里只追加资产。
+          if ! gh release view "$VTAG" >/dev/null 2>&1; then
+            echo "✗ Release $VTAG 不存在：请先用 scripts/release.sh 发布后端/网页源码，再发桌面端" >&2
+            exit 1
+          fi
+          ls -lh dist
+          gh release upload "$VTAG" dist/* --clobber
+          echo "✓ 已追加桌面安装包到 $VTAG"
+
+          # 滚动 Release：壳自更新读这里（prerelease，不抢 /releases/latest）
+          ROLLING=desktop-latest
+          if ! gh release view "$ROLLING" >/dev/null 2>&1; then
+            gh release create "$ROLLING" \
               --prerelease \
               --target "${{ github.sha }}" \
               --title "桌面端最新构建（滚动）" \
               --notes "由 CI 自动维护：桌面端安装包与 latest*.yml。请勿手动编辑，壳更新读取这里。"
           fi
-          ls -lh dist
-          gh release upload "$TAG" dist/* --clobber
-
-          # 版本 tag：给人看的版本记录，同样是 prerelease（不抢 /releases/latest）
-          VTAG="desktop-v${{ steps.version.outputs.version }}"
-          if ! gh release view "$VTAG" >/dev/null 2>&1; then
-            gh release create "$VTAG" \
-              --prerelease \
-              --target "${{ github.sha }}" \
-              --title "ArkSwarm 桌面端 ${{ steps.version.outputs.version }}" \
-              --notes "桌面端 ${{ steps.version.outputs.version }} 构建产物（壳独立版本线，与后端 V* 版本互不影响）。"
-          fi
-          gh release upload "$VTAG" dist/* --clobber
-          echo "✓ 已发布：$TAG / $VTAG"
+          gh release upload "$ROLLING" dist/* --clobber
+          echo "✓ 已刷新滚动 Release：$ROLLING"

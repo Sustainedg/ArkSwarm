@@ -30,6 +30,11 @@ Electron 主进程（薄壳）
 | `node/global/` | npm 全局安装前缀（内核 CLI 装在这里）+ `node/cache/` | 内核需要重装，不影响对话数据 |
 | `releases/` | 后端版本目录 + `current` 指针（复用主项目自更新机制） | 回滚历史丢失，不影响运行 |
 
+> 应用图标与托盘图标由 `desktop/scripts/gen-icons.py` 生成，几何直接复用网页
+> `scripts/gen_icons.py`（三节点星座 + 轨道弧）—— 桌面端与网页的图标是同一张图。
+> 改了品牌图形后跑 `npm run gen:icons` 重新生成；macOS 托盘是模板图（纯黑 + alpha），
+> Windows/Linux 用品牌色。
+
 > 安装包卸载时 `deleteAppDataOnUninstall: false`：对话数据与内核安装都在 userData，卸载应用不该带走。
 
 ---
@@ -38,9 +43,9 @@ Electron 主进程（薄壳）
 
 | | 后端 | 桌面壳 |
 | --- | --- | --- |
-| 版本源 | `backend/app/__init__.py` 的 `__version__`（V0.1.x） | `desktop/package.json` 的 `version`（0.x.y） |
+| 版本源 | `backend/app/__init__.py` 的 `__version__`（V0.1.x） | `desktop/package.json` 的 `version`（0.1.x，**与后端同号**，发布时 CI 双向校验） |
 | 产物 | `arkswarm.tar.gz` + `.sha256` | NSIS / DMG / zip + `latest*.yml` |
-| 发布 tag | `v0.1.3`（普通 Release） | `desktop-latest`（**滚动**，prerelease）+ `desktop-v0.x.y`（版本记录，prerelease） |
+| 发布 tag | `v0.1.3`（普通 Release，含网页/后端源码） | 安装包**追加到同一个 `v0.1.3` Release**；另有 `desktop-latest`（**滚动**，prerelease，壳自更新读它） |
 | 更新器 | `backend/app/selfupdate.py`，读 `/releases/latest` | `electron-updater`，Generic Provider 直读滚动 tag 下的 `latest*.yml` |
 | 生效方式 | 下载 → `releases/<版本>/` → 切 current → `os.execv` 同 PID 重启 | 下载安装包 → 重启 App（NSIS / Squirrel.Mac） |
 
@@ -71,7 +76,7 @@ Windows 的 NSIS 未签名也能更新（仅 SmartScreen 提示）。
 | 触发 | 行为 |
 | --- | --- |
 | PR / push（`desktop/**`、`backend/**`、`frontend/**` 有改动） | 双平台构建 + 打包版冒烟，不发布 |
-| push tag `desktop-v*` | 构建 + 冒烟 + 发布到 `desktop-latest` 与 `desktop-v<版本>` |
+| push tag `v*`（后端/网页发版） | 构建 + 冒烟，安装包追加到同一个 `v<版本>` Release，并刷新 `desktop-latest` |
 | `workflow_dispatch` + 勾选 publish | 同上（不发 tag 也能发布） |
 
 矩阵：
@@ -82,13 +87,16 @@ Windows 的 NSIS 未签名也能更新（仅 SmartScreen 提示）。
   条目（app-builder-lib 按同名 update-info 文件合并 `files`）；拆开调用会互相覆盖。
   因此 mac 任务要下载 `mac-arm64` 与 `mac-x64` 两份 Python / Node。
 
-### 发版（壳自己的版本线）
+### 发版（与网页/后端同一个版本号、同一个 Release）
 
 ```bash
-# 1) 改 desktop/package.json 的 version（与后端 __version__ 无关）
-# 2) 打 tag 并推送 —— CI 会校验 tag 与版本号一致，不一致直接失败
-git tag desktop-v0.2.0
-git push origin desktop-v0.2.0
+# 1) 改 backend/app/__init__.py 的 __version__（唯一版本源）与
+#    desktop/package.json 的 version（去掉 V，例如 V0.1.3 ↔ 0.1.3）
+# 2) 提交后跑 release.sh —— 它会校验两个版本号一致，并创建 v<版本> Release
+bash scripts/release.sh
+# 3) 推送 tag；桌面端 CI 会自动构建，把 Win/mac 安装包追加到同一个 Release，
+#    并刷新滚动 Release desktop-latest（壳自更新用）
+git push origin v0.1.3
 ```
 
 ### 冒烟（smoke）

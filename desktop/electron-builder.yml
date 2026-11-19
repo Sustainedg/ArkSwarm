@@ -47,6 +47,8 @@ asarUnpack:
   # 无需解包的资源（保持默认）
   - "**/*.{node,dll}"
 win:
+  # 与网页图标同源（desktop/scripts/gen-icons.py 生成）
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -63,6 +65,7 @@ nsis:
   # 差分更新（electron-updater 用 .blockmap 只下变化块）
   differentialPackage: true
 mac:
+  icon: build/icon.icns
   target:
     # zip 是 macOS 自动更新的必需产物（Squirrel.Mac 只认 zip，DMG 仅供人工安装）
     - target: dmg
@@ -88,6 +91,7 @@ mac:
 # 抢同一个 /Volumes 卷名，第二个 DMG 构建挂载时 hdiutil detach 反复失败。
 linux:
   # 桌面版只承诺 Win/macOS；linux 目标只是给服务器侧顺带构建，不作支持承诺
+  icon: build/icon.png
   target: [AppImage]
   category: Utility
 # 壳更新通道：**Generic Provider + 滚动 prerelease tag**，与后端 Release 完全隔离。

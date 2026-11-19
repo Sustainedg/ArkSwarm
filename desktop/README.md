@@ -48,6 +48,7 @@ npm run dev           # 编译主进程 + 启动 Electron（后端用仓库源�
 
 ```bash
 cd desktop
+npm run gen:icons                    # 生成应用图标 / 托盘图标（与网页同源，改了品牌图形才需要）
 node scripts/fetch-python.mjs        # 下载 python-build-standalone → build/python-runtime/<arch>/
 node scripts/fetch-node.mjs          # 下载官方 Node 22 LTS（校验 sha256）→ build/node-runtime/<arch>/
 node scripts/prepare-backend.mjs     # 确保 frontend/dist 存在
@@ -66,8 +67,9 @@ npx electron-builder --publish never # 产物在 release/
 - PR / push 改动 `desktop/**`、`backend/**`、`frontend/**` → Windows + macOS 双平台构建，
   并对**打包产物**跑冒烟启动（`ARKSWARM_DESKTOP_SMOKE=1`：内嵌 Python 建 venv → 起后端 →
   健康检查 → 退出 0）；
-- 打 tag `desktop-v*` → 构建产物与 `latest*.yml` 上传到滚动 Release `desktop-latest`
-  （**prerelease**，避免抢走后端更新器的 `/releases/latest`）。
+- 打后端版本 tag `v*` → 构建产物与 `latest*.yml` **追加到同一个 `v<版本>` Release**
+  （与网页/后端源码一起发布），同时刷新滚动 Release `desktop-latest`（**prerelease**，
+  避免抢走后端更新器的 `/releases/latest`）。
 
 ## 壳更新通道（要点）
 
@@ -83,7 +85,7 @@ prerelease。细节与设计原因见 `docs/desktop.md` §2。
 | 后端改动 | 桌面版需要的后端适配（若有）走主项目正常 PR 流程，桌面壳只读仓库 `backend/` 源码 |
 | 测试 | `desktop/` 不进 `scripts/test.sh`；本目录 `npm run typecheck` 自证，CI 另跑打包版冒烟 |
 | 文档 | 长期文档进 `docs/`（`docs/desktop.md`）；`desktop/README.md` 保持自包含 |
-| 版本 | 壳版本（package.json `version`）与后端 `__version__` 独立演进；后端更新走主项目 releases 机制（界面内一键升级） |
+| 版本 | 壳版本（package.json `version`）**与后端 `__version__` 同号**（V0.1.3 ↔ 0.1.3），发布时 CI 双向校验；后端更新走主项目 releases 机制（界面内一键升级） |
 
 ## 里程碑
 

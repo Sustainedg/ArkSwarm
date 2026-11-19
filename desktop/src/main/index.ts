@@ -7,7 +7,7 @@
  * 窗口策略（桌面版价值点）：关窗 = 隐藏到托盘，后端继续跑
  * → IM 在线、工单协作、生成中的回复都不中断。
  */
-import { app, BrowserWindow, Tray, Menu, dialog, shell } from 'electron';
+import { app, BrowserWindow, Tray, Menu, dialog, ipcMain, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { findFreePort, isPortInUse } from './ports';
@@ -27,6 +27,123 @@ const smokeMode = process.env.ARKSWARM_DESKTOP_SMOKE === '1';
 
 /** 冒烟模式的总看门狗：卡住也要以非零退出，绝不让 CI 任务挂到超时。 */
 const SMOKE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * 自绘标题栏高度（Windows 的 titleBarOverlay 与注入的 CSS 必须一致）。
+ * 默认原生标题栏在深色界面顶上会留一条纯白的系统色条 —— 那正是「不像原生软件」的来源。
+ */
+const TITLEBAR_HEIGHT = 36;
+
+/** Windows / macOS 使用自绘标题栏；Linux 没有 overlay 支持，保留系统边框。 */
+const customTitlebar = process.platform === 'win32' || process.platform === 'darwin';
+
+/** 桌面壳的图标目录（随 files 打进 app.asar）。 */
+function iconsDir(): string {
+  return path.join(__dirname, '..', 'resources', 'icons');
+}
+
+/** 托盘图标：macOS 用模板图（系统按菜单栏明暗自动着色），其它平台用品牌色。 */
+function trayIconPath(): string {
+  const name = process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png';
+  return path.join(iconsDir(), name);
+}
+
+/**
+ * 给页面注入「桌面外壳」样式与拖拽条（只在 Electron 里执行，浏览器访问完全不受影响）。
+ *
+ * 为什么改 `.app-shell` 而不是给 body 加 padding：`.app-shell` 写死了 `height: 100vh`，
+ * body 加 padding 只会把它顶出屏幕；这里改成「上边距 + 扣掉标题栏的高度」，
+ * 整页仍然正好一屏。拖拽条本身透明，露出的是页面自己的背景渐变，所以明暗主题都对得上。
+ */
+function desktopChromeCss(): string {
+  return `
+body.arkswarm-desktop { overflow: hidden; }
+body.arkswarm-desktop .app-shell {
+  height: calc(100vh - ${TITLEBAR_HEIGHT}px);
+  margin-top: ${TITLEBAR_HEIGHT}px;
+}
+#arkswarm-titlebar {
+  position: fixed; top: 0; left: 0; right: 0; height: ${TITLEBAR_HEIGHT}px;
+  -webkit-app-region: drag; z-index: 20; background: transparent;
+  display: flex; align-items: stretch; justify-content: flex-end;
+}
+#arkswarm-titlebar::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+  background: var(--border, rgba(255, 255, 255, 0.08));
+}
+/* Windows 自绘窗口按钮：颜色跟随页面主题变量，不再有系统浅色条 */
+.arkswarm-win-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
+.arkswarm-win-controls button {
+  width: 46px; height: 100%; border: 0; padding: 0; background: transparent;
+  color: var(--text-dim, #9aa0b0); display: grid; place-items: center; cursor: default;
+}
+.arkswarm-win-controls button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text, #e8eaf0); }
+.arkswarm-win-controls button.arkswarm-close:hover { background: #e81123; color: #fff; }
+.arkswarm-win-controls svg { pointer-events: none; }
+#arkswarm-titlebar.is-maximized .arkswarm-max-icon { display: none; }
+#arkswarm-titlebar:not(.is-maximized) .arkswarm-restore-icon { display: none; }
+`;
+}
+
+function desktopChromeScript(): string {
+  const controls = process.platform === 'win32';
+  return `(() => {
+  document.body.classList.add('arkswarm-desktop');
+  if (document.getElementById('arkswarm-titlebar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'arkswarm-titlebar';
+  bar.setAttribute('aria-hidden', 'true');
+  ${controls ? `
+  const icons = {
+    minimize: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" stroke="currentColor" stroke-width="1"/></svg>',
+    maximize: '<svg class="arkswarm-max-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg><svg class="arkswarm-restore-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="3.5" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1"/><path d="M3 3.5V1.5h5.5V7" fill="none" stroke="currentColor" stroke-width="1"/></svg>',
+    close: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1"/></svg>',
+  };
+  const box = document.createElement('div');
+  box.className = 'arkswarm-win-controls';
+  for (const action of ['minimize', 'toggle-maximize', 'close']) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    if (action === 'close') button.className = 'arkswarm-close';
+    button.innerHTML = icons[action === 'toggle-maximize' ? 'maximize' : action];
+    button.addEventListener('click', () => window.arkswarmDesktop?.window?.run?.(action));
+    box.appendChild(button);
+  }
+  bar.appendChild(box);
+  window.arkswarmDesktop?.window?.onMaximized?.((maximized) => {
+    bar.classList.toggle('is-maximized', Boolean(maximized));
+  });
+  ` : ''}
+  document.body.appendChild(bar);
+})();`;
+}
+
+/** Windows 自绘窗口按钮的 IPC 入口（监听一次即可）。 */
+function registerWindowControls(): void {
+  if (process.platform !== 'win32') return;
+  ipcMain.on('desktop-window', (event, action: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    if (action === 'minimize') {
+      win.minimize();
+    } else if (action === 'toggle-maximize') {
+      if (win.isMaximized()) win.unmaximize();
+      else win.maximize();
+    } else if (action === 'close') {
+      win.close(); // 主进程的 close 处理 = 隐藏到托盘
+    }
+  });
+}
+
+/** 每次页面加载（含后端自更新后的重载）都把桌面外壳装回去。 */
+function installDesktopChrome(win: BrowserWindow): void {
+  if (!customTitlebar) return;
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed()) return;
+    void win.webContents.insertCSS(desktopChromeCss()).catch(() => undefined);
+    void win.webContents.executeJavaScript(desktopChromeScript()).catch(() => undefined);
+  });
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -51,6 +168,7 @@ if (!app.requestSingleInstanceLock()) {
 async function main(): Promise<void> {
   await app.whenReady();
   ensureLayout();
+  registerWindowControls();
 
   if (smokeMode) {
     // 不建窗口；只给整条链路一个总时限（依赖安装 + 首启可能花几分钟）
@@ -129,7 +247,18 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0f1117',
     title: 'ArkSwarm',
+    icon: process.platform === 'darwin' ? undefined : path.join(iconsDir(), 'icon.png'),
     autoHideMenuBar: true,
+    // 深色自绘标题栏：Windows 用 titleBarOverlay 保留系统的最小化/最大化/关闭，
+    // macOS 用 hiddenInset 把红绿灯嵌进内容；两者都不再出现系统浅色条。
+    ...(process.platform === 'win32'
+      ? { titleBarStyle: 'hidden' as const }
+      : process.platform === 'darwin'
+        ? {
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: { x: 14, y: 12 },
+          }
+        : {}),
     webPreferences: {
       // 壳内页面就是普通 Web 页面：不开 nodeIntegration、不关 webSecurity
       nodeIntegration: false,
@@ -138,6 +267,15 @@ function createWindow(): void {
       preload: path.join(__dirname, '..', 'dist-preload', 'index.js'),
     },
   });
+  installDesktopChrome(mainWindow);
+  // 最大化状态同步给自绘标题栏（Windows 的还原图标）
+  const syncMaximized = (): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('desktop-window-state', mainWindow.isMaximized());
+    }
+  };
+  mainWindow.on('maximize', syncMaximized);
+  mainWindow.on('unmaximize', syncMaximized);
   // 就绪前先显示启动页（内联 HTML，无网络依赖）
   void loadSplash();
   mainWindow.once('ready-to-show', () => {
@@ -191,8 +329,8 @@ function showFatal(message: string): void {
 
 // ---- 托盘 ----
 function createTray(): void {
-  // M1 用生成的占位图（resources/icons/trayTemplate.png）；正式版换多分辨率正式图标
-  const iconPath = path.join(__dirname, '..', 'resources', 'icons', 'trayTemplate.png');
+  // 与网页同源的品牌星座：macOS 模板图 / Windows·Linux 品牌色
+  const iconPath = trayIconPath();
   if (!fs.existsSync(iconPath)) {
     // 图标缺失时宁可不出托盘也不能崩（后面还有 Dock/任务栏兜底）；但必须留下日志线索
     process.stdout.write('[desktop] 托盘图标缺失，跳过托盘创建\n');
