@@ -4,7 +4,7 @@
  * 与 `UserAvatar` 同一套外形约定：尺寸走内联 `width/height`（调用方原样式就是内联的），
  * 图片撑满圆框；加载失败（文件丢了 / 取图失败）自动退回 emoji，界面里不出现裂图。
  *
- * 「没图显示 emoji」不只是兜底：协作办公室地图、IM 绑定等只认得到 emoji 字段的界面，
+ * 「没图显示 emoji」不只是兜底：协作流程图、IM 绑定等只认得到 emoji 字段的界面，
  * 依旧显示 `avatar`，所以选了头像包也不会在那边变成一串编号。
  */
 import { useEffect, useState } from 'react'

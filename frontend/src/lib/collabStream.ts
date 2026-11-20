@@ -60,12 +60,27 @@ export function pruneNotices(notices: CollabNotice[]): CollabNotice[] {
 export interface CollabTurnState {
   status: CollabRunStatus
   reason?: string | null
-  live: LiveStep | null
+  /**
+   * 正在流式输出的步骤（波次并行时可能同时有多个；串行时最多一个）。
+   * 每个条目带自己的 stepId，SSE 事件按它分流，交织不会张冠李戴。
+   */
+  live: LiveStep[]
   /** 本轮 SSE 已完成的步骤，详情刷新后清空，避免和落库步骤重复。 */
   completed: FinishedStep[]
   tickets: Record<string, CollabTicket>
   notices: CollabNotice[]
   nextNoticeId: number
+}
+
+/** 兼容消费方的单数视角：数组里最新的那一步（串行场景它就是唯一的）。 */
+export function latestLive(live: LiveStep[]): LiveStep | null {
+  return live.length > 0 ? live[live.length - 1] : null
+}
+
+/** 某个岗位正在流式输出的那一步（岗位抽屉 / 进度条用它）。 */
+export function liveOfNode(live: LiveStep[], nodeKey: string | null | undefined): LiveStep | null {
+  if (!nodeKey) return null
+  return live.find((step) => step.nodeKey === nodeKey) ?? null
 }
 
 /**
@@ -115,7 +130,7 @@ export function makeCollabTurn(
   return {
     status: run.status,
     reason: run.error ?? null,
-    live: null,
+    live: [],
     completed: [],
     tickets: Object.fromEntries(tickets.map((ticket) => [ticket.id, ticket])),
     notices,
@@ -155,7 +170,7 @@ export function syncTurnWithRun(
     ...base,
     status: run.status,
     reason: run.error ?? null,
-    live: base.live && stillLive(base.live.stepId) ? base.live : null,
+    live: base.live.filter((step) => stillLive(step.stepId)),
     completed: base.completed.filter((step) => {
       const row = rows.get(step.stepId)
       return !row || row.status === 'streaming'
@@ -181,7 +196,15 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
     case 'collab.run.started':
       return { ...state, status: 'running', reason: null }
 
-    case 'collab.step.started':
+    case 'collab.step.started': {
+      const started: LiveStep = {
+        stepId: event.step_id ?? '',
+        nodeKey: event.node_key ?? '',
+        duty: event.duty ?? '',
+        agentName: event.agent_name ?? event.node_key ?? '智能体',
+        ticketId: event.ticket_id ?? null,
+        agent: emptyAgentStream(),
+      }
       return {
         ...state,
         status: 'running',
@@ -191,45 +214,42 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
           pruneNotices(state.notices.filter((notice) => Boolean(notice.stepId))),
           event.node_key,
         ),
-        live: {
-          stepId: event.step_id ?? '',
-          nodeKey: event.node_key ?? '',
-          duty: event.duty ?? '',
-          agentName: event.agent_name ?? event.node_key ?? '智能体',
-          ticketId: event.ticket_id ?? null,
-          agent: emptyAgentStream(),
-        },
+        // 并行波次里多个步骤同时在跑：按 stepId 各自登记，不互相顶掉
+        live: [...state.live.filter((step) => step.stepId !== started.stepId), started],
       }
+    }
 
     case 'collab.step.event': {
-      if (!state.live || !event.event || (event.step_id && event.step_id !== state.live.stepId)) {
-        return state
-      }
-      return {
-        ...state,
-        live: { ...state.live, agent: applyAgentEvent(state.live.agent, event.event) },
-      }
+      if (!event.event || !event.step_id) return state
+      const index = state.live.findIndex((step) => step.stepId === event.step_id)
+      if (index < 0) return state
+      const updated = [...state.live]
+      updated[index] = { ...updated[index], agent: applyAgentEvent(updated[index].agent, event.event) }
+      return { ...state, live: updated }
     }
 
     case 'collab.step.finished': {
       const failed = event.status === 'error'
-      const nodeKey = state.live?.nodeKey ?? null
-      // 断线重订阅会重放本轮事件：同一个 stepId 只保留最新一份，避免抽屉里出现重复气泡。
-      const completed = state.live
-        ? [
-            ...state.completed.filter((step) => step.stepId !== state.live!.stepId),
-            {
-              ...state.live,
-              status: event.status ?? 'complete',
-              action: event.action ?? '',
-              error: event.error ?? state.live.agent.error,
-            },
-          ].slice(-60)
-        : state.completed
+      const index = state.live.findIndex((step) => step.stepId === event.step_id)
+      // 断线重订阅会重放本轮事件：找不到对应 live（已收过账）就什么都不做
+      if (index < 0) return state
+      const finishedStep = state.live[index]
+      const nodeKey = finishedStep.nodeKey ?? null
+      // 同一个 stepId 只保留最新一份，避免抽屉里出现重复气泡。
+      const completed = [
+        ...state.completed.filter((step) => step.stepId !== finishedStep.stepId),
+        {
+          ...finishedStep,
+          status: event.status ?? 'complete',
+          action: event.action ?? '',
+          error: event.error ?? finishedStep.agent.error,
+        },
+      ].slice(-60)
+      const live = state.live.filter((step) => step.stepId !== finishedStep.stepId)
       const kept = retireNodeNotices(state.notices, nodeKey)
       if (!failed) {
         // 这一步跑通了：它自己以及同一岗位之前那条失败提醒都已经过时
-        return { ...state, live: null, completed, notices: kept }
+        return { ...state, live, completed, notices: kept }
       }
       const notice: CollabNotice = {
         id: state.nextNoticeId,
@@ -241,7 +261,7 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
       }
       return {
         ...state,
-        live: null,
+        live,
         completed,
         notices: pruneNotices([...kept, notice]).slice(-30),
         nextNoticeId: state.nextNoticeId + 1,
@@ -262,6 +282,8 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
         ...state,
         status,
         reason: event.reason ?? null,
+        // 收尾时不再有「正在跑」的步骤；残留（如挂起前的 streaming）一并清掉
+        live: ended ? [] : state.live,
         notices: ended
           ? state.notices.filter((notice) => notice.level === 'ask')
           : state.notices,
@@ -271,7 +293,9 @@ export function applyCollabEvent(state: CollabTurnState, event: CollabEvent): Co
     case 'collab.notice': {
       const text = event.text ?? ''
       const level = event.level ?? 'info'
-      const nodeKey = state.live?.nodeKey ?? null
+      // 提醒挂在「此刻最新在跑的那一步」上；并行波次里各步骤的 notice 已带 step_id 定位，
+      // 没带时归到最新的 live（与串行时代的归属一致）。
+      const nodeKey = latestLive(state.live)?.nodeKey ?? null
       const notice: CollabNotice = {
         id: state.nextNoticeId,
         key: noticeKey({ level, text, nodeKey }),

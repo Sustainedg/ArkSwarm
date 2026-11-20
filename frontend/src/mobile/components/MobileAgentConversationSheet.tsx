@@ -1,6 +1,7 @@
 /** 移动端岗位内部实时会话：全屏底部弹层，线程复用共享的 `CollabAgentThread`。 */
 import { useMemo } from 'react'
 import { CollabAgentThread } from '../../components/CollabAgentThread'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import { DUTIES } from '../../lib/collabDraft'
 import type { FinishedStep, LiveStep } from '../../lib/collabStream'
 import type { CollabAgentProgress } from '../../lib/collabProgress'
@@ -30,7 +31,13 @@ export function MobileAgentConversationSheet({
   return (
     <MobileSheet title={`${node.label} · 实时对话`} onClose={onClose} full bodyClassName="m-collab-agent-body">
       <div className="m-collab-agent-meta">
-        <span className="avatar">{node.avatar}</span>
+        <AgentAvatar
+          avatar={node.avatar}
+          avatarPreset={node.avatarPreset}
+          avatarFile={node.avatarFile}
+          agentId={node.agentId}
+          size={34}
+        />
         <div>
           <div className="m-collab-agent-name">{node.label}</div>
           <div className="dim small">

@@ -78,6 +78,17 @@ export function loadComposerDraft(id: string | null | undefined): ComposerDraft 
   return readStore()[id] ?? emptyDraft()
 }
 
+/**
+ * 还留着草稿的窗口 id 集合（正文非空或有待发附件）。
+ *
+ * 「新建对话」按钮用它判断某条空对话算不算「被用过」——没发消息但输入框里有字，
+ * 说明用户正在里面打草稿，再点新建就该真开一条新的（见 lib/conversations）。
+ * 一次读盘批量判断，别在循环里逐条 `loadComposerDraft`（那样每条都要整库 parse 一遍）。
+ */
+export function draftOwnerIds(): Set<string> {
+  return new Set(Object.keys(readStore()))
+}
+
 /** 记下某个窗口的草稿；内容全空等于「没有草稿」，顺手抹掉这条记忆。 */
 export function saveComposerDraft(id: string, draft: ComposerDraft): void {
   const store = readStore()

@@ -33,33 +33,8 @@
   /* 默认智能体那颗五角星：深色底上要亮，浅色底上要压深一点才看得清 */
   --star: #f2b41c;
 
-  /* 协作办公室那张等距插画：深色底图配深色的工牌 / 图例 / 工具按钮。
-     浅色外壳下换成浅色底图（public/office/iso-office-light.svg）与浅色卡片，见下面浅色块。 */
-  --office-canvas: #05040a;
-  --office-card: rgba(19, 18, 32, 0.94);
-  --office-card-edge: #0b0a12;
-  --office-card-face: rgba(255, 255, 255, 0.15);
-  --office-card-ring: rgba(255, 255, 255, 0.08);
-  --office-card-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
-  --office-lanyard: rgba(255, 255, 255, 0.3);
-  --office-glass: rgba(11, 10, 18, 0.78);
-  --office-tool: rgba(19, 18, 32, 0.92);
-  --office-tool-hover: rgba(45, 41, 76, 0.95);
-  --office-popover: linear-gradient(180deg, rgba(29, 27, 50, 0.98), rgba(15, 14, 26, 0.98));
-  --office-popover-ring: rgba(123, 92, 255, 0.42);
-  --office-popover-shadow: 0 22px 56px rgba(0, 0, 0, 0.55);
-  --office-chip: rgba(11, 10, 18, 0.5);
-  --office-inset: rgba(255, 255, 255, 0.04);
-  --office-map-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
-  /* 小人腿与手里的杯子：只在抖腿 / 休息喝咖啡时才现形，浅色外壳在下面覆盖 */
-  --office-leg-a: #4a4380;
-
   /* 「设置」勾选气泡（输入框那颗）：macOS 式白卡 + 轻阴影；深色下面板用深色、阴影加重一档 */
   --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  --office-leg-b: #211d3a;
-  --office-cup: #b93ab0;
-  --office-cup-a: rgba(255, 255, 255, 0.16);
-  --office-cup-b: rgba(255, 255, 255, 0.03);
 
   /* 「推进任务」决策卡：品牌青调，与「需要你决定」的紫调卡片区分（浅色在下面覆盖） */
   --advance-border: rgba(94, 158, 255, 0.34);
@@ -98,8 +73,6 @@
    遮罩、品牌色文字、滚动条…）—— 浅色下它们不改就是一块黑。
    每条选择器都带 `[data-theme='light']` 前缀：多一层属性选择器，优先级高于原规则，
    所以这一段放在文件前面也压得住后面的原规则（移动端在 mobile.css 里有一份同样的）。
-   注：协作办公室那张等距插画（.office-map / .collab-workdesk-* 等）有两张底图（深 / 浅，
-   同一份几何，见 scripts/gen_office_bg.py），由 CollabOfficeMap 按当前主题选。
    ============================================================ */
 [data-theme='light'] {
   color-scheme: light;
@@ -130,31 +103,9 @@
   --danger: #dc2626;
   --star: #d99400;
 
-  /* 协作办公室：浅色外壳用浅色底图，工牌 / 图例 / 工具按钮也换成浅色卡片 */
-  --office-canvas: #eef1f8;
-  --office-card: rgba(255, 255, 255, 0.95);
-  --office-card-edge: #ffffff;
-  --office-card-face: rgba(35, 32, 58, 0.09);
-  --office-card-ring: rgba(35, 32, 58, 0.08);
-  --office-card-shadow: 0 8px 18px rgba(58, 48, 96, 0.22);
-  --office-lanyard: rgba(35, 32, 58, 0.22);
-  --office-glass: rgba(255, 255, 255, 0.82);
-  --office-tool: rgba(255, 255, 255, 0.92);
-  --office-tool-hover: rgba(238, 236, 248, 0.98);
-  --office-popover: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 242, 250, 0.98));
-  --office-popover-ring: rgba(123, 92, 255, 0.32);
-  --office-popover-shadow: 0 22px 56px rgba(58, 48, 96, 0.22);
-  --office-chip: rgba(35, 32, 58, 0.06);
-  --office-inset: rgba(255, 255, 255, 0.7);
-  --office-map-shadow: 0 18px 44px rgba(58, 48, 96, 0.16);
-  --office-leg-a: #6b639c;
 
   /* 浅色下的勾选气泡：设计稿的柔和阴影（深色里那支 0.45 在白底上会脏） */
   --popover-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --office-leg-b: #37315c;
-  --office-cup: #c14ab8;
-  --office-cup-a: rgba(255, 255, 255, 0.35);
-  --office-cup-b: rgba(255, 255, 255, 0.08);
   --advance-border: rgba(59, 130, 246, 0.42);
   --advance-bg: linear-gradient(135deg, rgba(59, 130, 246, 0.09), rgba(123, 92, 255, 0.07));
 
@@ -187,11 +138,10 @@
 [data-theme='light'] .sidebar {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(243, 241, 252, 0.72));
 }
-[data-theme='light'] .collab-progress-board-head { background: rgba(255, 255, 255, 0.78); }
+[data-theme='light'] .collab-progress-board { background: var(--bg); }
 [data-theme='light'] .collab-inspector { background: rgba(255, 255, 255, 0.5); }
 [data-theme='light'] .collab-progress-trigger-count { background: rgba(35, 32, 58, 0.06); }
 [data-theme='light'] .modal-backdrop { background: rgba(37, 31, 68, 0.42); }
-[data-theme='light'] .collab-progress-board-backdrop { background: rgba(37, 31, 68, 0.55); }
 [data-theme='light'] .collab-progress-conversation {
   background: var(--bg);
 }
@@ -224,10 +174,6 @@
 [data-theme='light'] .board-entry-violation { color: #b3261e; }
 
 [data-theme='light'] .avatar.user { background: linear-gradient(135deg, #ded8f5, #c8c1e6); }
-
-/* 协作办公室：浅色外壳下换用浅色底图（public/office/iso-office-light.svg，由
-   scripts/gen_office_bg.py 同一份几何换算出来），工牌 / 图例 / 工具按钮也随之换成浅色卡片
-   （配色变量见上面的 [data-theme='light'] 变量块）。 */
 
 /* ---------- 外观设置（深色 / 浅色 / 跟随系统） ---------- */
 .theme-picker { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -471,9 +417,35 @@ code, pre, .mono { font-family: var(--mono); }
 .chat-item.active { background: var(--brand-soft); border-color: rgba(217, 79, 208, 0.3); }
 .chat-item:disabled { opacity: 0.55; cursor: not-allowed; }
 .chat-item-main {
-  display: flex; flex-direction: column; gap: calc(3px * var(--sbs, 1)); width: 100%; min-width: 0; text-align: left;
+  display: flex; flex-direction: row; align-items: center; gap: calc(9px * var(--sbs, 1));
+  width: 100%; min-width: 0; text-align: left;
   padding: 0; border: none; background: none; color: inherit; font: inherit; cursor: pointer;
   transition: padding-right 0.15s;
+}
+/* 行首头像是固定宽度的一列，剩下的宽度全给标题与副行 */
+.chat-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(3px * var(--sbs, 1)); }
+/* 行首头像：单聊一枚；用过 @ 召唤的对话按群聊样式叠成一摞（见 ConversationAvatar）。
+   后一枚压住前一枚的右下角，外圈补一道底色描边，两张脸叠在一起也不糊。 */
+.conv-avatars { flex: none; display: inline-flex; align-items: center; }
+.conv-avatars .conv-avatar {
+  width: calc(24px * var(--sbs, 1)); height: calc(24px * var(--sbs, 1));
+  font-size: calc(11px * var(--sbs, 1));
+  box-shadow: 0 0 0 2px var(--bg-panel);
+  background: var(--bg-panel);
+}
+.conv-avatars.stacked > .conv-avatar { position: relative; }
+.conv-avatars.stacked > .conv-avatar + .conv-avatar { margin-left: calc(-9px * var(--sbs, 1)); }
+/* 右边那枚压在左边之上（越往后越靠前），「+N」收口才不会被第三枚头像盖住 */
+.conv-avatars.stacked > .conv-avatar:nth-child(1) { z-index: 1; }
+.conv-avatars.stacked > .conv-avatar:nth-child(2) { z-index: 2; }
+.conv-avatars.stacked > .conv-avatar:nth-child(3) { z-index: 3; }
+.conv-avatars.stacked > .conv-avatar:nth-child(4) { z-index: 4; }
+/* 「+N」收口：超过 3 枚时，最后一格改成数字，别把标题挤没 */
+.conv-avatar-more {
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--bg-hover); color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-weight: 600; letter-spacing: 0.02em;
 }
 /* 动作条浮在右上角时，正文得让开这 84px（三个 24px 图标 + 间距 + 右边距）：
    选中行的底色是半透明的品牌色，动作条 `background: inherit` 也半透明，
@@ -497,8 +469,11 @@ code, pre, .mono { font-family: var(--mono); }
   .chat-item-state.running { animation: none; border-color: var(--brand); }
 }
 .chat-item-meta { font-size: calc(11px * var(--sbs, 1)); color: var(--text-dim); display: flex; gap: calc(6px * var(--sbs, 1)); align-items: center; }
-/* 智能体名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。 */
-.chat-item-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 智能体名过长时截断，时间靠右对齐（今天只显示时间，其余显示日期 + 时间）。
+   只让第一段（智能体名）可伸缩：条数被挤成「8…」比名字被截断更难看。 */
+.chat-item-meta > span { white-space: nowrap; }
+.chat-item-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-item-meta > span:not(:first-child) { flex: none; }
 .chat-item-time { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
 /* 行内动作：平时不占地方，鼠标移上去（或键盘走进去）才浮出来 */
 .chat-item-actions {
@@ -1071,6 +1046,53 @@ code, pre, .mono { font-family: var(--mono); }
 @media (prefers-reduced-motion: reduce) {
   .agent-avatar-preview[class*='live-'] .agent-avatar-emoji { animation: none; }
 }
+
+/* ---------- 空会话中央的大头像（两端各一份，共享段逐字一致；移动端在 mobile.css 收小） ----------
+   智能体的头像放大了站在会话中央：透明背景、四周留白（头像包的图已由
+   scripts/make_avatars_transparent.py 抠成透明）。CSS 只做两件事：
+   头像整体呼吸浮动（活物感）、脚边光晕与阴影（站在页面上的落点感）。 */
+.mascot-stage {
+  position: relative; width: 200px; height: 200px; margin: 0 auto;
+  animation: mascot-breathe 3.2s ease-in-out infinite;
+}
+/* 大头像：去掉圆框描边与底色（图本身透明），撑满舞台 */
+.mascot-avatar { display: block; }
+.mascot-avatar .agent-avatar {
+  width: 168px; height: 168px; margin: 0 auto;
+  border: none; background: none;
+  filter: drop-shadow(0 10px 24px rgb(0 0 0 / 28%));
+}
+.mascot-avatar .agent-avatar img {
+  width: 100%; height: 100%; object-fit: contain;
+}
+/* 脚下的椭圆光晕：人物「站在」页面上的落点感（呼吸时跟着同步缩放） */
+.mascot-glow {
+  position: absolute; left: 50%; bottom: -6px; z-index: -1;
+  width: 150px; height: 56px; transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--brand-soft), transparent 70%);
+  animation: mascot-glow-pulse 3.2s ease-in-out infinite;
+}
+/* 脚底阴影：比光晕更收敛的一小片深色，浅色主题下也不至于看不见 */
+.mascot-shadow {
+  position: absolute; left: 50%; bottom: 2px; z-index: -1;
+  width: 88px; height: 18px; transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgb(0 0 0 / 32%), transparent 68%);
+  animation: mascot-glow-pulse 3.2s ease-in-out infinite;
+}
+@keyframes mascot-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-7px) scale(1.02); }
+}
+@keyframes mascot-glow-pulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+/* 关动画的偏好：头像停住，光晕静止 —— 静态但不缺位 */
+@media (prefers-reduced-motion: reduce) {
+  .mascot-stage, .mascot-glow, .mascot-shadow { animation: none; }
+}
 /* 分组输入框的下拉建议：锚在 field 上（relative），已有分组一行一个，点击即填 */
 .group-suggest-wrap { position: relative; }
 .group-suggest {
@@ -1569,19 +1591,22 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .collab-item:hover { background: var(--bg-hover); }
 .collab-item.active { background: var(--brand-soft); border-color: rgba(217, 79, 208, 0.3); }
-.collab-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.collab-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 /* 输入区复用普通对话的版式（.chat-composer）：不参与弹性收缩，消息区自己滚动。 */
 .collab-main > .chat-composer { flex: none; }
 .collab-topbar { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .collab-run-title { font-weight: 600; font-size: 14px; }
 .collab-scroll { flex: 1; overflow: auto; padding: 22px 26px 8px; }
+/* 进度覆盖层的锚：包住「提醒条 + 时间线 + 决策卡」，覆盖层 inset:0 只盖到输入框上沿。 */
+.collab-stack { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
-/* ---------- 协作：进度按钮与全屏进度页 ---------- */
+/* ---------- 协作：进度按钮与进度覆盖层 ---------- */
 .collab-progress-trigger {
   display: inline-flex; align-items: center; gap: 7px;
   border-color: rgba(110, 231, 209, 0.24);
   background: linear-gradient(135deg, rgba(110, 231, 209, 0.08), rgba(217, 79, 208, 0.08));
 }
+.collab-progress-trigger.open { border-color: var(--accent); color: var(--text); }
 .collab-progress-trigger:hover:not(:disabled) { border-color: var(--accent); background: var(--bg-hover); }
 .collab-progress-trigger.attention { border-color: rgba(251, 191, 36, 0.35); }
 .collab-progress-trigger-count {
@@ -1596,29 +1621,18 @@ code, pre, .mono { font-family: var(--mono); }
   0%, 100% { opacity: 0.55; box-shadow: 0 0 0 2px rgba(110, 231, 209, 0.1); }
   50% { opacity: 1; box-shadow: 0 0 0 5px rgba(110, 231, 209, 0.16); }
 }
-.collab-progress-board-backdrop {
-  background: rgba(5, 4, 10, 0.86); justify-content: stretch; align-items: stretch;
-  backdrop-filter: blur(10px);
-}
 .collab-progress-board {
-  width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-top: 1px solid var(--border);
   background:
     radial-gradient(900px 480px at 8% -10%, rgba(217, 79, 208, 0.17), transparent 58%),
     radial-gradient(820px 520px at 96% 0%, rgba(110, 231, 209, 0.1), transparent 52%),
     var(--bg);
 }
-.collab-progress-board-head {
-  min-height: 92px; display: flex; align-items: center; gap: 16px; padding: 20px 38px;
-  border-bottom: 1px solid var(--border); background: rgba(23, 22, 42, 0.78); backdrop-filter: blur(16px);
-}
-.collab-progress-board-head > div { min-width: 0; }
-.collab-progress-eyebrow { font-size: 11px; font-weight: 650; letter-spacing: 0.12em; color: var(--accent); }
-.collab-progress-title-row { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
-.collab-progress-title-row h2 { font-size: 26px; letter-spacing: -0.025em; }
-.collab-progress-subtitle { margin-top: 4px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.collab-progress-close { margin-left: auto; flex: none; }
+/* 覆盖层不再有标题栏：顶栏的「协作进度」按钮负责开合，图例与徽标自己解释状态。 */
 .collab-progress-board-body {
-  flex: 1; min-height: 0; overflow: hidden; padding: 24px 32px 30px;
+  flex: 1; min-height: 0; overflow: hidden; padding: 18px 26px 22px;
   display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px;
 }
 .collab-progress-board-body.has-conversation {
@@ -1626,8 +1640,10 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .collab-progress-board-main {
   min-width: 0; min-height: 0; overflow: auto; padding-right: 6px;
-  display: flex; flex-direction: column; gap: 28px;
+  display: flex; flex-direction: column;
 }
+/* 没有标题栏后，流程图直接铺满整个覆盖层。 */
+.collab-progress-board-main > .flow-map { flex: 1; height: auto; min-height: 260px; }
 .collab-progress-conversation {
   min-width: 0; min-height: 0; display: flex; overflow: hidden;
   border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -1635,331 +1651,6 @@ code, pre, .mono { font-family: var(--mono); }
   background: var(--bg);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
-.collab-progress-section { display: flex; flex-direction: column; gap: 14px; }
-.collab-progress-section-head { display: flex; align-items: flex-end; gap: 14px; }
-.collab-progress-section-head > div { min-width: 0; flex: 1; }
-.collab-progress-section-head h3 { font-size: 16px; }
-.collab-progress-section-head p { margin-top: 4px; font-size: 12px; color: var(--text-dim); }
-.collab-progress-count {
-  flex: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
-  font-size: 11px; color: var(--text-muted); background: var(--bg-input);
-}
-/* ---------- 3D 工位场景 ---------- */
-.collab-station-scene {
-  --shirt-a: #b06bff; --shirt-b: #7b3fd0; --shirt-c: #452276;
-  position: relative; display: block; height: 138px; margin: 2px 0 0;
-  perspective: 900px; perspective-origin: 50% 30%;
-}
-.collab-station-scene.state-active { --shirt-a: #d987ff; --shirt-b: #a03fd0; --shirt-c: #5b2276; }
-.collab-station-scene.state-waiting { --shirt-a: #f0c86b; --shirt-b: #c48f24; --shirt-c: #8a6012; }
-.collab-station-scene.state-error { --shirt-a: #ff9d9d; --shirt-b: #c85252; --shirt-c: #8c2f2f; }
-.collab-station-scene.state-done { --shirt-a: #86efac; --shirt-b: #34a86c; --shirt-c: #1d6b45; }
-.collab-desk-ground {
-  position: absolute; left: 5%; right: 5%; bottom: 3px; height: 18px; border-radius: 50%;
-  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0) 74%);
-}
-
-/* 小人：转椅（留在工位）+ 可走位的身体层 + 头 + 身体 + 两条手臂（手另画在键盘上，见下） */
-.collab-worker {
-  position: absolute; left: 4px; bottom: 30px; width: 68px; height: 90px;
-  transform: rotateY(-11deg);
-}
-.collab-worker-chair {
-  position: absolute; left: -3px; bottom: -2px; width: 74px; height: 84px;
-  border-radius: 20px 20px 14px 14px;
-  background: linear-gradient(165deg, #3a3466, #1d1a33 74%);
-  box-shadow: inset 3px 4px 10px rgba(255, 255, 255, 0.1), inset -4px -6px 10px rgba(0, 0, 0, 0.42),
-              0 10px 18px rgba(0, 0, 0, 0.36);
-}
-.collab-worker-chair::after {
-  content: ''; position: absolute; left: 9px; right: 9px; bottom: 7px; height: 3px; border-radius: 3px;
-  background: rgba(255, 255, 255, 0.06);
-}
-.collab-worker-bubble {
-  position: absolute; left: 48px; top: -10px; z-index: 4;
-  min-width: 22px; padding: 2px 5px; font-size: 12px; line-height: 1.3; text-align: center; white-space: nowrap;
-  border-radius: 10px; background: var(--bg-elevated); border: 1px solid var(--border);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.34);
-  animation: collab-bubble-float 2.6s ease-in-out infinite;
-}
-.collab-worker-bubble::after {
-  content: ''; position: absolute; left: 5px; bottom: -4px; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--bg-elevated); border: 1px solid var(--border);
-}
-.collab-worker-neck {
-  position: absolute; left: 29px; top: 33px; width: 10px; height: 11px; border-radius: 4px;
-  background: linear-gradient(180deg, #e9b98f, #cf9670);
-}
-/* 脑袋：球面高光 + 外侧阴影，做出体积感 */
-.collab-worker-head {
-  position: absolute; left: 15px; top: 2px; width: 38px; height: 36px; z-index: 2;
-  border-radius: 50% 50% 46% 46%;
-  background: radial-gradient(circle at 33% 26%, #fff3e6, #f9d0a8 56%, #db9d6b 100%);
-  box-shadow: inset -6px -6px 12px rgba(150, 96, 58, 0.4), inset 5px 4px 9px rgba(255, 255, 255, 0.55),
-              0 7px 13px rgba(0, 0, 0, 0.34);
-  animation: collab-head-bob 3.4s ease-in-out infinite;
-}
-.collab-worker-hair {
-  position: absolute; left: -2px; top: -5px; width: 42px; height: 19px;
-  border-radius: 21px 21px 9px 6px;
-  background: linear-gradient(155deg, #8f72ff, #43307a 68%);
-  box-shadow: inset 3px 4px 8px rgba(255, 255, 255, 0.24), 0 4px 10px rgba(0, 0, 0, 0.34);
-}
-.collab-worker-hair::after {
-  content: ''; position: absolute; left: 4px; bottom: -7px; width: 11px; height: 10px;
-  border-radius: 0 0 9px 9px; background: linear-gradient(155deg, #6b52d0, #3a2a68);
-}
-.collab-worker-ear {
-  position: absolute; top: 15px; width: 8px; height: 10px; border-radius: 50%;
-  background: radial-gradient(circle at 40% 32%, #ffeede, #e2ab7c);
-  box-shadow: inset -1px -1px 3px rgba(150, 96, 58, 0.4);
-}
-.collab-worker-ear.left { left: -4px; }
-.collab-worker-ear.right { right: -4px; }
-.collab-worker-eye {
-  position: absolute; top: 16px; width: 6px; height: 7px; border-radius: 50%;
-  background: radial-gradient(circle at 36% 28%, #4b4269, #201c33);
-  box-shadow: inset 1px -1px 0 rgba(255, 255, 255, 0.75);
-  animation: collab-blink 4.6s ease-in-out infinite;
-}
-.collab-worker-eye.left { left: 8px; }
-.collab-worker-eye.right { right: 8px; }
-.collab-worker-cheek {
-  position: absolute; top: 22px; width: 8px; height: 5px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(241, 108, 138, 0.55), rgba(241, 108, 138, 0));
-}
-.collab-worker-cheek.left { left: 2px; }
-.collab-worker-cheek.right { right: 2px; }
-.collab-worker-mouth {
-  position: absolute; left: 50%; bottom: 6px; width: 10px; height: 5px; margin-left: -5px;
-  border-radius: 0 0 10px 10px; background: linear-gradient(180deg, #c8627c, #934055);
-  box-shadow: inset 0 -1px 1px rgba(0, 0, 0, 0.25);
-}
-/* 身体：上亮下暗的球面渐变当衣服 */
-.collab-worker-torso {
-  position: absolute; left: 15px; bottom: 2px; width: 38px; height: 46px; z-index: 1;
-  border-radius: 17px 17px 11px 11px;
-  background: radial-gradient(circle at 32% 16%, var(--shirt-a), var(--shirt-b) 62%, var(--shirt-c));
-  box-shadow: inset -6px -5px 11px rgba(0, 0, 0, 0.36), inset 4px 4px 9px rgba(255, 255, 255, 0.2),
-              0 9px 16px rgba(0, 0, 0, 0.32);
-}
-/* 手臂：肩关节当轴，往下伸到桌面后面；手单独画在键盘上（.collab-hand） */
-.collab-worker-arm {
-  position: absolute; z-index: 3; bottom: 16px; width: 11px; height: 52px; border-radius: 6px 6px 9px 9px;
-  background: linear-gradient(180deg, var(--shirt-b), var(--shirt-c));
-  transform-origin: 50% 4px; transition: transform 0.3s ease;
-  box-shadow: inset -2px 0 4px rgba(0, 0, 0, 0.3);
-}
-.collab-worker-arm.left { left: 8px; transform: rotate(26deg); }
-.collab-worker-arm.right { right: 10px; transform: rotate(17deg); }
-
-/* 桌子：桌面横跨工位、显示器立在右边、键盘压在最前面 */
-.collab-workdesk {
-  position: absolute; left: 44px; right: 0; bottom: 8px; height: 104px;
-  perspective: 720px; perspective-origin: 50% 0%;
-}
-.collab-workdesk-top {
-  position: absolute; left: 0; right: 0; bottom: 20px; height: 46px;
-  border-radius: 10px; transform: rotateX(56deg); transform-origin: 50% 100%;
-  background: linear-gradient(180deg, #5f5aa8, #2b2750 84%);
-  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.44), inset 0 2px 0 rgba(255, 255, 255, 0.2);
-}
-/* 桌面下沿那道厚边：让它看着是一块板，而不是一张纸 */
-.collab-workdesk-lip {
-  position: absolute; left: 0; right: 0; bottom: 16px; height: 7px; border-radius: 3px;
-  background: linear-gradient(180deg, #443f85, #221f3d);
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.46);
-}
-/* 前挡板：从桌面到地面的整块面板，桌子才立得住 */
-.collab-workdesk-apron {
-  position: absolute; left: 12px; right: 12px; bottom: 0; height: 20px; border-radius: 4px 4px 3px 3px;
-  background: linear-gradient(180deg, #332f60, #1a1730);
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-.collab-workdesk-leg {
-  position: absolute; bottom: 0; width: 12px; height: 22px; border-radius: 3px;
-  background: linear-gradient(180deg, #4a4585, #201d38);
-  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.4);
-}
-.collab-workdesk-leg.left { left: 4px; }
-.collab-workdesk-leg.right { right: 4px; }
-.collab-workdesk-monitor {
-  position: absolute; left: 92px; width: 62px; bottom: 44px; height: 58px;
-  border-radius: 7px; transform: rotateY(-12deg); transform-origin: 50% 100%;
-  background: linear-gradient(160deg, #262c49, #121625 72%);
-  border: 1px solid #3d3a66; overflow: hidden; padding: 9px 10px;
-  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 22px rgba(110, 231, 209, 0.14);
-}
-.collab-workdesk-code { display: flex; flex-direction: column; gap: 5px; }
-.collab-workdesk-code i {
-  display: block; height: 3.5px; width: var(--w, 60%); border-radius: 2px;
-  background: var(--accent); opacity: 0.55;
-}
-.collab-workdesk-code i:nth-child(1) { --w: 62%; background: var(--brand); }
-.collab-workdesk-code i:nth-child(2) { --w: 84%; }
-.collab-workdesk-code i:nth-child(3) { --w: 44%; }
-.collab-workdesk-code i:nth-child(4) { --w: 72%; background: var(--brand); }
-.collab-workdesk-caret {
-  position: absolute; left: 63%; top: 31px; width: 3px; height: 8px; border-radius: 1px;
-  background: var(--accent); opacity: 0.9;
-}
-/* 键盘：压在最前面，小人的手正落在键上 */
-.collab-workdesk-keyboard {
-  position: absolute; left: 4px; width: 82px; bottom: 20px; height: 28px; z-index: 2;
-  border-radius: 5px; transform: rotateX(58deg); transform-origin: 50% 100%;
-  display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 3px; padding: 5px;
-  background: linear-gradient(180deg, #4a4585, #2a2750);
-  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-}
-.collab-workdesk-keyboard::after {
-  content: ''; position: absolute; inset: auto 0 -4px 0; height: 6px; border-radius: 0 0 4px 4px;
-  background: linear-gradient(180deg, #322e5e, #1c1930);
-}
-.collab-workdesk-keyboard i { width: 9px; height: 4px; border-radius: 1.5px; background: #625cb0; }
-/* 手：从桌面后伸出来按在键上，打字时轮流抬起来 */
-.collab-hand {
-  position: absolute; z-index: 3; bottom: 21px; width: 14px; height: 14px;
-  border-radius: 46% 46% 40% 40%;
-  background:
-    repeating-linear-gradient(90deg, rgba(120, 70, 30, 0.14) 0 1px, rgba(255, 255, 255, 0) 1px 4.5px),
-    radial-gradient(circle at 36% 30%, #ffeedd, #e6b083);
-  box-shadow: inset -2px -2px 4px rgba(150, 96, 58, 0.42), 0 2px 5px rgba(0, 0, 0, 0.35);
-}
-.collab-hand.left { left: 6px; }
-.collab-hand.right { left: 26px; }
-/* 杯子：干活时冒热气 */
-.collab-workdesk-mug {
-  position: absolute; left: 74px; bottom: 46px; width: 15px; height: 16px; border-radius: 3px 3px 6px 6px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)), #b93ab0;
-  box-shadow: inset -2px -2px 4px rgba(0, 0, 0, 0.3), 0 4px 8px rgba(0, 0, 0, 0.35);
-}
-.collab-workdesk-mug::after {
-  content: ''; position: absolute; left: 5px; top: -9px; width: 4px; height: 8px; border-radius: 3px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
-  opacity: 0; animation: collab-steam 2.6s ease-in-out infinite;
-}
-@keyframes collab-steam {
-  0% { opacity: 0; transform: translateY(3px) scaleX(0.7); }
-  40% { opacity: 0.75; }
-  100% { opacity: 0; transform: translateY(-9px) scaleX(1.3); }
-}
-
-/* ---------- 状态：忙碌敲代码 ---------- */
-.collab-station-scene.state-active .collab-worker-arm.left,
-.collab-station-scene.live .collab-worker-arm.left { animation: collab-typing-left 0.52s ease-in-out infinite alternate; }
-.collab-station-scene.state-active .collab-worker-arm.right,
-.collab-station-scene.live .collab-worker-arm.right { animation: collab-typing-right 0.52s ease-in-out infinite alternate; }
-.collab-station-scene.state-active .collab-hand.left,
-.collab-station-scene.live .collab-hand.left { animation: collab-key-tap 0.52s ease-in-out infinite alternate; }
-.collab-station-scene.state-active .collab-hand.right,
-.collab-station-scene.live .collab-hand.right { animation: collab-key-tap 0.52s ease-in-out infinite alternate-reverse; }
-@keyframes collab-key-tap {
-  from { transform: translateY(0); }
-  to { transform: translateY(-2.5px); }
-}
-.collab-station-scene.state-active .collab-worker-bubble,
-.collab-station-scene.live .collab-worker-bubble { border-color: rgba(217, 79, 208, 0.55); }
-.collab-station-scene.state-active .collab-workdesk-code i,
-.collab-station-scene.live .collab-workdesk-code i { animation: collab-code-type 1.5s steps(10, end) infinite; }
-.collab-station-scene.state-active .collab-workdesk-code i:nth-child(2),
-.collab-station-scene.live .collab-workdesk-code i:nth-child(2) { animation-delay: 0.18s; }
-.collab-station-scene.state-active .collab-workdesk-code i:nth-child(3),
-.collab-station-scene.live .collab-workdesk-code i:nth-child(3) { animation-delay: 0.36s; }
-.collab-station-scene.state-active .collab-workdesk-code i:nth-child(4),
-.collab-station-scene.live .collab-workdesk-code i:nth-child(4) { animation-delay: 0.54s; }
-.collab-station-scene.state-active .collab-workdesk-keyboard i { animation: collab-key-press 0.9s steps(2, end) infinite; }
-.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(2) { animation-delay: 0.12s; }
-.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(3) { animation-delay: 0.26s; }
-.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(4) { animation-delay: 0.38s; }
-.collab-station-scene.state-active .collab-workdesk-keyboard i:nth-child(5) { animation-delay: 0.52s; }
-.collab-station-scene.state-active .collab-workdesk-monitor { box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 30px rgba(110, 231, 209, 0.26); }
-@keyframes collab-typing-left {
-  from { transform: rotate(18deg); }
-  to { transform: rotate(27deg) translateY(1.5px); }
-}
-@keyframes collab-typing-right {
-  from { transform: rotate(-24deg); }
-  to { transform: rotate(-33deg) translateY(1.5px); }
-}
-@keyframes collab-code-type { from { width: 6%; } to { width: var(--w, 60%); } }
-@keyframes collab-key-press { 0%, 49% { background: #6ee7d1; } 50%, 100% { background: #4b4780; } }
-@keyframes collab-breathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-1.5px); }
-}
-@keyframes collab-head-bob {
-  0%, 100% { transform: translateY(0) rotate(-1deg); }
-  50% { transform: translateY(-1.6px) rotate(1.4deg); }
-}
-@keyframes collab-blink {
-  0%, 92%, 100% { transform: scaleY(1); }
-  95% { transform: scaleY(0.12); }
-}
-@keyframes collab-bubble-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
-
-/* ---------- 状态：闲置打盹 ---------- */
-.collab-station-scene.state-pending { opacity: 0.72; filter: saturate(0.72); }
-.collab-station-scene.state-pending .collab-worker-head { transform: translateY(3px) rotate(-7deg); }
-.collab-station-scene.state-pending .collab-worker-eye { animation: none; transform: scaleY(0.18); }
-.collab-station-scene.state-pending .collab-worker-mouth { height: 3px; width: 7px; margin-left: -3.5px; border-radius: 10px; }
-.collab-station-scene.state-pending .collab-worker-arm.left { transform: rotate(8deg); }
-.collab-station-scene.state-pending .collab-worker-arm.right { transform: rotate(-12deg); }
-.collab-station-scene.state-pending .collab-workdesk-code i { opacity: 0.14; }
-.collab-station-scene.state-pending .collab-workdesk-caret { opacity: 0.12; }
-.collab-station-scene.state-pending .collab-workdesk-monitor { box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 12px rgba(110, 231, 209, 0.06); }
-.collab-station-scene.state-pending .collab-workdesk-keyboard i { background: #3a3763; }
-
-/* ---------- 状态：等你决定 ---------- */
-.collab-station-scene.state-waiting .collab-worker-arm.right { transform: rotate(-125deg); animation: collab-wave 1.5s ease-in-out infinite; }
-.collab-station-scene.state-waiting .collab-hand.right { left: 46px; bottom: 99px; }
-.collab-station-scene.state-waiting .collab-worker-mouth { height: 6px; width: 8px; margin-left: -4px; border-radius: 10px; }
-.collab-station-scene.state-waiting .collab-worker-bubble { border-color: rgba(251, 191, 36, 0.6); }
-.collab-station-scene.state-waiting .collab-workdesk-code i { background: var(--warn); opacity: 0.5; }
-@keyframes collab-wave {
-  0%, 100% { transform: rotate(-120deg); }
-  50% { transform: rotate(-134deg); }
-}
-
-/* ---------- 状态：出错 ---------- */
-.collab-station-scene.state-error .collab-workdesk-monitor {
-  border-color: rgba(248, 113, 113, 0.55);
-  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.46), inset 0 0 26px rgba(248, 113, 113, 0.32);
-  animation: collab-panic 0.42s steps(2, end) 6;
-}
-.collab-station-scene.state-error .collab-workdesk-code i { background: var(--danger); opacity: 0.72; }
-.collab-station-scene.state-error .collab-worker-eye { transform: scaleY(1.35); box-shadow: none; }
-.collab-station-scene.state-error .collab-worker-bubble { border-color: rgba(248, 113, 113, 0.6); }
-@keyframes collab-panic {
-  0%, 100% { transform: rotateY(-13deg) translateX(0); }
-  50% { transform: rotateY(-13deg) translateX(-2px); }
-}
-
-/* ---------- 状态：收工 ---------- */
-.collab-station-scene.state-done .collab-workdesk-code i { background: var(--ok); opacity: 0.4; }
-.collab-station-scene.state-done .collab-workdesk-caret { display: none; }
-.collab-station-scene.state-done .collab-worker-arm.left { transform: rotate(10deg); }
-.collab-station-scene.state-done .collab-worker-arm.right { transform: rotate(-14deg); }
-
-/* 降低动效：动画一律停下（无障碍） */
-@media (prefers-reduced-motion: reduce) {
-  .collab-worker, .collab-worker-body, .collab-worker-head, .collab-worker-eye, .collab-worker-bubble,
-  .collab-station-scene .collab-worker-arm, .office-pin-face, .office-pin-dot,
-  .office-popover, .office-progress-fill,
-  .collab-station-scene .collab-workdesk-code i, .collab-station-scene .collab-workdesk-keyboard i,
-  .collab-station-scene .collab-workdesk-monitor { animation: none !important; }
-}
-
-.collab-progress-flow-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.collab-progress-flow {
-  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-muted); font-size: 11.5px;
-}
-.collab-progress-flow b { font-weight: 620; color: var(--text-dim); }
-.collab-progress-flow.kind-review b { color: var(--accent); }
-.collab-progress-flow.kind-rework b { color: var(--warn); }
 
 /* ---------- 协作：岗位内部实时会话 ---------- */
 .collab-agent-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -2276,17 +1967,12 @@ code, pre, .mono { font-family: var(--mono); }
   .collab-drawer-body { grid-template-columns: 1fr; }
   .collab-tree { border-right: none; border-bottom: 1px solid var(--border); max-height: 38%; }
   .collab-detail-grid { grid-template-columns: 1fr; }
-  .collab-progress-board-head { padding: 18px 22px; }
-  .collab-progress-board-body { padding: 22px 22px 48px; }
+  .collab-progress-board-body { padding: 14px 16px 18px; }
   .collab-progress-board-body.has-conversation {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(340px, 48%);
     padding-bottom: 22px;
   }
-  /* 窄屏：一层一行、行内自动换行（箭头本来就是朝下的） */
-  .collab-flow { padding: 16px 10px 22px; }
-  .collab-flow-row { gap: 12px; }
-  .collab-station { width: min(236px, 100%); }
   .collab-agent-panel-head { flex-wrap: wrap; }
   .collab-agent-panel-close { margin-left: auto; }
   .collab-inspector { border-left: none; border-top: 1px solid var(--border); }
@@ -2810,330 +2496,155 @@ code, pre, .mono { font-family: var(--mono); }
 .zoomable.md-image img { max-width: 100%; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .md-image-missing { color: var(--text-dim); font-size: 12px; }
 
-/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */
-.office-map {
+/* ================= 协作流程图：节点进度 + 状态徽标 + 详情卡（两端共用这一份）================= */
+/* 协作进度的流程图视图（组件 components/CollabFlowMap.tsx，两端共用）：视觉沿用编排画布
+   （点阵底纹 + 正交折线 + 箭头），但这里是只读实况 —— 节点只有头像 + 昵称，
+   头像右上角的状态徽标区分执行 / 提问 / 出错 / 等待 / 完成，点节点弹「在做什么」详情卡。
+   颜色走主题变量与既有 --canvas-* 变量，浅色由 [data-theme='light'] 覆盖，不写死深色。 */
+.flow-map {
   position: relative; height: clamp(430px, 62vh, 740px); overflow: hidden;
-  border: 1px solid var(--border); border-radius: 20px; background: var(--office-canvas);
+  border: 1px solid var(--border); border-radius: 20px;
+  background-color: var(--canvas-bg);
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
   cursor: grab; touch-action: none; overscroll-behavior: contain; user-select: none;
   -webkit-user-select: none;
-  box-shadow: inset 0 1px 0 var(--office-inset), var(--office-map-shadow);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
-.office-map.dragging { cursor: grabbing; }
-.office-map-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: none; will-change: transform; }
-.office-map-bg { display: block; pointer-events: none; -webkit-user-drag: none; }
-.office-map-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.flow-map.dragging { cursor: grabbing; }
+.flow-map-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
 
-/* 工牌：挂在人头顶的小卡片（照片位 + 名字 + 职责），右上角的点区分状态。
-   缩得太小（缩到 LABEL_ZOOM 以下）就只剩头像，免得一排工牌糊成一片。 */
-.office-pin {
-  position: absolute; display: flex; flex-direction: column; align-items: center;
-  padding: 0; border: none; background: none; cursor: pointer; pointer-events: auto;
-  transform: translate(-50%, -100%);
+/* 连线：与编排画布同一套配色（assign 灰紫 / review 青 / rework 黄），回流再加虚线 */
+.flow-links { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.flow-link { fill: none; stroke: var(--canvas-link); stroke-width: 2; opacity: 0.85; stroke-linecap: round; stroke-linejoin: round; }
+.flow-link.kind-review { stroke: var(--canvas-link-review); }
+.flow-link.kind-rework { stroke: var(--canvas-link-rework); }
+.flow-link.loop { stroke-dasharray: 7 5; }
+.flow-arrow { fill: var(--canvas-link); }
+.flow-arrow.kind-review { fill: var(--canvas-link-review); }
+.flow-arrow.kind-rework { fill: var(--canvas-link-rework); }
+.flow-link-label { font-size: 10.5px; fill: var(--text-dim); text-anchor: middle; }
+
+/* 节点：头像 + 昵称 + 状态一行；右上角一枚状态徽标 */
+.flow-node {
+  position: absolute; width: 132px; height: 88px; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: var(--bg-panel); box-shadow: var(--canvas-node-shadow);
+  cursor: pointer; pointer-events: auto; font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
-.office-pin::after { /* 挂绳：从工牌底端垂到人头顶 */
-  content: ''; position: absolute; top: 100%; left: 50%; width: 2px; height: 13px;
-  transform: translateX(-50%);
-  background: linear-gradient(180deg, var(--office-lanyard), transparent);
+.flow-node:hover { border-color: var(--brand); transform: translateY(-2px); }
+.flow-node.selected { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.flow-node.state-pending { opacity: 0.55; }
+.flow-node.state-done { border-color: rgba(34, 197, 94, 0.5); }
+.flow-node-face {
+  position: relative; width: 40px; height: 40px; display: grid; place-items: center;
+  font-size: 24px; border-radius: 12px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
 }
-.office-pin-body {
-  position: relative; display: flex; align-items: center; gap: 5px;
-  padding: 3px 7px 3px 3px; border-radius: 12px;
-  border: 1px solid var(--border-strong); background: var(--office-card);
-  box-shadow: var(--office-card-shadow);
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+.flow-node-info { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; padding: 0 8px; }
+.flow-node-name {
+  max-width: 116px; font-size: 12px; font-weight: 640; line-height: 1.3; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.office-pin-face { /* 工牌上的照片位 */
-  position: relative; flex: none; width: 28px; height: 28px; display: grid; place-items: center;
-  font-size: 15px; border-radius: 8px;
-  background: linear-gradient(160deg, var(--office-card-face), transparent);
-  box-shadow: inset 0 0 0 1px var(--office-card-ring);
+.flow-node-state { font-size: 10px; line-height: 1.25; color: var(--text-dim); white-space: nowrap; }
+
+/* 状态徽标（头像右上角）：转圈=执行、气泡=提问、叹号=出错、对勾=完成、时钟=等待 */
+.flow-node-badge {
+  position: absolute; top: 7px; right: 7px; width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 10px; line-height: 1;
+  border: 2px solid var(--bg-panel); background: var(--text-dim); color: #fff;
 }
-.office-pin:hover .office-pin-body,
-.office-pin.selected .office-pin-body { transform: translateY(-3px) scale(1.04); border-color: var(--accent); }
-.office-pin.selected .office-pin-body { box-shadow: 0 0 0 3px rgba(110, 231, 209, 0.16), var(--office-card-shadow); }
-.office-pin.tone-working .office-pin-body { border-color: rgba(52, 211, 153, 0.62); }
-.office-pin.tone-busy .office-pin-body { border-color: rgba(248, 113, 113, 0.62); }
-.office-pin.tone-ask .office-pin-body { border-color: rgba(251, 191, 36, 0.62); }
-.office-pin.tone-done .office-pin-body { border-color: rgba(34, 197, 94, 0.5); }
-.office-pin-text { display: none; flex-direction: column; align-items: flex-start; gap: 1px; padding-right: 1px; }
-.office-pin.labelled .office-pin-text, .office-pin.selected .office-pin-text { display: flex; }
-.office-pin.detailed .office-pin-text { gap: 0; }
-.office-pin-dot {
-  position: absolute; top: -5px; right: -5px; width: 13px; height: 13px; border-radius: 50%;
-  border: 2.5px solid var(--office-card-edge); background: var(--text-dim);
-}
-.office-pin.tone-working .office-pin-dot { background: #34d399; animation: office-pin-pulse 1.9s ease-in-out infinite; }
-.office-pin.tone-busy .office-pin-dot { background: #f87171; }
-.office-pin.tone-ask .office-pin-dot { background: #fbbf24; }
-.office-pin.tone-idle .office-pin-dot { background: #6b7280; }
-.office-pin.tone-done .office-pin-dot { background: #22c55e; }
-.office-pin.live .office-pin-body { animation: office-pin-glow 1.8s ease-in-out infinite; }
-@keyframes office-pin-pulse {
+.flow-node.state-active .flow-node-badge { background: #34d399; animation: flow-badge-pulse 1.9s ease-in-out infinite; }
+.flow-node.state-active .flow-node-badge::after { content: '▶'; font-size: 7px; }
+.flow-node.state-waiting .flow-node-badge { background: #fbbf24; }
+.flow-node.state-waiting .flow-node-badge::after { content: '?'; font-size: 9px; font-weight: 700; }
+.flow-node.state-error .flow-node-badge { background: #f87171; }
+.flow-node.state-error .flow-node-badge::after { content: '!'; font-size: 10px; font-weight: 700; }
+.flow-node.state-pending .flow-node-badge { background: #6b7280; }
+.flow-node.state-pending .flow-node-badge::after { content: '…'; font-size: 10px; }
+.flow-node.state-done .flow-node-badge { background: #22c55e; }
+.flow-node.state-done .flow-node-badge::after { content: '✓'; font-size: 9px; font-weight: 700; }
+.flow-node.live { border-color: rgba(217, 79, 208, 0.6); animation: flow-node-glow 1.8s ease-in-out infinite; }
+@keyframes flow-badge-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
-  70% { box-shadow: 0 0 0 9px rgba(52, 211, 153, 0); }
+  70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
 }
-@keyframes office-pin-glow {
-  0%, 100% { box-shadow: var(--office-card-shadow), 0 0 0 0 rgba(217, 79, 208, 0.5); }
-  50% { box-shadow: var(--office-card-shadow), 0 0 0 8px rgba(217, 79, 208, 0); }
-}
-.office-pin-name {
-  max-width: 92px; font-size: 11px; font-weight: 640; line-height: 1.3; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.office-pin-duty { /* 职责：放得更大（DETAIL_ZOOM）才写出来 */
-  display: none; max-width: 92px; font-size: 9px; line-height: 1.25; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.office-pin.detailed .office-pin-duty { display: block; }
-
-/* 工位上真的坐着一个会动的 3D 小人：整层跟着底图缩放，所以永远踩在自己那把转椅上 */
-.office-map-people { position: absolute; inset: 0; pointer-events: none; }
-.office-worker { position: absolute; width: 0; height: 0; }
-.office-worker > .collab-station-scene {
-  /* 场景缩放倍数：**只此一处定义** —— 身体层的位移按 calc(var(--env-x) / var(--office-scale)) 换算成
-     场景局部像素，尺子只有一把，避免两处写死不同比例。 */
-  --office-scale: 0.72;
-  position: absolute; left: 0; bottom: -20px; width: 168px; height: 138px; margin: 0;
-  transform: translate(-50%, 0) scale(var(--office-scale)); transform-origin: 50% 100%;
-}
-/* 每个人各走各的节拍，一排人不会像机器人一样同频呼吸（没给 seed 时的兜底节拍） */
-.office-worker:nth-child(even) > .collab-station-scene .collab-worker-body,
-.office-worker:nth-child(even) > .collab-station-scene .collab-worker-head { animation-delay: -1.7s; }
-.office-worker:nth-child(3n) > .collab-station-scene .collab-worker-head { animation-delay: -0.8s; }
-.office-worker:nth-child(3n) > .collab-station-scene .collab-worker-eye { animation-delay: -2.4s; }
-
-/* 挂钟：钟面画在底图里（`.office-clock-face`），指针按真实时间转（见 components/OfficeClock.tsx） */
-.office-clock { position: absolute; width: 0; height: 0; pointer-events: none; }
-.office-clock-hand {
-  position: absolute; left: 0; bottom: 0; border-radius: 999px;
-  transform-origin: 50% 100%; will-change: transform;
-}
-.office-clock-hour { width: 3px; height: 8px; margin-left: -1.5px; background: #e6e3ff; }
-.office-clock-minute { width: 2px; height: 12px; margin-left: -1px; background: #f4f2ff; }
-.office-clock-second { width: 1.5px; height: 13px; margin-left: -0.75px; background: #6ee7d1; }
-.office-clock-cap {
-  position: absolute; left: 0; bottom: 0; width: 4px; height: 4px; margin: 0 0 -2px -2px;
-  border-radius: 50%; background: #d94fd0;
+@keyframes flow-node-glow {
+  0%, 100% { box-shadow: var(--canvas-node-shadow), 0 0 0 0 rgba(217, 79, 208, 0.5); }
+  50% { box-shadow: var(--canvas-node-shadow), 0 0 0 8px rgba(217, 79, 208, 0); }
 }
 
-/* 点标记弹出的进度信息卡 */
-.office-popover {
-  position: absolute; z-index: 6; width: 306px; padding: 12px 13px 13px;
-  border: 1px solid var(--office-popover-ring); border-radius: 16px;
-  background: var(--office-popover);
-  box-shadow: var(--office-popover-shadow); backdrop-filter: blur(10px);
+/* 详情卡：点节点弹出的「现在具体在做什么」 */
+.flow-popover {
+  position: absolute; z-index: 6; width: 300px; padding: 12px 13px 13px;
+  border: 1px solid rgba(123, 92, 255, 0.42); border-radius: 16px;
+  background: var(--bg-elevated);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.4); backdrop-filter: blur(10px);
+  text-align: left;
 }
-.office-popover-head { display: flex; align-items: flex-start; gap: 10px; }
-.office-popover-scene { flex: none; width: 108px; height: 88px; overflow: hidden; }
-.office-popover-scene .collab-station-scene { width: 168px; height: 138px; transform: scale(0.64); transform-origin: 0 0; }
-.office-popover-id { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.office-popover-name { font-size: 15px; font-weight: 640; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.office-popover-duty { font-size: 11px; color: var(--text-dim); }
-.office-popover-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); }
-.office-popover-status i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.office-tone-working, .office-popover-status.tone-working { color: #34d399; }
-.office-tone-busy, .office-popover-status.tone-busy { color: #f87171; }
-.office-tone-ask, .office-popover-status.tone-ask { color: #fbbf24; }
-.office-tone-idle, .office-popover-status.tone-idle { color: #8b93a7; }
-.office-tone-done, .office-popover-status.tone-done { color: #22c55e; }
-.office-popover-close {
+.flow-popover-head { display: flex; align-items: flex-start; gap: 10px; }
+.flow-popover-face {
+  flex: none; width: 38px; height: 38px; display: grid; place-items: center;
+  font-size: 22px; border-radius: 11px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.1), transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+.flow-popover-id { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.flow-popover-name { font-size: 15px; font-weight: 640; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-popover-status { font-size: 11.5px; color: var(--text-muted); }
+.flow-popover-status.state-active { color: #34d399; }
+.flow-popover-status.state-error { color: #f87171; }
+.flow-popover-status.state-waiting { color: #fbbf24; }
+.flow-popover-status.state-done { color: #22c55e; }
+.flow-popover-close {
   flex: none; width: 24px; height: 24px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--border); background: var(--bg-input); color: var(--text-muted); font-size: 11px;
 }
-.office-popover-close:hover { color: var(--text); border-color: var(--border-strong); }
-.office-popover-progress { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-.office-popover-progress-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
-.office-popover-progress-head b { font-family: var(--mono); font-size: 13px; color: var(--text); }
-.office-progress-track { height: 7px; border-radius: 999px; background: var(--bg-input); overflow: hidden; }
-.office-progress-fill { display: block; height: 100%; border-radius: 999px; background: currentColor; transition: width 0.4s ease; }
-.office-progress-fill.tone-working { color: #34d399; }
-.office-progress-fill.tone-busy { color: #f87171; }
-.office-progress-fill.tone-ask { color: #fbbf24; }
-.office-progress-fill.tone-idle { color: #8b93a7; }
-.office-progress-fill.tone-done { color: #22c55e; }
-.office-popover-summary {
+.flow-popover-close:hover { color: var(--text); border-color: var(--border-strong); }
+.flow-popover-summary {
   margin-top: 10px; font-size: 12px; line-height: 1.65; color: var(--text-muted);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.office-popover-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
-.office-popover-meta span {
+.flow-popover-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
+.flow-popover-meta span {
   padding: 2px 8px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: var(--office-chip);
+  border: 1px solid var(--border); background: var(--bg-input);
 }
-.office-popover-more { margin-top: 11px; width: 100%; justify-content: center; }
+.flow-popover-more { margin-top: 11px; width: 100%; justify-content: center; }
 
 /* 右下角工具与图例 */
-.office-map-tools { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; flex-direction: column; gap: 7px; }
-.office-map-tools button {
+.flow-map-tools { position: absolute; right: 14px; bottom: 14px; z-index: 4; display: flex; flex-direction: column; gap: 7px; }
+.flow-map-tools button {
   width: 38px; height: 38px; border-radius: 12px; cursor: pointer; font-size: 15px;
-  border: 1px solid var(--border-strong); background: var(--office-tool); color: var(--text);
+  border: 1px solid var(--border-strong); background: var(--canvas-hud-bg); color: var(--text);
   backdrop-filter: blur(8px); transition: background 0.15s ease, transform 0.15s ease;
 }
-.office-map-tools button:hover { background: var(--office-tool-hover); transform: translateY(-1px); }
-.office-map-legend {
+.flow-map-tools button:hover { background: var(--bg-hover); transform: translateY(-1px); }
+.flow-map-legend {
   position: absolute; right: 14px; top: 14px; z-index: 1; display: flex; flex-wrap: wrap; gap: 10px;
   justify-content: flex-end; max-width: calc(100% - 28px);
   padding: 7px 11px; border-radius: 12px; border: 1px solid var(--border);
-  background: var(--office-glass); backdrop-filter: blur(8px);
+  background: var(--canvas-hud-bg); backdrop-filter: blur(8px);
 }
-.office-map-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
-.office-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.office-map-hint {
+.flow-map-legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
+.flow-map-legend i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.flow-tone-active { color: #34d399; }
+.flow-tone-waiting { color: #fbbf24; }
+.flow-tone-error { color: #f87171; }
+.flow-tone-pending { color: #8b93a7; }
+.flow-tone-done { color: #22c55e; }
+.flow-map-hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 1; padding: 5px 12px; border-radius: 999px; font-size: 10.5px; color: var(--text-dim);
-  border: 1px solid var(--border); background: var(--office-glass); pointer-events: none;
+  border: 1px solid var(--border); background: var(--canvas-hud-bg); pointer-events: none;
 }
 
-/* ---------- 拟人化 v2：环境行为（L2）与微动作（L3）----------
-   工程口径见 docs/architecture.md §11：4 类环境行为只在「安全」的真实状态上叠加（矩阵见
-   lib/collabEnv.ts 的 ENV_ALLOWED），5 类微动作按员工 key 派生的节拍差异化。本段在「协作办公室」
-   共享块内，两端逐字一致（守卫 test_office_styles_are_identical_on_both_ends）。
-   权重：选择器统一带 .office-worker 前缀（5 个类名级），稳定压过 .collab-station-scene.state-*（4 个）
-   与 .collab-station-scene.live（3 个）—— 不靠 !important。 */
-
-/* 走位以**画布像素**写在 .office-worker 上（自定义属性会继承给身体层） */
-.office-worker {
-  --env-x: 0px; --env-y: 0px;
-}
-
-/* v2 新增的小人部件基础样式（身体层 / 腿 / 杯子）：与下面的 L2 / L3 一起落在本共享块内，
-   两端逐字一致（守卫 test_office_styles_are_identical_on_both_ends 逐字比对）。 */
-/* 身体层：气泡 / 脖子 / 头 / 躯干 / 腿 / 手臂 / 杯子都在这一层里。
-   环境行为（walk / discuss / rest / call）**只推这一层** —— 转椅（.collab-worker-chair）留在工位不动；
-   呼吸也从 .collab-worker 挪到这里（转椅不该跟着呼吸）。 */
-.collab-worker-body {
-  position: absolute; inset: 0;
-  animation: collab-breathe 3.4s ease-in-out infinite;
-  will-change: transform;
-}
-/* 腿：只有微动作 `fidget-leg`（抖腿）时才现形，默认藏在椅子后头，不影响既有 5 种状态姿势的形态 */
-.collab-worker-leg {
-  position: absolute; z-index: 2; bottom: 0; width: 15px; height: 24px; opacity: 0;
-  border-radius: 5px 5px 8px 8px; transform-origin: 50% 0;
-  background: linear-gradient(180deg, var(--office-leg-a), var(--office-leg-b));
-  box-shadow: inset -2px -3px 5px rgba(0, 0, 0, 0.35);
-}
-.collab-worker-leg.left { left: 17px; }
-.collab-worker-leg.right { left: 36px; }
-/* 杯子：只有环境行为 `env-rest`（休息喝咖啡）时才端在手里，其余姿态隐藏 */
-.collab-worker-cup {
-  position: absolute; z-index: 4; left: 50%; bottom: 26px; width: 13px; height: 14px;
-  margin-left: -6px; opacity: 0; border-radius: 3px 3px 6px 6px;
-  background: linear-gradient(160deg, var(--office-cup-a), var(--office-cup-b)), var(--office-cup);
-  box-shadow: inset -2px -2px 4px rgba(0, 0, 0, 0.3), 0 4px 8px rgba(0, 0, 0, 0.35);
-}
-
-/* L3 微动作：节拍来自员工 seed 派生的 --fidget-delay / --fidget-cycle（见 lib/collabEnv.ts）。
-   每个部件同一时刻只被一层驱动，所以微动作挂在状态姿势没占用的部件上。 */
-.office-worker .collab-station-scene.fidget-blink .collab-worker-eye {
-  animation: office-fidget-blink var(--fidget-cycle, 6.3s) ease-in-out var(--fidget-delay, 0s) infinite;
-}
-.office-worker .collab-station-scene.fidget-scratch .collab-worker-arm.right {
-  animation: office-fidget-scratch var(--fidget-cycle, 6.3s) ease-in-out var(--fidget-delay, 0s) infinite;
-}
-.office-worker .collab-station-scene.fidget-pen .collab-worker-arm.left {
-  animation: office-fidget-pen var(--fidget-cycle, 6.3s) ease-in-out var(--fidget-delay, 0s) infinite;
-}
-.office-worker .collab-station-scene.fidget-leg .collab-worker-leg {
-  opacity: 1;
-  animation: office-fidget-leg var(--fidget-cycle, 6.3s) ease-in-out var(--fidget-delay, 0s) infinite;
-}
-.office-worker .collab-station-scene.fidget-glance .collab-worker-head {
-  animation: office-fidget-glance var(--fidget-cycle, 6.3s) ease-in-out var(--fidget-delay, 0s) infinite;
-}
-@keyframes office-fidget-blink {
-  0%, 88%, 100% { transform: scaleY(1); }
-  92% { transform: scaleY(0.16); }
-}
-@keyframes office-fidget-scratch {
-  0%, 70%, 100% { transform: rotate(17deg); }
-  78% { transform: rotate(-40deg); }
-  86% { transform: rotate(-22deg); }
-}
-@keyframes office-fidget-pen {
-  0%, 60%, 100% { transform: rotate(26deg); }
-  72% { transform: rotate(2deg); }
-  84% { transform: rotate(30deg); }
-}
-@keyframes office-fidget-leg {
-  0%, 58%, 100% { transform: translateY(0); }
-  66% { transform: translateY(-3px); }
-  74% { transform: translateY(0); }
-}
-@keyframes office-fidget-glance {
-  0%, 62%, 100% { transform: rotate(0deg); }
-  70% { transform: rotate(-9deg); }
-  80% { transform: rotate(9deg); }
-}
-/* 冲突优先级（§11.6「同一时刻每个部件只能被一层驱动」）：L1 正在驱动手臂时
-   （`state-active` 敲键盘 / `live` 常驻打字），手臂归 **L1**，微动作让位（不在同一个 transform 上打架），
-   5 种真实状态姿势的形态因此不退化。
-   权重阶梯（同一把尺子，禁止 !important）：这两条**只写 5 个类名级**（不加 `.office-worker` 前缀，
-   与 `.fidget-*` 手臂规则同权，靠**源序在它之后**压过微动作）；而后面的 L2 `env-rest` / `env-call`
-   手臂规则同样是 5 级、源序更靠后 —— 于是**环境行为压过 L1 打字**（`active` 敲键盘的工位叠加
-   `rest` / `call` 时，手臂归环境行为，见 §11.6 部件分工表）。提回 6 级就会把环境行为重新盖住。 */
-.collab-station-scene.state-active.fidget-scratch .collab-worker-arm.right,
-.collab-station-scene.live.fidget-scratch .collab-worker-arm.right {
-  animation: collab-typing-right 0.52s ease-in-out infinite alternate;
-}
-.collab-station-scene.state-active.fidget-pen .collab-worker-arm.left,
-.collab-station-scene.live.fidget-pen .collab-worker-arm.left {
-  animation: collab-typing-left 0.52s ease-in-out infinite alternate;
-}
-
-/* L2 环境行为：rest 靠椅背端杯 / walk 走到本排过道 / discuss 两人聚到中点 / call 抬手到耳边。
-   位移一律用 --env-x / --env-y（画布像素）换算到场景局部像素（尺子只有一把：--office-scale）。 */
-.office-worker .collab-station-scene.env-walk .collab-worker-body {
-  /* 周期 == ENV_TICK_MS(5s)：调度器每个 tick 边界加/摘 env-walk 类，动画在边界都落在 0% / 100%
-     的「工位零位移」上，摘掉类的那一刻 transform 恰好归零，不留半程位移 → 没有瞬移。 */
-  animation: office-env-walk 5s ease-in-out infinite;
-}
-.office-worker .collab-station-scene.env-discuss .collab-worker-body {
-  animation: office-env-discuss 10s ease-in-out infinite;
-}
-.office-worker .collab-station-scene.env-rest .collab-worker-body {
-  animation: none; transform: rotate(-7deg) translateY(3px);
-}
-.office-worker .collab-station-scene.env-rest .collab-worker-cup { opacity: 1; }
-.office-worker .collab-station-scene.env-rest .collab-worker-arm.left,
-.office-worker .collab-station-scene.env-rest .collab-worker-arm.right {
-  animation: none; transform: rotate(96deg);
-}
-/* §11.6：`call` 由身体层「整体侧倾」+ 右臂抬起 + 头部侧倾共同构成（同一部件同一时刻只被一层驱动） */
-.office-worker .collab-station-scene.env-call .collab-worker-body {
-  animation: none; transform: rotate(3deg) translateX(2px);
-}
-.office-worker .collab-station-scene.env-call .collab-worker-arm.right {
-  animation: none; transform: rotate(118deg);
-}
-.office-worker .collab-station-scene.env-call .collab-worker-head {
-  animation: none; transform: rotate(9deg) translateX(2px);
-}
-@keyframes office-env-walk {
-  /* 首末帧都钉在工位（零位移），只有中途走到过道：一个 tick 正好一来回。 */
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  50% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0); }
-}
-/* 聚到中点后「相向交谈」：用 `--env-x` 的**符号**让两人朝彼此倾身（左来的人向右倾、右来的向左倾），
-   再配一次轻微侧头节奏 —— 只动身体层（头 / 手臂归 L1，§11.6 部件分工表里 discuss 不占这两件）。 */
-@keyframes office-env-discuss {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  16% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0); }
-  34% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0) translateX(calc(var(--env-x) * 0.06)) rotate(-2deg); }
-  50% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0); }
-  66% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0) translateX(calc(var(--env-x) * 0.06)) rotate(1.5deg); }
-  84% { transform: translate3d(calc(var(--env-x) / var(--office-scale)), calc(var(--env-y) / var(--office-scale)), 0); }
-}
-
-/* 无障碍：新增动画全部静默（调度侧同时屏蔽 walk / discuss，见 lib/collabEnv.ts），静态姿态保留。 */
+/* 无障碍：徽标呼吸 / 常驻辉光停下，状态色仍保留 */
 @media (prefers-reduced-motion: reduce) {
-  .office-worker .collab-station-scene.env-walk .collab-worker-body,
-  .office-worker .collab-station-scene.env-discuss .collab-worker-body,
-  .office-worker .collab-station-scene.fidget-blink .collab-worker-eye,
-  .office-worker .collab-station-scene.fidget-scratch .collab-worker-arm.right,
-  .office-worker .collab-station-scene.fidget-pen .collab-worker-arm.left,
-  .office-worker .collab-station-scene.fidget-leg .collab-worker-leg,
-  .office-worker .collab-station-scene.fidget-glance .collab-worker-head { animation: none; }
+  .flow-node.live, .flow-node.state-active .flow-node-badge, .flow-node:hover { animation: none; }
 }
 
 /* ================= 登录 / 注册（两端共用表单组件，样式各写一份）================= */

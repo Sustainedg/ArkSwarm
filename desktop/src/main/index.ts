@@ -15,7 +15,7 @@ import { waitForHealth } from './health';
 import { spawnBackend, watchBackendRestart, type BackendHandle } from './backend';
 import { ensurePythonRuntime } from './pythonRuntime';
 import { bootstrapBundledBackend } from './bootstrap';
-import { ensureLayout, dataDir } from './paths';
+import { ensureLayout, dataDir, installLogPath, pythonRuntimeDir } from './paths';
 import {
   checkForUpdatesManually,
   disposeAutoUpdate,
@@ -87,13 +87,26 @@ body.arkswarm-desktop .main { padding-top: ${TITLEBAR_HEIGHT}px; }
 .arkswarm-win-controls svg { pointer-events: none; }
 #arkswarm-titlebar.is-maximized .arkswarm-max-icon { display: none; }
 #arkswarm-titlebar:not(.is-maximized) .arkswarm-restore-icon { display: none; }
+
+/* macOS 折叠态：红绿灯由系统画在窗口左上角（x=14 起，三个按钮约 52px 宽），
+   而折叠栏只有 68px —— 按钮正好顶到右边缘，看起来像溢出了侧栏。
+   这里只给 macOS 壳的窄栏补 16px（68 → 84），让红绿灯完整落在侧栏里、右侧还留点余量。
+   网页端和 Windows 壳没有系统红绿灯，不受影响。 */
+body.arkswarm-mac .app-shell.collapsed { grid-template-columns: 84px 1fr; }
+/* 同上，兜住 index.css 里 < 980px 的 CSS 断点：JS 还没把 collapsed 类挂上时，
+   窄窗依旧按 68px 渲染，这里同步放宽，避免首屏闪一下红绿灯被压住。 */
+@media (max-width: 980px) {
+  body.arkswarm-mac .app-shell { grid-template-columns: 84px 1fr; }
+}
 `;
 }
 
 function desktopChromeScript(): string {
   const controls = process.platform === 'win32';
+  // 平台标记：macOS 的系统红绿灯嵌在窗口左上角，样式要据此给折叠栏留出宽度。
+  const platformClass = process.platform === 'darwin' ? ' arkswarm-mac' : '';
   return `(() => {
-  document.body.classList.add('arkswarm-desktop');
+  document.body.classList.add('arkswarm-desktop${platformClass}');
   if (document.getElementById('arkswarm-titlebar')) return;
   const bar = document.createElement('div');
   bar.id = 'arkswarm-titlebar';
@@ -197,11 +210,18 @@ async function main(): Promise<void> {
     const { ranDir } = bootstrapBundledBackend();
     // ① 端口：首选 8010（和其他宿主一致），被占则退到随机空闲端口
     backendPort = await pickPort();
-    // ② Python 运行时（首启建 venv + 装依赖，之后零网络）
-    await ensurePythonRuntime((p) => sendProgress(p.message));
+    // ② Python 运行时：打包版优先用内置解释器（依赖已预装，零网络、零拷贝）；
+    // 只有指纹对不上 / 开发模式才回退到 venv + 离线 wheelhouse / 在线 pip。
+    // 依赖清单从实际运行目录取：packaged 下就是 releases/<版本>，不依赖 current 指针。
+    const runtime = await ensurePythonRuntime(ranDir, (p) => sendProgress(p.message));
+    process.stdout.write(`[desktop] Python 运行时：${runtime.mode}\n`);
     // ③ 起后端（cwd 留在 ranDir，保持与 entrypoint.sh 的 exec 行为一致）
     sendProgress('启动后端服务…');
-    backend = spawnBackend({ port: backendPort, backendRoot: path.join(ranDir, 'backend') });
+    backend = spawnBackend({
+      port: backendPort,
+      backendRoot: path.join(ranDir, 'backend'),
+      python: runtime.python,
+    });
     // ④ 健康检查门控
     sendProgress('等待服务就绪…');
     const { version } = await waitForHealth(backendPort, { timeoutMs: 60_000 });
@@ -386,7 +406,12 @@ function showFatal(message: string): void {
     type: 'error',
     title: 'ArkSwarm 启动失败',
     message,
-    detail: `数据目录：${dataDir()}\n可尝试删除运行时目录后重试（对话数据不受影响）。`,
+    detail: [
+      `数据目录：${dataDir()}`,
+      `Python 运行时：${pythonRuntimeDir()}`,
+      `安装日志：${installLogPath()}`,
+      '删除 Python 运行时目录后重启即可重建（对话数据不受影响）。',
+    ].join('\n'),
   });
 }
 

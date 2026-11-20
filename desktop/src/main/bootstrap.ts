@@ -84,20 +84,88 @@ function installedVersions(): string[] {
  */
 const DIR_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
 
-/** 把 current 原子地指到目标版本目录（临时链接 + rename）。 */
-function switchCurrent(targetDir: string): void {
+/** 本进程内是否已确认「这台机器建不了目录链接」（避免每次启动重复尝试 + 重复刷日志）。 */
+let linkUnavailable = false;
+
+/**
+ * 删除一个指针路径（软链 / junction / 意外残留的真实目录）。
+ *
+ * 关键约束：**软链与 junction 只能摘链接本身**。绝不能对它们 recursive 删除 ——
+ * Windows 的 junction 被某些 Node / 文件系统组合当成普通目录处理时，递归删除会
+ * 穿透到目标版本目录，把真实文件连锅端掉（「删指针结果版本没了」的事故）。
+ * 所以顺序是：symlink → unlink；否则先 rmdir（目录联接用 rmdir 只摘指针），
+ * 只有明确返回 ENOTEMPTY 才认定是真实目录，再递归删除。
+ */
+function removePointer(pointer: string): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(pointer);
+  } catch {
+    return; // 不存在：无需处理
+  }
+  if (stat.isSymbolicLink()) {
+    try {
+      fs.unlinkSync(pointer);
+      return;
+    } catch {
+      /* Windows 的目录联接 unlink 会失败，落到 rmdir */
+    }
+  }
+  try {
+    fs.rmdirSync(pointer);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOTEMPTY' && code !== 'EEXIST') throw err;
+  }
+  // 走到这里说明是真实目录（不是链接）：放心递归删
+  fs.rmSync(pointer, { recursive: true, force: true });
+}
+
+/**
+ * 把 current 指向目标版本目录。
+ *
+ * @returns 是否成功。极少数环境（FAT/exFAT、部分网络盘、安全软件拦截重解析点）
+ *   连 junction 都建不了：此时不抛错，调用方降级为「直接运行版本目录」——
+ *   用户至少能启动应用，代价只是后端一键更新不可用（桌面端本来就走整包更新）。
+ */
+function switchCurrent(targetDir: string): boolean {
+  if (linkUnavailable) return false;
   const releases = releasesDir();
   const current = path.join(releases, 'current');
   const tmp = path.join(releases, '.current.tmp');
-  fs.rmSync(tmp, { force: true });
-  fs.symlinkSync(targetDir, tmp, DIR_LINK_TYPE);
+  removePointer(tmp);
+  try {
+    fs.symlinkSync(targetDir, tmp, DIR_LINK_TYPE);
+  } catch (err) {
+    linkUnavailable = true;
+    const code = (err as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+    process.stdout.write(
+      `[bootstrap] 无法创建 current 目录链接（${code}）：改为直接从版本目录运行，` +
+        '后端一键更新不可用。若需恢复，请检查文件系统（需 NTFS）或安全软件的「受控文件夹访问」。\n',
+    );
+    return false;
+  }
   try {
     fs.renameSync(tmp, current);
   } catch {
-    // Windows / 某些文件系统上目标已存在时 rename 会失败：先删再改名。
-    fs.rmSync(current, { force: true });
-    fs.renameSync(tmp, current);
+    // Windows / 某些文件系统上目标已存在时 rename 会失败：先摘指针再改名。
+    try {
+      removePointer(current);
+      fs.renameSync(tmp, current);
+    } catch (err) {
+      // 改名也失败（典型是安全软件锁住目录）：同样降级，别让启动卡死在一个指针上。
+      linkUnavailable = true;
+      try {
+        removePointer(tmp);
+      } catch {
+        /* 清不掉临时指针就留着，下次启动会先摘它 */
+      }
+      process.stdout.write(`[bootstrap] 切换 current 指针失败（${(err as Error).message}），改为直接运行版本目录\n`);
+      return false;
+    }
   }
+  return true;
 }
 
 /**
@@ -113,14 +181,16 @@ export function resolveRunDir(): string {
   if (fs.existsSync(current) && payloadComplete(current)) {
     return fs.realpathSync(current);
   }
-  fs.rmSync(current, { force: true });
+  removePointer(current);
 
   // 挑 releases/ 里最高的完整版本
   const versions = installedVersions();
   if (versions.length === 0) {
     throw new Error('releases/ 里没有任何可用版本（内置代码物化失败？）');
   }
-  switchCurrent(path.join(releases, versions[0]));
+  const target = path.join(releases, versions[0]);
+  // 指针建不出来时直接跑版本目录：`current` 只是自更新的地基，不该成为启动的硬依赖。
+  if (!switchCurrent(target)) return target;
   return fs.realpathSync(current);
 }
 
@@ -157,7 +227,11 @@ export function bootstrapBundledBackend(): { ranDir: string; firstBoot: boolean 
         fs.existsSync(current) && payloadComplete(current)
           ? path.basename(fs.realpathSync(current))
           : null;
-      if (running !== version) switchCurrent(target);
+      // 指针建不出来时直接跑内置版本；如果交给 resolveRunDir，可能退回到 current
+      // 指着的旧版本（壳升级了、后端反而跑旧代码）。
+      if (running !== version && !switchCurrent(target)) {
+        return { ranDir: target, firstBoot };
+      }
     }
     return { ranDir: resolveRunDir(), firstBoot };
   }
@@ -173,7 +247,7 @@ export function bootstrapBundledBackend(): { ranDir: string; firstBoot: boolean 
   }
   fs.rmSync(target, { recursive: true, force: true });
   copyDir(bundledBackendDir(), target);
-  switchCurrent(target);
+  if (!switchCurrent(target)) return { ranDir: target, firstBoot };
   return { ranDir: resolveRunDir(), firstBoot };
 }
 

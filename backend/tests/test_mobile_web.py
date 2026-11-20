@@ -94,11 +94,11 @@ def test_mobile_pages_do_not_import_desktop_ui():
 
 
 #: 两端共用一套 class 的样式段（移动端不加载 index.css，所以样式各写一份）：逐字一致，守卫见下。
-#: 「协作办公室」：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟。
-OFFICE_STYLE_BANNER = (
-    "/* ================= 协作办公室：等距底图 + 工位上的小人 / 工牌 / 会走的挂钟 ================= */"
+#: 「协作流程图」：节点进度 + 状态徽标 + 详情卡（组件 components/CollabFlowMap.tsx，两端共用）。
+FLOW_STYLE_BANNER = (
+    "/* ================= 协作流程图：节点进度 + 状态徽标 + 详情卡（两端共用这一份）================= */"
 )
-#: 「工单看板」：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴（到「协作办公室」横幅为止）。
+#: 「工单看板」：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴（到「协作流程图」横幅为止）。
 BOARD_STYLE_BANNER = (
     "/* ================= 工单看板：工单卡 / 动作徽章 / 流转时间线 / 规则手风琴 ================= */"
 )
@@ -119,8 +119,8 @@ MCP_DETAIL_STYLE_BANNER = (
 TABS_STYLE_BANNER = (
     "/* ================= 标签页：胶囊分段控件（设置 / 技能 / 用量 / 协作导航共用，两端共用这一份）================= */"
 )
-MOBILE_OFFICE_TUNING = "/* ---------- 移动端：办公室画布矮一点"
-#: 桌面端在办公室共享段之后还有登录 / 账号样式；它不是办公室的一部分，比对时在此截断。
+MOBILE_FLOW_TUNING = "/* ---------- 移动端：流程图画布矮一点"
+#: 桌面端在流程图共享段之后还有登录 / 账号样式；它不是流程图的一部分，比对时在此截断。
 AUTH_STYLE_BANNER = (
     "/* ================= 登录 / 注册（两端共用表单组件，样式各写一份）================= */"
 )
@@ -145,18 +145,36 @@ def _shared_style_block(path: Path, banner: str, cut: str | None = None) -> str:
 
 
 @needs_frontend
-def test_office_styles_are_identical_on_both_ends():
-    """办公室的样式两端各写一份（移动端不加载 index.css），两份必须逐字一致。
+def test_flow_styles_are_identical_on_both_ends():
+    """协作流程图的样式两端各写一份（移动端不加载 index.css），两份必须逐字一致。
 
-    改了一边忘了另一边，手机上就会走样：小人不在工位上、工牌错位、挂钟指针飞出去。
+    改了一边忘了另一边，手机上就会走样：节点错位、徽标变色、详情卡飘出画布。
     移动端自己那几条微调规则写在这一段之后，不参与比对。
     """
     desktop = _shared_style_block(
-        FRONTEND / "src" / "index.css", OFFICE_STYLE_BANNER, AUTH_STYLE_BANNER
+        FRONTEND / "src" / "index.css", FLOW_STYLE_BANNER, AUTH_STYLE_BANNER
     )
-    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", OFFICE_STYLE_BANNER, MOBILE_OFFICE_TUNING)
+    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", FLOW_STYLE_BANNER, MOBILE_FLOW_TUNING)
     assert desktop == mobile, (
-        "index.css 与 mobile.css 的协作办公室样式不一致：改了一边记得把另一边同步（两端各一份）"
+        "index.css 与 mobile.css 的协作流程图样式不一致：改了一边记得把另一边同步（两端各一份）"
+    )
+
+
+@needs_frontend
+def test_mobile_css_defines_every_canvas_variable_it_uses():
+    """移动端流程图用到的每个 ``--canvas-*`` 变量都要在 mobile.css 里定义。
+
+    移动端**不加载 index.css**：只搬用变量、不搬定义时，构建与类型检查都能过、页面也能打开，
+    但流程图的底色 / 网格点 / 连线 / 节点阴影会整片失效（未定义的变量按初始值兜底，
+    等于透明 / 不画）。这里把「用了就必须有定义」固化下来。
+    """
+    css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
+    used = set(re.findall(r"var\(--(canvas-[a-z-]+)\)", css))
+    defined = set(re.findall(r"--(canvas-[a-z-]+):", css))
+    missing = used - defined
+    assert not missing, (
+        f"mobile.css 使用了未定义的 --canvas-* 变量：{sorted(missing)}；"
+        "移动端不加载 index.css，这些变量必须在 mobile.css 的 :root 与 [data-theme='light'] 里各定义一份"
     )
 
 
@@ -187,8 +205,8 @@ def test_ticket_board_card_styles_are_identical_on_both_ends():
     只读节点越权时的红色高亮就在这段里：改了一边忘了另一边，手机上就看不见越权提示。
     两端各自的布局（桌面三栏、移动端单栏）写在这一段之外，不参与比对。
     """
-    desktop = _shared_style_block(FRONTEND / "src" / "index.css", BOARD_STYLE_BANNER, OFFICE_STYLE_BANNER)
-    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", BOARD_STYLE_BANNER, OFFICE_STYLE_BANNER)
+    desktop = _shared_style_block(FRONTEND / "src" / "index.css", BOARD_STYLE_BANNER, FLOW_STYLE_BANNER)
+    mobile = _shared_style_block(MOBILE_SRC / "mobile.css", BOARD_STYLE_BANNER, FLOW_STYLE_BANNER)
     assert desktop == mobile, (
         "index.css 与 mobile.css 的「工单看板」卡片样式不一致：改了一边记得把另一边同步"
     )
@@ -447,14 +465,14 @@ def test_mobile_entry_locks_zoom_and_desktop_keeps_it():
     # iOS Safari 会忽略 user-scalable=no，必须靠 touch-action 兜底（允许集里不含 pinch-zoom）。
     css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
     assert "touch-action: pan-x pan-y" in css
-    # 外壳本身不许锁住手势；只有「协作办公室画布」例外——它要自己接管拖动与缩放。
+    # 外壳本身不许锁住手势；只有「协作流程图画布」例外——它要自己接管拖动与缩放。
     locked = [
         selector.strip()
         for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", css)
         if "touch-action: none" in body
     ]
-    assert all(".office-map" in selector for selector in locked), (
-        f"只有协作办公室画布能锁触摸手势，这里是：{locked}"
+    assert all(".flow-map" in selector for selector in locked), (
+        f"只有协作流程图画布能锁触摸手势，这里是：{locked}"
     )
 
     # 锁定缩放后输入框必须 ≥ 16px：iOS 聚焦 font-size < 16px 的输入框会强制放大页面。
@@ -630,34 +648,33 @@ def test_lists_show_dates_with_a_single_time_source():
 
 
 @needs_frontend
-def test_collab_run_is_the_office_with_the_chat_hidden_behind_a_tap():
-    """协作运行页的主页面就是那间 3D 办公室；聊天界面点人物才出来。
+def test_collab_run_is_the_flow_map_with_the_chat_hidden_behind_a_tap():
+    """协作运行页的主页面就是那张协作流程图；聊天界面点节点才出来。
 
-    底部只有输入框，而且与对话页共用同一份（`components/Composer`）；3D 底图深 / 浅各一张，
-    由主题决定用哪张 —— 浅色外壳下不能还是一块深色画布。
+    底部只有输入框，而且与对话页共用同一份（`components/Composer`）；流程图配色走
+    `--canvas-*` 主题变量 —— 浅色外壳下不能还是一块深色画布。
     """
     page = (MOBILE_SRC / "pages" / "MobileCollabRunPage.tsx").read_text(encoding="utf-8")
     assert "components/Composer" in page, "协作运行页的输入区要复用对话页那一份"
     assert not re.search(r"placeholder\s*=", page), "输入框不该再有背景提示文字"
-    # 时间线只在对话弹层里出现：主页面是办公室，不是聊天界面。
+    # 时间线只在对话弹层里出现：主页面是流程图，不是聊天界面。
     assert 'className="m-thread m-run-chat-thread"' in page, "时间线应当只在对话弹层里"
-    assert "m-run-stage" in page, "主页面留一块专门放办公室画布的区域"
-    # 点人物 = 打开对话；入口智能体的对话就是「你 ↔ 领导者」那条线。
-    assert "openNode" in page and "setChatOpen(true)" in page, "点动画里的人物要能打开对话界面"
-    assert 'aria-label="与领导者对话"' not in page, "顶栏不要再塞一个对话按钮（点人物才是入口）"
+    assert "m-run-stage" in page, "主页面留一块专门放流程图画布的区域"
+    # 点节点 = 打开对话；入口智能体的对话就是「你 ↔ 领导者」那条线。
+    assert "openNode" in page and "setChatOpen(true)" in page, "点流程图里的节点要能打开对话界面"
+    assert 'aria-label="与领导者对话"' not in page, "顶栏不要再塞一个对话按钮（点节点才是入口）"
 
     # 协作聊天也能带附件（后端与对话走同一套 app.attachments）。
     assert "uploadCollabAttachment" in page, "输入区的回形针要接到协作附件接口"
 
-    # 底图跟着主题走：两张图、同一份几何。
-    office = (FRONTEND / "src" / "components" / "CollabOfficeMap.tsx").read_text(encoding="utf-8")
-    assert "iso-office-light.svg" in office and "useThemeMode" in office, (
-        "浅色外壳下要换成浅色底图（useThemeMode 决定用哪张）"
-    )
-    for name in ("iso-office.svg", "iso-office-light.svg"):
-        assert (FRONTEND / "public" / "office" / name).is_file(), f"缺少底图 {name}"
+    # 流程图组件两端共用同一份（components/CollabFlowMap.tsx）。
+    flow = (FRONTEND / "src" / "components" / "CollabFlowMap.tsx").read_text(encoding="utf-8")
+    assert "flow-node-badge" in flow, "节点上要有状态徽标（等待 / 执行 / 提问等状态）"
+    assert "flow-popover" in flow, "点节点要弹「现在在做什么」的详情卡"
+    progress = (MOBILE_SRC / "components" / "MobileCollabProgress.tsx").read_text(encoding="utf-8")
+    assert "CollabFlowMap" in progress, "移动端协作进度要复用同一份流程图组件"
     css = (MOBILE_SRC / "mobile.css").read_text(encoding="utf-8")
-    assert "--office-canvas" in css, "办公室画布底色要走主题变量（浅色下不能还是深色）"
+    assert "--canvas-bg" in css, "流程图画布底色要走主题变量（浅色下不能还是深色）"
 
 
 @needs_frontend
@@ -818,3 +835,22 @@ def test_final_only_view_is_one_switch_on_both_ends():
         assert selector in desktop, f"输入区共享段里缺少 {selector}"
         assert selector in mobile, f"移动端输入区共享段里缺少 {selector}"
     assert desktop == mobile, "输入区样式两端不一致：改了一边记得同步另一边"
+
+
+@needs_frontend
+def test_slash_clear_is_the_only_way_to_clear_agent_memory():
+    """清除记忆统一走输入框的 `/clear`：两端提交时拦下命令，调 `resetSession`，不发给智能体。
+
+    桌面端左侧栏对话行只留「✎ 重命名 / 🗑 删除」两枚悬停图标 —— 不再有「⋯」与会话操作弹窗。
+    """
+    for page, where in (
+        (FRONTEND / "src" / "pages" / "ChatPage.tsx", "桌面端"),
+        (MOBILE_SRC / "pages" / "MobileChatPage.tsx", "移动端"),
+    ):
+        text = page.read_text(encoding="utf-8")
+        assert "'/clear'" in text, f"{where}的输入区要识别 /clear 命令"
+        assert "resetSession" in text, f"{where}的 /clear 要调用 resetSession 清记忆"
+
+    desktop = (FRONTEND / "src" / "components" / "ConversationList.tsx").read_text(encoding="utf-8")
+    assert "MoreIcon" not in desktop, "桌面端对话行不再有「⋯」按钮"
+    assert "openActions" not in desktop, "桌面端不再把会话操作信号交给聊天页"

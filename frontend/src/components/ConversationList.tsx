@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../lib/api'
-import { notifyConversationsChanged, useConversationsChanged } from '../lib/conversations'
+import {
+  findUnusedConversation,
+  notifyConversationsChanged,
+  sortConversationsByRecent,
+  useConversationsChanged,
+} from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
 import type { Conversation, AgentProfile } from '../lib/types'
 import { sameConversationList, useAutoRefresh } from '../lib/useAutoRefresh'
-import { MoreIcon, PencilIcon, TrashIcon } from './Icons'
+import { PencilIcon, TrashIcon } from './Icons'
 import { AgentAvatar } from './AgentAvatar'
+import { ConversationAvatar } from './ConversationAvatar'
 
 /**
  * 左侧栏下半部分的对话列表（桌面端）：与移动端抽屉里那份同构 —— 导航在上、列表在下。
  *
- * 每行在鼠标移上去时浮出三个小图标：
- * - 「⋯」会话操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）：那几件事要用到聊天页的
- *   消息与会话状态，所以只用路由 state 打个信号，由 `ChatPage` 弹出面板；
+ * 每行行首是这条对话的头像（`ConversationAvatar`）：单聊一枚，用过 @ 召唤的对话按群聊
+ * 样式把多枚头像叠起来。列表按「最近活动」倒序 —— 谁刚有消息，谁就在最上面。
+ *
+ * 每行在鼠标移上去时浮出两个小图标：
  * - 「✎」就地重命名（回车提交，Esc 取消）；
  * - 「🗑」直接删除（删掉的正是当前打开的那条时，自动落到剩下的最近一条）。
+ *
+ * 会话级操作（重新生成 / 重置记忆 / 复制工作目录）只在移动端抽屉的「⋯」里提供 ——
+ * 桌面端列表刻意不再放这一枚，避免悬停时按钮过密。
  *
  * 标题左侧还有两种状态点（不占悬停图标的位置）：
  * - 正在回复：旋转的小环，数据来自列表接口的 `active_runs`；
@@ -54,11 +64,13 @@ export function ConversationList() {
   const load = useCallback(async () => {
     try {
       const snapshot = await api.listConversations()
-      setConversations((prev) => (sameConversationList(prev, snapshot.items) ? prev : snapshot.items))
+      // 消息一到就置顶：后端已按最近活动排序，这里再排一次作为兜底（见 lib/conversations）。
+      const items = sortConversationsByRecent(snapshot.items)
+      setConversations((prev) => (sameConversationList(prev, items) ? prev : items))
       const running = new Set(snapshot.active_runs.map((run) => run.conversation_id))
       setRunningIds((prev) => (sameIdSet(prev, running) ? prev : running))
       setError(null)
-      return snapshot.items
+      return items
     } catch (e) {
       setError(describe(e))
       return []
@@ -92,11 +104,23 @@ export function ConversationList() {
    *
    * 不带智能体 = 用「默认智能体」（智能体卡片右上角那颗五角星），工作目录也先留空
    * （进去后在输入框上方那两个小图标里随时改）—— 所以点一下「＋ 新建」就能直接说话。
+   *
+   * 真开新对话之前先找一条「从未被使用」的空对话（没发过消息、标题没动过、输入框没草稿）：
+   * 有就直接跳过去，连点也不会堆出一排「新对话」。用户在挑选器里明确点了某个智能体时
+   * 跳过这步 —— 人家点名要「跟这个人」开一条新的。
    */
   const create = async (agentId?: string) => {
     setCreating(true)
     setError(null)
     try {
+      if (!agentId) {
+        const unused = findUnusedConversation(await load())
+        if (unused) {
+          setPickerOpen(false)
+          navigate(`/chat/${unused.id}`)
+          return
+        }
+      }
       const conversation = await api.createConversation({ agent_profile_id: agentId })
       setPickerOpen(false)
       await load()
@@ -240,42 +264,43 @@ export function ConversationList() {
                   />
                 ) : (
                   <button className="chat-item-main" onClick={() => navigate(`/chat/${conversation.id}`)}>
-                    <span className="chat-item-head">
-                      {running ? (
-                        <span
-                          className="chat-item-state running"
-                          role="img"
-                          aria-label="智能体正在回复"
-                          title="智能体正在回复…"
-                        />
-                      ) : unread ? (
-                        <span
-                          className="chat-item-state unread"
-                          role="img"
-                          aria-label="有未读回复"
-                          title="有未读回复"
-                        />
-                      ) : null}
-                      <span className="chat-item-title">{conversation.title}</span>
-                    </span>
-                    <span className="chat-item-meta">
-                      <span>{conversation.agent_name}</span>
-                      <span>·</span>
-                      <span>{conversation.message_count} 条</span>
-                      <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
+                    <ConversationAvatar conversation={conversation} />
+                    <span className="chat-item-body">
+                      <span className="chat-item-head">
+                        {running ? (
+                          <span
+                            className="chat-item-state running"
+                            role="img"
+                            aria-label="智能体正在回复"
+                            title="智能体正在回复…"
+                          />
+                        ) : unread ? (
+                          <span
+                            className="chat-item-state unread"
+                            role="img"
+                            aria-label="有未读回复"
+                            title="有未读回复"
+                          />
+                        ) : null}
+                        <span className="chat-item-title">{conversation.title}</span>
+                      </span>
+                      <span className="chat-item-meta">
+                        <span>{conversation.agent_name}</span>
+                        {/* 群聊行（用过 @ 召唤）留给「谁 + 时间」：条数在窄侧栏里会把智能体名
+                            挤成「C…」，而头像叠片本身已经说明了这是多人对话。 */}
+                        {(conversation.participants?.length ?? 0) <= 1 && (
+                          <>
+                            <span>·</span>
+                            <span>{conversation.message_count} 条</span>
+                          </>
+                        )}
+                        <span className="chat-item-time">{formatListTime(conversation.updated_at)}</span>
+                      </span>
                     </span>
                   </button>
                 )}
 
                 <div className="chat-item-actions">
-                  <button
-                    className="chat-item-act"
-                    onClick={() => navigate(`/chat/${conversation.id}`, { state: { openActions: true } })}
-                    aria-label={`对话「${conversation.title}」的会话操作`}
-                    title="重新生成 / 重置记忆 / 复制工作目录 / 删除"
-                  >
-                    <MoreIcon size={14} />
-                  </button>
                   <button
                     className="chat-item-act"
                     onClick={() => startRename(conversation)}

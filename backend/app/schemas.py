@@ -489,6 +489,20 @@ class ConversationUpdate(BaseModel):
     model: str | None = Field(default=None, max_length=160)
 
 
+class ConversationParticipant(BaseModel):
+    """一条对话里出现过的智能体（主场 + 被 @ 召唤过的）。
+
+    列表行据此画头像：只有一个参与者 = 单聊头像；两个及以上 = 群聊式的堆叠头像。
+    ``id`` 就是智能体 id，前端取自定义头像时要用。
+    """
+
+    id: str
+    name: str | None = None
+    avatar: str | None = None
+    avatar_preset: str | None = None
+    avatar_file: str | None = None
+
+
 class ConversationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -514,6 +528,8 @@ class ConversationRead(BaseModel):
     message_count: int = 0
     #: 最后一条是**已完成**的助手回复、且晚于用户最后一次打开这条对话的时间
     unread: bool = False
+    #: 出现过在这条对话里的智能体（第一个永远是对话归属者）；被 @ 召唤过时会有多个。
+    participants: list[ConversationParticipant] = Field(default_factory=list)
 
 
 class MessageRead(BaseModel):

@@ -78,7 +78,7 @@ CLI 的 stdout 由 `runner._StreamLines` 拆行：`asyncio.StreamReader.readline
 区别只在编排与记忆：
 
 ```
-collab.engine.consume_turn()  ── 串行取一张就绪工单
+collab.engine.consume_turn()  ── 取就绪工单跑一步（max_parallel>1 时同父兄弟工单同波并行）
       └─ collab.execution.prepare_step()   # 全域唯一接触 runtime/agents 的边界
            ├─ ctx.history = []、ctx.session_id = None   ← 每一步都是全新会话，不共享记忆
            └─ ctx.prompt = prompt.build_step_prompt(...) # 只含工单字段与 gist 摘要
@@ -578,7 +578,7 @@ collab_messages(id, run_id→collab_runs, sender, role_key, agent_profile_id→a
 -- IM 域（旁路：通道，不是成员，见 docs/im.md）
 im_connections(id, platform, account_name, account_id, fields JSON, secrets JSON,
                agent_profile_id→agent_profiles, enabled, last_status, last_error,
-               runtime JSON, owner_id)
+               runtime JSON, options JSON, owner_id)
 im_peers(id, connection_id→im_connections, sender_id, sender_name,
          state(pending|allowed|denied), chat_key, chat_kind, chat_title)
 im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title,
@@ -809,8 +809,15 @@ frontend/
   抽屉由 `MobileApp` 统一持有，任何顶级页面的顶栏默认就是那个 logo 按钮（`MobileTopBar`
   在没有 `onBack` 时自动渲染），子页面仍是返回箭头。
   两端的对话列表项都显示时间：今天只显示 `14:23`，其余显示日期 + 时间（口径统一在 `lib/datetime.ts`）。
-  抽屉里每个对话行右侧的「⋯」是会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）的入口：
+  **行首是这条对话的头像**（`components/ConversationAvatar.tsx`）：单聊画一枚；被 @ 召唤过的对话
+  按群聊样式把多枚头像叠成一摞（最多 3 枚 + 「+N」）。参与者来自列表接口的 `participants`
+  （主场智能体排第一，召唤者按首次出场排；只查一次 `messages.agent_profile_id` 分组，不打 N+1）。
+  **列表按「最近活动」倒序**：后端取 `conversations.updated_at` 与最后一条消息时间的较晚者排序，
+  前端 `lib/conversations.ts:sortConversationsByRecent` 再兜底排一次 —— 刚发过消息的对话立刻置顶。
+  手机抽屉里每个对话行右侧的「⋯」是会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）的入口：
   它只把路由 state（`openActions`）交给聊天页，由聊天页弹面板 —— 那几件事要用到消息与会话状态。
+  桌面端左侧栏对话行不提供「⋯」：悬停只浮出「✎ 重命名 / 🗑 删除」，清除记忆改用输入框里的
+  `/clear` 命令（提交时拦截，调 `resetSession` 后提示，不发送消息）。
 - **朗读（语音合成）**：开关在对话页顶栏右上角（原有「⋯ 更多操作」的位置），**默认关闭**，
   开启后新回复会被念出来（`lib/tts.ts`：Markdown 先转纯文本，长文按句读切段排队，新输出打断旧的
   一条；开关存 `localStorage['arkswarm.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
@@ -873,16 +880,14 @@ frontend/
 - **输入区只有一份**：`components/Composer.tsx`（受控：草稿 / 附件 / 上传 / 发送都由
   页面给），两端的对话页与协作运行页（含聊天弹层）共用，交互与样式必须完全一致；
   样式段在 `index.css` 与 `mobile.css` 各写一份（桌面端 / 移动端各一段微调），共享那段逐字一致。
-- **协作运行页 = 一间办公室**：`/m/collab/runs/:id` 主区整屏铺那间可双指缩放 / 单指拖动的等距办公室
-  （`MobileCollabProgress`），时间线与「需要你决定」卡片收进整屏对话弹层 —— **点入口智能体工牌**才
-  出来（顶栏不放对话按钮），点其他岗位开只读岗位会话。**没有「聊天 / 推进」模式切换**（V0.43 移除）：
-  所有消息统一走 `/chat`（可带附件），是否推进任务由入口智能体判断 —— 它认为需要推进时在回复末尾
-  附 `chat_advance` 块，界面渲染「推进任务」决策卡，用户点选后指令才进 `/messages`；挂起后的续跑走
-  「继续 / 重试」按钮。
-  办公室底图有深 / 浅两张（`iso-office.svg` 与
-  `iso-office-light.svg`，同一份几何，`scripts/gen_office_bg.py` 构建期按「反相 + 色相旋转 180°」
-  换算），`CollabOfficeMap` 按当前主题选；工牌 / 图例 / 工具按钮 / 信息卡颜色走 `--office-*`
-  变量，浅色下整间办公室一起变浅。
+- **协作运行页 = 一张协作流程图**：`/m/collab/runs/:id` 主区整屏铺那张可拖动 / 双指缩放的
+  分层流程图（`MobileCollabProgress` → `CollabFlowMap`，两端共用同一份组件），时间线与
+  「需要你决定」卡片收进整屏对话弹层 —— **点入口智能体节点**才出来（顶栏不放对话按钮），点其他
+  岗位开只读岗位会话。**没有「聊天 / 推进」模式切换**（V0.43 移除）：所有消息统一走 `/chat`
+  （可带附件），是否推进任务由入口智能体判断 —— 它认为需要推进时在回复末尾附 `chat_advance` 块，
+  界面渲染「推进任务」决策卡，用户点选后指令才进 `/messages`；挂起后的续跑走「继续 / 重试」按钮。
+  流程图沿用编排画布的视觉语言（点阵底纹 + 正交折线 + 箭头），配色走 `--canvas-*` 主题变量，
+  浅色下整张图一起变浅。
 - **外观（深色 / 浅色 / 跟随系统）**：两端共用 `lib/theme.ts` —— 模式存在 localStorage 的
   `arkswarm.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
   `meta[name=theme-color]`（状态栏 / Android 系统导航条这些「原生外壳」跟着换色）与 iOS 独立应用的
@@ -906,199 +911,36 @@ frontend/
 
 ---
 
-## 11. 协作办公室实况呈现层（拟人化 v2）
+## 11. 协作流程图实况呈现层
 
-本节是「协作办公室实况呈现层（拟人化 v2）」的工程口径，对应当轮 PRD 的
-§3「功能范围」与 §6「商业级验收标准」（PRD 属一次性过程文档，不入库，需要追溯时看历史提交）。
-本节只回答「怎么实现、边界在哪、改哪些文件、怎么被守卫」；口径有异议回抛 CEO，不在下游自行改。
+协作进度的主视图是一张**分层流程图**（`components/CollabFlowMap.tsx`，桌面端进度板与
+移动端运行页共用同一份组件）：把这次协作画成「谁向谁派活」的节点图，替代早期版本的
+等距办公室动画（拟人化 v2 已随动画一起退役，相关底图 / 生成脚本 / 拟人化守卫均已删除）。
 
-### 11.1 呈现模型：三层，只允许向上叠加，不允许横向越权
+### 11.1 视觉与交互
 
-| 层 | 载体（DOM） | 谁驱动 | 能改什么 | 绝对不能改什么 |
-| --- | --- | --- | --- | --- |
-| **L1 真实状态层** | `.collab-station-scene.state-<CollabAgentState>` | 协作引擎数据（`lib/collabProgress.ts` → `CollabAgentProgress.state`） | 状态姿势（打盹 / 敲键盘 / 举手 / 出错 / 收工）与配色 | 状态点颜色（`office-tone-*`）、工牌文案、气泡 emoji（`STATE_BUBBLE`）、`stateLabel` |
-| **L2 环境行为层** | 同一元素上再挂 `.env-<rest / walk / discuss / call>` | `lib/collabEnv.ts` 的确定性调度 + `ENV_ALLOWED` 矩阵 | **身体姿态与工位内的位置**（靠椅背 / 走到过道 / 聚到一处 / 抬手到耳边） | 状态类名、气泡、颜色、工牌位置 |
-| **L3 微动作层** | 同一元素上再挂 `.fidget-<blink / scratch / pen / leg / glance>` | `workerSeed(员工 key)` 派生的节拍（CSS 关键帧自走） | 五官 / 手 / 腿的小幅度动作 | 同上；且不得与 L2 抢同一个部件 |
+| 元素 | 形态 |
+| --- | --- |
+| **节点** | 头像 + 昵称 + 状态一行的小卡片；等待中的岗位半透明 |
+| **状态徽标** | 头像右上角一枚圆徽标：绿▶=执行中（呼吸）、黄?=等你决定、红!=出错、灰…=等待、绿✓=完成 |
+| **连线** | 与编排画布同一套配色（assign 灰紫 / review 青 / rework 黄），回流（打回 / 返工）为虚线 |
+| **详情卡** | 点节点弹出：状态、最近动作、跑了几步、在办的工单、跳转该岗位实时对话 |
+| **画布** | 点阵底纹 + 拖动平移；桌面端支持滚轮缩放，移动端单指拖动 |
 
-`CollabWorker` 里把「人」拆成**椅子（留在工位）+ 身体（`.collab-worker-body`）**两层：
-椅子是工位的一部分，环境行为的走位只推身体那一层，所以 `walk`/`discuss` 不会把转椅也搬走。
-`.office-worker > .collab-station-scene` 这个**直接子代**关系保持不变（守卫测试与工位对位都靠它）。
+布局沿用 `lib/collabProgress.ts` 的 `buildFlowRows`（一行一层：入口领导者独占第一行，
+往下每行并排）；节点坐标由组件内 `layoutFlowNodes` 派生，无需手工维护。
 
-依赖方向（单向、无环）：
+**界面只留图本身**：桌面端进度覆盖层（`CollabProgressBoard`）与移动端运行页的流程图区
+都不再带标题、状态、完成度或使用说明 —— 「协作进度」开关挂在顶栏，状态徽标与图例
+（`.flow-map-legend`）自解释，说明文字与运行摘要（步数 / 工单 / 预算 / token、工单状态计数）
+只保留在左栏运行列表与工单看板里。覆盖层没有关闭按钮时由顶栏开关或 Esc 收起。
 
-```
-lib/collabProgress.ts（真实状态，已有）
-lib/collabOffice.ts （工位坐标 / 椅子落点，已有、受底图守卫）
-        ↑ 只读类型与常量
-lib/collabEnv.ts（新增：纯函数，禁止 import React / 组件 / 网络）
-        ↑
-components/CollabWorker.tsx ← components/WorkerAtDesk.tsx
-        ↑
-components/CollabOfficeMap.tsx（唯一持有 tick 与媒体查询的容器）
-        ↑
-CollabProgressBoard.tsx（桌面端） · mobile/components/MobileCollabProgress.tsx（移动端）
-```
+### 11.2 样式与守卫
 
-`lib/collabEnv.ts` 是**叶子纯函数模块**（与后端协作域的 `tickets.py` / `graph.py` 同一条约定）：
-只做整数运算，不碰 DOM、不读时钟、不取随机源 —— 这样它的行为可以被 Python 守卫测试**逐字镜像**，
-「刷新后同一员工个性一致」才有一条客观的验收路径（§11.7）。
-
-### 11.2 随机差异化机制：所有「偶然」都由员工 key 派生，且不靠随机源
-
-- **种子**：`workerSeed(key) = fnv1a32(key)`（32 位 FNV-1a，只做 `^` 与 `*` 再截断到 32 位）。
-  同一个 `CollabAgentProgress.key` 在桌面端 / 移动端 / 刷新后 / 换浏览器都是同一个数。
-  **禁止** `Math.random()` / `Date.now()` / `performance.now()` 参与个性（守卫测试直接扫源码）。
-- **微动作个性**：`fidgetProfile(seed)` → `{ kind, cycleMs, delayMs }`。
-  `kind` 在 5 种小动作里按 `seed` 选；`cycleMs` 取 4 档（5.2 / 6.3 / 7.4 / 8.5 秒）；
-  `delayMs` 取**负值**（把相位往后挪），使同屏员工的呼吸 / 眨眼 / 张望互不同频。
-  这套「按 nth-child 奇偶错开」的兜底规则（`index.css` / `mobile.css` 里已有的
-  `.office-worker:nth-child(even) …`）保留给**没有 seed 的场合**（信息卡缩略图）。
-- **环境行为调度**：`envBehaviorFor(seed, tick, allowed)` —— 纯函数，整数运算：
-
-  ```
-  ENV_TICK_MS = 5000            一格 5 秒（调度粒度）
-  ENV_CYCLE_TICKS = 24          一个循环 2 分钟
-  ENV_AWAY_TICKS = 6            每人每循环最多 30 秒在做环境行为
-
-  phase = (tick + (seed >>> 3)) % ENV_CYCLE_TICKS
-  phase >= ENV_AWAY_TICKS  → null（回到真实状态姿势）
-  否则 → allowed[(seed + phase * 7) % allowed.length]
-  ```
-
-  由此：同一时刻不同员工落进不同的 `phase`，各干各的；每人约 25% 的时间离开姿势循环，
-  且**确定性可复核**（守卫用 Python 镜像同一段算术，见 §11.7）。
-- **凑一起讨论必须真的「凑一起」**：discuss 不能各人各判。分组由**座位布局**决定 ——
-  `discussPairs(seats)` 在 `OFFICE_DESK_ROWS` 的每一排内部把相邻两人两两配对
-  （一排只剩一个人时不参与讨论）；每对有 `pairSeed = workerSeed('discuss:' + 两人 key)`。
-  只有当 **`pairPhase < DISCUSS_TICKS` 且两人都允许 discuss** 时，两人**同时**进入 `env-discuss`；
-  任何一人不允许（`waiting` / `error`）→ 整对跳过，不出现「一个人对着空气聊天」。
-
-### 11.3 真实状态优先：状态覆盖矩阵
-
-环境行为**只在安全状态上叠加**；`waiting`（在等你决定）与 `error`（出问题了）**一律不参与**，
-它们必须原地、保持原姿势与语义 —— 这两类状态正好是最需要用户立刻注意的，不能被演成悠闲。
-
-| 环境行为 | pending 打盹 | active 敲键盘 | waiting 举手 | error 出错 | done 收工 |
-| --- | --- | --- | --- | --- | --- |
-| `rest` 休息喝咖啡 | ✅ | ✅ | ❌ | ❌ | ✅ |
-| `walk` 离座走动 | ❌ | ✅ | ❌ | ❌ | ✅ |
-| `discuss` 凑一起讨论 | ❌ | ✅ | ❌ | ❌ | ✅ |
-| `call` 接电话 | ❌ | ✅ | ❌ | ❌ | ✅ |
-| 微动作 fidget | ❌ | ✅ | ❌ | ❌ | ✅ |
-
-- `pending` 只放开 `rest`：它本来就闲置，端杯咖啡不改变「待命」语义（气泡仍是 💤、点仍是灰点）；
-  走动 / 讨论 / 接电话则会与「在工位待命」冲突，故不放开。
-  **若 QA 判定 `pending + rest` 让「闲置」读起来像「悠闲」，把 `ENV_ALLOWED.pending` 改成 `[]` 即可**
-  —— 这是一行改动，也是这条取舍的退路。
-- `pending` / `waiting` / `error` 不开微动作：`pending` 闭眼、`waiting` 举手、`error` 瞪眼，
-  这三套姿势与「眨眼 / 挠头 / 转笔 / 抖腿 / 张望」会抢同一个部件（见 §11.6 部件分工表）。
-- **叠加不等于替换**：`env-*` 只改身体姿态与位置，状态类名、`office-tone-*` 颜色、
-  工牌文案、气泡 emoji、`aria-label` 全部保持 L1 原样（PRD 验收 3 由守卫逐条核对）。
-
-### 11.4 走位方案：只用既有坐标，不碰底图契约
-
-**结论：不新增任何工位坐标、底图坐标或房间坐标。** `OFFICE_DESKS` / `OFFICE_ROW_SIZES` /
-`OFFICE_CLOCK` / `OFFICE_CHAIR_OFFSET` / `OFFICE_FOCUS` 与 `scripts/gen_office_bg.py` **一行都不改**，
-底图 SVG 不需要重新生成，`backend/tests/test_frontend_assets.py` 的坐标类守卫自动保持绿。
-
-- **`walk`（离座走动）**：位移向量 = 等距底图的**一格步长**方向 ——
-  由 `OFFICE_CHAIR_OFFSET`（桌心 → 转椅，0.74 格）反推得到一格向量 `(-55.9, +28.0)`，
-  取 1.2～2 格走到**本排工位前的过道**。每个人从自己的椅子朝同一方向平移，
-  位置天然错开、不会叠在一起，也不需要新的落点坐标。
-- **`discuss`（凑一起讨论）**：聚点 = **同排配对两人椅点的中点**（`officeChairPoint(desk)` 现算，
-  不落成常量）；每人的位移 = 中点 − 自己椅点，两人位移相反 → 面对面聚拢。
-  中点必然落在两个合法工位之间，不会跑出地板。
-- **传达方式**：位移以**画布像素**表示，通过 CSS 变量 `--env-x` / `--env-y` 挂在 `.office-worker` 上
-  （自定义属性会继承，样式表里读得到）。`.collab-worker-body` 的 `translate3d()` 里按
-  `--office-scale`（0.72，从现有 `.office-worker > .collab-station-scene` 的 `scale()` 里提出来，
-  只此一处定义）换算成场景局部像素 —— **尺子只有一把**，避免两处写死不同比例。
-  `rotateY(-11deg)` 带来的横向透视缩短约 2%，在「人离开了工位、落在走道上」这个判定粒度上可忽略。
-- **工牌与小人锚点都不动**：走位只发生在人那一层；工牌仍钉在 `officeChairPoint()` 上指向工位。
-  人走开时工牌留在原处是**故意的** —— 工牌标的是「这个岗位坐哪儿」，不是「这个人此刻在哪」。
-
-### 11.5 双端与无障碍
-
-- **组件与逻辑两端共用一份**：移动端本来就用 `CollabOfficeMap`（`MobileCollabProgress`），
-  新增的 `lib/collabEnv.ts`、`CollabWorker` 改造、调度逻辑自动双端同时生效，**不造第二套人马**。
-- **样式仍两端各一份，且必须逐字一致**：所有新增 CSS（4 类环境行为姿态、微动作关键帧、
-  reduced-motion 覆盖）**全部写进「协作办公室」共享块** ——
-  `index.css` 的 `/* ================= 协作办公室 … */` 横幅之后到文件结尾、
-  `mobile.css` 同名横幅之后到 `MOBILE_OFFICE_TUNING` 之前。
-  现有守卫 `test_office_styles_are_identical_on_both_ends` 会**自动把新增部分纳入逐字比对**，
-  这是「双端一致」（PRD 验收 5）唯一可靠的机器检查点。
-- **权重与顺序**：新增规则写在共享块（在状态姿势段**之后**），且选择器统一加 `.office-worker` 前缀
-  （`.office-worker .collab-station-scene.env-rest …`，五个类名级），
-  稳定压过 `.collab-station-scene.state-* …`（四个）与 `.collab-station-scene.live …`（三个）——
-  这样 `active` 的敲键盘、`live` 的常驻打字都不会和环境行为抢手臂，**不靠 `!important` 取胜**。
-- **`prefers-reduced-motion: reduce` 的降级分两步**（PRD 验收 6）：
-  1. **样式侧**：共享块内（新增关键帧之后）加一段 reduced-motion 覆盖，把 L2 / L3 的新增动画
-     全部 `animation: none`；静态姿态保留 —— 页面仍然「看得懂谁在干嘛」，只是不动。
-  2. **调度侧**：调度器读 `matchMedia('(prefers-reduced-motion: reduce)')` 并监听 `change`，
-     在此模式下**屏蔽 `walk` / `discuss`**（这两个的语义依赖位移，动画一停就变成每秒瞬移，
-     那不算「静默」），只保留 `rest` / `call` 这类**原地静态姿态**。
-- **信息卡缩略图**（`WorkerAtDesk`）不参与环境行为：它只画真实状态姿势（不传 `env` / `seed`），
-  保持「一眼看清这个岗位在忙什么」。
-- **PWA**：`mobile.css` 属于外壳样式表，按既有约定必须把 `frontend/public/m/sw.js` 的
-  `arkswarm-m-shell-v<n>` / `arkswarm-m-assets-v<n>` **版本号 +1**，否则已加到主屏的独立应用
-  永远换不到新样式（守卫 `test_mobile_shell_has_a_self_service_refresh` 守着这条约定）。
-
-### 11.6 部件分工与性能
-
-**同一时刻每个部件只能被一层驱动**（否则两层动画抢同一个 `transform`，观感是抽搐）：
-
-| 部件 | L1 状态姿势 | L2 环境行为 | L3 微动作 |
-| --- | --- | --- | --- |
-| `.collab-worker-body`（新增包装层） | — | `walk`/`discuss` 位移、`rest` 靠椅背、`call` 整体侧倾 | — |
-| `.collab-worker-head` | `pending` 低头 | `call` 侧倾 | `glance` 左右张望 |
-| `.collab-worker-eye.*` | `pending` 闭眼、`error` 瞪大 | — | `blink` 眨眼 |
-| `.collab-worker-arm.right` | `active` 敲键盘、`waiting` 举手、`done` 放下 | `call` 抬手到耳边、`rest` 端杯 | `scratch` 挠头 |
-| `.collab-worker-arm.left` | 同上（镜像） | `rest` 端杯 | `pen` 转笔 |
-| `.collab-worker-leg.*`（新增） | — | — | `leg` 抖腿 |
-| `.collab-worker-cup`（新增，`.collab-worker-body` 内） | — | `rest` 才显示（`call` 隐藏） | — |
-
-- `env-*` 与 `fidget-*` 不得同时占同一部件：例如 `env-rest` / `env-call` 生效时，
-  显式把该部件上的微动作动画关掉（`animation: none`），由 SDE 在样式表里写明冲突优先级。
-- **只动合成属性**：关键帧只用 `transform` / `opacity`；禁止 `top` / `left` / `width` / `height` /
-  `margin` / `box-shadow` / `filter` 参与动画（避免 layout thrash；PRD 约束 9 的守卫要扫这个）。
-  `will-change: transform` 只加在会被动画驱动的层（`.collab-worker-body`），不要全场撒。
-- **调度成本**：一个 5 秒的 `setInterval` 计算 `tick`，`useMemo` 派生「seat key → env 行为」的映射；
-  **派生结果与上一格完全相同就不 `setState`**，避免每 5 秒白渲染一次地图。
-- **零资源**：全程不动 `frontend/package.json` 的依赖，不新增图片 / 字体 / 视频 / Lottie / 动画库
-  （PRD 约束 1 与验收 4，由守卫断言依赖集合未变）。
-
-### 11.7 守卫测试的影响与对齐
-
-**结论：不改任何既有坐标 / 底图契约，既有守卫全部保持绿；新增一个守卫文件把 v2 的约定固化下来。**
-
-既有守卫的影响面（逐条）：
-
-| 守卫 | 影响 | 对齐方式 |
-| --- | --- | --- |
-| `test_frontend_assets.py::test_committed_office_background_is_up_to_date` 等 5 条坐标类 | 无 | 不碰 `OFFICE_DESKS` / `OFFICE_ROW_SIZES` / `OFFICE_CLOCK` 与 `gen_office_bg.py`，不需要重新生成底图 |
-| `test_people_and_badges_are_pinned_to_the_chairs` | 需保持 | `.office-worker > .collab-station-scene` 仍是直接子代选择器；`CollabOfficeMap.tsx` 里 `officeChairPoint(` 仍同时给「人」和「工牌」定位（≥2 处），工牌不跟走位 |
-| `test_mobile_web.py::test_office_styles_are_identical_on_both_ends` | 自动覆盖新增部分 | 新 CSS 全部落在「协作办公室」共享块内，两端逐字一致 |
-| `test_mobile_web.py::test_mobile_shell_has_a_self_service_refresh` | 需同步 | `sw.js` 缓存名版本 +1 |
-| 其余后端测试 | 无 | 不新增接口、不改协作状态机、不新增 `CollabAgentState` |
-
-新增守卫 `backend/tests/test_office_env.py`（Python 侧，客观可判）：
-
-1. `frontend/package.json` 的 `dependencies` 与今天完全相同（零新依赖，PRD 验收 4）。
-2. `lib/collabEnv.ts` 源码里没有 `Math.random` / `Date.now` / `performance.now`；种子来自员工 key。
-3. **种子冻结表**：Python 用同一套 FNV-1a 重算 `workerSeed(key)`，与测试内冻结的
-   `{key: seed}` 表逐一比对（TS 改了口径就会红）。
-4. **调度冻结表**：Python 镜像 `envBehaviorFor(seed, tick, allowed)`，断言
-   (a) `pending/waiting/error/active/done` 各自的允许集合与 §11.3 矩阵一致；
-   (b) `waiting` / `error` 在任意 tick 恒为 `null`；
-   (c) 出现 `discuss` 的 tick 上，配对两人**同时**是 `discuss`（「凑一起」可核对）。
-5. CSS 文本层：4 个 `.env-*` 与 5 个 `.fidget-*` 选择器、新增关键帧都落在两端共享块内；
-   `state-error` / `state-waiting` 不出现在任何 `.env-*` 组合选择器里（防止有人用 CSS 硬开）。
-6. 共享块内 reduced-motion 段覆盖所有新增关键帧（正则抽 `@keyframes` 名 → 逐个核对）。
-7. 新增关键帧只动 `transform` / `opacity`（扫块内属性名）。
-
-### 11.8 本节明确不做
-
-- 不做交互（点小人看详情、拖拽走位）——只做观感（PRD §5）。
-- 不引入 `Math.random` 驱动的「真随机」；（个性化必须可复核）。
-- 不改后端接口 / 协作状态机 / `CollabAgentState`；不新增数据库字段。
-- 不重画底图、不改房间布局与工位坐标语义。
-- 不给信息卡缩略图加环境行为。
+- 样式段在 `index.css` 与 `mobile.css` 各写一份（「协作流程图」横幅），共享段逐字一致，
+  守卫 `test_mobile_web.py::test_flow_styles_are_identical_on_both_ends`；
+- 配色走 `--canvas-*` 主题变量（与编排画布共用），浅色由 `[data-theme='light']` 覆盖，
+  不写死深色；
+- 状态徽标的呼吸 / 辉光动画在 `prefers-reduced-motion: reduce` 下静默，状态色保留；
+- 移动端外壳缓存版本随外壳样式表改动 +1（`public/m/sw.js`），否则已装到主屏的 PWA
+  换不到新样式。

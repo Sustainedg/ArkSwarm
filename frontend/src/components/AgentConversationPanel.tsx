@@ -5,6 +5,7 @@ import type { FinishedStep, LiveStep } from '../lib/collabStream'
 import type { CollabAgentProgress } from '../lib/collabProgress'
 import type { CollabStep, CollabTicket } from '../lib/types'
 import { CollabAgentThread } from './CollabAgentThread'
+import { AgentAvatar } from './AgentAvatar'
 
 interface Props {
   node: CollabAgentProgress
@@ -34,7 +35,12 @@ export function AgentConversationPanel({
     <div className={`collab-agent-panel ${variant}`} aria-label={`${node.label}的实时对话`}>
       {/* 与普通对话共用同一套顶栏：头像 + 名字 + 次要信息，右边是状态与返回。 */}
       <header className="chat-topbar collab-agent-panel-head">
-        <span className="avatar">{node.avatar}</span>
+        <AgentAvatar
+          avatar={node.avatar}
+          avatarPreset={node.avatarPreset}
+          avatarFile={node.avatarFile}
+          agentId={node.agentId}
+        />
         <div className="collab-agent-panel-title">
           <div className="collab-agent-panel-name">{node.label} · 实时对话</div>
           <div className="collab-agent-panel-meta">

@@ -14,8 +14,9 @@ Electron 主进程（薄壳，TypeScript）
  ├─ ⓪ 首启 / 整包升级物化：安装包内置代码 → releases/<版本>/ + current 软链（bootstrap.ts，
  │    复刻 Docker entrypoint 的托管模式布局；新安装包里的后端版本更新时会切到新版本）
  ├─ ① 选端口：8010 优先，被占退随机（ports.ts）
- ├─ ② Python 运行时：embedded 解释器 → venv → pip 装依赖（pythonRuntime.ts；按
- │    requirements 的 sha256 指纹判断，依赖清单变了才重装，整包升级不漏装）
+ ├─ ② Python 运行时：依赖在构建期预装进 embedded 解释器，运行时按 requirements 的
+ │    sha256 指纹直接选用 —— 首启不建 venv、不跑 pip、不联网；指纹对不上才回退到
+ │    离线 wheelhouse → venv → 在线 pip（pythonRuntime.ts，方案 A + C）
  ├─ ②' Node 运行时：embedded Node + npm，全局前缀 / 缓存在 userData（runtimeEnv.ts，M4）
  ├─ ③ spawn 后端：uvicorn --host 127.0.0.1 --app-dir releases/current/backend（backend.ts，只听本机）
  ├─ ④ 健康检查门控：轮询 /api/health（health.ts）
@@ -31,7 +32,7 @@ Electron 主进程（薄壳，TypeScript）
 | 目录 | 内容 | 删了会怎样 |
 | --- | --- | --- |
 | `userData/data/` | `ARKSWARM_DATA_DIR`：SQLite、工作区、`secret.key`、内核 HOME | ⚠️ 数据全丢（与 Docker 的 `arkswarm-data` 卷同级） |
-| `userData/python/` | embedded 解释器 + venv | 下次启动自动重建（离线秒级） |
+| `userData/python/` | **仅兜底路径**：解释器副本 + venv（正常安装直接用内置运行时） | 下次启动自动重建（离线，优先用 wheelhouse） |
 | `userData/node/` | npm 全局安装前缀（内核 CLI 装在这）+ 缓存 | 内核需要重装，对话数据不受影响 |
 | `userData/releases/` | 后端版本目录（预留，接主项目自更新） | 回滚历史丢失，不影响运行 |
 
@@ -53,6 +54,7 @@ cd desktop
 npm run gen:icons                    # 生成应用图标 / 托盘图标（与网页同源，改了品牌图形才需要）
 npm run gen:installer                # 生成安装向导的品牌位图（同上，已入库，一般不用跑）
 node scripts/fetch-python.mjs        # 下载 python-build-standalone → build/python-runtime/<arch>/
+node scripts/prepare-python-deps.mjs # 后端依赖预装进该解释器 + 离线 wheelhouse（需联网）
 node scripts/fetch-node.mjs          # 下载官方 Node 24 LTS（校验 sha256）→ build/node-runtime/<arch>/
 node scripts/prepare-backend.mjs     # 确保 frontend/dist 存在
 npm run compile
@@ -69,8 +71,8 @@ npx electron-builder --publish never # 产物在 release/
 `.github/workflows/desktop.yml`：
 
 - PR / push 改动 `desktop/**`、`backend/**`、`frontend/**` → Windows + macOS 双平台构建，
-  并对**打包产物**跑冒烟启动（`ARKSWARM_DESKTOP_SMOKE=1`：内嵌 Python 建 venv → 起后端 →
-  健康检查 → 退出 0）；
+  并对**打包产物**跑冒烟启动（`ARKSWARM_DESKTOP_SMOKE=1`：内置运行时（依赖已预装）→
+  起后端 → 健康检查 → 退出 0）；
 - 打后端版本 tag `v*` → 构建产物与 `latest*.yml` **追加到同一个 `v<版本>` Release**
   （与网页/后端源码一起发布），同时刷新滚动 Release `desktop-latest`（**prerelease**，
   避免抢走后端更新器的 `/releases/latest`）。

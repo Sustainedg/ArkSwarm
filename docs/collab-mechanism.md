@@ -5,8 +5,9 @@
 > 事实基线：ArkSwarm `V0.1`（`backend/app/__init__.py`），提交 `7c6c54c` + 当前工作区未提交改动。
 > **代码是唯一事实来源**；本文与旧设计文档冲突时，以本文标注的「代码实际行为」为准，偏差清单见 §15。
 >
-> 相关文档：`docs/collaboration-design.md`（设计与里程碑）、`docs/collab-guide.html`（面向使用者的图文版）、
-> `docs/architecture.md`（平台运行时序与事件协议）、`AGENTS.md`（工程铁律）。
+> 相关文档：`docs/collaboration-design.md`（设计与里程碑）、`docs/collab-parallel.md`（波次并行专题）、
+> `docs/collab-guide.html`（面向使用者的图文版）、`docs/architecture.md`（平台运行时序与事件协议）、
+> `AGENTS.md`（工程铁律）。
 
 ---
 
@@ -14,10 +15,10 @@
 
 | 你想知道 | 答案 |
 | --- | --- |
-| 协作是什么 | 把多个「智能体」按一张有向图排成岗位，用**工单**在它们之间交接任务，引擎**串行**推进 |
+| 协作是什么 | 把多个「智能体」按一张有向图排成岗位，用**工单**在它们之间交接任务，引擎**波次**推进（默认串行） |
 | 智能体之间共享聊天记录吗 | **不会**。每一步都是全新会话，只拿到工单字段 + 结构化摘要 + 文件路径 |
 | 谁跟用户说话 | 只有**入口节点**（必须是协调者）。其他岗位的输出只在岗位抽屉/看板里 |
-| 同一时刻能跑几个步骤 | **1 个**，绝对串行 |
+| 同一时刻能跑几个步骤 | 默认 **1 个**；预算里 `max_parallel > 1` 时，同一父工单拆出、不同岗位的**兄弟工单**可同波并行（同一岗位永远串行） |
 | 任务怎么开始 | 先建运行（空目标），用户在聊天框说第一句话；CEO 判断后给「推进任务」卡，点选后才真正开跑 |
 | 卡住了怎么办 | 挂起为 `waiting_user` 并给红字原因；可「继续 / 重试 / 提高预算」，不会静默空转 |
 | 会不会无限返工/无限拆单 | 有返工轮次、拆解深度 5 层、同名子工单 2 张、步数/工单/token/空闲时限四类预算 |
@@ -39,14 +40,14 @@
  │  ③ 用户点选 → 指令进入工单通道（POST /messages）
  ▼
 根工单（Ticket）
- │  ④ 引擎串行取就绪工单 → 交给持有者节点 → 该节点跑一步
+ │  ④ 引擎取就绪工单 → 交给持有者节点 → 该节点跑一步（max_parallel>1 时兄弟工单同波并行）
  │     每步：拼 prompt → 起内核 → 流式事件 → 解析 work_order → 落库 → 改工单状态
  ▼
 delegate(handoff/split) / submit / review / done / ask_user / escalate / reject
  │  ⑤ 子工单全收尾 → 父工单回到拆解者汇总
  │  ⑥ 根工单 done → 交回入口智能体做「收尾汇报」→ 运行 done
  ▼
-用户看到结论 + 工单看板 + 协作进度（办公室实况）
+用户看到结论 + 工单看板 + 协作进度（流程图实况）
 ```
 
 三个必须记住的词：
@@ -623,7 +624,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 | --- | --- |
 | `/collab` | 协作运行列表 |
 | `/collab/teams/:teamId` | 表单式编排（**不引用桌面画布**） |
-| `/collab/runs/:runId` | 主区整屏是办公室实况；点入口工牌弹出聊天弹层，点其他岗位开只读岗位会话 |
+| `/collab/runs/:runId` | 主区整屏是流程图实况；点入口节点弹出聊天弹层，点其他岗位开只读岗位会话 |
 | `/collab/runs/:runId/tickets` | 移动端工单看板 |
 
 ### 12.2 协作运行页能做什么
@@ -651,17 +652,14 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 - 越权审计整条标红并列出被改文件；token、耗时压在小字里。
 - 桌面与移动端共用 `lib/ticketBoard.ts` 的视图模型（徽章配色、越权判定只有一份）。
 
-### 12.4 协作进度 / 办公室实况
+### 12.4 协作进度 / 流程图实况
 
-- 按 `orderedCollabNodes` 的推进顺序画成流程图（工位之间带动作名的箭头；`review`/`rework` 回边单独收在「打回与返工」里）。
-- 「🧭 协作进度」打开全屏办公室：等距视角底图 + 每个岗位一张桌子 + 一个纯 CSS 小人。
-  小人姿势跟随**真实状态**（`pending` 打盹 / `active` 敲键盘 / `waiting` 举手 / `error` 出错 / `done` 收工）。
-- 拟人化 v2 在真实状态上叠加**环境行为**（`rest` / `walk` / `discuss` / `call`）与**微动作**
-  （`blink` / `scratch` / `pen` / `leg` / `glance`），全部由员工 key 的 FNV-1a 种子确定性派生：
-  同一员工刷新/换端/换浏览器行为一致；`waiting` / `error` 一律不参与。
-- 调度参数：5 秒一格、24 格一循环（2 分钟）、每人每循环最多 6 格（30 秒）做环境行为。
-  `prefers-reduced-motion` 下屏蔽 `walk` / `discuss`，只保留原地姿态。
-- 工牌钉在椅子点（`officeChairPoint`），人走开工牌不动 —— 工牌标的是「岗位坐哪儿」。
+- 按 `buildFlowRows` 的层级摆成流程图（一行一层：入口领导者独占第一行，往下每行并排；
+  `review`/`rework` 回边在图上画成往回走的虚线）。
+- 「🧭 协作进度」打开全屏流程图：每个岗位一个节点（头像 + 昵称），头像右上角的**状态徽标**
+  区分状态（绿▶=执行中、黄?=等你决定、红!=出错、灰…=等待、绿✓=完成）。
+- 点节点弹「现在具体在做什么」的详情卡（状态、最近动作、步数、在办工单），并能跳到
+  该岗位的实时对话；画布可拖动平移 / 滚轮缩放。
 - 滚轮/双指缩放、拖动平移、右下角一键复位；点工牌弹信息卡（谁 / 在忙什么 / 粗略进度 / 步数 / 在处理的工单）。
 
 ---
@@ -682,7 +680,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 
 **机制层面**
 
-1. **不能并行**：同一时刻只推进一个步骤（可解释性与取消语义优先）。
+1. **默认串行**（`max_parallel=1`）：同一时刻只推进一个步骤；调高后只有「同父兄弟工单 + 不同岗位」能同波并行，同一岗位永远串行。
 2. **不能共享记忆**：智能体之间只有工单，没有聊天记录；每个步骤都是全新内核会话。
 3. **不能自由流转**：必须输出 `work_order` 块并通过语义校验，没有「随便说句话就推进」的路径。
 4. **不能跨图**：一张运行只对应一个协作组；不能运行中换图（换图请新建运行）。
@@ -709,7 +707,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 22. **协作运行不会自动发 IM 消息**：IM 域（`app/im/`）只桥接对话域，与协作域没有代码耦合。
 23. **节点没有适配器参数覆盖**：一个岗位用什么参数跑，完全由它绑定的智能体决定（旧图的 `options_override` 被忽略）。
 24. **步骤详情不返回完整 `parts`**：只给 `parts_count` / `tool_names`，完整流水要单独懒加载。
-25. **办公室实况不可交互**：不做「点小人看详情、拖拽走位」；只有工牌信息卡与「查看实时对话」入口。
+25. **流程图实况只读**：节点不可拖动重排（布局由层级派生）；交互只有点节点看详情卡与「查看实时对话」入口。
 26. **移动端不画线**：协作组编排用表单（岗位卡片 + 「从谁到谁 + 类型」下拉），与桌面端共用同一套字段语义与校验接口。
 
 ---
@@ -730,7 +728,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 
 ### 15.2 真实限制
 
-- **串行导致长流程慢**：一期接受，可解释性优先。
+- **并行下的写冲突**：只有「同父兄弟 + 不同岗位」的工单才同波推进，同一岗位串行；步骤序号与步数在数据库层原子计数，用量在波次收口后单点聚合。
 - **越权审计有上限**：最多扫 2000 个文件；大于 512 KB 的文件只比大小 + mtime，不比内容哈希。
 - **审计可能漏判**：审计只比对快照，`none` 节点仍拿到 cwd；真正的隔离需要沙箱。
 - **`escalate` 的目标解析**：沿 `owner_key` 与父链往上找「不是我的节点」；一路到顶则要求改用 `ask_user`。
@@ -738,7 +736,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 - **`report_at` 是每轮一次的开关**：如果用户在汇报轮又提问，根工单重新打开后才会再次汇报。
 - **SSE 缓冲只在内存**：服务重启后本轮缓冲消失，靠落库详情续看（`recover_interrupted` 会把残留收尾）。
 - **附件单文件 8 MB**：走 base64，大文件请直接放进工作目录。
-- **移动端办公室实况不做交互**：只做观感；聊天收进弹层。
+- **移动端流程图实况只读**：布局由层级派生；聊天收进弹层。
 
 ---
 
@@ -787,9 +785,8 @@ frontend/src/
   components/CollabCanvas.tsx          手写画布（拖动 / 四向端口 / 正交避障连线）
   components/NodeInspector.tsx         节点 / 边 / 团队属性面板
   components/TicketBoard.tsx           三栏工单看板
-  components/CollabProgressBoard.tsx   全屏流程图 / 办公室
-  components/CollabOfficeMap.tsx       办公室容器（tick / 媒体查询 / 工位）
-  components/CollabWorker.tsx          纯 CSS 小人（椅子 + 身体 + 微动作）
+  components/CollabProgressBoard.tsx   全屏协作进度（流程图 + 岗位对话侧栏）
+  components/CollabFlowMap.tsx         流程图视图（节点 + 状态徽标 + 详情卡，两端共用）
   components/CollabAgentThread.tsx     岗位只读实时会话
   lib/collabDraft.ts                   草稿与字段语义（两端共用）
   lib/collabStream.ts                  信封事件归约（步骤 / 工单 / 提醒）
@@ -797,11 +794,9 @@ frontend/src/
   lib/collabAsk.ts                     决策卡视图（含旧记录兜底）
   lib/collabAdvance.ts                 推进卡的本地消费记忆
   lib/collabProgress.ts                进度模型（岗位状态 / 流程图 / 连线）
-  lib/collabOffice.ts                  工位坐标 / 工牌 / 状态色（受底图守卫）
-  lib/collabEnv.ts                     环境行为与微动作的确定性调度（纯函数）
   lib/collabNotices.ts                 提醒「已关闭」本地记忆
   lib/ticketBoard.ts                   看板纯视图模型（两端共用）
-  mobile/pages/MobileCollabRunPage.tsx 移动端运行页（办公室 + 聊天弹层）
+  mobile/pages/MobileCollabRunPage.tsx 移动端运行页（流程图 + 聊天弹层）
   mobile/pages/MobileCollabTeamPage.tsx 移动端表单式编排
   mobile/pages/MobileTicketBoardPage.tsx 移动端工单看板
 ```
@@ -835,8 +830,6 @@ backend/.venv/bin/python -m pytest \
   tests/test_collab_architecture.py -q
 → 59 passed, 1 skipped（skip 的是「execution.py 属于执行层边界」的守卫用例，刻意跳过）
 
-backend/.venv/bin/python -m pytest tests/test_office_env.py -q
-→ 20 passed
 ```
 
 > 注：以上命令在仓库根目录执行即可（`backend/tests/conftest.py` 会把 `backend/` 加进 `sys.path`）。

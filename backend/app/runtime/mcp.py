@@ -334,14 +334,17 @@ async def ensure_builtin_servers_for_all(session: AsyncSession) -> int:
 
 
 async def builtin_param_warnings(
-    session: AsyncSession, profile: AgentProfile
+    session: AsyncSession,
+    profile: AgentProfile,
+    *,
+    override_ids: list[str] | None = None,
 ) -> list[str]:
     """运行前提示：已分配的内置服务器还有必填参数没填。
 
     只提示、不阻断运行 —— 用户可能只是想先聊两句；真正调用工具时脚本自己会给出
-    可操作的中文错误。
+    可操作的中文错误。``override_ids`` 是协作域的节点级分配（None = 跟随智能体页面）。
     """
-    ids = await agent_mcp_ids(session, profile.id)
+    ids = override_ids if override_ids is not None else await agent_mcp_ids(session, profile.id)
     if not ids:
         return []
     rows = (
@@ -775,10 +778,17 @@ async def set_agent_mcp_servers(
 
 
 async def mcp_servers_for_agent(
-    session: AsyncSession, profile: AgentProfile
+    session: AsyncSession,
+    profile: AgentProfile,
+    *,
+    override_ids: list[str] | None = None,
 ) -> list[McpServerSpec]:
-    """智能体在本轮运行中真正生效的 MCP 服务器（只取可分配、可用且启用中的）。"""
-    ids = await agent_mcp_ids(session, profile.id)
+    """智能体在本轮运行中真正生效的 MCP 服务器（只取可分配、可用且启用中的）。
+
+    ``override_ids``：协作域的节点级分配（None = 跟随智能体页面的分配；
+    给了列表就以它为准）。安全边界与默认路径完全一致：可分配、可用、启用中、同内核、同归属。
+    """
+    ids = override_ids if override_ids is not None else await agent_mcp_ids(session, profile.id)
     if not ids:
         return []
     rows = (await session.execute(select(McpServer).where(McpServer.id.in_(ids)))).scalars().all()
@@ -790,6 +800,14 @@ async def mcp_servers_for_agent(
             continue
         if row.type_id is not None and row.type_id != profile.type_id:
             continue
+        # 归属与「智能体分配」是同一套口径（见 set_agent_mcp_servers）：平台通用服务器
+        # 只能引用自己的，内置服务器按用户各播种一份也只能引用自己那一份。节点级覆盖
+        # 不能绕过它 —— 否则协作图能借别人的服务器（env / headers 含密钥）带进一次运行。
+        if profile.owner_id is not None:
+            if row.type_id is None and row.owner_id != profile.owner_id:
+                continue
+            if row.builtin_key is not None and row.owner_id != profile.owner_id:
+                continue
         specs.append(spec_from_row(row))
     return specs
 
@@ -862,13 +880,15 @@ async def prepare_mcp_home(
     ctx: AgentContext,
     *,
     scope_id: str | None = None,
+    override_ids: list[str] | None = None,
 ) -> list[str]:
     """把分配到的 MCP 服务器写进该内核的隔离目录，并把结果写回 ``ctx``。
 
     ``scope_id`` 是隔离目录的作用域（默认用对话 id；协作运行会传运行 id）。
+    ``override_ids`` 是协作域的节点级 MCP 分配（None = 跟随智能体页面）。
     返回需要提示给用户的说明/告警（由运行层作为 ``log`` 事件暴露）。
     """
-    ctx.mcp_servers = await mcp_servers_for_agent(session, profile)
+    ctx.mcp_servers = await mcp_servers_for_agent(session, profile, override_ids=override_ids)
     mount = definition.mcp_mount(ctx)
     if mount is None:
         return []
@@ -877,7 +897,7 @@ async def prepare_mcp_home(
     # 单测会以 ``None`` 会话 / 资料直接调这个函数（只验证物化计划），这里也跳过提示。
     warnings: list[str] = []
     if ctx.mcp_servers and session is not None and profile is not None:
-        warnings = await builtin_param_warnings(session, profile)
+        warnings = await builtin_param_warnings(session, profile, override_ids=override_ids)
     # 只有当配置真的要写进「内核隔离配置目录」时才建这个家：技能与 MCP 共用同一个目录，
     # 技能物化（prepare_skill_home）已经定过目录时以它为准。只写工作目录的内核
     # （例如 Gemini CLI）不需要这个目录，凭空建一个空目录会被 note_fresh_home

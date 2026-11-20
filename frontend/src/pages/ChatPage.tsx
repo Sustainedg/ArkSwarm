@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { Composer } from '../components/Composer'
 import { ConversationThread, type ConversationThreadItem } from '../components/ConversationThread'
 import { AgentIcon, FolderIcon, MenuIcon, ModelIcon, PlusIcon, ShareIcon, SpeakerIcon } from '../components/Icons'
 import { AgentAvatar } from '../components/AgentAvatar'
+import { MascotStage } from '../components/MascotStage'
 import type { RenderMessage } from '../components/MessageView'
 import { Modal } from '../components/Modal'
 import { useAuth } from '../components/AuthGate'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../lib/agentStream'
 import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../lib/api'
 import { useComposerDraft } from '../lib/composerDraft'
-import { notifyConversationsChanged } from '../lib/conversations'
+import { notifyConversationsChanged, findUnusedConversation } from '../lib/conversations'
 import { formatListTime } from '../lib/datetime'
 import { MediaUrlProvider, composeWithAttachments, splitAttachmentBlock } from '../lib/media'
 import { shortPath } from '../lib/paths'
@@ -68,13 +69,12 @@ interface QueuedMessage {
  * 与移动端同一套设计与分工：
  * - 顶栏右上角只有「分享 + 朗读」两个图标按钮（朗读默认关闭，开着时每条新回复念出来）；
  * - 输入区是两端共享的 `components/Composer`（附件 / 语音 / 图标发送都在框里）；
- * - 会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）不占顶栏，收在左侧栏对话行的
- *   「⋯」后面 —— 那几件事要用到本页的消息与会话状态，所以经路由 state 落回本页的弹窗。
+ * - 清除智能体记忆用输入框里的 `/clear` 命令（在提交时拦下，不作为消息发出）；
+ *   重命名与删除收在左侧栏对话行的悬停图标里，会话级弹窗不再保留。
  */
 export function ChatPage() {
   const { conversationId } = useParams()
   const navigate = useNavigate()
-  const location = useLocation()
   const speech = useSpeechOutput()
   const { theme } = useThemeMode()
   /** 当前用户：自己发的消息画真头像（见 MessageView 的 user prop） */
@@ -111,8 +111,6 @@ export function ChatPage() {
   const [activeRun, setActiveRun] = useState<ActiveRunInfo | null>(null)
   /** 强制重新订阅的计数器：同一轮运行被 openConversation 清掉实时卡片后要能重连 */
   const [attachNonce, setAttachNonce] = useState(0)
-  /** 会话操作弹窗（从左侧栏对话行的「⋯」打开） */
-  const [actionsOpen, setActionsOpen] = useState(false)
   /** 正在生成长图（要几百毫秒，期间按钮置灰避免连点出两张） */
   const [sharing, setSharing] = useState(false)
   /** 输入框上方那几个小图标打开的面板：工作目录 / 智能体 / 模型 */
@@ -138,8 +136,6 @@ export function ChatPage() {
   /** 已经念过的回复 id（切换对话时把历史一次性记为「已念过」，不重念） */
   const spokenRef = useRef<Set<string>>(new Set())
   const primedConversationRef = useRef<string | null>(null)
-  /** 本端刚删掉的对话 id：它引出的 404 是预期行为，不该再当成「这条对话不见了」处理 */
-  const selfDeletedRef = useRef<string | null>(null)
   /** 正在订阅的另一台设备 / 后台运行 */
   const attachRef = useRef<AbortController | null>(null)
   const attachedRunIdRef = useRef<string | null>(null)
@@ -266,15 +262,6 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId])
 
-  // 左侧栏对话行的「⋯」：先落到这个对话，再把会话操作弹窗打开。
-  // 用一次性的路由 state 传信号，读完（replace 掉）就清空，返回 / 刷新不会又弹一次。
-  useEffect(() => {
-    const state = location.state as { openActions?: boolean } | null
-    if (!state?.openActions) return
-    setActionsOpen(true)
-    navigate(location.pathname, { replace: true, state: null })
-  }, [location.state, location.pathname, navigate])
-
   // 流式输出时只在下沿跟随；用户把滚轮往上翻看历史，就停在原处，不再被拽回底部。
   // 切换对话时强制回到底部（新对话从最新一条看起）。
   useEffect(() => {
@@ -303,8 +290,7 @@ export function ChatPage() {
       setSyncError(null)
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        // 本端刚删的那条：在途的轮询打回来必然是 404，属于预期，不提示也不跳转（删除流程自己会跳）。
-        if (selfDeletedRef.current === conversationId) return
+        // 删除入口在左侧栏（删除流程自己会跳走）：这里照旧提示「对话不见了」即可。
         await leaveMissingConversation()
         return
       }
@@ -423,12 +409,11 @@ export function ChatPage() {
 
   const send = async (
     content: string,
-    regenerate = false,
     /** 待发送队列里的附件：不传就用输入区当前挂着的附件 */
     queuedAttachments?: AttachmentRef[],
   ): Promise<boolean> => {
     const conversation = active
-    const pending = regenerate ? [] : (queuedAttachments ?? attachments)
+    const pending = queuedAttachments ?? attachments
 
     /**
      * 消息没能发出去时，把正文与附件原样还给输入区，用户可以直接重发，不会凭空丢掉。
@@ -438,7 +423,6 @@ export function ChatPage() {
      * 也只能算「没读到回复」，不能再把内容挂回输入区（那会变成重复发送）。
      */
     const restoreUnsent = () => {
-      if (regenerate) return
       if (content.trim()) setDraft((prev) => (prev ? prev : content))
       if (pending.length > 0) {
         setAttachments((prev) => {
@@ -456,7 +440,7 @@ export function ChatPage() {
       restoreUnsent()
       return false
     }
-    if (!regenerate && !content.trim() && pending.length === 0) return false
+    if (!content.trim() && pending.length === 0) return false
 
     setError(null)
     setBusy(true)
@@ -473,8 +457,8 @@ export function ChatPage() {
     const summonAgent = summon ? scopeAgents.find((a) => a.id === summon) : undefined
     setLive({
       ...emptyAgentStream(),
-      userText: regenerate ? '' : content,
-      userAttachments: regenerate ? [] : pending.map((item) => item.rel_path),
+      userText: content,
+      userAttachments: pending.map((item) => item.rel_path),
       agentName: summonAgent?.name ?? conversation.agent_name ?? '智能体',
       avatar: summonAgent?.avatar ?? conversation.agent_avatar ?? '🤖',
       avatarPreset: summonAgent?.avatar_preset ?? conversation.agent_avatar_preset ?? null,
@@ -491,16 +475,12 @@ export function ChatPage() {
 
     try {
       await streamPost(
-        regenerate
-          ? `/api/conversations/${conversation.id}/regenerate`
-          : `/api/conversations/${conversation.id}/messages`,
-        regenerate
-          ? {}
-          : {
-              content,
-              attachments: pending.map((item) => item.rel_path),
-              ...(summon ? { summon_profile_id: summon } : {}),
-            },
+        `/api/conversations/${conversation.id}/messages`,
+        {
+          content,
+          attachments: pending.map((item) => item.rel_path),
+          ...(summon ? { summon_profile_id: summon } : {}),
+        },
         (event) => {
           if (!announced) {
             announced = true
@@ -551,6 +531,7 @@ export function ChatPage() {
 
   /**
    * 输入区「发送」：
+   * - `/clear` 命令：清除智能体的会话记忆，不作为消息发出；
    * - 空闲：直接发，草稿立刻清空（附件在消息落库、收到第一个事件时由 `send` 收走）；
    * - AI 正在回复：消息进入待发送队列，输入区马上可以继续写；本轮结束后按顺序自动发出
    *   （@ 召唤不支持排队：正在回复时按发送会取消召唤并提示，不悄悄丢掉用户的选择）。
@@ -558,6 +539,15 @@ export function ChatPage() {
   const submitDraft = () => {
     if (!active) return
     if (!draft.trim() && attachments.length === 0) return
+    if (draft.trim() === '/clear') {
+      if (runActive) {
+        setError('正在回复时不能清除记忆：等这一轮结束再发')
+        return
+      }
+      setDraft('')
+      void clearMemory()
+      return
+    }
     if (runActive) {
       if (summonId) {
         setSummonId(null)
@@ -631,7 +621,7 @@ export function ChatPage() {
     setQueue((prev) => prev.slice(1))
     // 发送失败时由 `send` 把正文与附件还回输入区（只还「一个事件都没收到」的那种）；
     // 这里不再兜一次，免得消息其实已经落库、却把内容重复挂回输入框。
-    void send(next.content, false, next.attachments)
+    void send(next.content, next.attachments)
     // send / runActive 每次渲染都是新的，这里只盯队列与运行状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, runActive, active?.id])
@@ -645,12 +635,20 @@ export function ChatPage() {
   /**
    * 顶栏的「新建对话」：与侧栏「＋ 新建」同一条路 —— 用默认智能体开一条新对话，
    * 工作目录留空（进去后随时改）；还没设过默认智能体时把错误亮出来，让用户去侧栏挑一个。
+   *
+   * 先找「从未被使用」的空对话：有就直接跳过去（标题没动过、没发过消息、输入框没草稿），
+   * 连点这个按钮也不会堆出一排「新对话」；确实没有才真开一条新的。
    */
   const startConversation = async () => {
     if (creating) return
     setCreating(true)
     setError(null)
     try {
+      const unused = findUnusedConversation((await api.listConversations()).items)
+      if (unused) {
+        navigate(`/chat/${unused.id}`)
+        return
+      }
       const conversation = await api.createConversation({})
       navigate(`/chat/${conversation.id}`)
     } catch (e) {
@@ -691,40 +689,19 @@ export function ChatPage() {
     }
   }
 
-  const resetSession = async () => {
+  /**
+   * `/clear` 命令：清掉智能体的会话记忆（下一轮从零开始，不带内核侧会话）。
+   * 不发消息 —— 命令在输入链路里就被拦下，不会作为正文进入对话。
+   */
+  const clearMemory = async () => {
     if (!active) return
-    setActionsOpen(false)
-    await api.resetSession(active.id)
-    await openConversation(active.id)
-  }
-
-  const removeConversation = async () => {
-    if (!active) return
-    setActionsOpen(false)
-    if (!confirm(`删除对话「${active.title}」？`)) return
+    setError(null)
     try {
-      await api.deleteConversation(active.id)
+      await api.resetSession(active.id)
+      await openConversation(active.id)
+      setNotice('已清除智能体记忆，下一轮重新开始')
     } catch (e) {
       setError(describe(e))
-      return
-    }
-    selfDeletedRef.current = active.id
-    setError(null)
-    setSyncError(null)
-    setAttachments([])
-    notifyConversationsChanged()
-    // 回到 /chat：由它自动进入剩下的最近一次对话（一条都没有时给空状态）。
-    navigate('/chat', { replace: true })
-  }
-
-  const copyWorkspace = async () => {
-    setActionsOpen(false)
-    if (!active?.workspace_dir) return
-    try {
-      await navigator.clipboard.writeText(active.workspace_dir)
-    } catch {
-      // 剪贴板在非 https/无权限时会失败：明确告诉用户改用手动复制，不要静默无反应。
-      setError('复制失败：请手动选中工作目录再复制')
     }
   }
 
@@ -1028,16 +1005,14 @@ export function ChatPage() {
                 items={threadItems}
                 empty={chatMessages.length === 0 && !liveMessage ? (
                   <div className="empty">
-                    <div className="empty-icon">
-                      <AgentAvatar
-                        avatar={active.agent_avatar}
-                        avatarPreset={active.agent_avatar_preset}
-                        avatarFile={active.agent_avatar_file}
-                        agentId={active.agent_profile_id}
-                        size={56}
-                      />
-                    </div>
-                    <p>与「{active.agent_name}」的对话已就绪</p>
+                    <MascotStage
+                      avatar={active.agent_avatar}
+                      avatarPreset={active.agent_avatar_preset}
+                      avatarFile={active.agent_avatar_file}
+                      agentId={active.agent_profile_id}
+                      agentName={active.agent_name}
+                    />
+                    <p style={{ marginTop: 14 }}>与「{active.agent_name}」的对话已就绪</p>
                     <p className="dim small" style={{ marginTop: 6 }}>
                       内核：{active.agent_type_id ?? '智能体'} · 工作目录：{active.workspace_dir ?? '默认'}
                     </p>
@@ -1469,39 +1444,6 @@ export function ChatPage() {
         </Modal>
       )}
 
-      {actionsOpen && active && (
-        <Modal
-          title={`「${active.title}」的操作`}
-          onClose={() => setActionsOpen(false)}
-          footer={
-            <button className="btn ghost" onClick={() => setActionsOpen(false)}>
-              关闭
-            </button>
-          }
-        >
-          <div className="stack" style={{ gap: 8 }}>
-            <button
-              className="btn"
-              disabled={busy || remoteRunning || messages.length === 0}
-              onClick={() => {
-                setActionsOpen(false)
-                void send('', true)
-              }}
-            >
-              ↻ 重新生成最后一条回复
-            </button>
-            <button className="btn" disabled={busy || !active.session_id} onClick={() => void resetSession()}>
-              ⟲ 重置智能体记忆
-            </button>
-            <button className="btn" disabled={!active.workspace_dir} onClick={() => void copyWorkspace()}>
-              📋 复制工作目录
-            </button>
-            <button className="btn danger" onClick={() => void removeConversation()}>
-              删除这个对话
-            </button>
-          </div>
-        </Modal>
-      )}
       </div>
     </MediaUrlProvider>
   )

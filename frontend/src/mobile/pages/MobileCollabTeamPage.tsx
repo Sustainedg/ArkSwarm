@@ -22,6 +22,9 @@ import type {
   CollabIssue,
   CollabNode,
   AgentProfile,
+  AgentType,
+  Skill,
+  McpServer,
 } from '../../lib/types'
 import { CollabEdgeForm } from '../components/CollabEdgeForm'
 import { CollabNodeForm } from '../components/CollabNodeForm'
@@ -47,6 +50,9 @@ export function MobileCollabTeamPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [agents, setAgents] = useState<AgentProfile[]>([])
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
+  const [types, setTypes] = useState<AgentType[]>([])
   const [nodeKey, setNodeKey] = useState<string | null>(null)
   const [edgeId, setEdgeId] = useState<string | null>(null)
   const [agentPickerOpen, setAgentPickerOpen] = useState(false)
@@ -75,7 +81,17 @@ export function MobileCollabTeamPage() {
   useEffect(() => {
     void (async () => {
       try {
-        setAgents(await api.listAgents())
+        // 技能 / MCP / 内核目录：岗位表单的「协作专属分配」选择器要用（与智能体页同一套数据源）
+        const [agentList, skillList, mcpList, typeList] = await Promise.all([
+          api.listAgents(),
+          api.listSkills(),
+          api.listMcpServers(),
+          api.agentTypes(),
+        ])
+        setAgents(agentList)
+        setSkills(skillList)
+        setMcpServers(mcpList)
+        setTypes(typeList)
       } catch (e) {
         setError(describeError(e))
       }
@@ -376,6 +392,11 @@ export function MobileCollabTeamPage() {
                       value={draft.budget.step_timeout_seconds ?? 36000}
                       onChange={(value) => patch({ budget: { ...draft.budget, step_timeout_seconds: value } })}
                     />
+                    <NumberField
+                      label="并行上限（1=串行）"
+                      value={draft.budget.max_parallel ?? 1}
+                      onChange={(value) => patch({ budget: { ...draft.budget, max_parallel: value } })}
+                    />
                   </div>
                   <span className="field-help">任何一项超限都会挂起并明确提示，不会静默烧钱。</span>
                 </div>
@@ -498,6 +519,9 @@ export function MobileCollabTeamPage() {
           <CollabNodeForm
             node={node}
             agents={agents}
+            skills={skills}
+            mcpServers={mcpServers}
+            types={types}
             isEntry={node.key === draft?.entry_key}
             onSave={(next) => saveNode(node.key, next)}
             onDelete={() => deleteNode(node.key)}

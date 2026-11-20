@@ -101,6 +101,19 @@ jobs:
             node scripts/fetch-python.mjs ${{ matrix.python }}
           fi
 
+      # 方案 A：把后端依赖预装进内嵌解释器；方案 C：顺带下载离线 wheelhouse 兜底。
+      # 用户机器上因此不再需要 pip / 联网 —— 首启直接用运行时。
+      - name: 预装 Python 依赖（方案 A + C）
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${{ matrix.python }}" = "both" ]; then
+            node scripts/prepare-python-deps.mjs mac-arm64
+            node scripts/prepare-python-deps.mjs mac-x64
+          else
+            node scripts/prepare-python-deps.mjs ${{ matrix.python }}
+          fi
+
       - name: 下载 embedded Node（${{ matrix.target }}）
         working-directory: desktop
         shell: bash

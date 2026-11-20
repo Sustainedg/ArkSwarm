@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { ACTIONS, DUTIES, SCOPES, sanitizeKey } from '../../lib/collabDraft'
+import { SkillPicker } from '../../components/SkillPicker'
+import { McpPicker } from '../../components/McpPicker'
+import { MobileSheet } from './MobileSheet'
 import type {
-  CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope, AgentProfile,
+  CollabDuty, CollabNode, CollabTicketAction, CollabWorkspaceScope,
+  AgentProfile, AgentType, Skill, McpServer,
 } from '../../lib/types'
 
 
@@ -9,11 +13,15 @@ import type {
  * 协作「岗位」表单（移动端）：底部弹层里的内容，本地编辑、点「保存岗位」才写回草稿。
  *
  * 只编辑这一个节点；改名会同步连线，所以 key 输入框每次按键都按后端规则规整（`sanitizeKey`）。
- * 节点只回答「他在这个协作里干什么」；用什么参数跑，完全由它绑定的智能体决定。
+ * 节点回答「他在这个协作里干什么」；适配器参数由绑定的智能体决定，但技能与 MCP
+ * 支持协作专属的临时分配（不改智能体页面的常规配置）。
  */
 export function CollabNodeForm({
   node,
   agents,
+  skills,
+  mcpServers,
+  types,
   isEntry,
   onSave,
   onDelete,
@@ -21,6 +29,9 @@ export function CollabNodeForm({
 }: {
   node: CollabNode
   agents: AgentProfile[]
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
   isEntry: boolean
   onSave: (next: CollabNode) => void
   onDelete: () => void
@@ -28,6 +39,7 @@ export function CollabNodeForm({
 }) {
   const [form, setForm] = useState<CollabNode>(node)
   const [keyInput, setKeyInput] = useState(node.key)
+  const [pickerOpen, setPickerOpen] = useState<'skills' | 'mcp' | null>(null)
   const agent = agents.find((item) => item.id === form.agent_profile_id)
 
   const set = (next: Partial<CollabNode>) => setForm((prev) => ({ ...prev, ...next }))
@@ -141,6 +153,16 @@ export function CollabNodeForm({
         <span className="field-help">0 表示用团队默认；与团队上限取小。</span>
       </div>
 
+      <NodeOverridesFields
+        form={form}
+        agent={agent}
+        skills={skills}
+        mcpServers={mcpServers}
+        types={types}
+        set={set}
+        onOpenPicker={(kind) => setPickerOpen(kind)}
+      />
+
       <div className="field">
         <label className="field-label">允许发起的动作</label>
         <div className="m-chip-row">
@@ -188,6 +210,102 @@ export function CollabNodeForm({
           保存岗位
         </button>
       </div>
+
+      {pickerOpen === 'skills' && (
+        <MobileSheet full title={`协作技能 · ${form.label || form.key}`} onClose={() => setPickerOpen(null)}>
+          <SkillPicker
+            skills={skills.filter((skill) => skill.type_id === agent?.type_id)}
+            selected={form.skill_ids ?? []}
+            onChange={(next) => set({ skill_ids: next })}
+          />
+        </MobileSheet>
+      )}
+      {pickerOpen === 'mcp' && (
+        <MobileSheet full title={`协作 MCP · ${form.label || form.key}`} onClose={() => setPickerOpen(null)}>
+          <McpPicker
+            servers={mcpServers.filter((server) => !server.type_id || server.type_id === agent?.type_id)}
+            selected={form.mcp_ids ?? []}
+            onChange={(next) => set({ mcp_ids: next })}
+          />
+        </MobileSheet>
+      )}
+    </>
+  )
+}
+
+/** 协作专属技能 / MCP 的三态切换（跟随智能体 / 本协作不给 / 自定义），移动端版式。 */
+function NodeOverridesFields({
+  form, agent, skills, mcpServers, types, set, onOpenPicker,
+}: {
+  form: CollabNode
+  agent: AgentProfile | undefined
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
+  set: (next: Partial<CollabNode>) => void
+  onOpenPicker: (kind: 'skills' | 'mcp') => void
+}) {
+  const agentType = types.find((item) => item.id === agent?.type_id)
+  const supportsSkills = !!agentType?.capabilities.skills
+  const supportsMcp = !!agentType?.capabilities.mcp
+  const matchingSkills = skills.filter((skill) => skill.type_id === agent?.type_id)
+  const assignableMcp = mcpServers.filter((server) => !server.type_id || server.type_id === agent?.type_id)
+  const skillIds = form.skill_ids ?? null
+  const mcpIds = form.mcp_ids ?? null
+
+  if (!agent) return null
+  return (
+    <>
+      {supportsSkills && (
+        <div className="field">
+          <label className="field-label">协作技能</label>
+          <div className="m-chip-row">
+            <label className={`m-chip${skillIds === null ? ' on' : ''}`}>
+              <input type="radio" checked={skillIds === null} onChange={() => set({ skill_ids: null })} />
+              跟随智能体
+            </label>
+            <label className={`m-chip${skillIds !== null && skillIds.length === 0 ? ' on' : ''}`}>
+              <input type="radio" checked={skillIds !== null && skillIds.length === 0} onChange={() => set({ skill_ids: [] })} />
+              本协作不给
+            </label>
+            <label className={`m-chip${skillIds !== null && skillIds.length > 0 ? ' on' : ''}`}>
+              <input
+                type="radio"
+                checked={skillIds !== null && skillIds.length > 0}
+                disabled={matchingSkills.length === 0}
+                onChange={() => onOpenPicker('skills')}
+              />
+              自定义{skillIds && skillIds.length > 0 ? `（${skillIds.length}）` : ''}
+            </label>
+          </div>
+          <span className="field-help">只影响这个协作，不改智能体页面的技能分配。</span>
+        </div>
+      )}
+      {supportsMcp && (
+        <div className="field">
+          <label className="field-label">协作 MCP</label>
+          <div className="m-chip-row">
+            <label className={`m-chip${mcpIds === null ? ' on' : ''}`}>
+              <input type="radio" checked={mcpIds === null} onChange={() => set({ mcp_ids: null })} />
+              跟随智能体
+            </label>
+            <label className={`m-chip${mcpIds !== null && mcpIds.length === 0 ? ' on' : ''}`}>
+              <input type="radio" checked={mcpIds !== null && mcpIds.length === 0} onChange={() => set({ mcp_ids: [] })} />
+              本协作不给
+            </label>
+            <label className={`m-chip${mcpIds !== null && mcpIds.length > 0 ? ' on' : ''}`}>
+              <input
+                type="radio"
+                checked={mcpIds !== null && mcpIds.length > 0}
+                disabled={assignableMcp.length === 0}
+                onChange={() => onOpenPicker('mcp')}
+              />
+              自定义{mcpIds && mcpIds.length > 0 ? `（${mcpIds.length}）` : ''}
+            </label>
+          </div>
+          <span className="field-help">只影响这个协作，不改智能体页面的 MCP 分配。</span>
+        </div>
+      )}
     </>
   )
 }

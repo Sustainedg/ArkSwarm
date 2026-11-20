@@ -212,6 +212,9 @@ export function CollabAgentThread({
         partsCount: step.parts_count ?? 0,
       },
       avatar: node.avatar,
+      avatarPreset: node.avatarPreset,
+      avatarFile: node.avatarFile,
+      agentId: node.agentId,
       label: node.label,
     })
   }
@@ -239,6 +242,9 @@ export function CollabAgentThread({
         logs: step.agent.logs,
       },
       avatar: node.avatar,
+      avatarPreset: node.avatarPreset,
+      avatarFile: node.avatarFile,
+      agentId: node.agentId,
       label: node.label,
     })
   }
@@ -250,6 +256,9 @@ export function CollabAgentThread({
       meta: <span className="pill brand">实时输出</span>,
       message: liveMessage,
       avatar: node.avatar,
+      avatarPreset: node.avatarPreset,
+      avatarFile: node.avatarFile,
+      agentId: node.agentId,
       label: node.label,
     })
   }

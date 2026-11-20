@@ -43,6 +43,16 @@ export function releasesDir(): string {
 }
 
 /**
+ * 安装期日志（venv / pip 的完整输出）。
+ *
+ * 放在 userData 根目录而不是 `python/` 里：弹窗会引导用户删运行时目录重建，
+ * 日志放里面会跟着一起没掉，用户想反馈时反而找不到。
+ */
+export function installLogPath(): string {
+  return path.join(userDataRoot(), 'install.log');
+}
+
+/**
  * npm 的全局安装前缀（桌面版自己的一份，绝不写进系统 Node 的目录）。
  *
  * 为什么必须隔离：打包版的 Node 运行时在 `resources/` 里（macOS 上位于 .app 内部，
@@ -63,20 +73,6 @@ export function nodeCacheDir(): string {
 export function nodeGlobalBinDir(): string {
   const prefix = nodeGlobalDir();
   return process.platform === 'win32' ? prefix : path.join(prefix, 'bin');
-}
-
-/**
- * 后端应用根的**默认值**：仓库 backend/（开发模式）。
- *
- * 打包模式实际跑 releases/current/backend（bootstrap.ts 物化的托管布局，
- * selfupdate.py 靠它识别托管模式），这里保留 dev 模式的落点；
- * 打包流程请用 `resolveRunDir()` 的结果，不要直接用本函数。
- */
-export function backendRoot(): string {
-  if (app.isPackaged) {
-    return path.join(userDataRoot(), 'releases', 'current', 'backend');
-  }
-  return path.join(app.getAppPath(), '..', 'backend');
 }
 
 /** 确保目录存在（递归创建，幂等）。 */

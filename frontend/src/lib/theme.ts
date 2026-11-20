@@ -90,7 +90,7 @@ export function initTheme(): void {
 
 /**
  * 设置页用：读当前模式 + 当前生效的主题 + 切换（切换后立即生效并记住，跨页面 / 下次打开都保持）。
- * `theme` 是解析后的结果，界面里要按主题分支时用它（例如协作办公室按主题选深浅底图）。
+ * `theme` 是解析后的结果，界面里要按主题分支时用它。
  */
 export function useThemeMode(): {
   mode: ThemeMode

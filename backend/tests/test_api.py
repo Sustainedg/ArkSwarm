@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -241,6 +242,54 @@ async def test_streaming_assistant_message_is_not_unread(client: httpx.AsyncClie
 
     listed = (await client.get("/api/conversations")).json()["items"][0]
     assert listed["unread"] is False
+
+
+async def test_conversation_list_is_recent_first_and_shows_participants(client: httpx.AsyncClient):
+    """列表按「最近活动」倒序；被 @ 召唤过的对话把参与者一起带出来（主场永远排第一）。
+
+    排序口径是「对话 updated_at 与最后一条消息时间取较晚者」—— 这样即使历史数据里
+    updated_at 没跟着消息走，最近有新消息的对话也不会被钉在下面。
+    """
+    home = await make_agent(client, name="主场智能体")
+    guest = await make_agent(client, name="客座智能体")
+
+    older = (await client.post("/api/conversations", json={"agent_profile_id": home["id"]})).json()
+    newer = (await client.post("/api/conversations", json={"agent_profile_id": home["id"]})).json()
+    t_old = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    t_new = datetime(2021, 1, 2, tzinfo=timezone.utc)
+
+    async with SessionLocal() as session:
+        # 两条对话的 updated_at 都停在旧时间：证明排序看的是真正的最新一条消息。
+        for conversation_id in (older["id"], newer["id"]):
+            row = await session.get(Conversation, conversation_id)
+            row.updated_at = t_old
+            session.add(row)
+        session.add(
+            Message(conversation_id=older["id"], role="user", content="旧消息", created_at=t_old)
+        )
+        # newer 由被 @ 召唤的客座智能体作答 —— 消息里记着它的 id。
+        session.add(
+            Message(
+                conversation_id=newer["id"],
+                role="assistant",
+                content="客座的回答",
+                agent_profile_id=guest["id"],
+                created_at=t_new,
+            )
+        )
+        await session.commit()
+
+    items = (await client.get("/api/conversations")).json()["items"]
+    assert [item["id"] for item in items] == [newer["id"], older["id"]]
+
+    # 召唤过别的智能体：参与者 = 主场 + 客座（按首次出场排）。
+    assert [p["id"] for p in items[0]["participants"]] == [home["id"], guest["id"]]
+    assert [p["name"] for p in items[0]["participants"]] == ["主场智能体", "客座智能体"]
+    # 没召唤过的对话只有主场一枚（前端据此画单聊头像）。
+    assert [p["id"] for p in items[1]["participants"]] == [home["id"]]
+    # 单条详情也带同一份参与者，聊天页与侧栏用的是同一口径。
+    detail = (await client.get(f"/api/conversations/{newer['id']}")).json()
+    assert [p["id"] for p in detail["conversation"]["participants"]] == [home["id"], guest["id"]]
 
 
 async def test_run_continues_after_the_client_disconnects(client: httpx.AsyncClient):

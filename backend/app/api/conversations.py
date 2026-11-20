@@ -18,6 +18,13 @@ from ..models import AgentProfile, Conversation, Gateway, Message, User
 from ..runtime import registry
 from ..runtime import skills as skill_service
 from ..runtime import titles
+from ..runtime.conversations import (
+    is_unread,
+    ordered_participants,
+    order_by_recent_activity,
+    participant_brief,
+    participants_by_conversation,
+)
 from ..runtime.service import (
     ConfigurationError,
     new_conversation,
@@ -57,6 +64,7 @@ def _conversation_read(
     profile: AgentProfile | None,
     count: int = 0,
     unread: bool = False,
+    participants: list[AgentProfile] | None = None,
 ) -> ConversationRead:
     return ConversationRead(
         id=conversation.id,
@@ -76,25 +84,8 @@ def _conversation_read(
         agent_model=profile.model if profile else None,
         message_count=count,
         unread=unread,
+        participants=[participant_brief(p) for p in (participants or [])],
     )
-
-
-def _as_utc(value: datetime) -> datetime:
-    """SQLite 不存时区：比大小前先统一成 UTC，别拿 aware 和 naive 直接比。"""
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-
-
-def _is_unread(conversation: Conversation, last: Message | None) -> bool:
-    """「AI 回复完了、但用户还没看」= 最后一条是已完成的助手消息，且晚于最后已读时间。
-
-    生成中的 ``streaming`` 占位不算 —— 那时列表行显示的是「正在回复」的动画。
-    升级前的旧对话没有 ``last_read_at``，一律当已读。
-    """
-    if last is None or last.role != "assistant" or last.status == "streaming":
-        return False
-    if conversation.last_read_at is None:
-        return False
-    return _as_utc(last.created_at) > _as_utc(conversation.last_read_at)
 
 
 async def _owned_conversation(conversation_id: str, session: AsyncSession, user: User) -> Conversation:
@@ -119,7 +110,7 @@ async def list_conversations(
     session: AsyncSession = Depends(get_session),
     user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    query = _owned_query(select(Conversation).order_by(Conversation.updated_at.desc()), user)
+    query = _owned_query(select(Conversation), user)
     if not include_archived:
         query = query.where(Conversation.archived == False)  # noqa: E712
     rows = (await session.execute(query)).scalars().all()
@@ -147,23 +138,37 @@ async def list_conversations(
             )
         ).scalars().all()
         latest = {message.conversation_id: message for message in latest_rows}
+    # 每条对话出现过的「客场」智能体（@ 召唤者）：侧栏据此把头像叠成群聊样式。
+    summoned = await participants_by_conversation(session, [c.id for c in rows])
     # 智能体批量取一次：逐个 session.get 会让一次列表请求打出 N 条查询。
+    # 召唤者的头像也要一起取回来，所以 id 集合要把他们并进去。
     profile_ids = {c.agent_profile_id for c in rows}
+    profile_ids.update(pid for ids in summoned.values() for pid in ids)
     profiles = {
         row.id: row
         for row in (
             await session.execute(select(AgentProfile).where(AgentProfile.id.in_(profile_ids)))
         ).scalars()
     }
-    items = [
-        _conversation_read(
-            c,
-            profiles.get(c.agent_profile_id),
-            counts.get(c.id, 0),
-            _is_unread(c, latest.get(c.id)),
-        ).model_dump()
-        for c in rows
-    ]
+
+    # 排序口径与参与者组装是业务口径，放在 runtime/conversations.py；这里只负责序列化。
+    ordered = order_by_recent_activity(rows, latest)
+
+    items = []
+    for conversation in ordered:
+        home = profiles.get(conversation.agent_profile_id)
+        participants = ordered_participants(
+            conversation, home, summoned.get(conversation.id, []), profiles
+        )
+        items.append(
+            _conversation_read(
+                conversation,
+                home,
+                counts.get(conversation.id, 0),
+                is_unread(conversation, latest.get(conversation.id)),
+                participants,
+            ).model_dump()
+        )
     return {"items": items, "active_runs": registry.list()}
 
 
@@ -233,8 +238,24 @@ async def get_conversation(
         )
     ).scalars().all()
     profile = await _related(session, conversation)
+    # 单条响应也要带参与者：聊天页顶栏与侧栏共用同一份「这条对话里有谁」的视图。
+    summoned_ids = (await participants_by_conversation(session, [conversation.id])).get(
+        conversation.id, []
+    )
+    extra_ids = [pid for pid in summoned_ids if pid != conversation.agent_profile_id]
+    extra_profiles: dict[str, AgentProfile] = {}
+    if extra_ids:
+        extra_profiles = {
+            row.id: row
+            for row in (
+                await session.execute(select(AgentProfile).where(AgentProfile.id.in_(extra_ids)))
+            ).scalars()
+        }
+    participants = ordered_participants(conversation, profile, summoned_ids, extra_profiles)
     return {
-        "conversation": _conversation_read(conversation, profile, len(messages)).model_dump(),
+        "conversation": _conversation_read(
+            conversation, profile, len(messages), participants=participants
+        ).model_dump(),
         "messages": [MessageRead.model_validate(m).model_dump() for m in messages],
         "active_run": registry.active_for(conversation_id).snapshot() if registry.active_for(conversation_id) else None,
     }

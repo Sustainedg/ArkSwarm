@@ -547,6 +547,15 @@ export interface ConversationModelOptions {
   models: string[]
 }
 
+/** 一条对话里出现过的智能体（主场 + 被 @ 召唤过的），列表行画头像用。 */
+export interface ConversationParticipant {
+  id: string
+  name?: string | null
+  avatar?: string | null
+  avatar_preset?: string | null
+  avatar_file?: string | null
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -570,6 +579,11 @@ export interface Conversation {
   message_count: number
   /** 最后一条是已完成的 AI 回复、且晚于用户最后一次打开它的时间（列表接口算出来） */
   unread?: boolean
+  /**
+   * 在这条对话里出现过的智能体，第一个是对话归属者。
+   * 只有一个 = 单聊；两个及以上 = 用过 @ 召唤，列表行画成群聊式堆叠头像。
+   */
+  participants?: ConversationParticipant[]
 }
 
 /** `GET /conversations` 的返回：对话列表 + 当前正在跑的那些运行。 */
@@ -830,6 +844,10 @@ export interface CollabNode {
   /** 空数组表示按 duty 取默认动作集合 */
   output_contract: CollabTicketAction[]
   max_rounds: number
+  /** 协作专属技能分配：null = 跟随智能体页面的分配；给了列表以它为准（不写回智能体） */
+  skill_ids?: string[] | null
+  /** 协作专属 MCP 分配：语义同 skill_ids */
+  mcp_ids?: string[] | null
   x: number
   y: number
 }
@@ -860,6 +878,8 @@ export interface CollabBudget {
   timeout_seconds: number
   /** 单步限时（秒，0 = 不限）：一个工单步骤 / 聊天回复的执行上限 */
   step_timeout_seconds?: number
+  /** 同一波最多并行推进几个工单步骤；1 = 完全串行（默认），上限 8 */
+  max_parallel?: number
 }
 
 /**
@@ -872,6 +892,7 @@ export interface CollabBudgetPatch {
   max_tokens?: number
   timeout_seconds?: number
   step_timeout_seconds?: number
+  max_parallel?: number
 }
 
 export interface CollabIssue {

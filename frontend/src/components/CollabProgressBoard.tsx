@@ -1,17 +1,21 @@
 /**
- * 协作进度（全屏）：把这次协作画成一间**等距视角的办公室**，每个岗位上坐着一个会动的小人 + 一张工牌。
+ * 协作进度（覆盖层）：把这次协作画成一张**分层流程图**，每个岗位是一个节点（头像 + 昵称）。
  *
- * 工位按层级摆（谁向谁派活）：入口领导者独占最里面一行，往里第二行是它直接派活的人（通常是 CTO），
- * 再往外的两排是并排干活的人——「上面一个、下面一排」的团队结构在图上就能看出来。
- * 工牌上的状态点区分状态（绿=工作中、红=忙碌、黄=等你决定、灰=闲置、绿勾=完成）。
- * 画布支持滚轮缩放与拖动平移；点任一工牌弹出进度实况，也能跳到它在本次协作里的实时对话。
- * 回流（打回 / 返工）不参与分层，单独收在下面的区块里。
+ * 与移动端同一套交互形态：不再另开全屏页面，而是**盖在对话时间线上**（顶栏与输入框保持
+ * 可用 —— 输入框仍能和入口智能体对话，Esc 收起覆盖层回到时间线）。
+ *
+ * 图上不放任何标题与说明：顶栏的「协作进度」按钮就是开合开关，状态徽标与图例已能自解释。
+ * 工位按层级摆（谁向谁派活）：入口领导者独占第一行，往下每行是它直接派活的人，
+ * 并排干活的人在同一行 —— 「上面一个、下面一排」的团队结构在图上就能看出来。
+ * 节点头像右上角的状态徽标区分状态（绿=执行中、黄=等你决定、红=出错、灰=等待、勾=完成），
+ * 点节点弹出「现在具体在做什么」的详情卡，还能跳到它在本次协作里的实时对话。
+ * 回流（打回 / 返工）在图上单独画成往回走的虚线，不参与分层。
  */
 import { useEffect, useState } from 'react'
-import type { FinishedStep, LiveStep } from '../lib/collabStream'
-import { buildFlowLinks, type CollabFlowEdge, type CollabAgentProgress } from '../lib/collabProgress'
+import { liveOfNode, type FinishedStep, type LiveStep } from '../lib/collabStream'
+import { type CollabFlowEdge, type CollabAgentProgress } from '../lib/collabProgress'
 import type { CollabStep, CollabTicket } from '../lib/types'
-import { CollabOfficeMap } from './CollabOfficeMap'
+import { CollabFlowMap } from './CollabFlowMap'
 import { AgentConversationPanel } from './AgentConversationPanel'
 
 interface Props {
@@ -19,22 +23,18 @@ interface Props {
   edges: CollabFlowEdge[]
   steps: CollabStep[]
   tickets: CollabTicket[]
-  live: LiveStep | null
+  /** 并行波次里可能同时有多个岗位在流式输出；岗位视角用 liveOfNode 取 */
+  live: LiveStep[]
   streamed: FinishedStep[]
-  runTitle: string
-  teamName: string
-  statusLabel: string
-  statusPill: string
   onClose: () => void
   /** 点岗位对话里的工单卡片时打开完整工单 */
   onOpenTicket?: (ticketId: string) => void
-  /** 上面还压着工单看板时，Esc 交给看板处理，别把进度页一起关掉 */
+  /** 上面还压着工单看板时，Esc 交给看板处理，别把进度覆盖层一起关掉 */
   escapeDisabled?: boolean
 }
 
 export function CollabProgressBoard({
-  nodes, edges, steps, tickets, live, streamed, runTitle, teamName, statusLabel, statusPill, onClose,
-  onOpenTicket, escapeDisabled = false,
+  nodes, edges, steps, tickets, live, streamed, onClose, onOpenTicket, escapeDisabled = false,
 }: Props) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
 
@@ -52,86 +52,31 @@ export function CollabProgressBoard({
   if (nodes.length === 0) return null
 
   const selectedNode = nodes.find((node) => node.key === selectedKey) ?? null
-  const total = nodes.length
-  const done = nodes.filter((node) => node.state === 'done').length
-
-  const links = buildFlowLinks(nodes, edges)
-  const loops = links.filter((link) => link.isLoop)
-  const labels = new Map(nodes.map((node) => [node.key, node.label]))
 
   return (
-    <div className="collab-drawer-backdrop collab-progress-board-backdrop">
-      <section className="collab-progress-board" role="dialog" aria-modal="true" aria-label="协作进度">
-        <header className="collab-progress-board-head">
-          <div>
-            <div className="collab-progress-eyebrow">协作流程</div>
-            <div className="collab-progress-title-row">
-              <h2>协作进度</h2>
-              <span className={`pill ${statusPill}`}>{statusLabel}</span>
-            </div>
-            <p className="collab-progress-subtitle">{runTitle} · {teamName}</p>
-          </div>
-          <button className="btn ghost sm collab-progress-close" onClick={onClose} aria-label="关闭">
-            ✕
-          </button>
-        </header>
-
-        <div className={`collab-progress-board-body${selectedNode ? ' has-conversation' : ''}`}>
-          <div className="collab-progress-board-main">
-            <section className="collab-progress-section">
-              <div className="collab-progress-section-head">
-                <div>
-                  <h3>办公室实况</h3>
-                  <p>
-                    一间等距视角的办公室：滚轮放大、拖动平移，点工位上的工牌看她在忙什么。
-                    工牌上的状态点——绿=在线工作、红=忙碌出问题、黄=等你决定、灰=闲置、绿勾=已完成。
-                    进度是按岗位状态粗估的，只为一眼看个大概。
-                  </p>
-                </div>
-                <span className="collab-progress-count">{done}/{total} 个岗位已完成</span>
-              </div>
-              <CollabOfficeMap nodes={nodes} edges={edges} onOpenNode={setSelectedKey} />
-            </section>
-
-            {loops.length > 0 && (
-              <section className="collab-progress-section collab-progress-flows">
-                <div className="collab-progress-section-head">
-                  <div>
-                    <h3>打回与返工</h3>
-                    <p>这些箭头是往回走的：审查不通过就打回上游，返工完再往前走。</p>
-                  </div>
-                </div>
-                <div className="collab-progress-flow-list">
-                  {loops.map((link) => (
-                    <span className={`collab-progress-flow kind-${link.kind}`} key={link.id}>
-                      <span>{labels.get(link.fromKey) ?? link.fromKey}</span>
-                      <b>{link.kindLabel}</b>
-                      <span>{labels.get(link.toKey) ?? link.toKey}</span>
-                    </span>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-
-          {selectedNode && (
-            <aside className="collab-progress-conversation">
-              <AgentConversationPanel
-                node={selectedNode}
-                roster={nodes}
-                steps={steps}
-                tickets={tickets}
-                live={live}
-                streamed={streamed}
-                onOpenTicket={onOpenTicket}
-                onClose={() => setSelectedKey(null)}
-                closeLabel="← 返回概览"
-                variant="embedded"
-              />
-            </aside>
-          )}
+    <section className="collab-progress-board" role="region" aria-label="协作进度">
+      <div className={`collab-progress-board-body${selectedNode ? ' has-conversation' : ''}`}>
+        <div className="collab-progress-board-main">
+          <CollabFlowMap nodes={nodes} edges={edges} onOpenNode={setSelectedKey} />
         </div>
-      </section>
-    </div>
+
+        {selectedNode && (
+          <aside className="collab-progress-conversation">
+            <AgentConversationPanel
+              node={selectedNode}
+              roster={nodes}
+              steps={steps}
+              tickets={tickets}
+              live={liveOfNode(live, selectedNode.key)}
+              streamed={streamed}
+              onOpenTicket={onOpenTicket}
+              onClose={() => setSelectedKey(null)}
+              closeLabel="← 返回概览"
+              variant="embedded"
+            />
+          </aside>
+        )}
+      </div>
+    </section>
   )
 }

@@ -273,6 +273,8 @@ async def test_run_detail_reports_budget(client: httpx.AsyncClient, tmp_path: Pa
         "max_tokens": 0,
         "timeout_seconds": 600,
         "step_timeout_seconds": 36000,
+        # 并行上限是预算的一部分：默认 1 = 完全串行（行为与过去一致）
+        "max_parallel": 1,
     }
     team = await create_team(client, linear_graph(env["agent_profiles"]), budget=budget)
     run_id, _ = await start_run(client, team["id"], "把登录页改成暗色主题")

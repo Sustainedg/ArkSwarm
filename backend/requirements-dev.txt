@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest==8.3.4
 pytest-asyncio==0.25.0
+# 离线资源脚本（scripts/make_avatars_transparent.py / scripts/gen_mascot_pack.py）用：
+# 抠图 / 裁剪 / 转 WebP。**不进运行时依赖** —— 服务端已不再生成形象帧。
+pillow==11.1.0

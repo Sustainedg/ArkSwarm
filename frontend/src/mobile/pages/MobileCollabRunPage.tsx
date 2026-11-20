@@ -13,7 +13,8 @@ import {
 } from '../../lib/collabAdvance'
 import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
 import {
-  applyCollabEvent, dismissCollabNotice, syncTurnWithRun, type CollabNotice, type CollabTurnState,
+  applyCollabEvent, dismissCollabNotice, liveOfNode, syncTurnWithRun,
+  type CollabNotice, type CollabTurnState,
 } from '../../lib/collabStream'
 import {
   forgetDismissedNotices, loadDismissedNotices, rememberDismissedNotice,
@@ -90,7 +91,7 @@ export function MobileCollabRunPage() {
   const [budgetOpen, setBudgetOpen] = useState(false)
   const [budgetDraft, setBudgetDraft] = useState({ max_steps: 0, max_tickets: 0, max_tokens: 0, timeout_seconds: 0, step_timeout_seconds: 0 })
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null)
-  /** 与入口智能体的对话界面：默认不显示，点动画里的人物才弹出来 */
+  /** 与入口智能体的对话界面：默认不显示，点流程图里的节点才弹出来 */
   const [chatOpen, setChatOpen] = useState(false)
   const [pendingUser, setPendingUser] = useState<{ id: string; text: string; attachments: string[] } | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -117,7 +118,7 @@ export function MobileCollabRunPage() {
   const streamedStepIds = useMemo(
     () => new Set([
       ...(turn?.completed ?? []).map((step) => step.stepId),
-      ...(turn?.live ? [turn.live.stepId] : []),
+      ...(turn?.live ?? []).map((step) => step.stepId),
     ]),
     [turn?.completed, turn?.live],
   )
@@ -128,7 +129,7 @@ export function MobileCollabRunPage() {
     [detail?.steps, leaderKey, streamedStepIds],
   )
   const chatMessages = detail?.chat_messages ?? []
-  const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
+  const leaderLive = turn?.live?.find((step) => step.nodeKey === leaderKey) ?? null
 
   const load = useCallback(async (id: string) => {
     try {
@@ -418,7 +419,7 @@ export function MobileCollabRunPage() {
     void sendMessage(text, attachments)
   }
 
-  /** 点动画里的人物：入口智能体打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
+  /** 点流程图里的节点：入口智能体打开对话界面（它的对话就是与用户的这条线），其他岗位看只读会话。 */
   const openNode = (key: string) => {
     if (key === leaderKey) {
       setChatOpen(true)
@@ -658,7 +659,7 @@ export function MobileCollabRunPage() {
 
   const status = turn?.status ?? detail?.status ?? 'running'
   // 详情轮询发现运行又推进起来了（另一台设备点了继续 / 本页此前掉线），而这里已经退订：
-  // 自动补一次订阅，办公室里的岗位实时对话才能继续拿到逐字输出。
+  // 自动补一次订阅，流程图里各岗位的实时对话才能继续拿到逐字输出。
   useEffect(() => {
     if (!runId || status !== 'running' || busyRef.current) return
     const timer = window.setTimeout(() => {
@@ -675,14 +676,15 @@ export function MobileCollabRunPage() {
         steps: detail?.steps ?? [],
         tickets: detail?.tickets ?? [],
         agents,
-        live: turn?.live ?? null,
+        live: turn?.live ?? [],
         streamed: turn?.completed ?? [],
         runStatus: status,
       }),
     [team?.graph, leaderKey, detail?.steps, detail?.tickets, agents, turn?.live, turn?.completed, status],
   )
   const selectedNode = progress.nodes.find((node) => node.key === selectedNodeKey) ?? null
-  const besideLeader = turn?.live && turn.live.nodeKey !== leaderKey ? turn.live : null
+  const besideLeader =
+    turn?.live?.find((step) => step.nodeKey !== leaderKey) ?? null
   const pendingAsks = useMemo(
     () =>
       status === 'waiting_user'
@@ -732,7 +734,7 @@ export function MobileCollabRunPage() {
       {(busy || remoteRunning) && (
         <div className="m-collab-running-bar">
           <span className="dim small">
-            领导者团队正在推进{turn?.live ? `「${turn.live.agentName}」` : ''}；点办公室里的领导者可以问进度
+            领导者团队正在推进{besideLeader ? `「${besideLeader.agentName}」` : ''}；点流程图里的领导者可以问进度
           </span>
           <button className="btn sm danger" onClick={() => void stop()}>
             {busy ? '■ 停止' : '叫停'}
@@ -883,7 +885,7 @@ export function MobileCollabRunPage() {
         </div>
       )}
 
-      {/* 主页面就是那间可缩放 / 拖动的 3D 办公室；聊天界面点人物才出来。 */}
+      {/* 主页面就是那张可拖动的协作流程图；聊天界面点节点才出来。 */}
       <div className="m-run-stage">
         <MobileCollabProgress nodes={progress.nodes} edges={progress.edges} onOpenNode={openNode} />
       </div>
@@ -978,7 +980,7 @@ export function MobileCollabRunPage() {
           roster={progress.nodes}
           steps={detail.steps}
           tickets={detail.tickets}
-          live={turn?.live ?? null}
+          live={liveOfNode(turn?.live ?? [], selectedNode.key)}
           streamed={turn?.completed ?? []}
           onOpenTicket={(ticketId) => navigate(`/collab/runs/${detail.id}/tickets?ticket=${ticketId}`)}
           onClose={() => setSelectedNodeKey(null)}

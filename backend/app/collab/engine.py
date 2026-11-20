@@ -1,4 +1,4 @@
-"""编排状态机：把「一张图 + 一张工单」变成一条**串行推进**的流水线。
+"""编排状态机：把「一张图 + 一张工单」变成一条**波次推进**的流水线（默认串行）。
 
 一次 :func:`consume_turn` 会一直推进到「需要用户介入」或「全部完成」为止：
 
@@ -10,7 +10,9 @@
 
 设计要点（对应 docs/collaboration-design.md §3 / §5）：
 
-* **串行**：同一时刻只有一个步骤在跑，因此"谁在等谁"永远确定。
+* **波次推进**：默认（``max_parallel=1``）同一时刻只有一个步骤在跑；调高后
+  只有「同父兄弟工单 + 不同岗位」能同波并行（见 :func:`_pick_wave`），
+  "谁在等谁"在波次边界仍然确定。
 * **工单是唯一的交接物**：每个步骤的输入由 ``prompt.py`` 从工单字段拼出来，
   不携带任何智能体的对话原文。
 * **每一步都落库**：``collab_steps`` 既用于展示时间线，也用于审计与重跑。
@@ -18,15 +20,18 @@
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Sequence
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from ..agents.events import AgentEvent, EventType
 from ..attachments import AttachmentError, attachment_relative_path, compose_with_attachments
+from ..db import SessionLocal
 from ..models import AgentProfile, utcnow
 from . import execution, protocol
 from .graph import (
@@ -84,7 +89,7 @@ MAX_TICKET_DEPTH = 5
 #: 同一个父工单下、同名子工单最多拆几次：超过就挂起让人判断，避免"复读式拆解"空转烧钱
 MAX_DUPLICATE_CHILD_TITLES = 2
 FINISHED_STATES = {TicketState.DONE.value, TicketState.REJECTED.value}
-#: 「该有人动手」的状态：串行推进时引擎就绪队列取的就是这些
+#: 「该有人动手」的状态：引擎就绪队列取的就是这些（波次调度也只从这里挑）
 READY_STATES = {
     TicketState.OPEN.value,
     TicketState.WORKING.value,
@@ -141,6 +146,20 @@ class TurnState:
     reason: str | None = None
     status: str | None = None
     budget_exhausted: bool = False
+    #: 这一步的用量（成功完成时才有）：主循环 / 波次汇总统一聚合到 run 行
+    step_usage: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class WaveState:
+    """一个并行波次的汇总载体（同 :class:`TurnState` 的用法）。"""
+
+    #: 各成功步骤的用量清单
+    usages: list[dict[str, Any]] = field(default_factory=list)
+    #: 实际完成的步骤数
+    finished: int = 0
+    #: 波内要求整轮停止时给 (status, reason)；None 表示这一波顺利跑完
+    stopped: tuple[str, str] | None = None
 
 
 # --- 准备 -------------------------------------------------------------------
@@ -190,10 +209,21 @@ async def _pending_question_ticket(session: AsyncSession, run_id: str) -> Collab
 
 
 async def _next_sequence(session: AsyncSession, run_id: str) -> int:
-    rows = (
-        await session.execute(select(CollabStep.sequence).where(CollabStep.run_id == run_id))
-    ).all()
-    return max((row[0] for row in rows), default=0) + 1
+    """取下一个步骤序号：**对运行行原子自增**，多个并行步骤不会撞号。
+
+    串行时代用「查最大值 + 1」就够；并行后两个步骤可能同时读到同一个最大值、
+    各自 +1 落库，时间线顺序就毁了。SQLite 的 ``UPDATE ... RETURNING`` 是原子的，
+    天然适合当计数器（WAL 模式下写锁只持有这一条语句的时间）。
+    """
+    seq = (
+        await session.execute(
+            update(CollabRun)
+            .where(CollabRun.id == run_id)
+            .values(step_seq=CollabRun.step_seq + 1)
+            .returning(CollabRun.step_seq)
+        )
+    ).scalar_one()
+    return int(seq or 1)
 
 
 def _first_line(text: str, limit: int = 60) -> str:
@@ -333,6 +363,19 @@ async def prepare_turn(session: AsyncSession, run_id: str, content: str | None) 
     session.add(run)
     await session.commit()
     await session.refresh(run)
+    # 旧库升级兜底：step_seq 是后加的计数列，历史运行的它停在 0，而步骤表里可能已有
+    # 一大串 sequence。这里对齐一次（取 max+1），并行取号才不会与历史序号撞车。
+    if (run.step_seq or 0) == 0:
+        rows = (
+            await session.execute(
+                select(CollabStep.sequence).where(CollabStep.run_id == run.id)
+            )
+        ).all()
+        top = max((row[0] for row in rows), default=0)
+        if top:
+            run.step_seq = top
+            session.add(run)
+            await session.commit()
     return PreparedTurn(run=run, team=team, graph=graph, entry=entry, content=text or None)
 
 
@@ -691,7 +734,17 @@ async def consume_chat(
 
 
 async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIterator[protocol.CollabEvent]:
-    """推进这次协作，直到需要用户介入或全部完成。"""
+    """推进这次协作，直到需要用户介入或全部完成。
+
+    调度是**波次并行**（``max_parallel > 1`` 时）：每一波从就绪工单里挑出
+    「同一父工单拆出的兄弟工单、且持有者岗位互不相同」的一批同时推进，
+    全部结束后（join）才做父工单汇总与下一波调度。护栏（见 docs/collaboration-design.md §3.4）：
+
+    * **同一岗位永远串行**：一个岗位一个对话通道（与入口聊天通道的约束一致）；
+    * **只有兄弟工单才并行**：它们由同一次 split 拆出、天然无先后依赖；其他工单（如
+      返工环、审查链）仍按串行顺序推进；
+    * ``max_parallel=1``（默认）时退化为完全串行，行为与过去一字不差。
+    """
     run_id = prepared.run.id
     state = TurnState()
     steps_this_turn = 0
@@ -739,26 +792,67 @@ async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIt
                     )
             break
 
-        ticket = ready[0]
-        node = node_map(prepared.graph).get(ticket.holder_key)
-        if node is None:
-            state.stop = True
-            state.reason = f"工单 {ticket_code(ticket.id)} 的持有者「{ticket.holder_key}」不在图里"
-            state.status = RunStatus.ERROR.value
-            break
+        wave = _pick_wave(prepared, ready)
+        nodes = node_map(prepared.graph)
 
-        async for event in _run_step(
-            session,
-            prepared,
-            run,
-            ticket,
-            node,
-            state,
-            user_message=prepared.content if first_step else None,
-        ):
-            yield event
-        first_step = False
-        steps_this_turn += 1
+        if len(wave) == 1:
+            # 串行路径（绝大多数轮次）：与过去完全一致，不开新会话、不多一层包装。
+            ticket = wave[0]
+            node = nodes.get(ticket.holder_key)
+            if node is None:
+                state.stop = True
+                state.reason = (
+                    f"工单 {ticket_code(ticket.id)} 的持有者「{ticket.holder_key}」不在图里"
+                )
+                state.status = RunStatus.ERROR.value
+                break
+            async for event in _run_step(
+                session,
+                prepared,
+                run,
+                ticket,
+                node,
+                state,
+                user_message=prepared.content if first_step else None,
+            ):
+                yield event
+            first_step = False
+            steps_this_turn += 1
+            if state.step_usage:
+                await _accumulate_run_usage(session, run, [state.step_usage])
+                state.step_usage = {}
+        else:
+            # 并行波次：后台任务推进（每步独立会话），事件从队列实时汇出，
+            # 前端按 step_id 分流；波次全部结束后统一聚合用量、检查停止信号。
+            queue: asyncio.Queue[protocol.CollabEvent | None] = asyncio.Queue()
+            wave_task = asyncio.create_task(
+                _run_wave(
+                    prepared,
+                    wave,
+                    queue,
+                    user_message=prepared.content if first_step else None,
+                )
+            )
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield event
+            finally:
+                if not wave_task.done():
+                    await wave_task
+            first_step = False
+            result = wave_task.result()
+            steps_this_turn += result.finished
+            # 波次在独立会话里改过 run 行（steps_used 自增等）；主会话的 run 对象已过期，
+            # 先刷新再聚合 usage，避免把旧值写回（见 _accumulate_run_usage 的读-改-写）。
+            await session.refresh(run)
+            await _accumulate_run_usage(session, run, result.usages)
+            if result.stopped:
+                # 波内某个步骤要求停下（失败挂起 / 取消）：带上它的理由收尾本轮
+                state.stop, state.status, state.reason = True, *result.stopped
+
         if steps_this_turn >= MAX_STEPS_PER_TURN:
             state.stop = True
             state.reason = "单次请求内推进的步骤过多，已暂停（请稍后点「继续」）"
@@ -766,6 +860,105 @@ async def consume_turn(session: AsyncSession, prepared: PreparedTurn) -> AsyncIt
 
     async for event in _finalize(session, prepared, state):
         yield event
+
+
+def _pick_wave(prepared: PreparedTurn, ready: Sequence[CollabTicket]) -> list[CollabTicket]:
+    """从就绪工单里挑出这一波并行推进的工单。
+
+    规则（缺一不可，全部为了不引入新的不确定状态）：
+
+    * 按既有顺序取第一张工单，它的**同父兄弟**才能进同一波——兄弟工单由同一次
+      split 拆出，天然无先后依赖；其他关系的工单（返工环、跨部门的活）互相之间
+      可能隐含依赖，一律不并；
+    * **持有者岗位互不相同**：一个岗位一个对话通道，同一岗位同时跑两张工单
+      会把两个 prompt 拼进同一段执行历史；
+    * 数量不超过预算里的 ``max_parallel``；``max_parallel=1`` 时永远只有一张。
+    """
+    limit = budget_from_storable(prepared.run.budget).max_parallel
+    if limit <= 1:
+        return [ready[0]]
+    head = ready[0]
+    nodes = node_map(prepared.graph)
+    wave: list[CollabTicket] = [head]
+    seen_holders = {head.holder_key}
+    for ticket in ready[1:]:
+        if len(wave) >= limit:
+            break
+        if ticket.parent_ticket_id != head.parent_ticket_id:
+            break
+        if not ticket.holder_key or ticket.holder_key in seen_holders:
+            continue
+        if ticket.holder_key not in nodes:
+            continue
+        wave.append(ticket)
+        seen_holders.add(ticket.holder_key)
+    return wave
+
+
+async def _run_wave(
+    prepared: PreparedTurn,
+    wave: Sequence[CollabTicket],
+    queue: "asyncio.Queue[protocol.CollabEvent | None]",
+    *,
+    user_message: str | None,
+) -> WaveState:
+    """在后台任务里并行推进一波兄弟工单，事件实时塞进 ``queue``。
+
+    每个步骤开**独立的数据库会话**（AsyncSession 不能并发共享）。事件按「谁先产出
+    谁先出」入队，SSE 信封本身带 ``step_id``，前端按它分流到各岗位的会话线程，
+    交织不会张冠李戴。
+
+    任何一步要求停下（失败挂起 / 取消），**记下原因但让其余步骤跑完**：半途强杀
+    已在执行的子进程会留下「工单还是 working、步骤还是 streaming」的脏状态，
+    由启动恢复收尾反而更糟。波次结束后主循环按 stopped 决定整轮去留。
+    """
+    nodes = node_map(prepared.graph)
+    result = WaveState()
+
+    async def drive_one(index: int, ticket_id: str) -> None:
+        try:
+            async with SessionLocal() as step_session:
+                ticket = await step_session.get(CollabTicket, ticket_id)
+                if ticket is None or ticket.state not in READY_STATES:
+                    return
+                node = nodes.get(ticket.holder_key)
+                if node is None:
+                    result.stopped = (
+                        RunStatus.ERROR.value,
+                        f"工单 {ticket_code(ticket.id)} 的持有者「{ticket.holder_key}」不在图里",
+                    )
+                    return
+                step_run = await step_session.get(CollabRun, prepared.run.id)
+                if step_run is None:
+                    return
+                local_state = TurnState()
+                async for event in _run_step(
+                    step_session,
+                    prepared,
+                    step_run,
+                    ticket,
+                    node,
+                    local_state,
+                    user_message=user_message if index == 0 else None,
+                ):
+                    queue.put_nowait(event)
+                result.finished += 1
+                if local_state.step_usage:
+                    result.usages.append(local_state.step_usage)
+                if local_state.stop:
+                    result.stopped = (
+                        local_state.status or RunStatus.WAITING_USER.value,
+                        local_state.reason or "并行步骤被挂起",
+                    )
+        except Exception as exc:  # noqa: BLE001 - 铁律 11：并行分支的异常也要显式上浮
+            result.stopped = (RunStatus.ERROR.value, f"并行步骤执行失败：{exc}")
+
+    tasks = [asyncio.create_task(drive_one(index, t.id)) for index, t in enumerate(wave)]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        queue.put_nowait(None)
+    return result
 
 
 def _elapsed_seconds(started: datetime | None) -> float:
@@ -993,11 +1186,18 @@ async def _run_step(
     step.finished_at = utcnow()
 
     session.add(step)
-    run.steps_used = (run.steps_used or 0) + 1
-    run.usage = _merge_usage(run, usage)
-    run.updated_at = utcnow()
-    session.add(run)
+    # 步数走原子自增（并行步骤不会互相覆盖）；usage 是 JSON 列没法用 SQL 合并，
+    # 由主循环 / 波次 join 后统一聚合（见 ``_accumulate_run_usage``）——每一步只落自己的行，
+    # 聚合永远在单点串行做，读-改-写竞态就不存在了。
+    await session.execute(
+        update(CollabRun)
+        .where(CollabRun.id == run.id)
+        .values(steps_used=CollabRun.steps_used + 1, updated_at=utcnow())
+    )
     await session.commit()
+    # 成功完成的用量交给控制载体；串行路径同样受益（主循环统一聚合）
+    if step_status == "complete" and usage:
+        state.step_usage = usage
 
     if parse_warning:
         yield protocol.notice(parse_warning, "warn", step_id=step.id)
@@ -1119,14 +1319,44 @@ def _merge_part(parts: list[dict[str, Any]], kind: str, text: str) -> None:
         parts.append({"kind": kind, "text": text})
 
 
-def _merge_usage(run: CollabRun, usage: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(run.usage or {})
-    for key, value in usage.items():
-        if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
-            merged[key] = merged[key] + value
-        else:
-            merged[key] = value
-    return merged
+async def _accumulate_run_usage(
+    session: AsyncSession, run: CollabRun, usages: Sequence[dict[str, Any]]
+) -> None:
+    """把一个波次里各步骤的用量聚合到运行行上（主循环串行调用，单点写）。
+
+    并行步骤各自的 usage 已经落在 ``collab_steps`` 行里；run 行的聚合挪到这里统一做，
+    避免多个会话同时读-改-写同一个 JSON 列（后提交的会覆盖先提交的）。
+    """
+    if not usages:
+        return
+    fresh = (
+        (
+            await session.execute(
+                select(CollabRun)
+                .where(CollabRun.id == run.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if fresh is None:
+        return
+    merged = dict(fresh.usage or {})
+    for usage in usages:
+        for key, value in usage.items():
+            if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
+                merged[key] = merged[key] + value
+            else:
+                merged[key] = value
+    # 只写 usage 一列（Core UPDATE）：ORM 整对象写回会把并行会话刚自增的
+    # steps_used 用本会话的旧值盖掉（expire_on_commit=False 时内存对象不会自动刷新）。
+    await session.execute(
+        update(CollabRun)
+        .where(CollabRun.id == run.id)
+        .values(usage=merged, updated_at=utcnow())
+    )
+    await session.commit()
 
 
 async def _ticket_history(session: AsyncSession, ticket_id: str) -> list[HistoryEntry]:
@@ -1377,8 +1607,19 @@ async def _apply_action(
             yield protocol.notice(f"派发目标「{order.assignee}」不在图里", "error")
             return
         if order.mode is DeliveryMode.SPLIT:
-            draft = order.ticket
-            title = (draft.title if draft else "") or "子任务"
+            # 一次 split 可拆多张（``tickets`` 数组）；单张时 ``order.ticket`` 就是它。
+            # 先做全部护栏检查（深度 / 重名），任何一张不合规就整单拒绝——绝不留半截状态。
+            drafts = order.tickets or ([order.ticket] if order.ticket else [])
+            if not drafts:
+                await _reject_action(
+                    session,
+                    run,
+                    ticket,
+                    state,
+                    "mode=split 时必须带有 ticket 或 tickets（子工单字段）",
+                )
+                yield protocol.ticket_updated(_ticket_payload(ticket))
+                return
             depth = await _ticket_depth(session, ticket)
             if depth >= MAX_TICKET_DEPTH:
                 message = (
@@ -1389,39 +1630,66 @@ async def _apply_action(
                 await _reject_action(session, run, ticket, state, message)
                 yield protocol.ticket_updated(_ticket_payload(ticket))
                 return
-            repeats = await _child_count_with_title(session, ticket.id, title)
-            if repeats >= MAX_DUPLICATE_CHILD_TITLES:
-                message = (
-                    f"同一个父工单下已经拆出过 {repeats} 张同名（或高度相似）的子工单，最近一张是「{title}」。"
-                    "再拆同一件事只会空转：要么先看看下游已经交回了什么、直接汇总收尾，"
-                    "要么换一件真正不同的事、并给出更具体的标题；实在拿不准就 ask_user 让用户拍板"
+            for draft in drafts:
+                repeats = await _child_count_with_title(
+                    session, ticket.id, draft.title or "子任务"
                 )
-                await _reject_action(session, run, ticket, state, message)
-                yield protocol.ticket_updated(_ticket_payload(ticket))
-                return
-            child = CollabTicket(
-                run_id=run.id,
-                parent_ticket_id=ticket.id,
-                from_agent_profile_id=node.agent_profile_id,
-                to_agent_profile_id=target.agent_profile_id,
-                owner_key=node.key,
-                holder_key=target.key,
-                title=title,
-                brief=(draft.to_dict() if draft else {}),
-                state=TicketState.OPEN.value,
-                max_rounds=effective_max_rounds(target, budget_from_storable(run.budget)),
-            )
+                if repeats >= MAX_DUPLICATE_CHILD_TITLES:
+                    message = (
+                        f"同一个父工单下已经拆出过 {repeats} 张同名（或高度相似）的子工单，"
+                        f"最近一张是「{draft.title or '子任务'}」。"
+                        "再拆同一件事只会空转：要么先看看下游已经交回了什么、直接汇总收尾，"
+                        "要么换一件真正不同的事、并给出更具体的标题；实在拿不准就 ask_user 让用户拍板"
+                    )
+                    await _reject_action(session, run, ticket, state, message)
+                    yield protocol.ticket_updated(_ticket_payload(ticket))
+                    return
+            children: list[CollabTicket] = []
+            for draft in drafts:
+                # 每张可自带 assignee（分给不同岗位并行）；不带就用外层的目标
+                draft_target = target
+                if draft.assignee and draft.assignee != (order.assignee or ""):
+                    override = nodes.get(draft.assignee)
+                    if override is None:
+                        await _reject_action(
+                            session,
+                            run,
+                            ticket,
+                            state,
+                            f"子工单「{draft.title or '（无标题）'}」的派发对象「{draft.assignee}」不在图里",
+                        )
+                        yield protocol.ticket_updated(_ticket_payload(ticket))
+                        return
+                    draft_target = override
+                children.append(
+                    CollabTicket(
+                        run_id=run.id,
+                        parent_ticket_id=ticket.id,
+                        from_agent_profile_id=node.agent_profile_id,
+                        to_agent_profile_id=draft_target.agent_profile_id,
+                        owner_key=node.key,
+                        holder_key=draft_target.key,
+                        title=(draft.title or "").strip() or "子任务",
+                        brief=draft.to_dict(),
+                        state=TicketState.OPEN.value,
+                        max_rounds=effective_max_rounds(
+                            draft_target, budget_from_storable(run.budget)
+                        ),
+                    )
+                )
             # 谁拆的谁汇总：子工单全部完成后，父工单回到这个节点手里
             ticket.owner_key = node.key
             ticket.state = TicketState.WAITING_CHILDREN.value
-            session.add(child)
+            for child in children:
+                session.add(child)
             session.add(ticket)
-            run.tickets_used = (run.tickets_used or 0) + 1
+            run.tickets_used = (run.tickets_used or 0) + len(children)
             session.add(run)
             await session.commit()
-            await session.refresh(child)
+            for child in children:
+                await session.refresh(child)
+                yield protocol.ticket_created(_ticket_payload(child))
             await session.refresh(ticket)
-            yield protocol.ticket_created(_ticket_payload(child))
             yield protocol.ticket_updated(_ticket_payload(ticket))
             return
 
@@ -1664,7 +1932,20 @@ async def _rollup_parents(session: AsyncSession, run: CollabRun) -> AsyncIterato
 
 
 async def _finalize(session: AsyncSession, prepared: PreparedTurn, state: TurnState) -> AsyncIterator[protocol.CollabEvent]:
-    run = await session.get(CollabRun, prepared.run.id)
+    # 并行波次在**别的会话**里原子自增过 steps_used / usage；本会话 identity map 里的
+    # run 对象还是旧值（expire_on_commit=False），直接 add+commit 会用旧值把新值盖掉。
+    # 这里强制重读一次，保证收尾写的是数据库里的最新状态。
+    run = (
+        (
+            await session.execute(
+                select(CollabRun)
+                .where(CollabRun.id == prepared.run.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .first()
+    )
     if run is None:
         return
     tickets = await _tickets(session, run.id)

@@ -1,6 +1,7 @@
-/** 移动端协作进度：与桌面端同一间等距办公室（双指缩放 / 单指拖动 / 点工牌看进度）。 */
-import { buildFlowLinks, type CollabFlowEdge, type CollabAgentProgress } from '../../lib/collabProgress'
-import { CollabOfficeMap } from '../../components/CollabOfficeMap'
+/** 移动端协作进度：与桌面端同一张流程图（拖动平移 / 双指缩放 / 点节点看进度）。
+ *  图上不放标题与说明：顶栏已有运行标题，状态徽标与图例自己解释，画布直接铺满。 */
+import type { CollabFlowEdge, CollabAgentProgress } from '../../lib/collabProgress'
+import { CollabFlowMap } from '../../components/CollabFlowMap'
 
 interface Props {
   nodes: CollabAgentProgress[]
@@ -10,26 +11,10 @@ interface Props {
 
 export function MobileCollabProgress({ nodes, edges, onOpenNode }: Props) {
   if (nodes.length === 0) return null
-  const loops = buildFlowLinks(nodes, edges).filter((link) => link.isLoop)
 
   return (
     <div className="m-collab-progress">
-      <div className="m-collab-progress-head">
-        <span>协作进度</span>
-        <span className="dim">双指缩放 · 点人物看对话</span>
-      </div>
-      <CollabOfficeMap nodes={nodes} edges={edges} onOpenNode={onOpenNode} initialView="desks" />
-      {loops.length > 0 && (
-        <div className="m-collab-progress-links">
-          {loops.map((link) => (
-            <span className={`m-collab-progress-link kind-${link.kind}`} key={link.id}>
-              {nodes.find((node) => node.key === link.fromKey)?.label ?? link.fromKey}
-              <b>↩ {link.kindLabel}</b>
-              {nodes.find((node) => node.key === link.toKey)?.label ?? link.toKey}
-            </span>
-          ))}
-        </div>
-      )}
+      <CollabFlowMap nodes={nodes} edges={edges} onOpenNode={onOpenNode} />
     </div>
   )
 }

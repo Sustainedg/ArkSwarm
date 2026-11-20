@@ -4,6 +4,7 @@ import { MessageView, type RenderMessage } from '../../components/MessageView'
 import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../lib/agentStream'
 import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
 import { useComposerDraft } from '../../lib/composerDraft'
+import { findUnusedConversation } from '../../lib/conversations'
 import { formatListTime } from '../../lib/datetime'
 import { MediaUrlProvider, composeWithAttachments, splitAttachmentBlock } from '../../lib/media'
 import { shortPath } from '../../lib/paths'
@@ -27,6 +28,7 @@ import { summarizeUsage } from '../../lib/usage'
 import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, PlusIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
 import { useAuth } from '../../components/AuthGate'
 import { AgentAvatar } from '../../components/AgentAvatar'
+import { MascotStage } from '../../components/MascotStage'
 import { Composer } from '../../components/Composer'
 import { MobileMenuButton, useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
@@ -517,13 +519,39 @@ export function MobileChatPage() {
   const runActive = busy || remoteRunning || Boolean(activeRun)
 
   /**
+   * `/clear` 命令：清掉智能体的会话记忆（下一轮从零开始），不作为消息发出。
+   * 与桌面端同一条语义 —— 命令在输入链路里就被拦下，不会进入对话。
+   */
+  const clearMemory = async () => {
+    if (!active) return
+    setError(null)
+    try {
+      await api.resetSession(active.id)
+      await open(active.id)
+      setNotice('已清除智能体记忆，下一轮重新开始')
+    } catch (e) {
+      reportError(e)
+    }
+  }
+
+  /**
    * 输入区「发送」：
+   * - `/clear` 命令：清除智能体的会话记忆，不作为消息发出；
    * - 空闲：直接发，草稿立刻清空（附件在消息落库、收到第一个事件时由 `send` 收走）；
    * - AI 正在回复：消息进入待发送队列，输入区马上可以继续写；本轮结束后按顺序自动发出。
    */
   const submitDraft = () => {
     if (!active) return
     if (!draft.trim() && attachments.length === 0) return
+    if (draft.trim() === '/clear') {
+      if (runActive) {
+        setError('正在回复时不能清除记忆：等这一轮结束再发')
+        return
+      }
+      setDraft('')
+      void clearMemory()
+      return
+    }
     if (runActive) {
       // @ 召唤不支持排队：正在回复时按发送会取消召唤并提示，不悄悄丢掉用户的选择。
       if (summonId) {
@@ -618,12 +646,20 @@ export function MobileChatPage() {
   /**
    * 顶栏的「新建对话」：与抽屉里「＋ 新建」同一条路 —— 用默认智能体开一条新对话，
    * 工作目录留空（进去后随时改）；还没设过默认智能体时打开抽屉让用户挑一个。
+   *
+   * 先找「从未被使用」的空对话（没发过消息、标题没动过、输入框没草稿）：有就直接跳
+   * 过去，连点也不会堆出一排「新对话」；确实没有才真开一条新的。
    */
   const startConversation = async () => {
     if (creating) return
     setCreating(true)
     setError(null)
     try {
+      const unused = findUnusedConversation((await api.listConversations()).items)
+      if (unused) {
+        navigate(`/chat/${unused.id}`)
+        return
+      }
       const conversation = await api.createConversation({})
       navigate(`/chat/${conversation.id}`)
     } catch (e) {
@@ -918,16 +954,14 @@ export function MobileChatPage() {
 
         {chatMessages.length === 0 && !liveMessage && active && (
           <div className="m-empty">
-            <div className="m-empty-icon">
-              <AgentAvatar
-                avatar={active.agent_avatar}
-                avatarPreset={active.agent_avatar_preset}
-                avatarFile={active.agent_avatar_file}
-                agentId={active.agent_profile_id}
-                size={56}
-              />
-            </div>
-            <p>与「{active.agent_name}」的对话已就绪</p>
+            <MascotStage
+              avatar={active.agent_avatar}
+              avatarPreset={active.agent_avatar_preset}
+              avatarFile={active.agent_avatar_file}
+              agentId={active.agent_profile_id}
+              agentName={active.agent_name}
+            />
+            <p style={{ marginTop: 14 }}>与「{active.agent_name}」的对话已就绪</p>
             <p className="dim small">所有输出都会写回工作目录 {short(active.workspace_dir ?? '默认', 40)}</p>
           </div>
         )}

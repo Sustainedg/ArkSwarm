@@ -26,7 +26,7 @@
 | 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希；长效程序化凭据是 PAT（`pat_` 前缀，库里只存 sha256） |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
 | MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`）。平台内置服务器（`builtin_key` 非空，声明在 `app/builtin_mcp.py`：图片生成 / 系统管理）启动时逐用户播种，连接方式由平台维护 |
-| 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 串行引擎），独立于对话域，见 `docs/collaboration-design.md` |
+| 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 波次并行引擎，默认串行），独立于对话域，见 `docs/collaboration-design.md` |
 | IM 域 | `backend/app/im/` —— 把智能体连到聊天软件（Telegram / 飞书 / 钉钉 / 企业微信 / QQ / Discord / Slack）；设置页标签「IM」，见 `docs/im.md` |
 
 ---
@@ -78,7 +78,7 @@
  ┌──────────────────────────────▼────────────────────────────────────┐
  │ api/            路由、请求校验(Pydantic)、SSE 封装、HTTP 状态码    │
  ├───────────────────────────────────────────────────────────────────┤
- │ collab/         协作域（旁路）：编排图 · 工单协议 · 串行引擎 · 运行 API │
+ │ collab/         协作域（旁路）：编排图 · 工单协议 · 波次并行引擎 · 运行 API │
  │ im/             IM 域（旁路）：连接登记 · 配对 · 平台适配器 · 运行桥   │
  ├───────────────────────────────────────────────────────────────────┤
  │ runtime/        service=编排+持久化 · runner=执行(CLI/API) ·       │
@@ -379,9 +379,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   **回复期间继续输入**：开 `queueWhenBusy`，框里有内容时右侧按钮从「停止」变成「排队发送」，
   发送只是交给页面入队（队列状态与「本轮结束自动发出」的 effect 在页面里，组件不持有队列），
   两个按钮不并存 —— 别为此再写一套输入框。
-- **协作运行页主页面就是那间办公室**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`，
-  时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 —— **点入口智能体工牌**才出来
-  （顶栏不要再放对话按钮），点其他岗位开只读岗位会话。
+- **协作运行页主页面就是那张协作流程图**：`MobileCollabRunPage` 主区整屏铺 `MobileCollabProgress`
+  （内部是两端共用的 `CollabFlowMap`：节点 = 头像 + 昵称，头像右上角是状态徽标，点节点弹
+  「在做什么」详情卡），时间线与「需要你决定」卡片收进 `MobileSheet full` 的对话弹层 ——
+  **点入口智能体节点**才出来（顶栏不要再放对话按钮），点其他岗位开只读岗位会话。
 - **协作运行页只有一条聊天通道，没有「模式」可选**：所有消息统一发进入口智能体的聊天通道
   （`POST /api/collab/runs/{id}/chat`，可带附件），**不要**再加「普通对话 / 推进任务」模式按钮
   或两档选项框 —— 用户手动选错模式就是「发消息没反应」，这正是它被删掉的原因。是否推进任务由
@@ -396,17 +397,14 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 - **附件能力下沉在 `backend/app/attachments.py`**：校验 / 落盘 / 拼提示词只有一份，对话
   （`POST /api/conversations/{id}/attachments`）与协作（`POST /api/collab/runs/{id}/attachments`）
   都调用它，别再各写一份 base64 解码与目录穿越校验。
-- **办公室底图有两张**：`frontend/public/office/iso-office.svg`（深）与 `iso-office-light.svg`
-  （浅），同一份几何 —— `scripts/gen_office_bg.py` 的 `light_color()` 在构建期按「反相 + 色相旋转
-  180°」换算（不要把实时 `filter` 加到手机上的大图上），`CollabOfficeMap` 按 `lib/theme.ts` 的当前
-  主题选。办公室里的工牌 / 图例 / 工具按钮 / 信息卡颜色一律走 `--office-*` 变量（两端样式表各一份，
-  浅色只在 `[data-theme='light']` 覆盖），**不要**写死深色。
 - **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `arkswarm.tts`，
   **默认关闭**；开启后新回复会被念出来，Markdown 先转成纯文本）。两个 iOS 坑必须一起处理：
   ① 首次发声要在**用户手势里**解锁（点开关时 `unlockSpeech()`）；② 打断上一条时 `cancel()` 与
   `speak()` 不能在同一轮里（iOS 会吞掉），要丢到下一个任务。对话页顶栏右上角只有「分享 + 朗读」
-  两个按钮；会话级操作（重新生成 / 重置记忆 / 复制工作目录 / 删除）挂在抽屉的对话行「⋯」上，
-  由聊天页弹面板 —— 不要再往顶栏塞「⋯」。
+  两个按钮 —— **不要再往顶栏塞「⋯」**。桌面端左侧栏对话行只放「✎ 重命名 / 🗑 删除」两枚悬停图标，
+  不再有「⋯」与会话操作弹窗（手机抽屉的「⋯」仍保留其余会话操作）。
+  **清除智能体记忆用输入框里的 `/clear` 命令**：两端在提交时拦下它，调 `resetSession` 后给一条提示，
+  不把它当正文发给智能体。
 - **分享成长图**：`src/lib/shareImage.ts`（Canvas 手绘，不引依赖）：对话页顶栏的分享按钮把当前
   对话渲染成 PNG，优先走 `navigator.share({ files })`，不支持就退回下载。
 - **安装归「内核管理」，配置归「智能体」**：一个内核 = 一份安装 + N 个智能体，所以内核的
@@ -551,12 +549,15 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   （有图显示图、没图显示显示名首字母）。
 - **智能体头像**：三个来源并存，显示优先级 **自定义上传（`avatar_file`）> 内置头像包
   （`avatar_preset`）> emoji（`avatar`）**。内置头像包是 3D 黏土风 Q 版半身像，图片在
-  `frontend/public/avatars/`、清单在 `frontend/src/lib/avatarPack.ts`，**两者只由
-  `scripts/gen_avatar_pack.py` 一次生成**（`tests/test_frontend_assets.py` 会校验一一对应）。
+  `frontend/public/avatars/`、清单在 `frontend/src/lib/avatarPack.ts`，**清单与文件由
+  `scripts/gen_avatar_pack.py` 一次生成**；白底抠成透明背景用 `scripts/make_avatars_transparent.py`
+  原地处理（文件名不变，前端靠 `lib/agentAvatar.ts` 的 `AVATAR_PACK_REV` 让缓存整体失效）。
+  两处都必须与清单一一对应（`tests/test_frontend_assets.py` 会校验）。
+  动画帧（`scripts/gen_mascot_pack.py`）只是**离线实验工具**，界面不再使用，也不参与运行时。
   「随机生成」只是从清单里抽一个编号，不调用生图接口 —— 秒出、离线可用、零成本。
   编号形状（`pack-NNN`）由 `app/avatars.is_valid_preset` 校验；展示统一用
   `components/AgentAvatar.tsx`（取自定义图同样走带令牌 blob，不要拼 `?access_token=`）。
-  只认得到 emoji 的地方（IM 绑定下拉、协作办公室地图等）继续显示 `avatar`，不会露出一串编号。
+  只认得到 emoji 的地方（IM 绑定下拉、协作流程图节点等）继续显示 `avatar`，不会露出一串编号。
 
 ---
 
@@ -613,7 +614,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
 | `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对）；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管；**改了图标要同步 `components/BrandMark.tsx`**（界面品牌标与图标是同一组几何，内联 SVG 用 `currentColor` 跟随主题） |
 | `im/*`（IM 域） | `pytest tests/test_im.py` + `tests/test_im_architecture.py`（分层 / 平台元数据 / 归属）；新增平台只加 `base.PLATFORMS` 一条 + `platforms/` 一个模块；IM 表加列登记 `im/tables.py` 的 `ADDITIVE_COLUMNS`；碰运行层只能改 `bridge.py`；同步 `docs/im.md` |
-| `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；同步 `docs/collaboration-design.md` |
+| `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；节点级技能 / MCP 覆盖走 `NodeSpec.skill_ids` / `mcp_ids` + `runtime` 各查询函数的 `override_ids`（不写回智能体配置）；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
 
 ---

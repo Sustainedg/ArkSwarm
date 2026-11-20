@@ -585,9 +585,18 @@ async def set_agent_skills(
     return wanted
 
 
-async def skills_for_agent(session: AsyncSession, profile: AgentProfile) -> list[SkillSpec]:
-    """智能体在本轮运行中真正生效的技能（只取同内核且目录仍在的）。"""
-    ids = await agent_skill_ids(session, profile.id)
+async def skills_for_agent(
+    session: AsyncSession,
+    profile: AgentProfile,
+    *,
+    override_ids: list[str] | None = None,
+) -> list[SkillSpec]:
+    """智能体在本轮运行中真正生效的技能（只取同内核且目录仍在的）。
+
+    ``override_ids``：协作域的节点级分配（None = 跟随智能体页面的分配；
+    给了列表就以它为准）。安全边界与默认路径完全一致：同内核、可用、归属校验。
+    """
+    ids = override_ids if override_ids is not None else await agent_skill_ids(session, profile.id)
     if not ids:
         return []
     rows = (await session.execute(select(Skill).where(Skill.id.in_(ids)))).scalars().all()
@@ -637,14 +646,16 @@ async def prepare_skill_home(
     ctx: AgentContext,
     *,
     scope_id: str | None = None,
+    override_ids: list[str] | None = None,
 ) -> list[str]:
     """把智能体分配到的技能物化进该内核的隔离目录，并把结果写回 ``ctx``。
 
     ``scope_id`` 是隔离目录的作用域（默认用对话 id；协作运行会传自己的作用域）。
     传了 ``scope_id`` 时 ``conversation`` 可以为 ``None``（协作运行没有对话）。
+    ``override_ids`` 是协作域的节点级技能分配（None = 跟随智能体页面）。
     返回需要提示给用户的说明/告警（由运行层作为 ``log`` 事件暴露）。
     """
-    ctx.skills = await skills_for_agent(session, profile)
+    ctx.skills = await skills_for_agent(session, profile, override_ids=override_ids)
     mount = definition.skill_mount(ctx)
     if mount is None:
         return []

@@ -122,6 +122,11 @@ class NodeSpec(BaseModel):
     output_contract: list[TicketAction] = Field(default_factory=list)
     #: 同一工单在该节点上最多返工几轮；0 表示取团队默认
     max_rounds: int = Field(default=0, ge=0)
+    #: 协作专属技能分配：None = 完全跟随智能体页面的分配；给了列表就以它为准
+    #: （空列表 = 这个协作里不给任何技能）。只影响协作运行，不写回智能体配置。
+    skill_ids: list[str] | None = None
+    #: 协作专属 MCP 分配：语义同 skill_ids。
+    mcp_ids: list[str] | None = None
     x: float = 0
     y: float = 0
 
@@ -166,6 +171,10 @@ class BudgetSpec(BaseModel):
     #: 重活（大仓库构建、长测试）经常跑过一小时；0 在这里是「不限」而不是「用默认」，
     #: 执行层会把它转成 runner 认识的 -1。
     step_timeout_seconds: int = Field(default=36000, ge=0)
+    #: 同一波最多并行推进几个工单步骤；**1 = 完全串行**（一期默认，行为与过去完全一致）。
+    #: 只有「同一父工单拆出的兄弟工单、且持有者岗位互不相同」才会并行（见 ``engine.consume_turn``）；
+    #: 同一岗位永远串行（一个岗位一个对话通道），返工 / 审查环也只在波次边界推进。
+    max_parallel: int = Field(default=1, ge=1, le=8)
 
 
 class GraphIssue(BaseModel):
@@ -290,6 +299,8 @@ class RunBudgetPatch(BaseModel):
     timeout_seconds: int | None = Field(default=None, ge=30)
     #: 新的单步限时（秒，0 = 不限）；为空表示不改。对正在跑的那一步不生效，从下一步起算。
     step_timeout_seconds: int | None = Field(default=None, ge=0)
+    #: 新的并行上限（1 = 串行）；为空表示不改。对正在跑的这一波不生效，从下一波起算。
+    max_parallel: int | None = Field(default=None, ge=1, le=8)
 
 
 class RunAttachmentUpload(BaseModel):

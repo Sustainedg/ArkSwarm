@@ -214,7 +214,7 @@ async def test_workspace_only_mount_does_not_create_an_isolated_home(
     """只把配置写进工作目录的内核（Gemini CLI）：不该凭空建「家」，更不该因此把会话当新的一轮。"""
     definition = get_agent("gemini-cli")
 
-    async def fake_servers(_session, _profile):
+    async def fake_servers(_session, _profile, **_kwargs):
         return [spec("assigned")]
 
     monkeypatch.setattr(mcp_service, "mcp_servers_for_agent", fake_servers)

@@ -94,6 +94,8 @@ export const DEFAULT_BUDGET: CollabBudget = {
   max_tokens: 0,
   timeout_seconds: 3600,
   step_timeout_seconds: 36000,
+  /** 同一波最多并行推进几个工单步骤；1 = 完全串行（默认） */
+  max_parallel: 1,
 }
 
 /** 后端 BudgetSpec 有 ge 约束：这里按同一套下限夹紧，避免保存时才 422 */
@@ -105,6 +107,7 @@ export function clampBudget(budget: CollabBudget): CollabBudget {
     max_tokens: Math.max(0, budget.max_tokens),
     timeout_seconds: Math.max(30, budget.timeout_seconds),
     step_timeout_seconds: Math.max(0, budget.step_timeout_seconds ?? 36000),
+    max_parallel: Math.min(8, Math.max(1, budget.max_parallel ?? 1)),
   }
 }
 

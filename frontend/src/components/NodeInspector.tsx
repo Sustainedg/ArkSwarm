@@ -1,22 +1,31 @@
 /**
  * 编排编辑器的右侧属性面板：节点 / 边 / 团队三种上下文共用一个面板。
  *
- * 节点只回答「他在这个协作里干什么」（职责、能力边界、动作、连给谁）；用什么参数跑，
- * 完全由它绑定的智能体决定 —— 这里不提供任何节点级参数覆盖。
+ * 节点回答「他在这个协作里干什么」（职责、能力边界、动作、连给谁）；适配器参数仍完全由
+ * 它绑定的智能体决定 —— 但**技能与 MCP** 支持协作专属的临时分配（`skill_ids` / `mcp_ids`）：
+ * 方便某个协作任务临时给岗位增减技能，而不动智能体页面的常规配置。
  */
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { CollabSelection } from './CollabCanvas'
 import { AgentAvatar } from './AgentAvatar'
+import { SkillPicker } from './SkillPicker'
+import { McpPicker } from './McpPicker'
+import { Modal } from './Modal'
 import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, isWarningIssue, type TeamDraft } from '../lib/collabDraft'
 import type {
   CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
-  CollabWorkspaceScope, CollabDuty as Duty, AgentProfile,
+  CollabWorkspaceScope, CollabDuty as Duty, AgentProfile, AgentType, Skill, McpServer,
 } from '../lib/types'
 
 interface Props {
   draft: TeamDraft
   selection: CollabSelection | null
   agents: AgentProfile[]
+  /** 技能 / MCP / 内核目录：节点级「协作专属分配」的选择器要用 */
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
   issues: CollabIssue[]
   onPatchTeam: (patch: Partial<TeamDraft>) => void
   onPatchNode: (key: string, patch: Partial<CollabNode>) => void
@@ -27,7 +36,7 @@ interface Props {
 }
 
 export function NodeInspector({
-  draft, selection, agents, issues,
+  draft, selection, agents, skills, mcpServers, types, issues,
   onPatchTeam, onPatchNode, onPatchEdge, onRenameNode, onDeleteNode, onDeleteEdge,
 }: Props) {
   const node = selection?.kind === 'node' ? draft.nodes.find((item) => item.key === selection.id) : undefined
@@ -41,6 +50,9 @@ export function NodeInspector({
           nodes={draft.nodes}
           entryKey={draft.entry_key}
           agents={agents}
+          skills={skills}
+          mcpServers={mcpServers}
+          types={types}
           issues={issues}
           onPatch={(patch) => onPatchNode(node.key, patch)}
           onRename={(next) => onRenameNode(node.key, next)}
@@ -71,12 +83,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function NodePanel({
-  node, nodes, entryKey, agents, issues, onPatch, onRename, onDelete, onSetEntry,
+  node, nodes, entryKey, agents, skills, mcpServers, types, issues,
+  onPatch, onRename, onDelete, onSetEntry,
 }: {
   node: CollabNode
   nodes: CollabNode[]
   entryKey: string | null
   agents: AgentProfile[]
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
   issues: CollabIssue[]
   onPatch: (patch: Partial<CollabNode>) => void
   onRename: (next: string) => void
@@ -141,6 +157,15 @@ function NodePanel({
           <span className="field-help">工单里用它指代岗位；改名会同步更新所有连线。</span>
         </label>
       </Section>
+
+      <NodeOverridesSection
+        node={node}
+        agent={agent}
+        skills={skills}
+        mcpServers={mcpServers}
+        types={types}
+        onPatch={onPatch}
+      />
 
       <Section title="在这个协作里干什么">
         <label className="field">
@@ -253,6 +278,200 @@ function NodePanel({
         <span className="dim small">共 {nodes.length} 个节点</span>
       </div>
     </>
+  )
+}
+
+/**
+ * 协作专属的技能 / MCP 分配：三态选择。
+ *
+ * - **跟随智能体**（`skill_ids` / `mcp_ids` 为 null，默认）：完全用智能体页面的分配；
+ * - **本协作不给**（空列表）：这个岗位在协作运行里不带任何技能 / MCP；
+ * - **自定义**：从同内核的可选项里挑（与智能体表单同一套选择器）。
+ *
+ * 只影响协作运行，保存时写进图（`PUT /teams/{id}`），不写回智能体配置 ——
+ * 方便某个任务临时给岗位增减技能，用完删掉即可。
+ */
+function NodeOverridesSection({
+  node, agent, skills, mcpServers, types, onPatch,
+}: {
+  node: CollabNode
+  agent: AgentProfile | undefined
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
+  onPatch: (patch: Partial<CollabNode>) => void
+}) {
+  const [pickerOpen, setPickerOpen] = useState<'skills' | 'mcp' | null>(null)
+  const agentType = types.find((item) => item.id === agent?.type_id)
+  const supportsSkills = !!agentType?.capabilities.skills
+  const supportsMcp = !!agentType?.capabilities.mcp
+  const matchingSkills = skills.filter((skill) => skill.type_id === agent?.type_id)
+  const assignableMcp = mcpServers.filter(
+    (server) => !server.type_id || server.type_id === agent?.type_id,
+  )
+  const skillIds = node.skill_ids ?? null
+  const mcpIds = node.mcp_ids ?? null
+  const nameOf = (id: string) =>
+    matchingSkills.find((skill) => skill.id === id)?.name
+    ?? assignableMcp.find((server) => server.id === id)?.name
+    ?? id
+
+  const toggleInList = (kind: 'skill_ids' | 'mcp_ids', current: string[] | null, id: string) => {
+    // null（跟随智能体）状态下第一次点选：以智能体当前分配为底子，再叠加这次点选。
+    const base = current ?? []
+    onPatch({
+      [kind]: base.includes(id) ? base.filter((item) => item !== id) : [...base, id],
+    } as Partial<CollabNode>)
+  }
+
+  return (
+    <Section title="协作专属技能 / MCP">
+      {!agent ? (
+        <div className="banner info">先给这个节点绑定一个智能体，才能设置技能与 MCP。</div>
+      ) : (
+        <div className="stack" style={{ gap: 10 }}>
+          {!supportsSkills && <div className="banner info">「{agent.name}」的内核不支持技能。</div>}
+          {supportsSkills && (
+            <div className="field">
+              <span className="field-label">技能</span>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className={`collab-toggle${skillIds === null ? ' on' : ''}`}
+                  onClick={() => onPatch({ skill_ids: null })}
+                  title="用智能体页面的常规技能分配"
+                >
+                  跟随智能体{skillIds === null ? `（${matchingSkills.filter((s) => agent.skill_ids?.includes(s.id)).length} 个）` : ''}
+                </button>
+                <button
+                  type="button"
+                  className={`collab-toggle${skillIds !== null && skillIds.length === 0 ? ' on' : ''}`}
+                  onClick={() => onPatch({ skill_ids: [] })}
+                  title="这个协作运行里不带任何技能"
+                >
+                  本协作不给
+                </button>
+                <button
+                  type="button"
+                  className={`collab-toggle${skillIds !== null && skillIds.length > 0 ? ' on' : ''}`}
+                  onClick={() => setPickerOpen('skills')}
+                  disabled={matchingSkills.length === 0}
+                >
+                  自定义{skillIds && skillIds.length > 0 ? `（${skillIds.length} 个）` : ''}
+                </button>
+              </div>
+              {skillIds !== null && skillIds.length > 0 && (
+                <div className="row wrap" style={{ gap: 5, marginTop: 6 }}>
+                  {skillIds.map((id) => (
+                    <span className="pill" key={id}>
+                      {nameOf(id)}
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        onClick={() => toggleInList('skill_ids', skillIds, id)}
+                        aria-label={`移除技能「${nameOf(id)}」`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {!supportsMcp && <div className="banner info">「{agent.name}」的内核不支持 MCP。</div>}
+          {supportsMcp && (
+            <div className="field">
+              <span className="field-label">MCP 服务器</span>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className={`collab-toggle${mcpIds === null ? ' on' : ''}`}
+                  onClick={() => onPatch({ mcp_ids: null })}
+                  title="用智能体页面的常规 MCP 分配"
+                >
+                  跟随智能体{mcpIds === null ? `（${assignableMcp.filter((s) => agent.mcp_ids?.includes(s.id)).length} 个）` : ''}
+                </button>
+                <button
+                  type="button"
+                  className={`collab-toggle${mcpIds !== null && mcpIds.length === 0 ? ' on' : ''}`}
+                  onClick={() => onPatch({ mcp_ids: [] })}
+                  title="这个协作运行里不连任何 MCP 服务器"
+                >
+                  本协作不给
+                </button>
+                <button
+                  type="button"
+                  className={`collab-toggle${mcpIds !== null && mcpIds.length > 0 ? ' on' : ''}`}
+                  onClick={() => setPickerOpen('mcp')}
+                  disabled={assignableMcp.length === 0}
+                >
+                  自定义{mcpIds && mcpIds.length > 0 ? `（${mcpIds.length} 个）` : ''}
+                </button>
+              </div>
+              {mcpIds !== null && mcpIds.length > 0 && (
+                <div className="row wrap" style={{ gap: 5, marginTop: 6 }}>
+                  {mcpIds.map((id) => (
+                    <span className="pill" key={id}>
+                      🔌 {nameOf(id)}
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        onClick={() => toggleInList('mcp_ids', mcpIds, id)}
+                        aria-label={`移除 MCP「${nameOf(id)}」`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <span className="field-help">
+            只影响这个协作组里的该岗位，不改智能体页面的常规分配 —— 方便某个任务临时增减技能，用完删掉即可。
+            「跟随智能体」时显示的是智能体页面的常规分配数。
+          </span>
+        </div>
+      )}
+
+      {pickerOpen === 'skills' && (
+        <Modal
+          wide
+          title={`协作技能 · ${node.label || node.key}`}
+          onClose={() => setPickerOpen(null)}
+          footer={
+            <button className="btn primary" onClick={() => setPickerOpen(null)}>
+              完成（已选 {skillIds?.length ?? 0} 个）
+            </button>
+          }
+        >
+          <SkillPicker
+            skills={matchingSkills}
+            selected={skillIds ?? []}
+            onChange={(next) => onPatch({ skill_ids: next })}
+          />
+        </Modal>
+      )}
+      {pickerOpen === 'mcp' && (
+        <Modal
+          wide
+          title={`协作 MCP · ${node.label || node.key}`}
+          onClose={() => setPickerOpen(null)}
+          footer={
+            <button className="btn primary" onClick={() => setPickerOpen(null)}>
+              完成（已挂 {mcpIds?.length ?? 0} 个）
+            </button>
+          }
+        >
+          <McpPicker
+            servers={assignableMcp}
+            selected={mcpIds ?? []}
+            onChange={(next) => onPatch({ mcp_ids: next })}
+          />
+        </Modal>
+      )}
+    </Section>
   )
 }
 
@@ -407,6 +626,7 @@ function TeamPanel({
           <NumberField label="token 上限（0=不限）" value={draft.budget.max_tokens} onChange={(v) => setBudget({ max_tokens: v })} />
           <NumberField label="运行时限（秒）" value={draft.budget.timeout_seconds} onChange={(v) => setBudget({ timeout_seconds: v })} />
           <NumberField label="单步限时·秒（0=不限）" value={draft.budget.step_timeout_seconds ?? 36000} onChange={(v) => setBudget({ step_timeout_seconds: v })} />
+          <NumberField label="并行上限（1=串行）" value={draft.budget.max_parallel ?? 1} onChange={(v) => setBudget({ max_parallel: v })} />
         </div>
         <span className="field-help">任何一项超限都会挂起并明确提示，不会静默烧钱。</span>
       </Section>

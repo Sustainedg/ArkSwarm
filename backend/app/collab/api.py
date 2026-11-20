@@ -9,13 +9,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from .. import attachments
 from ..auth_deps import current_user, owner_id_for, require_owned
 from ..db import SessionLocal, get_session
-from ..models import AgentProfile, User, utcnow
+from ..models import AgentProfile, McpServer, Skill, User, utcnow
 from ..transport.sse import sse_stream
 from .bus import bus, chat_bus
 from . import engine, execution, graph as graph_service, store
@@ -73,6 +74,54 @@ async def _assert_graph_agents_owned(
             )
 
 
+async def _assert_graph_refs_owned(
+    session: AsyncSession, user: User, graph: GraphSpec
+) -> None:
+    """拒绝让协作图引用别人的技能 / MCP：节点级覆盖会把对方服务器的密钥带进一次运行。
+
+    可见口径与列表一致（见 ``runtime/skills.py`` 与 ``runtime/mcp.py``）：共享技能、内核配置
+    扫来的共享 MCP 人人可用；平台通用技能 / 通用 MCP 与内置 MCP 按用户隔离（内置项各用户各一份）。
+    """
+    if user.role == "admin":
+        return
+    owner_id = user.id
+    skill_ids = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(Skill.id).where(or_(Skill.owner_id.is_(None), Skill.owner_id == owner_id))
+            )
+        ).all()
+    }
+    mcp_ids = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(McpServer.id).where(
+                    or_(McpServer.owner_id == owner_id, McpServer.type_id.is_not(None))
+                )
+            )
+        ).all()
+    }
+    for node in graph.nodes:
+        for field, allowed, label in (
+            ("skill_ids", skill_ids, "技能"),
+            ("mcp_ids", mcp_ids, "MCP 服务器"),
+        ):
+            value = getattr(node, field, None)
+            if value is None:
+                continue
+            for ref in value:
+                if ref not in allowed:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"节点「{node.label or node.key}」引用了"
+                            f"不属于你的{label}，请重新选择自己的"
+                        ),
+                    )
+
+
 async def _owned_team(team_id: str, session: AsyncSession, user: User):
     try:
         team = await store.get_team(session, team_id)
@@ -109,6 +158,7 @@ async def create_team(
     user: Annotated[User, Depends(current_user)] = None,
 ) -> TeamRead:
     await _assert_graph_agents_owned(session, user, payload.graph)
+    await _assert_graph_refs_owned(session, user, payload.graph)
     team = await store.create_team(session, payload, owner_id=owner_id_for(user))
     return store.to_read(team, await _known_agent_profile_ids(session, user))
 
@@ -133,6 +183,7 @@ async def save_team(
     await _owned_team(team_id, session, user)
     if payload.graph is not None:
         await _assert_graph_agents_owned(session, user, payload.graph)
+        await _assert_graph_refs_owned(session, user, payload.graph)
     try:
         team = await store.save_team(session, team_id, payload)
     except store.TeamKeyInUse as exc:
@@ -255,8 +306,9 @@ async def create_run(
         graph = graph_service.from_storable(team.graph)
     except ValueError:
         graph = GraphSpec()
-    # 老库 / 管理员建的图里也可能残留别人的智能体，运行前再拦一次。
+    # 老库 / 管理员建的图里也可能残留别人的智能体 / 技能 / MCP，运行前再拦一次。
     await _assert_graph_agents_owned(session, user, graph)
+    await _assert_graph_refs_owned(session, user, graph)
     try:
         run = await store.create_run(session, payload, owner_id=owner_id_for(user))
     except store.TeamNotFound as exc:
@@ -549,6 +601,9 @@ async def patch_run_budget(
         budget.timeout_seconds = payload.timeout_seconds
     if payload.step_timeout_seconds is not None:
         budget.step_timeout_seconds = payload.step_timeout_seconds
+    if payload.max_parallel is not None:
+        # 并行上限不涉及「不能压到已用量之下」：随时可调（含调回 1 = 串行）
+        budget.max_parallel = payload.max_parallel
 
     run.budget = graph_service.budget_to_storable(budget)
     # 预算超限的挂起原因已经不再成立，清掉它让「继续」按钮语义干净。

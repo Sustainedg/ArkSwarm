@@ -12,7 +12,6 @@ import type { RenderMessage } from './MessageView'
 import { TicketBoard } from './TicketBoard'
 import { Modal } from './Modal'
 import { api, ApiError, collabRunFileUrl, streamGet, streamPost } from '../lib/api'
-import { ticketStateMeta } from '../lib/collabDraft'
 import { collabChoiceAnswer, findPendingCollabAsks } from '../lib/collabAsk'
 import {
   applyChatEvent, advanceOvertakenByTicketSteps, chatAdvanceFrom, dismissChatAdvance,
@@ -102,7 +101,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const streamedStepIds = useMemo(
     () => new Set([
       ...(turn?.completed ?? []).map((step) => step.stepId),
-      ...(turn?.live ? [turn.live.stepId] : []),
+      ...(turn?.live ?? []).map((step) => step.stepId),
     ]),
     [turn?.completed, turn?.live],
   )
@@ -113,7 +112,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
     [detail?.steps, leaderKey, streamedStepIds],
   )
   const chatMessages = detail?.chat_messages ?? []
-  const leaderLive = turn?.live?.nodeKey === leaderKey ? turn.live : null
+  const leaderLive = turn?.live?.find((step) => step.nodeKey === leaderKey) ?? null
   const status = turn?.status ?? detail?.status ?? 'waiting_user'
 
   const loadRuns = useCallback(async () => {
@@ -628,7 +627,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
         steps: detail?.steps ?? [],
         tickets: detail?.tickets ?? [],
         agents,
-        live: turn?.live ?? null,
+        live: turn?.live ?? [],
         streamed: turn?.completed ?? [],
         runStatus: status,
       }),
@@ -661,12 +660,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
   const advanceAsk = chatTurn.live ? null : (chatTurn.advance ?? persistedAdvance)
   const runUsage = summarizeUsage([detail?.usage])
   const usedTokens = rawUsageTotal(detail?.usage)
-  // 顶栏的工单状态摘要：不用打开抽屉也能一眼看出卡在哪
-  const ticketCounts = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const ticket of detail?.tickets ?? []) counts[ticket.state] = (counts[ticket.state] ?? 0) + 1
-    return counts
-  }, [detail])
 
   return (
     <MediaUrlProvider
@@ -704,36 +697,13 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
       <section className="collab-main">
         {detail ? (
           <>
+            {/* 顶栏只放操作按钮：运行标题、状态、预算与工单摘要都在左栏列表与工单看板里看。 */}
             <div className="collab-topbar">
-              <div style={{ minWidth: 0 }}>
-                <div className="row" style={{ gap: 8 }}>
-                  <span className="collab-run-title">{detail.title}</span>
-                  <span className={`pill ${RUN_STATUS[status]?.pill ?? ''}`}>{RUN_STATUS[status]?.label ?? status}</span>
-                </div>
-                <div className="dim small">
-                  {detail.team_name} · 已用 {detail.steps_used}/{detail.budget?.max_steps ?? '—'} 步 ·{' '}
-                  {detail.tickets_used}/{detail.budget?.max_tickets ?? '—'} 张工单
-                  {detail.budget?.max_rounds_per_ticket
-                    ? ` · 单工单最多返工 ${detail.budget.max_rounds_per_ticket} 轮`
-                    : ''}
-                  {runUsage.total > 0 && ` · ${runUsage.total.toLocaleString()} tok`}
-                </div>
-                {detail.tickets.length > 0 && (
-                  <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                    {Object.entries(ticketCounts).map(([state, count]) => (
-                      <span key={state} className={`pill ${ticketStateMeta(state).pill}`}>
-                        {ticketStateMeta(state).label} {count}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="spacer" style={{ flex: 1 }} />
-              <div className="row" style={{ gap: 6 }}>
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                 <button
-                  className={`btn sm collab-progress-trigger${progressAttention ? ' attention' : ''}`}
-                  onClick={() => setProgressOpen(true)}
-                  title="查看岗位推进、实时状态与内部对话入口"
+                  className={`btn sm collab-progress-trigger${progressAttention ? ' attention' : ''}${progressOpen ? ' open' : ''}`}
+                  onClick={() => setProgressOpen((prev) => !prev)}
+                  title="查看流程图实况、岗位状态与内部对话入口"
                 >
                   <span>🧭 协作进度</span>
                   <span className="collab-progress-trigger-count">{progressDone}/{progress.nodes.length}</span>
@@ -785,6 +755,7 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               </div>
             </div>
 
+            <div className="collab-stack">
             {turn && turn.notices.filter((notice) => notice.level !== 'ask').length > 0 && (
               <div className="stack" style={{ gap: 6, padding: '0 22px 6px' }}>
                 {turn.notices.filter((notice) => notice.level !== 'ask').slice(-4).map((notice) => (
@@ -926,6 +897,24 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
               </div>
             )}
 
+            {progressOpen && (
+              <CollabProgressBoard
+                nodes={progress.nodes}
+                edges={progress.edges}
+                steps={detail.steps}
+                tickets={detail.tickets}
+                live={turn?.live ?? []}
+                streamed={turn?.completed ?? []}
+                onClose={() => setProgressOpen(false)}
+                onOpenTicket={(ticketId) => {
+                  setBoardTicketId(ticketId)
+                  setBoardOpen(true)
+                }}
+                escapeDisabled={boardOpen}
+              />
+            )}
+            </div>
+
             {/* 与普通对话共用同一个输入区组件与版式：圆角输入框、附件 / 语音 / 发送都在框里。 */}
             <div className="chat-composer">
               <div className="chat-composer-inner">
@@ -1014,27 +1003,6 @@ export function CollabRunsPanel({ runId, teams, agents, onOpenRun }: Props) {
             setBoardOpen(false)
             setBoardTicketId(null)
           }}
-        />
-      )}
-
-      {progressOpen && detail && (
-        <CollabProgressBoard
-          nodes={progress.nodes}
-          edges={progress.edges}
-          steps={detail.steps}
-          tickets={detail.tickets}
-          live={turn?.live ?? null}
-          streamed={turn?.completed ?? []}
-          runTitle={detail.title}
-          teamName={detail.team_name ?? team?.name ?? '协作组'}
-          statusLabel={RUN_STATUS[status]?.label ?? status}
-          statusPill={RUN_STATUS[status]?.pill ?? ''}
-          onClose={() => setProgressOpen(false)}
-          onOpenTicket={(ticketId) => {
-            setBoardTicketId(ticketId)
-            setBoardOpen(true)
-          }}
-          escapeDisabled={boardOpen}
         />
       )}
 

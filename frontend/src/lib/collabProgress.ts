@@ -17,10 +17,20 @@ import type {
 
 export type CollabAgentState = 'pending' | 'active' | 'waiting' | 'error' | 'done'
 
+/** 岗位头像的完整三字段：`AgentAvatar` 组件按「自定义图 > 头像包 > emoji」依次回退。 */
+export interface CollabAgentFace {
+  avatar: string
+  avatarPreset?: string | null
+  avatarFile?: string | null
+}
+
 export interface CollabAgentProgress {
   key: string
   label: string
   avatar: string
+  avatarPreset?: string | null
+  avatarFile?: string | null
+  agentId?: string | null
   duty: string
   isEntry: boolean
   state: CollabAgentState
@@ -179,7 +189,8 @@ interface BuildProgressArgs {
   steps: CollabStep[]
   tickets: CollabTicket[]
   agents: AgentProfile[]
-  live?: LiveStep | null
+  /** 并行波次里可能同时有多个岗位在流式输出；单个（串行场景）或数组都接受 */
+  live?: LiveStep | LiveStep[] | null
   streamed?: FinishedStep[]
   runStatus: CollabRunStatus
 }
@@ -271,6 +282,7 @@ export function buildCollabProgress({
   runStatus,
 }: BuildProgressArgs): { nodes: CollabAgentProgress[]; edges: CollabFlowEdge[] } {
   if (!graph || graph.nodes.length === 0) return { nodes: [], edges: [] }
+  const liveSteps = live == null ? [] : Array.isArray(live) ? live : [live]
 
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const nodes = orderedCollabNodes(graph, entryKey).map((node): CollabAgentProgress => {
@@ -285,7 +297,7 @@ export function buildCollabProgress({
     const activeTickets = tickets.filter(
       (ticket) => ticket.holder_key === node.key && ACTIVE_TICKET_STATES.has(ticket.state),
     )
-    const isLive = live?.nodeKey === node.key
+    const isLive = liveSteps.some((step) => step.nodeKey === node.key)
     const blockedTicket = activeTickets.find((ticket) => ticket.state === 'blocked')
     const activeTicket = blockedTicket ?? activeTickets[0]
     // 运行已不在进行中，但这一步还停在 streaming / 被中断：说明它没跑完（例如服务重启）。
@@ -331,6 +343,9 @@ export function buildCollabProgress({
       key: node.key,
       label: node.label || node.key,
       avatar: agentsById.get(node.agent_profile_id)?.avatar ?? '🤖',
+      avatarPreset: agentsById.get(node.agent_profile_id)?.avatar_preset ?? null,
+      avatarFile: agentsById.get(node.agent_profile_id)?.avatar_file ?? null,
+      agentId: node.agent_profile_id,
       duty: node.duty,
       isEntry: node.key === entryKey,
       state,

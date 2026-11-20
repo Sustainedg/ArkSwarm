@@ -282,11 +282,14 @@ async def _build_context(
     home_scope: str,
     prompt: str,
     history: list[dict[str, str]] | None = None,
+    node: NodeSpec | None = None,
 ) -> tuple[AgentContext, list[str]]:
     """组装一次运行的上下文，并把分配到的技能与 MCP 物化进该内核的隔离目录。
 
     物化走的是与对话链路（``runtime.service.prepare_run``）**完全相同的一条路径**：
     技能先落、MCP 复用同一个「家」，物化告警原样交回调用方，由运行层作为 notice 暴露。
+    节点带了协作专属分配（``skill_ids`` / ``mcp_ids`` 非 None）时以节点为准 ——
+    只影响本次协作运行，不写回智能体页面的配置。
     """
     profile = resolved.profile
     definition = resolved.definition
@@ -316,11 +319,14 @@ async def _build_context(
         prompt=text,
     )
     # 技能与 MCP 共用一个「家」：先物化技能定下 home_dir，MCP 再复用它（顺序不能反）。
+    # 协作专属分配（node.skill_ids / node.mcp_ids 非 None）在这条路径上覆盖默认来源。
     warnings = await prepare_skill_home(
-        session, definition, profile, None, ctx, scope_id=home_scope
+        session, definition, profile, None, ctx,
+        scope_id=home_scope, override_ids=node.skill_ids if node else None,
     )
     warnings += await prepare_mcp_home(
-        session, definition, profile, None, ctx, scope_id=home_scope
+        session, definition, profile, None, ctx,
+        scope_id=home_scope, override_ids=node.mcp_ids if node else None,
     )
     return ctx, warnings
 
@@ -352,6 +358,7 @@ async def prepare_step(
         resolved=resolved,
         home_scope=_home_scope(run.id, resolved.profile.id, "step"),
         prompt=prompt,
+        node=node,
     )
 
     prepared = PreparedStep(
@@ -390,6 +397,7 @@ async def prepare_chat(
         resolved=resolved,
         home_scope=_home_scope(run.id, resolved.profile.id, "chat"),
         prompt=prompt,
+        node=node,
     )
     return PreparedStep(
         profile=resolved.profile,

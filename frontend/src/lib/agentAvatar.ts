@@ -21,9 +21,15 @@ export function isAvatarPreset(value: string | null | undefined): value is strin
   return /^pack-\d{3}$/.test(value ?? '')
 }
 
+/**
+ * 头像包内容版本：头像包整体重处理时 +1（白底 → 透明 v2；修复浅色人物被误抠 → v3）。地址带它当
+ * 查询串，浏览器缓存随之整体失效 —— 否则文件名没变，页面会一直用旧的白底缓存。
+ */
+const AVATAR_PACK_REV = '3'
+
 /** 内置头像包图片地址（public 目录，随构建发布，无需鉴权）。 */
 export function avatarPresetUrl(preset: string): string {
-  return `${BASE}/avatars/${preset}.webp`
+  return `${BASE}/avatars/${preset}.webp?v=${AVATAR_PACK_REV}`
 }
 
 /** 随机抽一个内置头像包编号；排除当前正在用的那张，让「随机生成」次次都有新面孔。 */

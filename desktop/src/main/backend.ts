@@ -19,6 +19,11 @@ export interface SpawnOptions {
   port: number;
   /** 后端应用根（releases/current 的 backend；源码模式 = 仓库 backend/）。 */
   backendRoot: string;
+  /**
+   * 跑后端的解释器：内置运行时（依赖已预装）或 userData 里的 venv python。
+   * 由 pythonRuntime.ensurePythonRuntime 决定，别在这里自己猜。
+   */
+  python: string;
 }
 
 export interface BackendHandle {
@@ -76,7 +81,7 @@ function killTree(pid: number, force: boolean): void {
 /** 拉起后端（uvicorn）。要求 venv 已就绪（pythonRuntime.ts 负责）。 */
 export function spawnBackend(opts: SpawnOptions): BackendHandle {
   const child = spawn(
-    venvPython(),
+    opts.python,
     [
       '-m', 'uvicorn', 'app.main:app',
       '--host', '127.0.0.1',

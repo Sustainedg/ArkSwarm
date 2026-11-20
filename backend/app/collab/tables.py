@@ -42,7 +42,11 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     },
     # ---- 多用户系统：协作组与协作运行按 owner_id 归属。工单和步骤经 run_id 间接归属，不加。
     "collab_teams": {"owner_id": "VARCHAR(64)"},
-    "collab_runs": {"owner_id": "VARCHAR(64)"},
+    "collab_runs": {
+        "owner_id": "VARCHAR(64)",
+        # 步骤序号计数器：并行推进时用「UPDATE ... RETURNING」原子取号，避免撞号
+        "step_seq": "INTEGER NOT NULL DEFAULT 0",
+    },
 }
 
 
@@ -101,6 +105,8 @@ class CollabRun(SQLModel, table=True):
     )
     steps_used: int = Field(default=0)
     tickets_used: int = Field(default=0)
+    #: 步骤序号计数器（原子取号用，见 ``engine._next_sequence``）；老库由 ADDITIVE_COLUMNS 补 0
+    step_seq: int = Field(default=0)
     error: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(UTCDateTime))

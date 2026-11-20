@@ -22,18 +22,26 @@ import {
   toTeamDraft,
   type TeamDraft,
 } from '../lib/collabDraft'
-import type { CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile } from '../lib/types'
+import type {
+  CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile, AgentType, Skill, McpServer,
+} from '../lib/types'
 import { AgentAvatar } from './AgentAvatar'
 
 interface Props {
   teamId?: string
   teams: CollabTeam[]
   agents: AgentProfile[]
+  /** 技能 / MCP / 内核目录：节点级「协作专属分配」的选择器要用（与智能体表单同一套数据源） */
+  skills: Skill[]
+  mcpServers: McpServer[]
+  types: AgentType[]
   onOpenTeam: (teamId: string | null) => void
   onTeamsChanged: () => void | Promise<void>
 }
 
-export function CollabSettingsPanel({ teamId, teams, agents, onOpenTeam, onTeamsChanged }: Props) {
+export function CollabSettingsPanel({
+  teamId, teams, agents, skills, mcpServers, types, onOpenTeam, onTeamsChanged,
+}: Props) {
   const [draft, setDraft] = useState<TeamDraft | null>(null)
   const [selection, setSelection] = useState<CollabSelection | null>(null)
   const [issues, setIssues] = useState<CollabIssue[]>([])
@@ -251,6 +259,9 @@ export function CollabSettingsPanel({ teamId, teams, agents, onOpenTeam, onTeams
               draft={draft}
               selection={selection}
               agents={agents}
+              skills={skills}
+              mcpServers={mcpServers}
+              types={types}
               issues={issues}
               onPatchTeam={patchTeam}
               onPatchNode={patchNode}

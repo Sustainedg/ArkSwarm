@@ -12,8 +12,10 @@
 Electron 主进程（薄壳）
  ├─ 首启 / 整包升级物化：安装包内代码 → userData/releases/<版本>/ + current 软链（bootstrap.ts）
  ├─ 选端口：8010 优先，被占退随机（ports.ts）
- ├─ Python 运行时：内嵌解释器 → venv → pip 装依赖（pythonRuntime.ts；按 requirements 的
- │    sha256 指纹判断，变了才重装 —— 整包升级引入新依赖时不会漏装）
+ ├─ Python 运行时：**依赖在构建期就装进内嵌解释器**（prepare-python-deps.mjs），
+ │   运行时按 requirements 的 sha256 指纹直接选用 —— 首启不建 venv、不跑 pip、不联网；
+ │   指纹对不上（开发模式 / 目录损坏）才回退：离线 wheelhouse → venv → 在线 pip
+ │   （pythonRuntime.ts，方案 A + C）
  ├─ Node 运行时：内嵌 Node + npm，全局前缀钉在 userData（runtimeEnv.ts，M4）
  ├─ spawn 后端：uvicorn --host 127.0.0.1 --app-dir releases/current/backend
  ├─ 健康检查门控 → loadURL(127.0.0.1:<port>)
@@ -27,7 +29,7 @@ Electron 主进程（薄壳）
 | 目录 | 内容 | 删了会怎样 |
 | --- | --- | --- |
 | `data/` | `ARKSWARM_DATA_DIR`：SQLite、工作区、`secret.key`、内核隔离配置 | ⚠️ 数据全丢 |
-| `python/` | 内嵌解释器 + venv | 下次启动自动重建（离线秒级 + 首次联网装依赖） |
+| `python/` | **仅兜底路径**：内嵌解释器副本 + venv（正常安装走内置运行时，这里可能不存在） | 下次启动自动重建（离线 wheelhouse 装着；实在没有才联网） |
 | `node/global/` | npm 全局安装前缀（内核 CLI 装在这里）+ `node/cache/` | 内核需要重装，不影响对话数据 |
 | `releases/` | 后端版本目录 + `current` 指针（复用主项目自更新机制） | 回滚历史丢失，不影响运行 |
 
@@ -152,15 +154,16 @@ git push origin v0.1.3
 
 打包产物以 `ARKSWARM_DESKTOP_SMOKE=1` 启动：主进程只跑「运行时 → 后端 → `/api/health`」，
 不建窗口 / 托盘，就绪后打印 `[desktop] smoke ok version=… port=…` 并退出 0；失败退出 1，
-10 分钟总看门狗退出 2。它验证的是**真实安装包**里的整条链路（内嵌 Python 建 venv、
-装依赖、起 uvicorn），而不是源码模式。
+10 分钟总看门狗退出 2。它验证的是**真实安装包**里的整条链路（内置运行时直接起 uvicorn，
+依赖已预装、不联网），而不是源码模式 —— 首启慢 / 依赖缺失会在这一步暴露。
 
 ### 本地打包
 
 ```bash
 cd desktop
-node scripts/fetch-python.mjs   # 按当前平台下载（产物进 build/python-runtime/<arch>/）
-node scripts/fetch-node.mjs     # 同上（build/node-runtime/<arch>/）
+node scripts/fetch-python.mjs        # 按当前平台下载（产物进 build/python-runtime/<arch>/）
+node scripts/prepare-python-deps.mjs # 依赖预装进该解释器 + 下载离线 wheelhouse（需联网）
+node scripts/fetch-node.mjs          # 同上（build/node-runtime/<arch>/）
 node scripts/prepare-backend.mjs
 npm run compile && npx electron-builder --publish never
 ```
@@ -296,13 +299,25 @@ xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
 - **Windows npm 内核**：`.cmd` 垫片已处理；若某个内核的 Windows 包不是 Node 程序
   （未来变化），需要按新通道重新评估；
 - **内嵌运行时签名**：有证书时逐个签（公证要求）；无证书时整包 ad-hoc 签，二者不会同时发生；
+- **安装包体积**：为换取首启零联网，Python 依赖与离线 wheelhouse 随包分发（压缩后约
+  +20–30MB）；后续整包升级走 `.blockmap` 差分，只传变化块，不会每次都全量下发；
+- **wheelhouse 与公证**：wheel 里含 Mach-O（`.so`），当前构建未签名；将来启用 Developer ID
+  公证时，如果 notarytool 报「whl 内有未签名二进制」，把 Mac 包的 wheelhouse 去掉即可
+  （方案 A 已覆盖正常路径，C 只是兜底）；
 - 桌面版**不承诺 Linux**（electron-builder 的 AppImage 只是顺带产物）。
 
 ## 7. 排障
 
+正常安装**首启不联网**：依赖在构建期已装进内嵌解释器（方案 A），指纹对不上才回退到
+离线 wheelhouse（方案 C），最后才是在线 pip。真走到在线这一步时，桌面版也认
+`ARKSWARM_PIP_INDEX_URL`（镜像源）与 `ARKSWARM_INSTALL_PROXY`（安装期代理），
+语义与 Docker 一致、只作用于 pip 子进程。
+
 | 症状 | 先看 |
 | --- | --- |
-| 启动卡在「安装后端依赖」 | 网络 / 代理；`userData/python/venv` 可整目录删掉重建（对话数据不受影响） |
+| 启动报 `EPERM: operation not permitted, symlink 'V…' -> …\current` | **旧壳的 bug**（v0.1.3 及以前用 `fs.symlinkSync(..., 'dir')`，Windows 普通用户没权限）：升级到改用 junction 的修复版即可。旧包自救：开启「开发者模式」或以管理员启动一次，也可手动<br>`mklink /J "%APPDATA%\ArkSwarm\releases\current" "%APPDATA%\ArkSwarm\releases\V0.1.3"` |
+| 首启仍停在「安装后端依赖」（正常应秒开）/ 报 `ProxyError ... Cannot connect to proxy`（10053/10060） | 先看启动日志里的 `Python 运行时：bundled` 还是 `venv`：`venv` 说明内置依赖指纹没对上（开发模式 / resources 被改），走了兜底。若在在线安装阶段失败：Windows 系统代理残留（代理软件退出后注册表设置还在），关闭「设置 → 网络和 Internet → 代理」或启动代理软件；应用会自动绕过连不上的系统代理重试一次。仍失败看 `%APPDATA%\ArkSwarm\install.log`，按上面两个环境变量配镜像 / 代理。`userData/python/venv` 可整目录删掉重建（对话数据不受影响） |
+| 启动日志出现 `无法创建 current 目录链接` | 文件系统不支持重解析点（FAT/exFAT、部分网络盘）或被安全软件拦截：应用会降级为直接从版本目录运行（后端一键更新不可用，桌面端本来走整包更新），不影响使用 |
 | 内核装了但启动报「未安装或不在 PATH」 | 是否用的是打包版（`resources/node-runtime` 是否存在）；`userData/node/global/bin` 是否在 PATH |
 | 壳更新提示 404 / 找不到 latest.yml | 滚动 Release `desktop-latest` 是否还在、是否被误设成非 prerelease；`ARKSWARM_DESKTOP_UPDATE_URL` 是否被覆盖 |
 | macOS 公证失败 | 日志里搜 `sign-runtimes`；确认内嵌运行时里没有漏签的 Mach-O；检查 entitlements |

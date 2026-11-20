@@ -35,7 +35,7 @@ frontend/src/mobile 移动端 pages/components + mobile.css · PWA   纯展示 +
         │  REST /api/*  ·  SSE POST /api/conversations/{id}/messages · GET .../{id}/stream
 api/                路由 · Pydantic 校验 · SSE 封装 · HTTP 状态码   薄
         │
-collab/             协作域（旁路）：编排图 · 工单协议 · 串行引擎 · 运行 API
+collab/             协作域（旁路）：编排图 · 工单协议 · 波次并行引擎 · 运行 API
 im/                 IM 域（旁路）：连接登记 · 配对 · 平台适配器（叶子）· 运行桥
         │
 runtime/service.py  编排：对话→智能体→适配器（网关解密密钥与地址）、能力决策、历史回放、落库
@@ -354,7 +354,7 @@ class AcmeHarness(OpenAIHarnessBase):
 | 任意 OpenAI 兼容端点 | 已有 `openai_harness.py`（OpenRouter/vLLM/Ollama/Kimi/GLM） | 新供应商 = 一个子类 |
 | 未来的 Aider / Cline / Continue 等 CLI | 无适配器 | 按 §6.1 写模块；或先用 §6.3 |
 | 非 OpenAI 协议的 API（如 Anthropic Messages API） | 复用 `OpenAIHarnessBase` 不合适 | 以 `Runtime.API` 直接实现 `async stream(ctx)`，产出标准事件即可 |
-| 需要"多智能体协作/编排" | 已有独立协作域 `app/collab/`（可视化编排 + 工单协议 + 串行引擎），见 `docs/collaboration-design.md` | 在 `app/collab/` 内扩展；每一步仍复用 `runtime.runner` 与事件协议，不要改适配器，也不要让框架层反向依赖协作域 |
+| 需要"多智能体协作/编排" | 已有独立协作域 `app/collab/`（可视化编排 + 工单协议 + 波次并行引擎，默认串行），见 `docs/collaboration-design.md` | 在 `app/collab/` 内扩展；每一步仍复用 `runtime.runner` 与事件协议，不要改适配器，也不要让框架层反向依赖协作域 |
 
 判断标准始终是：**这次改动是否只落在 `agents/builtin/` 一个文件里？** 如果能，就说明架构还健康。
 
@@ -407,9 +407,6 @@ class AcmeHarness(OpenAIHarnessBase):
   两端的尺寸微调写在共享段之后）。**回复期间继续输入**用 `queueWhenBusy`：两端对话页都开着它，
   框里有内容时右侧按钮是「排队发送」（点一下交给页面入队），空着时才是「停止」；队列与
   「本轮结束自动发出」的逻辑属于页面（`ChatPage` / `MobileChatPage`），组件只提供开关。
-- **图片 / 插画类的多主题资源在构建期换算，不要在手机上跑实时滤镜**：协作办公室底图就是这么做的
-  —— `scripts/gen_office_bg.py` 从同一份几何产出深 / 浅两张 SVG，前端按主题选（见
-  `frontend/public/office/`、`components/CollabOfficeMap.tsx`）。
 - **移动端锁定缩放**：它是「固定外壳」的应用形态，入口视口写 `maximum-scale=1.0, user-scalable=no`，
   并在 `mobile.css` 用 `touch-action: pan-x pan-y` 兜底（iOS Safari 忽略 `user-scalable=no`）；
   因此移动端输入框字号必须 ≥ 16px（iOS 聚焦小于 16px 的输入框会强制放大页面）。桌面端不禁用缩放。

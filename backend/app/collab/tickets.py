@@ -37,6 +37,8 @@ MAX_REPAIR_TRIES = 200
 #: ask_user 的可点选项数量：少于 2 条就不叫「选择」，多到用户看不完也没有意义
 MIN_ASK_OPTIONS = 2
 MAX_ASK_OPTIONS = 12
+#: 一次 split 最多拆几张子工单：多到这个数就该问用户怎么拆了（防「一拆二十张」失控）
+MAX_SPLIT_TICKETS = 8
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SMART_QUOTES = {
@@ -110,9 +112,15 @@ class TicketDraft:
     acceptance: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
     deliverables: list[str] = field(default_factory=list)
+    #: 一次拆多张时，这张子工单自己的派发对象（覆盖外层 ``assignee``）。
+    #: 留空 = 用外层的：单张拆分与既有行为完全一致。
+    assignee: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        # assignee 是「派发路由」而不是工单内容：不混进 brief（工单字段见 render_protocol_guide）
+        data.pop("assignee", None)
+        return data
 
     @classmethod
     def from_value(cls, value: Any) -> TicketDraft:
@@ -140,6 +148,7 @@ class TicketDraft:
             acceptance=_lines(value.get("acceptance") or value.get("acceptance_criteria")),
             constraints=_lines(value.get("constraints")),
             deliverables=_lines(value.get("deliverables") or value.get("deliverable")),
+            assignee=_text(value.get("assignee")),
         )
 
 
@@ -149,6 +158,9 @@ class WorkOrder:
 
     action: TicketAction
     ticket: TicketDraft | None = None
+    #: 一次 split 拆出的**全部**子工单（单张时也放这里，``ticket`` 保持兼容）。
+    #: 引擎按 ``assignees`` 逐张派发；数量超过并行上限时由调度分批，不在这里截断。
+    tickets: list[TicketDraft] = field(default_factory=list)
     assignee: str | None = None
     parent_ticket: str | None = None
     verdict: str | None = None
@@ -726,9 +738,24 @@ def _build_order(obj: dict[str, Any]) -> WorkOrder:
         raise ValueError(f"不认识的 mode：{raw_mode}；允许的取值：{allowed_modes}") from None
 
     draft = TicketDraft.from_value(ticket_value)
+    # 一次 split 拆多张：``tickets`` 是数组、每项都是工单字段；单张时 ``ticket`` 就是它。
+    # 两种写法并存（模型经常只拆一张），引擎统一读 ``order.tickets``。
+    multi_value = obj.get("tickets")
+    drafts: list[TicketDraft] = []
+    if isinstance(multi_value, list) and multi_value:
+        for item in multi_value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    drafts.append(TicketDraft(title=text))
+            elif isinstance(item, dict):
+                drafts.append(TicketDraft.from_value(item))
+    if not drafts and ticket_value is not None:
+        drafts = [draft]
     return WorkOrder(
         action=action,
         ticket=draft if (ticket_value is not None) else None,
+        tickets=drafts,
         assignee=_text(fields.get("assignee")) or None,
         parent_ticket=_text(fields.get("parent_ticket")) or None,
         verdict=verdict,
@@ -998,6 +1025,11 @@ def resolve_order_targets(order: WorkOrder, aliases: Mapping[str, str]) -> None:
         order.assignee = assignee
     if rework_to != order.rework_to:
         order.rework_to = rework_to
+    # 拆多张时每张自带的 assignee 同样做唯一匹配归一（模型常写显示名）
+    for draft in order.tickets:
+        resolved = resolve(draft.assignee)
+        if resolved != draft.assignee:
+            draft.assignee = resolved
 
 
 def validate_order(
@@ -1042,8 +1074,30 @@ def validate_order(
             return f"delegate 必须给出 assignee；你只能派给：{'、'.join(assignees)}"
         if order.assignee not in assignees:
             return f"不能把工单交给「{order.assignee}」；你只能派给：{'、'.join(assignees)}"
-        if order.mode is DeliveryMode.SPLIT and (order.ticket is None or not order.ticket.title):
-            return "mode=split 时必须带有 ticket，且 ticket.title 不能为空（子工单要有名字）"
+        if order.mode is DeliveryMode.SPLIT:
+            drafts = order.tickets or ([order.ticket] if order.ticket else [])
+            if not drafts or not any(draft.title for draft in drafts):
+                return (
+                    "mode=split 时必须带有 ticket（或 tickets 数组），"
+                    "且每张子工单都要有 title"
+                )
+            if any(not draft.title for draft in drafts):
+                return (
+                    "mode=split 拆多张时 tickets 里每张都必须有 title"
+                    "（缺标题的子工单没法追踪）"
+                )
+            if len(drafts) > MAX_SPLIT_TICKETS:
+                return (
+                    f"一次 split 最多拆 {MAX_SPLIT_TICKETS} 张子工单（这次给了 {len(drafts)} 张）："
+                    "拆得更细请分几轮进行，或先和用户确认怎么分工"
+                )
+            # 拆多张时每张可以自带 assignee（分派给不同岗位并行干）；不带就用外层的
+            for draft in drafts:
+                if draft.assignee and draft.assignee not in assignees:
+                    return (
+                        f"不能把子工单「{draft.title or '（无标题）'}」交给「{draft.assignee}」；"
+                        f"你只能派给：{'、'.join(assignees)}"
+                    )
 
     if order.action is TicketAction.REVIEW:
         if order.verdict is None:
@@ -1122,6 +1176,13 @@ def render_protocol_guide(
             "（不要写岗位显示名，也不要自己编一个）；mode 决定语义——"
             "handoff（转交：同一件活换人做，我继续等结果，ticket 可省略）；"
             "split（拆子工单：我是子工单的发起人，等它完成后我来汇总，必须给 ticket.title）。"
+        )
+        rules.append(
+            "一次 split 可以拆出多张子工单：把 tickets 写成数组（每项都是一份完整的 ticket 字段），"
+            "每张都会成为独立追踪的子工单；不指定每张的 assignee 时全部交给外层的 assignee，"
+            "要分给不同岗位并行干时在每张里写它自己的 assignee。拆多张时每张都要有 title，"
+            f"一次最多 {MAX_SPLIT_TICKETS} 张。只在确实能并行分工时才这么做——"
+            "先后依赖的活请拆成几轮，每轮等上一轮交回结论后再拆下一张。"
         )
         rules.append(
             "ticket 只有这几个字段：title / goal / requirements / acceptance / constraints / "
@@ -1244,11 +1305,13 @@ def _delegate_example(assignees: Sequence[str]) -> dict[str, Any]:
         "action": "delegate",
         "mode": "split",
         "assignee": sorted(assignees)[0] if assignees else "<下游节点key>",
-        "ticket": {
-            "title": "…",
-            "goal": "…",
-            "requirements": ["…"],
-            "acceptance": ["…（可判定的验收标准）"],
-            "constraints": ["…"],
-        },
+        "tickets": [
+            {
+                "title": "…（一张子工单干一件事）",
+                "goal": "…",
+                "requirements": ["…"],
+                "acceptance": ["…（可判定的验收标准）"],
+                "constraints": ["…"],
+            }
+        ],
     }

@@ -15,6 +15,7 @@
     "dist:dir": "npm run compile && electron-builder --dir",
     "fetch:node": "node scripts/fetch-node.mjs",
     "fetch:python": "node scripts/fetch-python.mjs",
+    "prepare:deps": "node scripts/prepare-python-deps.mjs",
     "gen:icons": "python3 scripts/gen-icons.py",
     "gen:installer": "python3 scripts/gen-installer-assets.py",
     "start": "electron .",

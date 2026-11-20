@@ -400,6 +400,9 @@ export function AgentsPage() {
           teamId={editingTeamId}
           teams={teams}
           agents={agents}
+          skills={skills}
+          mcpServers={mcpServers}
+          types={types}
           onOpenTeam={openTeam}
           onTeamsChanged={loadTeams}
         />
