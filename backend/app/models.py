@@ -38,6 +38,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "owner_id": "VARCHAR(64)",
         # 「智能体自定义头像文件」是后加的：老行留空，界面回退到 emoji 头像。
         "avatar_file": "VARCHAR(120)",
+        # 「内置头像包编号」是后加的：老行留空，界面回退到 emoji 头像。
+        "avatar_preset": "VARCHAR(32)",
     },
     # 「技能市场页地址」这一列是后加的：老行一律按空串补上（来源仍复用已有的 source_kind）。
     # owner_id 是「按用户隔离技能库」后加的：老行留空 = 全平台共享（内核自带 / 宿主机技能）；
@@ -173,6 +175,10 @@ class AgentProfile(SQLModel, table=True):
     id: str = Field(default_factory=new_id, primary_key=True)
     name: str = Field(sa_column=Column(String(120), nullable=False))
     avatar: str = Field(default="🛠️", sa_column=Column(String(16), nullable=False))
+    #: 内置头像包编号（``pack-001`` ~ ``pack-060``）：随机生成 / 快选从这里选，前端渲染成
+    #: ``/avatars/pack-001.webp``。与 ``avatar``（emoji 兜底）、``avatar_file``（自定义上传）
+    #: 三个并存，显示优先级：自定义上传 > 内置头像包 > emoji。
+    avatar_preset: str | None = Field(default=None, sa_column=Column(String(32)))
     #: 自定义头像文件名（``<智能体id>-<内容摘要>.<png|jpg|webp>``，文件在 ``<数据目录>/avatars/``，
     #: 与用户头像同一个目录与校验管线）。有值时界面优先显示它，否则回退到 emoji 头像。
     avatar_file: str | None = Field(default=None, sa_column=Column(String(120)))
@@ -181,7 +187,7 @@ class AgentProfile(SQLModel, table=True):
     #: 备注
     description: str | None = Field(default=None, sa_column=Column(Text))
     system_prompt: str = Field(default="", sa_column=Column(Text, nullable=False))
-    #: 适配器 id（claude-code / codex / gemini-cli / openai-harness / custom-cli …）
+    #: 适配器 id（claude-code / codex / gemini-cli / deepseek-harness / openai-harness / custom-cli …）
     type_id: str = Field(sa_column=Column(String(64), nullable=False, index=True))
     #: 使用的自定义网关；为空（或指向官方链路）表示「官方默认」——平台不接管路由，
     #: 运行时回落到适配器读到的本机配置（见 ``runtime/gateway.py:bind_gateway``）
@@ -213,8 +219,9 @@ class Skill(SQLModel, table=True):
     """统一编目的技能。
 
     * 内核自带 / 宿主机上已有的技能：``owner_id`` 为空，全平台共享、只读；
-    * 用户自己的技能库（导入、市场安装、跨内核复制）落在
-      ``<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>``，按 ``owner_id`` 隔离。
+    * 用户自己的技能库（导入、市场安装、挂载到其它内核）**按 slug 只存一份**：
+      ``<数据目录>/skill-libraries/<owner_id>/<slug>``，按 ``owner_id`` 隔离；被哪些内核
+      引用登记在同级 ``.mounts.json``，一行对应一个引用它的内核，所有行 ``path`` 指向同一实体。
 
     ``id`` 是稳定标识：共享技能为 ``<type_id>:<slug>``，用户技能为
     ``<type_id>:lib:<owner_id 或 local>:<slug>``（同一 slug 在不同用户下互不冲突）。

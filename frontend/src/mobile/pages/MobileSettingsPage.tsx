@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../components/AuthGate'
 import { THEME_OPTIONS, useThemeMode } from '../../lib/theme'
@@ -5,7 +6,7 @@ import { MobileTopBar } from '../components/MobileTopBar'
 import { ProxySettings } from '../../components/ProxySettings'
 import { UserAvatar } from '../../components/UserAvatar'
 import { TitleSettingsSection } from '../../components/TitleSettings'
-import { refreshShell, useInstallController } from '../pwa'
+import { isIos, isStandalone, refreshShell, useInstallController } from '../pwa'
 
 /**
  * 设置：外观 + 配置入口 + 少数维护动作。
@@ -18,6 +19,8 @@ export function MobileSettingsPage({ version }: { version: string }) {
   const { user, authEnabled, logout } = useAuth()
   const install = useInstallController()
   const { mode, setMode } = useThemeMode()
+  /** 刚切过外观：iOS 独立应用的状态栏样式只在启动时读取，得提示重开才生效 */
+  const [themeChanged, setThemeChanged] = useState(false)
 
   return (
     <div className="m-page">
@@ -60,7 +63,10 @@ export function MobileSettingsPage({ version }: { version: string }) {
                     key={option.value}
                     className={`theme-option${active ? ' active' : ''}`}
                     aria-pressed={active}
-                    onClick={() => setMode(option.value)}
+                    onClick={() => {
+                      setMode(option.value)
+                      setThemeChanged(true)
+                    }}
                   >
                     <span className="theme-option-head">
                       <span className="theme-option-label">{option.label}</span>
@@ -72,6 +78,13 @@ export function MobileSettingsPage({ version }: { version: string }) {
               })}
             </div>
             <p className="dim small">外观只存在本机，不影响别人。</p>
+            {themeChanged && isIos() && isStandalone() && (
+              // iOS 限制：apple-mobile-web-app-status-bar-style 只在应用启动时读取，
+              // 运行中改 meta 不生效 —— 深色下不重开就会留着一条浅色的状态栏（看起来像「顶部空了」）。
+              <p className="dim small">
+                状态栏由 iOS 在启动时读取：请把应用从后台划掉再打开，状态栏才会跟着外观切换。
+              </p>
+            )}
           </div>
 
           <div className="stack" style={{ gap: 8 }}>

@@ -22,7 +22,15 @@ def ctx(**overrides) -> AgentContext:
 
 
 def test_registry_exposes_first_party_adapters():
-    for expected in ("claude-code", "codex", "gemini-cli", "openai-harness", "custom-cli", "hermes-agent"):
+    for expected in (
+        "claude-code",
+        "codex",
+        "gemini-cli",
+        "openai-harness",
+        "custom-cli",
+        "hermes-agent",
+        "deepseek-harness",
+    ):
         assert expected in known_ids()
 
 

@@ -8,9 +8,12 @@
  *   "The signature of the binary ... is invalid" —— 公证直接失败。
  *
  * 什么时候生效：
- *   只有 macOS + 证书环境（CSC_LINK / CSC_NAME 已配置、钥匙串里能找到
- *   "Developer ID Application" 身份）时才动手；本地开发与 unsigned 构建会直接跳过，
- *   不影响打包。
+ *   - 有 Developer ID Application 身份（CSC_LINK / CSC_NAME 已配置）→ 逐个签内嵌运行时，
+ *     交给 electron-builder 后续做顶层签名与公证；
+ *   - **没有证书 → 对整包做 ad-hoc 签名**（`codesign --sign -`）。这一步是必须的：
+ *     electron-builder 改过名/改过 Info.plist 之后，Electron 的原签名已经失效，
+ *     不重签的 `.app` 在用户机器上会被 Gatekeeper 判成「已损坏」，
+ *     而「已损坏」在系统设置里**没有**「仍要打开」的入口。
  *
  * 为什么逐个 `file` 判断再签：
  *   `codesign` 对非 Mach-O 文件（.py、.js、.json）会报错；只对 `file` 识别为
@@ -79,12 +82,49 @@ function isMachO(file) {
   }
 }
 
+/**
+ * 没有证书时的兜底：对整包做 **ad-hoc 签名**（`codesign --sign -`）。
+ *
+ * 为什么需要：
+ *   electron-builder 打包 macOS 时会改名应用、改 Info.plist、换图标，
+ *   这些操作会让 Electron 自带的签名失效。未重新签名的 `.app` 被下载后带上 quarantine，
+ *   Gatekeeper 判定的是「**已损坏**」——这个状态在系统设置里**没有**「仍要打开」的入口，
+ *   用户只能靠终端 `xattr` / 手动签名自救。
+ *
+ * ad-hoc 签名的效果：
+ *   `.app` 重新拥有一份**自洽**的签名（虽然不受 Apple 信任），Gatekeeper 于是降级为
+ *   「**未识别开发者**」——系统设置 → 隐私与安全性会出现「仍要打开」，双击 → 允许即可。
+ *   这是不买证书时能拿到的最好体验；真正的双击无提示仍然需要 Developer ID + 公证。
+ *
+ * 为什么用 --deep：
+ *   Electron 的 helper app / framework / 内嵌 Python·Node 的 Mach-O 都得重签，
+ *   逐个列太脆；`--deep` 是 Apple 给的「整包递归签」入口（虽然官方不推荐用于正式签名，
+ *   但 ad-hoc 救急正好）。签完立刻 `--verify --deep --strict` 自检，失败必须显式报错 ——
+ *   否则我们会安静地发出一份仍然「已损坏」的包。
+ */
+function adhocSign(context) {
+  const appName = context.packager.appInfo.productFilename;
+  const appPath = path.join(context.appOutDir, `${appName}.app`);
+  if (!fs.existsSync(appPath)) {
+    throw new Error(`[sign-runtimes] ad-hoc 签名失败：找不到 ${appPath}`);
+  }
+
+  console.log('[sign-runtimes] 未找到 Developer ID 证书 → 对整包做 ad-hoc 签名（消除「已损坏」）');
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
+  // 自检：签名自洽才算兜底成功。失败会抛出 → 构建失败，而不是发出一份坏包。
+  execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath], {
+    stdio: 'inherit',
+  });
+  console.log('[sign-runtimes] ad-hoc 签名完成（用户首次打开需在「隐私与安全性」里点「仍要打开」）');
+}
+
 module.exports = async function signRuntimes(context) {
   if (context.electronPlatformName !== 'darwin') return;
 
   const identity = findIdentity();
   if (!identity) {
-    console.log('[sign-runtimes] 没有可用的 Developer ID Application 身份，跳过内嵌运行时签名');
+    // 没有证书：不再直接跳过，走 ad-hoc 兜底
+    adhocSign(context);
     return;
   }
 

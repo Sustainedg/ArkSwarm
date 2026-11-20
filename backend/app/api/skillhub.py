@@ -63,7 +63,8 @@ async def market_kernels(
 ) -> dict:
     """哪些内核可以装技能（声明了技能目录的适配器），供安装 / 导入时的目标选择。
 
-    ``path`` 是**当前用户**在该内核下的技能库目录 —— 安装与导入都落在那里。
+    ``path`` 是**当前用户**的技能库目录 —— 技能按 slug 只存一份，所有内核共用；
+    这里的 ``type_id`` 只是「安装后挂载到哪个内核」。
     """
     items: list[dict[str, str | None]] = []
     for definition in all_agents():
@@ -77,9 +78,7 @@ async def market_kernels(
             {
                 "type_id": definition.id,
                 "name": definition.name,
-                "path": str(
-                    skill_service.library_root(owner_id_for(user), definition.id)
-                ),
+                "path": str(skill_service.library_root(owner_id_for(user))),
             }
         )
     return {"items": items}
@@ -166,9 +165,9 @@ async def uninstall_market_skill(
         # 非管理员看不到别人的技能；共享的老市场技能也只有管理员能卸载。
         raise HTTPException(status_code=404, detail=f"技能不存在：{payload.skill_id}")
     try:
-        name = await skill_service.uninstall_market_skill(session, payload.skill_id)
+        result = await skill_service.uninstall_market_skill(session, payload.skill_id)
     except skill_service.SkillNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except skill_service.SkillError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    return {"ok": True, "name": name}
+    return {"ok": True, **result}

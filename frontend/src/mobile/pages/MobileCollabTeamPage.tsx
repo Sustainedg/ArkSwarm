@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import {
   DUTIES,
   EDGE_KINDS,
@@ -480,7 +481,7 @@ export function MobileCollabTeamPage() {
           <div className="m-list">
             {agents.map((agent) => (
               <button key={agent.id} className="m-item" onClick={() => addAgent(agent)}>
-                <span className="avatar">{agent.avatar}</span>
+                <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} avatarFile={agent.avatar_file} agentId={agent.id} size={34} />
                 <span className="m-item-main">
                   <span className="m-item-title">{agent.name}</span>
                   <span className="m-item-sub">{agent.type_name ?? agent.type_id} · {agent.tagline ?? '无备注'}</span>

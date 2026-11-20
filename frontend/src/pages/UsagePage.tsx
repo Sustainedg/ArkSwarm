@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { RefreshIcon } from '../components/Icons'
+import { AgentAvatar } from '../components/AgentAvatar'
 import { api, ApiError } from '../lib/api'
 import { dayInputValue, usageRangeQuery, type UsageRangeKind } from '../lib/usage'
 import type { UsageOverview, UsageTokens } from '../lib/types'
@@ -308,7 +309,7 @@ export function UsagePage() {
                     {data.by_agent.map((agent, index) => (
                       <div className="usage-agent" key={agent.id}>
                         <span className="usage-rank">{rank(index)}</span>
-                        <span className="usage-agent-avatar">{agent.avatar}</span>
+                        <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} size={26} className="usage-agent-avatar" />
                         <div className="usage-agent-main">
                           <div className="usage-agent-line">
                             <span className="usage-agent-name">{agent.name}</span>

@@ -224,11 +224,16 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   `fingerprint` / `files` / `owner_id` …）。共享技能（内核自带 / 宿主机）的 `id` 是
   `<type_id>:<slug>`；用户技能库里的技能是 `<type_id>:lib:<owner_id 或 local>:<slug>`，
   同名技能在不同用户下互不冲突。
-- **用户技能库按用户隔离**：内核自带 / 宿主机上已有的技能由适配器扫描，`owner_id` 为空、
-  全平台共享只读；导入、市场安装、跨内核复制都落在平台数据目录
-  `<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>`，归属到当前用户。列表 / 详情 /
-  分配 / 导出 / 删除 / 用量都只对「共享 + 自己」生效；管理员可看全部并带归属用户名。
-  **禁止**把用户技能写进内核的全局技能目录（那会让所有人共享）。
+- **用户技能库按用户隔离、按 slug 只存一份**：内核自带 / 宿主机上已有的技能由适配器扫描，
+  `owner_id` 为空、全平台共享只读；导入、市场安装、挂载到其它内核的技能都落在平台数据目录
+  `<数据目录>/skill-libraries/<owner_id>/<slug>`（**不再按内核分子目录**），归属到当前用户。
+  一份技能被哪些内核引用登记在同级的 `<owner_id>/.mounts.json`（`{"<slug>": ["claude-code", …]}`），
+  编目时按引用展开成「一个内核一行」（`skills.id = <type>:lib:<owner>:<slug>`），所有行共享同一个
+  `path`。因此市场更新（重新安装）覆盖唯一实体后，挂载到它的全部内核同时生效；
+  「复制到内核」实际只是登记引用，不再复制文件；删除 / 卸载只摘本内核引用，最后一个引用消失才删实体。
+  列表 / 详情 / 分配 / 导出 / 删除 / 用量都只对「共享 + 自己」生效；管理员可看全部并带归属用户名。
+  旧布局 `<owner_id>/<type_id>/<slug>` 在重扫时自动迁移（同 slug 合并引用；内容冲突时市场份优先，
+  另一份挪进 `<owner_id>/.conflicts/`）。**禁止**把用户技能写进内核的全局技能目录（那会让所有人共享）。
 - `SkillMount`：适配器声明的**物化计划**（`home_name`、`skills_subdir`、`carry` 要携带的配置文件、
   `patch` 配置文件补丁、`notes` 用户提示）。框架只按这份声明执行，不认识具体内核。
 - 适配器钩子：`skill_roots()`（声明本机原生技能根：路径 + 来源 + 是否可安装；框架据此
@@ -237,8 +242,8 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   与 `skill_invocation(tool_name, tool_input)`（把一次工具调用识别成技能调用时返回技能 slug，
   供「用量」页统计调用次数；默认不识别——「技能调用长什么样」是适配器的知识）。
   技能可来自「技能市场」（`source_kind=market`），但它和用户导入的技能一样装进
-  `<数据目录>/skill-libraries/<owner_id>/<type_id>/`（可卸载）；不再写进内核的全局技能目录。
-  适配器只负责「本机原生技能根在哪」，平台托管的用户库路径由框架统一维护。
+  `<数据目录>/skill-libraries/<owner_id>/<slug>`（可卸载、可多内核共享引用）；不再写进内核的
+  全局技能目录。适配器只负责「本机原生技能根在哪」，平台托管的用户库路径由框架统一维护。
 - **插件技能只认「已安装」**：内核自带的插件市场目录（如 Claude Code 的
   `plugins/marketplaces/<市场>/`）只是**可浏览的货架**，里面的技能并没有安装。插件技能必须来自
   该内核自己的「已安装清单」（Claude Code 是 `plugins/installed_plugins.json` 里登记的
@@ -544,6 +549,14 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   前端取图走 `lib/avatar.ts` 带令牌 `fetch` 成 blob + object URL，**不要**把头像地址塞进
   `<img src>` 拼 `?access_token=`（令牌会进日志与历史）。展示统一用 `components/UserAvatar.tsx`
   （有图显示图、没图显示显示名首字母）。
+- **智能体头像**：三个来源并存，显示优先级 **自定义上传（`avatar_file`）> 内置头像包
+  （`avatar_preset`）> emoji（`avatar`）**。内置头像包是 3D 黏土风 Q 版半身像，图片在
+  `frontend/public/avatars/`、清单在 `frontend/src/lib/avatarPack.ts`，**两者只由
+  `scripts/gen_avatar_pack.py` 一次生成**（`tests/test_frontend_assets.py` 会校验一一对应）。
+  「随机生成」只是从清单里抽一个编号，不调用生图接口 —— 秒出、离线可用、零成本。
+  编号形状（`pack-NNN`）由 `app/avatars.is_valid_preset` 校验；展示统一用
+  `components/AgentAvatar.tsx`（取自定义图同样走带令牌 blob，不要拼 `?access_token=`）。
+  只认得到 emoji 的地方（IM 绑定下拉、协作办公室地图等）继续显示 `avatar`，不会露出一串编号。
 
 ---
 

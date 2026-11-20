@@ -294,9 +294,10 @@ export const api = {
   },
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
   deleteSkill: (id: string) =>
-    request<{ ok: boolean; name: string }>(`/api/skills/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    }),
+    request<{ ok: boolean; name: string; remaining_kernels?: string[] }>(
+      `/api/skills/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
   rescanSkills: () => request<SkillRescanResult>('/api/skills/rescan', { method: 'POST' }),
   /** 导出技能：拿回 zip 的原始字节（接口要鉴权，不能直接塞进 <a href>）。 */
   exportSkill: async (id: string): Promise<Blob> => {
@@ -316,7 +317,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  /** 复制技能到另一个内核（只复制文件，不复制智能体分配）。 */
+  /** 把技能挂载到另一个内核（技能库按 slug 只存一份，不复制智能体分配）。 */
   copySkill: (id: string, typeId: string) =>
     request<SkillTransferResult>(`/api/skills/${encodeURIComponent(id)}/copy`, {
       method: 'POST',
@@ -373,10 +374,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
   uninstallMarketSkill: (skillId: string) =>
-    request<{ ok: boolean; name: string }>('/api/skillhub/uninstall', {
-      method: 'POST',
-      body: JSON.stringify({ skill_id: skillId }),
-    }),
+    request<{ ok: boolean; name: string; remaining_kernels?: string[] }>(
+      '/api/skillhub/uninstall',
+      {
+        method: 'POST',
+        body: JSON.stringify({ skill_id: skillId }),
+      },
+    ),
 
   /** 列表 + 正在跑的运行：后者让左侧栏知道哪些对话正在回复。 */
   listConversations: () => request<ConversationListSnapshot>('/api/conversations'),

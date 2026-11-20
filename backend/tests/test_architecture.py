@@ -54,6 +54,7 @@ BUILTIN_IDS = {
     "openai-harness",
     "custom-cli",
     "hermes-agent",
+    "deepseek-harness",
 }
 
 CJK = re.compile(r"[\u4e00-\u9fff]")

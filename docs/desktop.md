@@ -38,6 +38,46 @@ Electron 主进程（薄壳）
 
 > 安装包卸载时 `deleteAppDataOnUninstall: false`：对话数据与内核安装都在 userData，卸载应用不该带走。
 
+### 1.1 Windows 安装向导的品牌化
+
+NSIS 的向导界面不是「配个主题」就能换皮肤的（MUI2 固定用系统对话框色），所以做法是
+**只换 MUI 留出来的两张位图 + 补一页欢迎页**，剩下的交给系统：
+
+| 资源 | 尺寸 | 出现位置 | 配置项 |
+| --- | --- | --- | --- |
+| `build/installerSidebar.bmp` | 164×314 | 欢迎页 / 完成页左侧竖图 | `nsis.installerSidebar` |
+| `build/installerHeader.bmp` | 150×57 | 其余向导页右上角横幅 | `nsis.installerHeader` |
+| `build/installer-branding.nsh` | — | 补一页 `MUI_PAGE_WELCOME` | `nsis.include` |
+| 仓库根 `LICENSE` | — | 许可协议页（可滚动全文） | `nsis.license: ../LICENSE` |
+
+三张资源由 `desktop/scripts/gen-installer-assets.py` 生成（**纯标准库**，几何复用
+`scripts/gen_icons.py` 的星座渲染器），产物已入库，CI 不跑该脚本。改了品牌色 / 品牌图形时：
+
+```bash
+cd desktop && npm run gen:installer   # 与 npm run gen:icons 一起跑
+```
+
+**硬约束（改尺寸会静默裁切，不是报错）**：
+
+- 侧栏必须正好 164×314、横幅必须正好 150×57 —— MUI 按像素原样贴；
+- 位深必须 **24 位 BMP**（BGR、无 alpha、扫描线自下而上、每行 4 字节对齐）。
+  32 位 BMP 的 alpha 在不同 Windows 版本上表现不一致，24 位是最稳的公共子集；
+- 横幅底色必须**纯白**：MUI 把它贴在白色页头右上角，底色不白就能看到一块色块边界。
+
+**为什么额外补欢迎页**：electron-builder 的向导模式默认从「安装选项」开始，
+`MUI_WELCOMEFINISHPAGE_BITMAP` 就只在最后一页「完成」出现一次，首屏反而是通用模板。
+`build/installer-branding.nsh` 里的 `customWelcomePage` 宏补上欢迎页，品牌图成为**第一屏**；
+宏内先 `!insertmacro skipPageIfUpdated`，自动更新（`--updated`）时这一页自动跳过，
+不给升级流程凭空多一次点击。
+
+> **许可协议页**：`nsis.license` 指向仓库根的 `LICENSE`（**MIT**），安装器会自动多出一页
+> 可滚动全文。权威来源只有这一份 —— `desktop/package.json` 的 SPDX 字段同步为 `"MIT"`，
+> 不在 `desktop/` 下再维护副本。路径写 `../LICENSE` 是因为 `getResource` 从
+> `buildResources`（`desktop/build`）解析不到时会回退到 `projectDir`（`desktop/`）。
+> 换协议时只改根 `LICENSE` + `desktop/package.json` 的 SPDX 字段，别再改配置。
+> 同一份文件还通过 `extraResources` 落到 `resources/LICENSE.txt`，满足 MIT
+> 「分发副本保留版权声明」的要求。
+
 ---
 
 ## 2. 两条版本线 · 两条更新通道（最容易踩的坑）
@@ -131,10 +171,25 @@ npm run compile && npx electron-builder --publish never
 
 ## 4. 签名与公证
 
-> 当前公开构建仍是 **unsigned**：Windows SmartScreen 会拦（README 引导「仍要运行」），
-> macOS 首次打开需右键「打开」。下面的接线在**配置证书后自动生效**，不需要改代码。
+> 当前公开构建仍是 **unsigned**：Windows SmartScreen 会拦（README 引导「仍要运行」）。
+> macOS 走 **ad-hoc 签名兜底**（见 4.1）：用户首次打开会在「隐私与安全性」里点「仍要打开」，
+> 不会再看到「已损坏」。配置证书后下面的接线自动生效，不需要改代码。
 
-### 4.1 CI Secrets 清单
+### 4.1 ad-hoc 兜底（没有证书时的 macOS 行为）
+
+`scripts/sign-runtimes.cjs` 在 `afterPack` 阶段判断：找不到 Developer ID Application 身份时，
+对整包执行 `codesign --force --deep --sign -` 并 `--verify --deep --strict` 自检。
+
+原因：electron-builder 打包时会改名应用、改 `Info.plist`、换图标，**Electron 自带签名随之失效**。
+不重签的 `.app` 下载后带 quarantine，Gatekeeper 判的是「**已损坏**」——这个状态在
+系统设置里**没有**「仍要打开」的入口（macOS 15 起连右键「打开」的绕过也没了），
+用户只能靠终端自救。ad-hoc 签名让包重新自洽，Gatekeeper 降级为「**未识别开发者**」，
+「仍要打开」按钮就会出现。
+
+> 注意：ad-hoc 签名**不解决**"双击直接打开"。那仍然需要 Developer ID + 公证（4.3）。
+> 签名自检失败会让构建**失败**（而不是静默发出一份坏包），这是故意的。
+
+### 4.2 CI Secrets 清单
 
 | Secret | 平台 | 用途 |
 | --- | --- | --- |
@@ -146,7 +201,7 @@ npm run compile && npx electron-builder --publish never
 
 另可用 `CSC_NAME` 显式指定钥匙串里的签名身份（默认取第一个 `Developer ID Application`）。
 
-### 4.2 Windows
+### 4.3 Windows
 
 拿到代码签名证书（OV/EV）→ 导出 `.pfx` → base64 后放进 `CSC_LINK`，密码进
 `CSC_KEY_PASSWORD`。electron-builder 自动签 `ArkSwarm-<版本>-win-x64.exe`。
@@ -155,7 +210,7 @@ Azure Trusted Signing 属于另一条路（`win.azureSignOptions`），本文不
 > NSIS 保持 `perMachine: false`：electron-updater 的静默更新要求安装目录对当前用户可写，
 > 装到 `Program Files`（machine 级）会需要提权、静默更新直接失败。
 
-### 4.3 macOS
+### 4.4 macOS
 
 1. Apple Developer Program → 创建 **Developer ID Application** 证书 → 导出 `.p12`；
 2. `.p12` base64 → `CSC_LINK`，密码 → `CSC_KEY_PASSWORD`；再配 `APPLE_ID` /
@@ -166,7 +221,8 @@ Azure Trusted Signing 属于另一条路（`win.azureSignOptions`），本文不
    - `afterPack: scripts/sign-runtimes.cjs`：**逐个签名内嵌 Python / Node 里的 Mach-O**。
      electron-builder 虽然会扫包内二进制，但按「内容像不像二进制」启发式判定（会把 `.pyc`
      之类也当二进制丢给 `codesign`），所以用 `mac.signIgnore` 把两份运行时交给专用脚本：
-     只签 `file` 认定的 Mach-O，并统一套 runtime entitlements。漏签一个 dylib，公证就整包失败；
+     只签 `file` 认定的 Mach-O，并统一套 runtime entitlements。漏签一个 dylib，公证就整包失败。
+     **没有证书时同一钩子改走整包 ad-hoc 签名**（见 4.1），两条分支互斥；
    - 正常签名（electron-builder，已跳过上面两个目录）；
    - `afterSign: scripts/notarize.cjs`：提交 Apple 公证（未配置凭据时直接跳过）。
 4. 验证：
@@ -213,7 +269,7 @@ xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
 
 ### 5.3 落地内容
 
-- `scripts/fetch-node.mjs`：下载官方 Node 22 LTS（与 `docker/Dockerfile` 同版本）、
+- `scripts/fetch-node.mjs`：下载官方 Node 24 LTS（与 `docker/Dockerfile` 同版本）、
   校验 `SHASUMS256.txt`、按架构落到 `build/node-runtime/<arch>/`；
 - `src/main/runtimeEnv.ts`：把「内置 Node 目录 + 托管 npm 全局 bin」前置进 PATH，
   并把 `npm_config_prefix` / `npm_config_cache` 钉到 userData；后端进程继承这份环境，
@@ -234,11 +290,12 @@ xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
 
 ## 6. 已知限制
 
-- **未签名构建**：Windows SmartScreen 拦截、macOS 需右键打开，macOS 自动更新不可用；
+- **未签名构建**：Windows SmartScreen 拦截；macOS 走 ad-hoc 兜底，首次打开需在
+  「隐私与安全性」点「仍要打开」，且 macOS 自动更新不可用（Squirrel.Mac 只认正式签名）；
 - **mac Intel**：构建双架构，但 CI 冒烟只跑 arm64（`macos-latest` 是 arm64 runner）；
 - **Windows npm 内核**：`.cmd` 垫片已处理；若某个内核的 Windows 包不是 Node 程序
   （未来变化），需要按新通道重新评估；
-- **内嵌运行时签名**依赖 cert；`afterPack` 钩子在没有证书时会跳过，行为等同 unsigned；
+- **内嵌运行时签名**：有证书时逐个签（公证要求）；无证书时整包 ad-hoc 签，二者不会同时发生；
 - 桌面版**不承诺 Linux**（electron-builder 的 AppImage 只是顺带产物）。
 
 ## 7. 排障
@@ -249,3 +306,4 @@ xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
 | 内核装了但启动报「未安装或不在 PATH」 | 是否用的是打包版（`resources/node-runtime` 是否存在）；`userData/node/global/bin` 是否在 PATH |
 | 壳更新提示 404 / 找不到 latest.yml | 滚动 Release `desktop-latest` 是否还在、是否被误设成非 prerelease；`ARKSWARM_DESKTOP_UPDATE_URL` 是否被覆盖 |
 | macOS 公证失败 | 日志里搜 `sign-runtimes`；确认内嵌运行时里没有漏签的 Mach-O；检查 entitlements |
+| macOS 打开报「已损坏」 | 先看构建日志有没有 `[sign-runtimes] ad-hoc 签名完成`。旧包自救：<br>`sudo xattr -rd com.apple.quarantine /Applications/ArkSwarm.app`<br>仍报损坏再 `sudo codesign --force --deep --sign - /Applications/ArkSwarm.app` |

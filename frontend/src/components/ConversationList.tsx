@@ -6,6 +6,7 @@ import { formatListTime } from '../lib/datetime'
 import type { Conversation, AgentProfile } from '../lib/types'
 import { sameConversationList, useAutoRefresh } from '../lib/useAutoRefresh'
 import { MoreIcon, PencilIcon, TrashIcon } from './Icons'
+import { AgentAvatar } from './AgentAvatar'
 
 /**
  * 左侧栏下半部分的对话列表（桌面端）：与移动端抽屉里那份同构 —— 导航在上、列表在下。
@@ -185,7 +186,15 @@ export function ConversationList() {
                   title={`与「${agent.name}」开始新对话`}
                 >
                   <span className="chat-item-title">
-                    {agent.avatar} {agent.name}
+                    <AgentAvatar
+                      avatar={agent.avatar}
+                      avatarPreset={agent.avatar_preset}
+                      avatarFile={agent.avatar_file}
+                      agentId={agent.id}
+                      size={18}
+                      className="agent-avatar-inline"
+                    />{' '}
+                    {agent.name}
                     {agent.is_default && <span className="pill brand">默认</span>}
                   </span>
                   <span className="chat-item-meta">

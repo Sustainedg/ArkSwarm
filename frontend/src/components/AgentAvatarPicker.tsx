@@ -1,21 +1,27 @@
 /**
- * 智能体头像选择器（编辑表单第一位）：大头像预览 + 随机生成可爱动图 + 自定义上传 + emoji 快选。
+ * 智能体头像选择器（编辑表单第一位）：大头像预览 + 随机生成 3D 黏土风头像 + 自定义上传 + emoji 快选。
  *
- * - **随机生成**：从可爱动物 / 表情 emoji 池里随机挑一个，配上随机的小动作（摇摆 / 浮动 /
- *   蹦跳 —— 见 `.agent-avatar-live` 的三套动画）。生成的头像「会动」，比一排静态按钮有生气。
+ * - **随机生成**：从内置头像包（`public/avatars/`，由 `scripts/gen_avatar_pack.py` 生成的
+ *   3D 黏土风 Q 版半身像）随机抽一张，数据库里存编号（`avatar_preset`）。秒出、离线可用、
+ *   不调生图接口。也可以展开画廊自己挑。
  * - **自定义上传**：base64 走 `PUT /api/agents/{id}/avatar`（与用户头像同一条管线）。
  *   新建流程是「先建后传」：表单先保存拿到智能体 id，页面再补一次上传。
- * - **emoji 快选**：原有的固定 emoji 池保留，作为兜底。
+ * - **emoji 快选**：最老的兜底池保留 —— 协作办公室地图等只认 emoji 的地方依旧用它。
  *
- * 受控组件：`emoji`（当前 emoji 头像）由表单持有；`avatarFileId` 是已上传头像的
- * 文件名标识（上传成功后由页面写回，保存时不用再传 —— 后端在上传接口里已落库）。
+ * 三个来源的显示优先级：上传图 > 头像包 > emoji（见 `components/AgentAvatar.tsx`）。
+ * 切换到低优先级来源时，高层级的值要同步清掉 / 删文件，不然界面会「看着换了、存的是旧的」。
+ *
+ * 受控组件：`emoji` / `preset` 由表单持有；`avatarFileId` 是已上传头像的文件名标识
+ * （上传成功后由页面写回，保存时不用再传 —— 后端在上传接口里已落库）。
  */
 import { useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
+import { ALL_AVATAR_PRESETS, avatarPresetUrl, randomAvatarPreset } from '../lib/agentAvatar'
 import { readFileAsBase64, validateAvatarFile } from '../lib/avatar'
 import { RefreshIcon } from './Icons'
+import { AgentAvatar } from './AgentAvatar'
 
-/** 可爱的动物 / 小生物 emoji 池：随机生成从这里挑。 */
+/** 可爱的动物 / 小生物 emoji 池：emoji 快选（兜底）从这里挑。 */
 const CUTE_AVATARS = [
   '🐱', '🐶', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮',
   '🐷', '🐸', '🐵', '🐔', '🐧', '🦉', '🦄', '🐙', '🦋', '🐳',
@@ -25,18 +31,12 @@ const CUTE_AVATARS = [
 /** 随机动作池：三选一（CSS 动画类，见 index.css 的 .agent-avatar-live-*）。 */
 const LIVE_ANIMATIONS = ['swing', 'float', 'bounce'] as const
 
-/** 随机生成一枚「可爱的会动的头像」：emoji + 动作。 */
-function randomLiveAvatar(): { emoji: string; animation: (typeof LIVE_ANIMATIONS)[number] } {
-  return {
-    emoji: CUTE_AVATARS[Math.floor(Math.random() * CUTE_AVATARS.length)],
-    animation: LIVE_ANIMATIONS[Math.floor(Math.random() * LIVE_ANIMATIONS.length)],
-  }
-}
-
 export function AgentAvatarPicker({
   agentId,
   emoji,
   onEmojiChange,
+  preset,
+  onPresetChange,
   avatarFileId,
   onUploaded,
 }: {
@@ -44,6 +44,9 @@ export function AgentAvatarPicker({
   agentId: string | null
   emoji: string
   onEmojiChange: (emoji: string) => void
+  /** 当前内置头像包编号（有值 = 随机生成 / 画廊选中的那张） */
+  preset: string | null
+  onPresetChange: (preset: string | null) => void
   /** 当前自定义头像的文件名标识（有值 = 已上传，预览显示图而不是 emoji） */
   avatarFileId?: string | null
   /** 上传 / 删除成功后回传更新后的智能体 */
@@ -52,14 +55,30 @@ export function AgentAvatarPicker({
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  /** 随机生成时的小动作（选完 emoji 后它一直动着，页面有生气） */
+  /** 画廊展开状态：60 张缩略图没必要常驻，点一下再铺开 */
+  const [galleryOpen, setGalleryOpen] = useState(false)
+  /** 随机生成时的小动作（emoji 头像才有「会动」的效果，图片头像安静站着） */
   const [liveAnimation, setLiveAnimation] = useState<(typeof LIVE_ANIMATIONS)[number] | null>(null)
 
   const generate = () => {
-    const next = randomLiveAvatar()
-    onEmojiChange(next.emoji)
-    setLiveAnimation(next.animation)
-    // 换了 emoji 头像，自定义头像图就不再显示（后端以 avatar_file 优先，这里同步删掉）。
+    onPresetChange(randomAvatarPreset(preset))
+    // 图片头像安静站着：小动作只属于 emoji（动图会把圆框里的留白一起转出来）
+    setLiveAnimation(null)
+    // 换了头像包编号，自定义头像图就不再显示（后端以 avatar_file 优先，这里同步删掉）。
+    if (agentId && avatarFileId) void removeFile()
+  }
+
+  const pickPreset = (next: string) => {
+    onPresetChange(next)
+    setLiveAnimation(null)
+    if (agentId && avatarFileId) void removeFile()
+  }
+
+  const pickEmoji = (item: string) => {
+    onEmojiChange(item)
+    onPresetChange(null)
+    // emoji 头像保留原来的「会动」手感：随机配一套小动作
+    setLiveAnimation(LIVE_ANIMATIONS[Math.floor(Math.random() * LIVE_ANIMATIONS.length)])
     if (agentId && avatarFileId) void removeFile()
   }
 
@@ -102,28 +121,29 @@ export function AgentAvatarPicker({
   }
 
   const hasFile = Boolean(agentId && avatarFileId)
+  const hasImage = hasFile || Boolean(preset)
 
   return (
     <div className="field">
       <label className="field-label">头像</label>
       <div className="agent-avatar-picker">
-        {/* 大头像预览：已上传图 > emoji（随机生成的会一直做小动作） */}
-        <div className={`agent-avatar-preview${liveAnimation && !hasFile ? ` live-${liveAnimation}` : ''}`}>
-          {hasFile ? (
-            <img
-              src={`/api/agents/${agentId}/avatar?v=${avatarFileId}`}
-              alt="智能体头像"
-              onError={(event) => {
-                // 文件丢了（换了数据目录之类）：退回 emoji，不显示裂图
-                (event.target as HTMLImageElement).style.display = 'none'
-              }}
-            />
-          ) : (
+        {/* 大头像预览：已上传图 > 头像包 > emoji（emoji 快选的会一直做小动作） */}
+        {hasImage ? (
+          <AgentAvatar
+            className={`agent-avatar-preview${liveAnimation ? ` live-${liveAnimation}` : ''}`}
+            avatar={emoji}
+            avatarPreset={preset}
+            avatarFile={avatarFileId}
+            agentId={agentId}
+            size={64}
+          />
+        ) : (
+          <div className={`agent-avatar-preview${liveAnimation ? ` live-${liveAnimation}` : ''}`}>
             <span className="agent-avatar-emoji">{emoji}</span>
-          )}
-        </div>
+          </div>
+        )}
         <div className="agent-avatar-actions">
-          <button type="button" className="btn sm" onClick={generate} title="随机生成一枚可爱的会动的头像">
+          <button type="button" className="btn sm" onClick={generate} title="随机抽一张 3D 黏土风头像（离线可用）">
             <RefreshIcon size={13} /> 随机生成
           </button>
           <button
@@ -140,6 +160,9 @@ export function AgentAvatarPicker({
               移除图片
             </button>
           )}
+          <button type="button" className="btn sm ghost" onClick={() => setGalleryOpen((open) => !open)}>
+            {galleryOpen ? '收起画廊' : '从头像包挑选'}
+          </button>
           <input
             ref={inputRef}
             type="file"
@@ -154,18 +177,30 @@ export function AgentAvatarPicker({
         </div>
       </div>
       {error && <span className="field-help" style={{ color: 'var(--danger)' }}>{error}</span>}
+      {/* 头像包画廊：全部内置头像，点一下即选中 */}
+      {galleryOpen && (
+        <div className="agent-avatar-gallery">
+          {ALL_AVATAR_PRESETS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`agent-avatar-emoji-btn${item === preset && !hasFile ? ' picked' : ''}`}
+              onClick={() => pickPreset(item)}
+              aria-label={`头像 ${item}`}
+            >
+              <img src={avatarPresetUrl(item)} alt="" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      )}
       {/* emoji 快选：兜底的固定池 */}
       <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
         {CUTE_AVATARS.slice(0, 18).map((item) => (
           <button
             key={item}
             type="button"
-            className={`agent-avatar-emoji-btn${item === emoji && !hasFile ? ' picked' : ''}`}
-            onClick={() => {
-              onEmojiChange(item)
-              setLiveAnimation(null)
-              if (agentId && avatarFileId) void removeFile()
-            }}
+            className={`agent-avatar-emoji-btn${item === emoji && !hasImage ? ' picked' : ''}`}
+            onClick={() => pickEmoji(item)}
             aria-label={`头像 ${item}`}
           >
             {item}

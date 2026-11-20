@@ -164,6 +164,7 @@ async def _to_read(
         id=profile.id,
         name=profile.name,
         avatar=profile.avatar,
+        avatar_preset=profile.avatar_preset,
         avatar_file=profile.avatar_file,
         tagline=profile.tagline,
         description=profile.description,
@@ -294,10 +295,14 @@ async def create_agent(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     await _require_gateway(payload.gateway_id, session, user)
     target_owner = owner_id_for(user)
+    # 不传 = 不用内置头像包（回退 emoji），只有真的带了编号才校验形状。
+    if payload.avatar_preset is not None and not avatars.is_valid_preset(payload.avatar_preset):
+        raise HTTPException(status_code=422, detail="头像包编号不合法")
     profile = AgentProfile(
         name=payload.name,
         type_id=payload.type_id,
         avatar=payload.avatar or "🛠️",
+        avatar_preset=payload.avatar_preset,
         tagline=payload.tagline,
         description=payload.description,
         system_prompt=payload.system_prompt or "",
@@ -355,6 +360,8 @@ async def update_agent(
             raise HTTPException(status_code=422, detail=str(exc)) from None
     if "gateway_id" in data:
         await _require_gateway(data["gateway_id"], session, user)
+    if data.get("avatar_preset") is not None and not avatars.is_valid_preset(data["avatar_preset"]):
+        raise HTTPException(status_code=422, detail="头像包编号不合法")
     credentials: list = data.pop("credentials", None) or []
     if data.get("is_default") is not None:
         # 点星 / 取消星：点亮时把别人的摘掉（全局唯一）
@@ -369,7 +376,7 @@ async def update_agent(
         except KeyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
     for field, value in data.items():
-        if value is not None or field in {"gateway_id", "model", "tagline", "description"}:
+        if value is not None or field in {"gateway_id", "model", "tagline", "description", "avatar_preset"}:
             setattr(profile, field, value)
     if data.get("type_id"):
         # 换内核后，原来分配的技能 / 内核专属 MCP 可能不属于新型号，直接丢弃并在响应里体现。
@@ -572,6 +579,7 @@ async def duplicate_agent(
         name=f"{profile.name} 副本",
         type_id=profile.type_id,
         avatar=profile.avatar,
+        avatar_preset=profile.avatar_preset,
         tagline=profile.tagline,
         description=profile.description,
         system_prompt=profile.system_prompt,

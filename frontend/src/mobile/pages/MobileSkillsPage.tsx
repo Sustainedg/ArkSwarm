@@ -62,7 +62,7 @@ function MobileSkillsLocal() {
   const [deleting, setDeleting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [loading, setLoading] = useState(true)
-  // 三个弹层：导入（列表顶部）、分配与复制（详情页动作条）
+  // 三个弹层：导入（列表顶部）、分配与挂载到其它内核（详情页动作条）
   const [importing, setImporting] = useState(false)
   const [assigning, setAssigning] = useState<SkillDetail | null>(null)
   const [copying, setCopying] = useState<SkillDetail | null>(null)
@@ -114,7 +114,8 @@ function MobileSkillsLocal() {
     if (!selected) return
     if (
       !confirm(
-        `删除技能「${selected.name}」？\n会删除它的源目录，并解除所有智能体对它的分配。`,
+        `删除技能「${selected.name}」？\n会摘掉本内核的引用，并解除本内核智能体对它的分配；` +
+          '如果还有别的内核在用它，技能文件会保留。',
       )
     ) {
       return
@@ -123,7 +124,12 @@ function MobileSkillsLocal() {
     setNotice(null)
     try {
       const result = await api.deleteSkill(selected.id)
-      setNotice(`已删除「${result.name}」`)
+      const still = result.remaining_kernels ?? []
+      setNotice(
+        still.length > 0
+          ? `已从本内核移除「${result.name}」，仍挂载在 ${still.length} 个内核`
+          : `已删除「${result.name}」`,
+      )
       setSelected(null)
       await reload({ source_kind: sourceKind || undefined, q: query || undefined })
     } catch (e) {
@@ -321,7 +327,7 @@ function MobileSkillsLocal() {
                 onClick={() => setCopying(selected)}
                 disabled={!selected.available}
               >
-                复制到内核
+                挂载到内核
               </button>
             </div>
 
@@ -446,14 +452,14 @@ function MobileSkillsLocal() {
 
       {copying && (
         <MobileSheet
-          title={`复制「${copying.name}」到别的内核`}
+          title={`把「${copying.name}」挂载到别的内核`}
           onClose={() => setCopying(null)}
         >
           <SkillCopyForm
             skill={copying}
             onCancel={() => setCopying(null)}
             onCopied={(result, kernelName) =>
-              void afterTransfer('已复制', result, kernelName)
+              void afterTransfer('已挂载', result, kernelName)
             }
           />
         </MobileSheet>

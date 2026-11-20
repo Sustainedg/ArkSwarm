@@ -123,7 +123,9 @@ export function SkillsMarket({
       const hint = result.requires_api_key
         ? '（该技能需要第三方 API 密钥，记得在「设置 → 凭据」里配好）'
         : ''
-      const message = `已把「${result.name}」安装到 ${kernelLabel(kernels, kernel)}，请到「智能体 → 技能」分配给智能体后生效${hint}`
+      const message =
+        `已把「${result.name}」挂载到 ${kernelLabel(kernels, kernel)}（技能文件全内核共用，重新安装即同步更新）` +
+        `，请到「智能体 → 技能」分配给智能体后生效${hint}`
       setNotice(message)
       await onInstalled?.(message)
       setError(null)
@@ -140,9 +142,13 @@ export function SkillsMarket({
     setInstalling(skill.slug)
     setNotice(null)
     try {
-      await api.uninstallMarketSkill(skillId)
+      const result = await api.uninstallMarketSkill(skillId)
       await refreshInstalled()
-      const message = `已卸载「${skill.name}」`
+      const still = result.remaining_kernels ?? []
+      const message =
+        still.length > 0
+          ? `已从 ${kernelLabel(kernels, kernel)} 卸载「${skill.name}」，但仍挂载在 ${still.length} 个内核上`
+          : `已卸载「${skill.name}」`
       setNotice(message)
       await onInstalled?.(message)
       setError(null)
@@ -174,7 +180,7 @@ export function SkillsMarket({
           className="select"
           value={kernel}
           onChange={(e) => setKernel(e.target.value)}
-          title="新安装的技能落到哪个内核"
+          title="安装后把技能挂载到哪个内核（文件全内核共用）"
         >
           {kernels.map((item) => (
             <option key={item.type_id} value={item.type_id}>
@@ -195,7 +201,8 @@ export function SkillsMarket({
     >
       {header}
       <div className="dim small">
-        技能来源：腾讯 SkillHub（skillhub.cn）。安装后可到「智能体 → 技能」分配，也可在「本地技能」里删除。
+        技能来源：腾讯 SkillHub（skillhub.cn）。同一技能在技能库里只存一份文件，安装到多个内核时共用；
+        更新（重新安装）后所有挂载它的内核同时生效。安装后到「智能体 → 技能」分配即可。
       </div>
       {error && <div className="banner err">{error}</div>}
       {notice && <div className="banner ok">{notice}</div>}

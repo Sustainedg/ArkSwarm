@@ -254,6 +254,10 @@ class AgentDefinition(ABC):
     #: 首次启动播种时是否允许为该适配器创建实例
     #: （需要用户先填写配置才能工作的模板设为 False）
     auto_provision: ClassVar[bool] = True
+    #: 是否出现在「新建智能体」的内核下拉里。
+    #: ``False`` 只影响新建选择：存量智能体仍可正常编辑、运行，
+    #: 内核管理与运行时页也照旧展示（它们是「逃生舱」型模板，不再作为推荐入口）。
+    selectable: ClassVar[bool] = True
 
     # -- 元数据与自省 --------------------------------------------------------
 
@@ -283,6 +287,7 @@ class AgentDefinition(ABC):
             "docs_url": self.docs_url,
             "logo": self.logo,
             "executable": self.executable,
+            "selectable": self.selectable,
             "availability": availability.to_dict(),
             "provisioning": self.provisioning(availability),
         }

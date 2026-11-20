@@ -7,6 +7,11 @@ export interface ConversationThreadItem {
   id: string
   message?: RenderMessage
   avatar?: string
+  /** 智能体的内置头像包编号 / 自定义头像文件：气泡画真头像用（见 AgentAvatar） */
+  avatarPreset?: string | null
+  avatarFile?: string | null
+  /** 智能体 id：取自定义头像图要用 */
+  agentId?: string | null
   label?: string
   /** 气泡上方的岗位 / 工单元信息 */
   meta?: ReactNode
@@ -40,6 +45,9 @@ export function ConversationThread({ items, empty, centered = false, className =
             <MessageView
               message={item.message}
               avatar={item.avatar}
+              avatarPreset={item.avatarPreset}
+              avatarFile={item.avatarFile}
+              agentId={item.agentId}
               label={item.label}
               finalOnly={finalOnly}
               user={user}

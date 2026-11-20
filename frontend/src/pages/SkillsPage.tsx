@@ -8,6 +8,7 @@ import { SkillImportForm } from '../components/SkillImportForm'
 import { useExpandMap } from '../lib/collapse'
 import { downloadBlob } from '../lib/skillFiles'
 import type { AgentProfile, Skill, SkillDetail, SkillTransferResult } from '../lib/types'
+import { AgentAvatar } from '../components/AgentAvatar'
 import { SkillsMarket } from '../components/SkillsMarket'
 import { MarkdownView } from '../components/MarkdownView'
 import { stripFrontmatter } from '../lib/skillBody'
@@ -15,7 +16,7 @@ import { stripFrontmatter } from '../lib/skillBody'
 /**
  * 技能页：把各智能体内核的技能目录统一编目后集中展示。
  * 技能只能通过「智能体 → 技能」的分配被某个智能体使用，这里负责查看、导入 / 导出、
- * 复制到别的内核与重新扫描。
+ * 挂载到别的内核与重新扫描。技能库按 slug 只存一份，多个内核共用同一份文件。
  */
 export function SkillsPage() {
   const [tab, setTab] = useState<'local' | 'market'>('local')
@@ -95,7 +96,8 @@ export function SkillsPage() {
   const removeSkill = async (skill: SkillDetail) => {
     if (
       !confirm(
-        `删除技能「${skill.name}」？\n会删除它的源目录，并解除所有智能体对它的分配。`,
+        `删除技能「${skill.name}」？\n会摘掉本内核的引用，并解除本内核智能体对它的分配；` +
+          '如果还有别的内核在用它，技能文件会保留。',
       )
     ) {
       return
@@ -104,7 +106,12 @@ export function SkillsPage() {
     setNotice(null)
     try {
       const result = await api.deleteSkill(skill.id)
-      setNotice(`已删除「${result.name}」`)
+      const still = result.remaining_kernels ?? []
+      setNotice(
+        still.length > 0
+          ? `已从本内核移除「${result.name}」，但仍挂载在 ${still.length} 个内核上`
+          : `已删除「${result.name}」`,
+      )
       setSelected(null)
       setDetail(null)
       await reload({ source_kind: sourceKind || undefined, q: query || undefined })
@@ -161,8 +168,9 @@ export function SkillsPage() {
         <div>
           <h1 className="page-title">技能</h1>
           <p className="page-desc">
-            内核自带的技能全平台共享；导入、市场安装与跨内核复制的技能属于你自己的技能库，
-            只有你能看到和管理。技能通过「智能体分配」生效，管理员可以查看全部用户的技能库。
+            内核自带的技能全平台共享；导入、市场安装与挂载到其它内核的技能属于你自己的技能库，
+            只有你能看到和管理。同一份技能只存一份文件，多个内核共用引用；技能通过「智能体分配」生效，
+            管理员可以查看全部用户的技能库。
           </p>
         </div>
         <div className="spacer" />
@@ -324,12 +332,12 @@ export function SkillsPage() {
       )}
 
       {copying && (
-        <Modal title={`复制「${copying.name}」到别的内核`} onClose={() => setCopying(null)}>
+        <Modal title={`把「${copying.name}」挂载到别的内核`} onClose={() => setCopying(null)}>
           <SkillCopyForm
             skill={copying}
             onCancel={() => setCopying(null)}
             onCopied={(result, kernelName) =>
-              void afterTransfer('已复制', result, kernelName)
+              void afterTransfer('已挂载', result, kernelName)
             }
           />
         </Modal>
@@ -386,9 +394,9 @@ function SkillDetailPane({
               className="btn sm"
               onClick={onCopy}
               disabled={!skill.available}
-              title="把技能文件复制到自己另一个内核的技能库"
+              title="把同一份技能挂载到自己另一个内核（不复制文件）"
             >
-              复制到内核
+              挂载到内核
             </button>
             {skill.deletable && (
               <button
@@ -408,6 +416,9 @@ function SkillDetailPane({
           <span className="skill-chip">
             {skill.file_count} 个文件 · {formatBytes(skill.total_bytes)}
           </span>
+          {(skill.mounted_kernels?.length ?? 0) > 0 && (
+            <span className="skill-chip">挂载到 {skill.mounted_kernels!.length} 个内核</span>
+          )}
           <span className="skill-chip">
             {skill.agents.length > 0 ? `被 ${skill.agents.length} 个智能体使用` : '尚未分配'}
           </span>
@@ -433,7 +444,7 @@ function SkillDetailPane({
             <div className="skill-detail-agents">
               {skill.agents.map((agent) => (
                 <span className="skill-agent" key={agent.id}>
-                  <span className="skill-agent-avatar">{agent.avatar || '🤖'}</span>
+                  <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} agentId={agent.id} size={22} className="skill-agent-avatar" />
                   <span className="skill-agent-name">{agent.name}</span>
                 </span>
               ))}

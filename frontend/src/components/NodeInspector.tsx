@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from 'react'
 import type { CollabSelection } from './CollabCanvas'
+import { AgentAvatar } from './AgentAvatar'
 import { ACTIONS, DUTIES, EDGE_KINDS, SCOPES, isWarningIssue, type TeamDraft } from '../lib/collabDraft'
 import type {
   CollabBudget, CollabEdge, CollabEdgeKind, CollabIssue, CollabNode,
@@ -94,7 +95,7 @@ function NodePanel({
   return (
     <>
       <div className="collab-inspector-head">
-        <span className="collab-node-avatar">{agent?.avatar ?? '🤖'}</span>
+        <AgentAvatar avatar={agent?.avatar} avatarPreset={agent?.avatar_preset} avatarFile={agent?.avatar_file} agentId={agent?.id} size={30} className="collab-node-avatar" />
         <div style={{ minWidth: 0 }}>
           <div className="collab-inspector-title">{node.label || agent?.name || node.key}</div>
           <div className="dim small mono-sm">{node.key}</div>

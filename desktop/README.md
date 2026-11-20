@@ -51,15 +51,17 @@ npm run dev           # 编译主进程 + 启动 Electron（后端用仓库源�
 ```bash
 cd desktop
 npm run gen:icons                    # 生成应用图标 / 托盘图标（与网页同源，改了品牌图形才需要）
+npm run gen:installer                # 生成安装向导的品牌位图（同上，已入库，一般不用跑）
 node scripts/fetch-python.mjs        # 下载 python-build-standalone → build/python-runtime/<arch>/
-node scripts/fetch-node.mjs          # 下载官方 Node 22 LTS（校验 sha256）→ build/node-runtime/<arch>/
+node scripts/fetch-node.mjs          # 下载官方 Node 24 LTS（校验 sha256）→ build/node-runtime/<arch>/
 node scripts/prepare-backend.mjs     # 确保 frontend/dist 存在
 npm run compile
 npx electron-builder --publish never # 产物在 release/
 ```
 
 - **Windows**：NSIS 安装器（x64）；未签名时 SmartScreen 会拦，文档引导「仍要运行」
-- **macOS**：DMG + zip（arm64 + x64）；未签名时首次打开需右键 →「打开」
+- **macOS**：DMG + zip（arm64 + x64）；未签名构建会自动做 **ad-hoc 签名**，
+  首次打开需在「系统设置 → 隐私与安全性」点「仍要打开」（不会再报「已损坏」）
 - 签名与公证的接线已就绪（配好证书 / Apple 凭据即自动生效），步骤见 `docs/desktop.md` §4
 
 ## CI/CD
@@ -109,7 +111,7 @@ prerelease。细节与设计原因见 `docs/desktop.md` §2。
 | 后端桌面形态启动（`ARKSWARM_DATA_DIR` + 127.0.0.1 + `--app-dir`） | ✅ `/api/health` 200，数据目录布局与 Docker 卷一致 |
 | 优雅停止（SIGTERM → 端口释放） | ✅ 杀掉后端口无响应，无孤儿进程 |
 | electron-builder `--dir` 打包 | ✅ 资源布局正确（app-backend 同构 tar.gz） |
-| 内置 Node 链路（M4） | ✅ 下载校验 sha256 → node v22.23.5 / npm 10.9.9 → 私有 prefix `npm install -g` → 垫片在 PATH 可执行 |
+| 内置 Node 链路（M4） | ✅ 下载校验 sha256 → node v24.22.3 / npm 11.x → 私有 prefix `npm install -g` → 垫片在 PATH 可执行 |
 | npm 包装命令（Node 实现） | ✅ `pytest tests/test_runtimes.py` 真实跑通（挪占位 / 失败回滚 / 不误伤自有链接） |
 | Windows `.cmd` 启动形态 | ✅ `pytest tests/test_runner.py`（`_spawn_argv` 的 Windows 分支单测） |
 | 打包版冒烟（真实安装包） | CI 矩阵（Windows / macOS）各跑一次 —— 本机无图形栈，按 M2 的约定排进 CI |

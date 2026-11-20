@@ -70,6 +70,7 @@ def _conversation_read(
         updated_at=conversation.updated_at,
         agent_name=profile.name if profile else None,
         agent_avatar=profile.avatar if profile else None,
+        agent_avatar_preset=profile.avatar_preset if profile else None,
         agent_avatar_file=profile.avatar_file if profile else None,
         agent_type_id=profile.type_id if profile else None,
         agent_model=profile.model if profile else None,

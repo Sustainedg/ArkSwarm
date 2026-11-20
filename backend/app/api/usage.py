@@ -275,6 +275,7 @@ async def usage_overview(
                 "id": agent_id,
                 "name": profile.name if profile else "（已移除的智能体）",
                 "avatar": profile.avatar if profile else "👤",
+                "avatar_preset": profile.avatar_preset if profile else None,
                 "type_id": profile.type_id if profile else None,
                 "type_name": _type_name(profile.type_id) if profile else None,
                 "tokens": _finalize(bucket),
@@ -292,6 +293,7 @@ async def usage_overview(
                 "title": conversation.title if conversation else "（已删除的对话）",
                 "agent_name": profile.name if profile else None,
                 "agent_avatar": profile.avatar if profile else None,
+                "agent_avatar_preset": profile.avatar_preset if profile else None,
                 "updated_at": conversation.updated_at if conversation else None,
                 "tokens": _finalize(bucket),
             }

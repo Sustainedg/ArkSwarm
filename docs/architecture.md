@@ -60,7 +60,9 @@
 后台任务（`ActiveRun` 持有事件缓冲与订阅者队列），HTTP 的 SSE 只负责订阅。客户端刷新 /
 关页面只会让订阅者离开，**不会** kill 子进程或中断这一轮；重新打开对话时，详情里的
 `active_run` 会让前端改为订阅 `GET /api/conversations/{id}/stream`，先重放缓冲、再收实时增量
-（另一台设备同样如此）。真正取消只走 `POST /api/conversations/{id}/cancel`。
+（另一台设备同样如此）。快照里的 `agent_name` / `agent_profile_id` / `agent_avatar` 描述的是
+**本轮作答者**：@ 召唤轮是被召唤的智能体，不是对话归属的那一个 —— 重连时实时卡片据此显示
+正确的名字与头像。真正取消只走 `POST /api/conversations/{id}/cancel`。
 
 CLI 的 stdout 由 `runner._StreamLines` 拆行：`asyncio.StreamReader.readline()` 在单行超过 64 KiB
 缓冲上限时会抛 `ValueError`（「Separator is found, but chunk is longer than limit」），而内核常常把整段代码
@@ -195,7 +197,7 @@ uninstall_argv=…, latest_argv=…, prepare_argv=…)`，框架（`runtime/prov
   留下让包管理器再也无法覆写安装目录的残留 —— 典型是 npm 的中转目录（卸载 / 覆盖安装前
   先把旧目录 rename 成 `.<包名>-<安装路径哈希>` 再删掉），而中转名只由绝对路径决定，
   于是之后**每一次**安装 / 更新 / 卸载都会永久撞上 `ENOTEMPTY`。适配器声明这条清扫命令
-  （内置的三个 npm 内核用 `builtin/util.py:npm_prepare_argv()` 生成），框架在同一次动作的
+  （内置的 npm 内核用 `builtin/util.py:npm_prepare_argv()` 生成），框架在同一次动作的
   最前面跑一遍并回显它的输出；清扫与动作共用同一个总时限，清扫自己失败只回一行告警、
   **不**中断动作 —— 成败始终只由动作自己的退出码决定。
 
@@ -260,8 +262,8 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 
 ### 4.2.1 凭据信任边界与网络出口过滤
 
-**信任边界声明**：有 shell 访问或网络访问的智能体（Claude Code、Codex、Gemini CLI、custom-cli、
-OpenAI 兼容内核）原则上能读到注入的凭据值。平台做了多层防护，但无法阻止一个有 shell + 网络的 AI
+**信任边界声明**：有 shell 访问或网络访问的智能体（Claude Code、Codex、Gemini CLI、DeepSeek Harness、
+custom-cli、OpenAI 兼容内核）原则上能读到注入的凭据值。平台做了多层防护，但无法阻止一个有 shell + 网络的 AI
 把信息间接传出去——这是信任边界，不是 bug。
 
 **网络出口过滤**（新增）：
@@ -328,11 +330,12 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 
 * **共享技能**：内核自带 / 宿主机上已有的技能，由适配器 ``skill_roots()`` 只读扫描，
   ``owner_id`` 为空，全平台可见、只读；
-* **用户技能库**：导入、市场安装、跨内核复制产生的技能，落在
-  ``<数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>``，按用户隔离。
+* **用户技能库**：导入、市场安装、挂载到其它内核的技能，**按 slug 只存一份**，落在
+  ``<数据目录>/skill-libraries/<owner_id>/<slug>``，按用户隔离；被哪些内核引用登记在
+  ``<owner_id>/.mounts.json``。
 
-一份技能只对写它的那个内核成立（`allowed-tools`、`scripts/`、依赖的插件都是内核特有的），
-运行时再按「智能体分配」物化进隔离目录。
+一份技能文件被多个内核共用（引用挂载），市场更新覆盖唯一实体后，所有挂载它的内核同时生效；
+运行时再按「智能体分配」物化进各自的隔离目录。
 
 ```
 内核技能根（共享） ──discover_skills()──┐
@@ -341,15 +344,17 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
   ~/.claude/skills
   ~/.claude/plugins/cache（已安装插件）
   $CODEX_HOME/skills
-  <数据目录>/skill-libraries/<用户>/<内核>/<技能>
+  <数据目录>/skill-libraries/<用户>/<技能>          # 一份实体
+  <数据目录>/skill-libraries/<用户>/.mounts.json    # 被哪些内核引用
 ```
 
 - **编目**：适配器用 `skill_roots()` 声明自己的技能根（路径 + 来源 + 是否可安装），框架用
   `scan_skill_roots()` 统一扫描，去重（同一个 slug 按「平台技能 > 市场技能 > 个人 > 项目 > 插件 > 系统」
   取优先级最高的一份）后写入 `skills` 表；同时扫描各用户的技能库
-  （`<数据目录>/skill-libraries/<owner>/<内核>/<技能>`），`owner_id` 记归属。
-  目录消失时只把 `available` 置 False，**不删行**，智能体分配不会断链。
-  来源标签见 `runtime/skills.py:SOURCE_LABELS`。
+  （`<数据目录>/skill-libraries/<owner>/<技能>`），按 `.mounts.json` 展开成「一个内核一行」，
+  `owner_id` 记归属，所有行共享同一个 `path`。目录消失时只把 `available` 置 False，**不删行**，
+  智能体分配不会断链。旧布局 `<owner>/<内核>/<技能>` 在重扫时自动迁移（同 slug 合并引用，
+  内容冲突时市场份优先、另一份挪进 `.conflicts/`）。来源标签见 `runtime/skills.py:SOURCE_LABELS`。
 - **按用户隔离**：共享技能（`owner_id` 为空）所有人可见只读；用户技能只有主人与管理员可见，
   标识带归属（`<type>:lib:<owner 或 local>:<slug>`），因此不同用户导入同名技能不会冲掉对方。
   列表 / 详情 / 分配 / 用量 / 删除全链路按这条规则过滤。
@@ -362,10 +367,11 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 - **分配**：`agent_skills` 是智能体能用的技能的**唯一来源**；`PUT /api/agents/{id}/skills` 整表替换。
   类型与智能体的内核不一致、或技能不在该智能体主人可见范围（别人的用户技能）时，
   界面直接禁止选择，服务端再兜底返回 422。
-- **导入 / 导出 / 跨内核复制**：技能页可以把一个技能导出成 zip（`GET /api/skills/{id}/export`，只读），
+- **导入 / 导出 / 跨内核挂载**：技能页可以把一个技能导出成 zip（`GET /api/skills/{id}/export`，只读），
   把 zip 导入自己的技能库（`POST /api/skills/import`，内容走 base64，同名不覆盖），
-  或把技能目录复制到自己另一个内核的技能库（`POST /api/skills/{id}/copy`）。三者都只动技能目录，
-  导入 / 复制后仍需「智能体分配」才会在运行时生效；共享技能可以被复制成自己的个人技能。
+  或把同一份技能挂载到自己另一个内核（`POST /api/skills/{id}/copy`，只登记引用，不复制文件）。
+  共享技能第一次挂载时会收进技能库；之后所有内核共用这一份。三者都只动技能目录 / 引用登记，
+  导入 / 挂载后仍需「智能体分配」才会在运行时生效。
 - **物化（严格仅分配）**：适配器的 `skill_mount(ctx)` 声明「我的内核从哪里读技能」——
   例如 Claude Code 用 `CLAUDE_CONFIG_DIR` 指向一个只含「分配到的技能 + 本机 settings」的隔离
   配置目录，并关闭内核自带的 bundled 技能与内置插件；Codex 用 `CODEX_HOME`。
@@ -390,12 +396,14 @@ MCP 服务器里，AI 只能调用暴露的工具（如 `create_pr`），永远�
 ```
 skillhub.cn ──/api/skills 列表 / /api/v1/skills/{slug} 详情──▶ 浏览
            └─/api/v1/download?slug=…（zip）──▶ 安全解压到
-                <数据目录>/skill-libraries/<owner_id>/<type_id>/<slug>
+                <数据目录>/skill-libraries/<owner_id>/<slug>
 ```
 
 - **安装 = 写当前用户的技能库**（不是内核全局目录）：落点是平台托管的
-  `skill_libraries_root/<owner>/<内核>/<技能>`，天然按用户隔离；适配器只负责声明
+  `skill_libraries_root/<owner>/<技能>`，天然按用户隔离；适配器只负责声明
   「本机原生技能根在哪」，不参与用户库路径。
+- **一份实体、多内核引用**：再次安装同一个 slug（装到别的内核）= 覆盖唯一实体 + 登记引用，
+  等价于「更新」，所有已挂载的内核同时生效；卸载只摘本内核引用，最后一个引用消失才删实体。
 - **装完仍需分配**：安装只是把技能放进了该用户的编目范围（`source_kind=market`），要
   智能体真正用上，还得在「智能体 → 技能」里分配——与内核自带技能同一套「严格仅分配」规则。
 - **可卸载，但有护栏**：市场页卸载要求目录内有市场安装标记（``.skillhub.json``）**且**目录落在
@@ -533,8 +541,9 @@ users(id, username UNIQUE, display_name, email, password_hash, token_version, ro
 gateways(id, name, kind(official|custom), type_id, protocol, auth_style, base_url,
          api_key_encrypted, selected_models JSON, model_catalog JSON, extra_headers JSON,
          enabled, last_probed_at, deleted_at, owner_id)   ← API 密钥的唯一来源
-agent_profiles(id, name, avatar, tagline, description, system_prompt, type_id,
-               gateway_id→gateways, model, options JSON, enabled, deleted_at, owner_id)
+agent_profiles(id, name, avatar, avatar_preset, avatar_file, tagline, description, system_prompt,
+               type_id, gateway_id→gateways, model, options JSON, enabled, deleted_at, owner_id)
+               -- 头像优先级：avatar_file（自定义上传）> avatar_preset（内置头像包）> avatar（emoji）
 credentials(id, name, description, value_encrypted, created_at, updated_at, deleted_at, owner_id)
 agent_credentials(agent_profile_id→agent_profiles, credential_id→credentials，复合主键 + position)
 conversations(id, title, agent_profile_id→agent_profiles, session_id, workspace_dir, model, archived,

@@ -146,6 +146,8 @@ class AgentProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     type_id: str
     avatar: str = "🛠️"
+    #: 内置头像包编号（``pack-001`` ~ ``pack-060``）；合法值由前端 `lib/avatarPack.ts` 的清单定义
+    avatar_preset: str | None = None
     tagline: str | None = None
     description: str | None = None
     system_prompt: str = ""
@@ -166,6 +168,8 @@ class AgentProfileUpdate(BaseModel):
     is_default: bool | None = None
     type_id: str | None = None
     avatar: str | None = None
+    #: 内置头像包编号；传 null 表示不用（界面回退到 emoji）
+    avatar_preset: str | None = None
     tagline: str | None = None
     description: str | None = None
     system_prompt: str | None = None
@@ -206,6 +210,8 @@ class AgentProfileRead(BaseModel):
     id: str
     name: str
     avatar: str
+    #: 内置头像包编号；有值时前端渲染 ``/avatars/<它>.webp``，优先级在 avatar_file 之后
+    avatar_preset: str | None = None
     #: 自定义头像文件名；有值时前端拼 ``/api/agents/{id}/avatar?v=<它>`` 取图，优先于 emoji
     avatar_file: str | None = None
     tagline: str | None = None
@@ -298,6 +304,8 @@ class SkillRead(BaseModel):
     owner_name: str | None = None
     #: 这条技能是否在当前用户自己的技能库里
     is_own: bool = False
+    #: 这份技能实体被哪些内核引用（用户技能库按 slug 只存一份；共享技能为空列表）
+    mounted_kernels: list[str] = Field(default_factory=list)
 
 
 class SkillDetail(SkillRead):
@@ -310,7 +318,8 @@ class SkillDetail(SkillRead):
     meta: dict[str, Any] = Field(default_factory=dict)
     body: str = ""
     body_truncated: bool = False
-    agents: list[dict[str, str]] = Field(default_factory=list)
+    #: 引用它的智能体摘要；`avatar_preset` 可能为空（没用内置头像包），所以值是 `str | None`
+    agents: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class SkillRescanResult(BaseModel):
@@ -336,7 +345,7 @@ class SkillImportIn(BaseModel):
 
 
 class SkillCopyIn(BaseModel):
-    """把一个技能复制到另一个内核。"""
+    """把一份技能挂载到另一个内核（技能库按 slug 只存一份，不复制文件）。"""
 
     #: 目标内核 id；与技能所属内核相同时接口会拒绝
     type_id: str
@@ -346,11 +355,11 @@ class SkillCopyIn(BaseModel):
 
 
 class SkillHubInstallIn(BaseModel):
-    """把一个市场技能安装到某个内核的原生技能根。"""
+    """把一个市场技能装进当前用户的技能库，并挂载到指定内核。"""
 
     #: 市场里的技能标识（slug）
     slug: str
-    #: 目标内核 id（如 claude-code / codex）；装到该内核声明的技能目录里
+    #: 目标内核 id（如 claude-code / codex）；安装后挂载到该内核
     type_id: str
     #: 指定版本；留空装最新版
     version: str | None = None
@@ -447,7 +456,8 @@ class McpServerRead(BaseModel):
 class McpServerDetail(McpServerRead):
     """MCP 服务器详情：附上引用了它的智能体。"""
 
-    agents: list[dict[str, str]] = Field(default_factory=list)
+    #: 引用它的智能体摘要；`avatar_preset` 可能为空（没用内置头像包），所以值是 `str | None`
+    agents: list[dict[str, str | None]] = Field(default_factory=list)
 
 
 class McpRescanResult(BaseModel):
@@ -494,6 +504,8 @@ class ConversationRead(BaseModel):
     updated_at: datetime
     agent_name: str | None = None
     agent_avatar: str | None = None
+    #: 内置头像包编号（快照；有值时前端渲染 /avatars/<它>.webp）
+    agent_avatar_preset: str | None = None
     #: 智能体自定义头像文件名（快照；有值时前端取 /api/agents/{agent_profile_id}/avatar 显示）
     agent_avatar_file: str | None = None
     agent_type_id: str | None = None

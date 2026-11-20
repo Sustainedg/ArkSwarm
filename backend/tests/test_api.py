@@ -86,6 +86,27 @@ async def test_agent_crud_keeps_gateway_and_model(client: httpx.AsyncClient):
     assert (await client.get(f"/api/agents/{agent['id']}")).status_code == 404
 
 
+async def test_agent_avatar_preset_roundtrip(client: httpx.AsyncClient):
+    """内置头像包编号：能存能读能清空，形状不对要拒（字符串会落库，不能放任任意串）。"""
+    agent = await make_agent(client, avatar_preset="pack-007")
+    assert agent["avatar_preset"] == "pack-007"
+    # 换 emoji 头像时预设要能一起清掉（前端传 null）
+    cleared = await client.patch(f"/api/agents/{agent['id']}", json={"avatar_preset": None})
+    assert cleared.json()["avatar_preset"] is None
+    # 重新挑一个头像包
+    picked = await client.patch(f"/api/agents/{agent['id']}", json={"avatar_preset": "pack-042"})
+    assert picked.json()["avatar_preset"] == "pack-042"
+    # 形状不合法的编号在写入前就挡掉
+    bad = await client.post(
+        "/api/agents",
+        json={"name": "x", "type_id": "custom-cli", "avatar_preset": "javascript:alert(1)"},
+    )
+    assert bad.status_code == 422
+    # 列表接口同样带出该字段：气泡 / 卡片据此画真头像
+    listed = (await client.get("/api/agents")).json()["items"]
+    assert next(item for item in listed if item["id"] == agent["id"])["avatar_preset"] == "pack-042"
+
+
 async def test_gateway_delete_blocked_while_an_agent_uses_it(client: httpx.AsyncClient):
     agent = await make_agent(client)
     response = await client.delete(f"/api/gateways/{agent['gateway_id']}")
@@ -426,7 +447,7 @@ async def test_soft_deleted_agent_frees_its_gateway(client: httpx.AsyncClient):
 
 async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):
     overview = (await client.get("/api/system/overview")).json()
-    assert overview["agent_types"] == 6  # 新增 Hermes Agent 后共 6 个内置适配器
+    assert overview["agent_types"] == 7  # Hermes Agent 与 DeepSeek Harness 之后共 7 个内置适配器
     assert overview["installed_types"] >= 1  # 当前环境中已安装 claude-code
     assert overview["version"] == __version__
     assert overview["version_history"][0]["version"] == overview["version"]
@@ -644,7 +665,7 @@ async def test_removed_kernel_gives_a_readable_error(client: httpx.AsyncClient):
         await session.execute(
             update(AgentProfile)
             .where(AgentProfile.id == role["id"])
-            .values(type_id="deepseek-harness")
+            .values(type_id="removed-kernel")
         )
         await session.commit()
 
@@ -661,7 +682,7 @@ async def test_removed_kernel_gives_a_readable_error(client: httpx.AsyncClient):
     # 列表接口仍然要把这条智能体展示出来（历史对话照旧可读），只是标成「未知类型」
     items = (await client.get("/api/agents")).json()["items"]
     assert [row["id"] for row in items] == [agent["id"], role["id"]]
-    assert items[1]["type_id"] == "deepseek-harness"
+    assert items[1]["type_id"] == "removed-kernel"
 
 
 async def test_default_agent_star_is_unique_and_drives_new_conversations(client: httpx.AsyncClient):
@@ -831,6 +852,32 @@ async def test_summon_answers_one_turn_and_keeps_ownership(client: httpx.AsyncCl
         m for m in detail["messages"] if m["role"] == "assistant" and not m["agent_profile_id"]
     )
     assert home_reply is not None
+
+
+async def test_summon_run_snapshot_carries_the_answerer(client: httpx.AsyncClient):
+    """运行快照必须带**本轮作答者**：另一台设备重连时靠它显示正确的名字与头像。
+
+    若这里错记成对话归属的智能体，被召唤者就会顶着主场智能体的头像说话。
+    """
+    agent = await make_agent(client)
+    other = await make_profile(client, gateway_id=agent["gateway_id"], name="被召唤者")
+    conversation = (
+        await client.post("/api/conversations", json={"agent_profile_id": agent["id"]})
+    ).json()
+
+    async with SessionLocal() as session:
+        prepared = await prepare_run(
+            session,
+            conversation["id"],
+            SendMessage(content="召唤", summon_profile_id=other["id"]),
+        )
+    try:
+        snapshot = prepared.run.snapshot()
+        assert snapshot["agent_name"] == "被召唤者"
+        assert snapshot["agent_profile_id"] == other["id"]
+        assert snapshot["agent_avatar"] == other["avatar"]
+    finally:
+        registry.finish(prepared.run, "ok")
 
 
 async def test_summon_shares_history_but_not_session(client: httpx.AsyncClient):

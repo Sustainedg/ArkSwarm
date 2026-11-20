@@ -6,6 +6,8 @@ import {
   validateCredentials,
 } from '../../components/CredentialEditor'
 import { DynamicForm } from '../../components/DynamicForm'
+import { AgentAvatar } from '../../components/AgentAvatar'
+import { ALL_AVATAR_PRESETS, avatarPresetUrl, randomAvatarPreset } from '../../lib/agentAvatar'
 import { CollapsibleGroup } from '../../components/CollapsibleGroup'
 import { StarIcon } from '../../components/Icons'
 import { McpPicker } from '../../components/McpPicker'
@@ -126,7 +128,13 @@ export function MobileAgentsPage() {
   const renderAgentCard = (agent: AgentProfile) => (
     <div className="card" key={agent.id}>
       <div className="row">
-        <span className="avatar">{agent.avatar}</span>
+        <AgentAvatar
+          avatar={agent.avatar}
+          avatarPreset={agent.avatar_preset}
+          avatarFile={agent.avatar_file}
+          agentId={agent.id}
+          size={40}
+        />
         <div className="m-item-main">
           <div className="m-item-title">{agent.name}</div>
           <div className="m-item-sub">
@@ -301,9 +309,23 @@ function AgentForm({
   library: Credential[]
   onSaved: () => void
 }) {
-  const [typeId, setTypeId] = useState<string>(agent?.type_id ?? agentTypes[0]?.id ?? '')
+  // 与桌面端同一规则：新建只列可选模板，编辑存量智能体时保留它自己的内核。
+  const selectableTypes = useMemo(() => {
+    const usable = agentTypes.filter((type) => type.selectable !== false)
+    if (agent && !usable.some((type) => type.id === agent.type_id)) {
+      const current = agentTypes.find((type) => type.id === agent.type_id)
+      if (current) return [...usable, current]
+    }
+    return usable
+  }, [agentTypes, agent])
+
+  const [typeId, setTypeId] = useState<string>(
+    agent?.type_id ?? selectableTypes[0]?.id ?? agentTypes[0]?.id ?? '',
+  )
   const [name, setName] = useState(agent?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? AVATARS[0])
+  /** 内置头像包编号：随机生成 / 画廊挑选写这里，随表单一并保存 */
+  const [avatarPreset, setAvatarPreset] = useState<string | null>(agent?.avatar_preset ?? null)
   const [groupName, setGroupName] = useState(agent?.group_name ?? '')
   const [tagline, setTagline] = useState(agent?.tagline ?? '')
   const [description, setDescription] = useState(agent?.description ?? '')
@@ -320,6 +342,8 @@ function AgentForm({
   const [options, setOptions] = useState<Record<string, unknown>>(agent?.options ?? {})
   const [credentialDrafts, setCredentialDrafts] = useState(() => credentialsToDraft(agent?.credentials))
   const [saving, setSaving] = useState(false)
+  /** 头像包画廊的开合：60 张缩略图没必要常驻 */
+  const [galleryOpen, setGalleryOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const selected = agentTypes.find((type) => type.id === typeId) ?? null
@@ -327,7 +351,7 @@ function AgentForm({
   // 新建时按当前内核补齐适配器选项的默认值（换内核走 chooseType）。
   useEffect(() => {
     if (agent) return
-    const initial = agentTypes.find((type) => type.id === typeId) ?? agentTypes[0]
+    const initial = selectableTypes.find((type) => type.id === typeId) ?? selectableTypes[0]
     if (!initial) return
     if (!typeId) setTypeId(initial.id)
     setOptions((prev) =>
@@ -335,7 +359,7 @@ function AgentForm({
         ? prev
         : Object.fromEntries(initial.config_fields.map((field) => [field.key, field.default])),
     )
-  }, [agent, typeId, agentTypes])
+  }, [agent, typeId, selectableTypes])
 
   const gatewayChoices = useMemo(() => gatewaysFor(selected, gateways), [selected, gateways])
   const gateway = gateways.find((item) => item.id === gatewayId) ?? null
@@ -386,6 +410,7 @@ function AgentForm({
         group_name: groupName.trim(),
         type_id: selected.id,
         avatar,
+        avatar_preset: avatarPreset,
         tagline: tagline.trim() || null,
         description: description.trim() || null,
         system_prompt: systemPrompt,
@@ -429,13 +454,49 @@ function AgentForm({
 
       <div className="field">
         <label className="field-label">头像</label>
-        <div className="row wrap" style={{ gap: 6 }}>
+        <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+          <AgentAvatar
+            avatar={avatar}
+            avatarPreset={avatarPreset}
+            size={56}
+            className="agent-avatar-preview"
+          />
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setAvatarPreset(randomAvatarPreset(avatarPreset))}
+          >
+            🎲 随机生成
+          </button>
+          <button type="button" className="btn sm ghost" onClick={() => setGalleryOpen((open) => !open)}>
+            {galleryOpen ? '收起画廊' : '从头像包挑选'}
+          </button>
+        </div>
+        {galleryOpen && (
+          <div className="agent-avatar-gallery">
+            {ALL_AVATAR_PRESETS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`agent-avatar-emoji-btn${item === avatarPreset ? ' picked' : ''}`}
+                onClick={() => setAvatarPreset(item)}
+                aria-label={`头像 ${item}`}
+              >
+                <img src={avatarPresetUrl(item)} alt="" loading="lazy" />
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
           {AVATARS.map((item) => (
             <button
               key={item}
               type="button"
-              className={`btn sm${item === avatar ? ' primary' : ''}`}
-              onClick={() => setAvatar(item)}
+              className={`btn sm${item === avatar && !avatarPreset ? ' primary' : ''}`}
+              onClick={() => {
+                setAvatar(item)
+                setAvatarPreset(null)
+              }}
             >
               {item}
             </button>
@@ -449,7 +510,7 @@ function AgentForm({
           const next = agentTypes.find((item) => item.id === event.target.value)
           if (next) chooseType(next)
         }}>
-          {agentTypes.map((type) => (
+          {selectableTypes.map((type) => (
             <option key={type.id} value={type.id}>
               {type.name} · {type.vendor}
             </option>

@@ -6,7 +6,7 @@
   "description": "ArkSwarm 桌面版 —— 把 AI 编程内核变成你的聊天同事（Windows / macOS）",
   "main": "dist-main/index.js",
   "author": "ArkSwarm",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "scripts": {
     "build": "npm run compile && electron-builder --publish never",
     "compile": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
@@ -16,6 +16,7 @@
     "fetch:node": "node scripts/fetch-node.mjs",
     "fetch:python": "node scripts/fetch-python.mjs",
     "gen:icons": "python3 scripts/gen-icons.py",
+    "gen:installer": "python3 scripts/gen-installer-assets.py",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit"
   },

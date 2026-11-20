@@ -154,7 +154,7 @@ async def get_mcp_server(
     detail = McpServerDetail(
         **_describe(row, counts).model_dump(),
         agents=[
-            {"id": profile.id, "name": profile.name, "avatar": profile.avatar}
+            {"id": profile.id, "name": profile.name, "avatar": profile.avatar, "avatar_preset": profile.avatar_preset}
             for profile in agents
         ],
     )

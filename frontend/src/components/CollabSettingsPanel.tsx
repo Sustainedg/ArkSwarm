@@ -23,6 +23,7 @@ import {
   type TeamDraft,
 } from '../lib/collabDraft'
 import type { CollabEdge, CollabIssue, CollabNode, CollabTeam, AgentProfile } from '../lib/types'
+import { AgentAvatar } from './AgentAvatar'
 
 interface Props {
   teamId?: string
@@ -207,7 +208,7 @@ export function CollabSettingsPanel({ teamId, teams, agents, onOpenTeam, onTeams
                     onDragStart={(event) => event.dataTransfer.setData('text/collab-agent', agent.id)}
                     onClick={() => addNode(agent)}
                   >
-                    <span>{agent.avatar}</span>
+                    <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} avatarFile={agent.avatar_file} agentId={agent.id} size={20} />
                     <span>{agent.name}</span>
                   </button>
                 ))}

@@ -147,6 +147,8 @@ export interface AgentType {
   default_models?: string[]
   docs_url?: string | null
   executable?: string | null
+  /** 是否出现在「新建智能体」的内核下拉里；false 的模板只保留给存量智能体 */
+  selectable?: boolean
   /** 运行时的安装 / 更新方式（`/api/agent-types` 也带上，与「运行时」页同源） */
   provisioning?: RuntimeProvisioning
   availability: Availability
@@ -262,6 +264,8 @@ export interface AgentProfile {
   id: string
   name: string
   avatar: string
+  /** 内置头像包编号（pack-001 ~ pack-060）；有值时渲染 /avatars/<它>.webp，优先级在 avatar_file 之后 */
+  avatar_preset?: string | null
   /** 自定义头像文件名；有值时取 /api/agents/{id}/avatar 显示，优先于 emoji */
   avatar_file?: string | null
   tagline?: string | null
@@ -341,6 +345,8 @@ export interface Skill {
   owner_name?: string | null
   /** 这条技能是否在当前用户自己的技能库里 */
   is_own: boolean
+  /** 这份技能实体被哪些内核引用（用户技能库按 slug 只存一份；共享技能为空） */
+  mounted_kernels?: string[]
 }
 
 export interface SkillDetail extends Skill {
@@ -352,7 +358,7 @@ export interface SkillDetail extends Skill {
   body: string
   body_truncated: boolean
   /** 引用了这个技能的智能体 */
-  agents: { id: string; name: string; avatar: string }[]
+  agents: { id: string; name: string; avatar: string; avatar_preset?: string | null }[]
 }
 
 export interface SkillRescanResult {
@@ -362,7 +368,7 @@ export interface SkillRescanResult {
   total: number
 }
 
-/** 导入 / 复制技能后的结果：新技能的标识与落点内核。 */
+/** 导入 / 挂载技能后的结果：新技能的标识与落点内核。 */
 export interface SkillTransferResult {
   skill_id: string
   name: string
@@ -424,7 +430,7 @@ export interface McpServer {
 
 export interface McpServerDetail extends McpServer {
   /** 挂着这个服务器的智能体 */
-  agents: { id: string; name: string; avatar: string }[]
+  agents: { id: string; name: string; avatar: string; avatar_preset?: string | null }[]
 }
 
 export interface McpRescanResult {
@@ -509,6 +515,12 @@ export interface ActiveRunInfo {
   id: string
   conversation_id: string
   agent_name: string
+  /** 本轮作答的智能体 id：@ 召唤轮是被召唤者，普通轮是对话归属者 */
+  agent_profile_id?: string | null
+  /** 本轮作答智能体的 emoji 头像（与 agent_profile_id 对应） */
+  agent_avatar?: string | null
+  /** 本轮作答智能体的内置头像包编号（与 agent_avatar 对应） */
+  agent_avatar_preset?: string | null
   status: string
   elapsed_seconds: number
   /** 本轮助手消息 id：界面据此隐藏数据库里那条空占位，改用实时卡片渲染 */
@@ -548,6 +560,10 @@ export interface Conversation {
   updated_at: string
   agent_name?: string | null
   agent_avatar?: string | null
+  /** 智能体的内置头像包编号（快照）；有值时渲染 /avatars/<它>.webp */
+  agent_avatar_preset?: string | null
+  /** 智能体的自定义头像文件名（快照）；有值时取 /api/agents/{agent_profile_id}/avatar */
+  agent_avatar_file?: string | null
   agent_type_id?: string | null
   /** 智能体配置的默认模型（对话未单独指定时，输入框上显示它 + 「默认」标签） */
   agent_model?: string | null
@@ -655,6 +671,7 @@ export interface UsageAgentRow {
   id: string
   name: string
   avatar: string
+  avatar_preset?: string | null
   type_id?: string | null
   type_name?: string | null
   tokens: UsageTokens

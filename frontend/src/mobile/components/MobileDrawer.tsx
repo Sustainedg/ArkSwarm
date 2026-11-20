@@ -8,6 +8,7 @@ import { sameConversationList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { describeError } from '../util'
 import { BrandMark } from '../../components/BrandMark'
 import { UserAvatar } from '../../components/UserAvatar'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import { LogoutIcon, SettingsIcon } from '../../components/Icons'
 
 /** 抽屉上半部分的主导航：对应曾经固定在底部的 Tab（「对话」是回聊天页的入口）。 */
@@ -189,7 +190,7 @@ export function MobileDrawer({ open, onClose, version }: Props) {
                         disabled={creating}
                         onClick={() => void start(agent.id)}
                       >
-                        <span className="avatar">{agent.avatar}</span>
+                        <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} avatarFile={agent.avatar_file} agentId={agent.id} size={34} />
                         <span className="m-item-main">
                           <span className="m-item-title">
                             {agent.name}

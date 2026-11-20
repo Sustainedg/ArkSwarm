@@ -18,6 +18,12 @@ class ActiveRun:
     agent_name: str
     #: 发起这次运行的对话所属用户；``None`` 是鉴权关闭 / 历史数据，视为管理员可见。
     owner_id: str | None = None
+    #: 本轮作答的智能体：@ 召唤轮是**被召唤者**，普通轮是对话归属的智能体。
+    #: 重连的客户端据此在实时卡片上显示正确的名字与头像（不能想当然用对话归属者）。
+    agent_profile_id: str | None = None
+    agent_avatar: str | None = None
+    #: 内置头像包编号（快照）：重连的客户端据此画 ``/avatars/<它>.webp``。
+    agent_avatar_preset: str | None = None
     started_at: float = field(default_factory=time.time)
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     process: Any = None
@@ -43,6 +49,9 @@ class ActiveRun:
             "id": self.id,
             "conversation_id": self.conversation_id,
             "agent_name": self.agent_name,
+            "agent_profile_id": self.agent_profile_id,
+            "agent_avatar": self.agent_avatar,
+            "agent_avatar_preset": self.agent_avatar_preset,
             "status": self.status,
             "elapsed_seconds": round(time.time() - self.started_at, 1),
             "assistant_message_id": self.assistant_message_id,
@@ -96,13 +105,23 @@ class RunRegistry:
         self._runs: dict[str, ActiveRun] = {}
 
     def register(
-        self, conversation_id: str, agent_name: str, owner_id: str | None = None
+        self,
+        conversation_id: str,
+        agent_name: str,
+        owner_id: str | None = None,
+        *,
+        agent_profile_id: str | None = None,
+        agent_avatar: str | None = None,
+        agent_avatar_preset: str | None = None,
     ) -> ActiveRun:
         run = ActiveRun(
             id=uuid.uuid4().hex[:12],
             conversation_id=conversation_id,
             agent_name=agent_name,
             owner_id=owner_id,
+            agent_profile_id=agent_profile_id,
+            agent_avatar=agent_avatar,
+            agent_avatar_preset=agent_avatar_preset,
         )
         self._runs[run.id] = run
         return run

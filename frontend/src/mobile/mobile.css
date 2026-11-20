@@ -500,6 +500,47 @@ code, pre, .mono { font-family: var(--mono); }
 /* 自己的消息画真头像（UserAvatar）：撑满 avatar 圆框，与 AI 侧的 emoji 头像同尺寸 */
 .avatar .avatar-user { --avatar-size: 100%; width: 100%; height: 100%; }
 
+/* ---------- 智能体头像（两端共用：列表 / 气泡 / 选择器） ---------- */
+/* 图片来源有两种：内置头像包（/avatars/*.webp）与自定义上传（带令牌取的 blob）。
+   两端样式表各写一份、逐字一致；各端的尺寸微调写在共享段之后。 */
+.agent-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; overflow: hidden;
+  background: var(--bg-panel); border: 1px solid var(--border);
+}
+.agent-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 内联在文字行里的小头像：去掉圆框描边、贴齐基线；inline-grid 免得独占一行 */
+.agent-avatar-inline { display: inline-grid; border: none; background: none; vertical-align: -3px; }
+/* 空态里的大头像：水平居中 */
+.empty-icon .agent-avatar { margin: 0 auto; }
+/* 气泡 / 列表里的头像：AgentAvatar 撑满外层圆框，避免出现双层描边 */
+.avatar > .agent-avatar { width: 100%; height: 100%; border: none; background: none; }
+/* emoji 快选 / 头像包：一排圆形小按钮，选中的描边点亮 */
+.agent-avatar-emoji-btn {
+  flex: none; width: 36px; height: 36px; border-radius: 50%; padding: 0;
+  display: grid; place-items: center; font-size: 19px; line-height: 1;
+  border: 1px solid var(--border); background: none; cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.agent-avatar-emoji-btn:hover { border-color: var(--border-strong); transform: scale(1.1); }
+.agent-avatar-emoji-btn.picked { border-color: var(--brand); background: var(--brand-soft); }
+.agent-avatar-emoji-btn img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+/* 头像包画廊：所有内置头像一排排铺开，超过预览高度就内部滚动 */
+.agent-avatar-gallery {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 8px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated);
+  max-height: 200px; overflow-y: auto;
+}
+
+/* 移动端的尺寸微调（共享段之后） */
+.agent-avatar-preview {
+  width: 56px; height: 56px;
+  background: linear-gradient(135deg, var(--brand-soft), var(--accent-soft));
+  border-color: var(--border-strong);
+}
+.m-empty-icon .agent-avatar { margin: 0 auto; }
+.agent-avatar-emoji-btn { width: 38px; height: 38px; }
+
 .form-grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
 .form-grid .span-2 { grid-column: span 1; }
 .advanced-toggle {
@@ -1630,15 +1671,15 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .img-lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
 
-/* 一条消息带过的附件：图片是缩略图，文档等是文件名胶囊 */
-/* 附件清单：与消息正文里的「📎 附件」块同构 —— 说明头一行 + 每个附件一行完整路径，
-   图片附件在路径旁配缩略图。路径是「智能体能直接读」的关键信息，必须完整可读。 */
-.bubble-attachments { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-.bubble-attachments-head { font-size: 12px; color: var(--text-muted); }
-.bubble-attachment-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.bubble-attachment-path {
-  min-width: 0; flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
-  overflow-wrap: anywhere;
+/* 一条消息带过的附件：图片是缩略图，文档等是文件名胶囊。
+   气泡里不再铺「📎 附件（已存入工作目录，可直接读取）：」这行提示与完整路径 ——
+   那是写给智能体看的提示词，对话里只留用户想看的「带了什么」。 */
+.bubble-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.bubble-attachment-name {
+  display: inline-block; max-width: 220px; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-hover);
+  color: var(--text-muted); font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
 }
 .zoomable.bubble-attachment-thumb { flex: none; width: 64px; height: 64px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
 .zoomable.bubble-attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }

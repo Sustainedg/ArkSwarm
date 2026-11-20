@@ -15,6 +15,10 @@ files:
   - package.json
   - "!**/*.map"
 extraResources:
+  # MIT 要求分发的副本里保留版权声明 → 随应用带一份（落到 resources/LICENSE.txt）。
+  # 安装向导的「许可协议」页用的是同一份文件（nsis.license: ../LICENSE），不维护副本。
+  - from: ../LICENSE
+    to: LICENSE.txt
   # 后端源码包：构建时由 scripts/prepare-backend.mjs 组装（backend/ + frontend/dist/），
   # 安装后落在 resources/app-backend/，与主项目 arkswarm.tar.gz 同构。
   # 排除清单与 scripts/release.sh 对齐：真实数据、venv、缓存、测试一律不进安装包
@@ -64,6 +68,23 @@ nsis:
   deleteAppDataOnUninstall: false
   # 差分更新（electron-updater 用 .blockmap 只下变化块）
   differentialPackage: true
+
+  # ---- 品牌化（资源由 scripts/gen-installer-assets.py 生成，已入库） ----
+  # 以下路径相对 buildResources（desktop/build）解析，写文件名即可
+  # 左侧竖图：欢迎页 + 完成页共用（164×314，MUI 的硬性尺寸）
+  installerSidebar: installerSidebar.bmp
+  # 右上角横幅：其余向导页（150×57，MUI_HEADERIMAGE_RIGHT）
+  installerHeader: installerHeader.bmp
+  # 自定义页：补一页品牌欢迎页（默认向导没有 welcome page）
+  # 不叫 installer.nsh：electron-builder 自带模板里已有同名文件，
+  # 撞名后 !addincludedir 的搜索顺序一旦变化就会静默加载错文件。
+  include: installer-branding.nsh
+  # 许可协议页：单一权威来源是仓库根的 LICENSE（MIT），不在 desktop/ 再存一份副本。
+  # 注意路径从 buildResources 解析不到时会回退到 projectDir（desktop/），
+  # 所以 ../LICENSE 指向仓库根；纯 ASCII 文本，NSIS 的 Unicode 构建直接可读。
+  license: ../LICENSE
+  # 控制面板「应用和功能」里的显示名（默认是「ArkSwarm 0.1.3」带版本号）
+  uninstallDisplayName: ArkSwarm
 mac:
   icon: build/icon.icns
   target:

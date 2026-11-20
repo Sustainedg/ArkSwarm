@@ -76,7 +76,7 @@ async def _collect(definition: AgentDefinition, action: str) -> list[dict]:
 
 def test_cli_kernels_declare_a_provisioner():
     """三个 CLI 内核都要声明安装方式，否则「运行时」页无从下手。"""
-    for type_id in ("claude-code", "codex", "gemini-cli", "hermes-agent"):
+    for type_id in ("claude-code", "codex", "gemini-cli", "hermes-agent", "deepseek-harness"):
         provisioner = get_agent(type_id).provisioner
         assert provisioner is not None, f"{type_id} 未声明 provisioner"
         assert provisioner.manager and provisioner.package, f"{type_id} 缺少包管理器/包名"
@@ -94,7 +94,7 @@ def test_api_kernels_are_not_managed():
 
 def test_npm_kernels_clean_up_leftovers_before_acting():
     """npm 的中转目录残留会让安装 / 更新 / 卸载永久失败，三个 npm 内核都要声明清扫命令。"""
-    for type_id in ("claude-code", "codex", "gemini-cli"):
+    for type_id in ("claude-code", "codex", "gemini-cli", "deepseek-harness"):
         provisioner = get_agent(type_id).provisioner
         assert provisioner is not None and provisioner.prepare_argv, f"{type_id} 缺少「清扫」命令"
 
@@ -109,6 +109,7 @@ def test_npm_kernels_install_through_the_conflict_aware_wrapper():
         ("claude-code", "@anthropic-ai/claude-code"),
         ("codex", "@openai/codex"),
         ("gemini-cli", "@google/gemini-cli"),
+        ("deepseek-harness", "@deepseek-ai/dsh"),
     )
     for type_id, package in kernels:
         definition = get_agent(type_id)

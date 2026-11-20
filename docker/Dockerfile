@@ -13,7 +13,7 @@
 # ---- 前端构建阶段 ----
 # frontend/dist 被 .gitignore 忽略；用源码在镜像里现构建，全新 clone 也能直接
 # docker compose up --build，不依赖本地先跑一次 npm run build。
-FROM node:20-slim AS frontend
+FROM node:24-slim AS frontend
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -29,9 +29,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends curl ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 LTS：Claude Code 要求 Node >= 22，Gemini CLI >= 20，Codex >= 16。
-# 用官方二进制包而不是 NodeSource：少一个外部 apt 源，也便于按构建架构取对应包。
-# 内核（Claude Code / Codex / Gemini / Hermes）由运行时的 entrypoint 或
+# Node.js 24 LTS：DeepSeek Harness 要求 Node >= 24.9，Claude Code 要求 >= 22，
+# Gemini CLI >= 20，Codex >= 16。用官方二进制包而不是 NodeSource：少一个外部 apt 源，
+# 也便于按构建架构取对应包。
+# 内核（Claude Code / Codex / Gemini / Hermes / DeepSeek Harness）由运行时的 entrypoint 或
 # 「设置 → 内核管理」安装到 HOME（数据卷），不再烘进镜像。
 ARG TARGETARCH
 RUN set -eux; \
@@ -41,7 +42,7 @@ RUN set -eux; \
       arm64) node_arch="arm64" ;; \
       *) echo "不支持的架构：$arch" >&2; exit 1 ;; \
     esac; \
-    node_version="v22.23.5"; \
+    node_version="v24.22.3"; \
     tarball="node-${node_version}-linux-${node_arch}.tar.gz"; \
     curl -fsSLo "/tmp/${tarball}" "https://nodejs.org/dist/${node_version}/${tarball}"; \
     curl -fsSLo /tmp/SHASUMS256.txt "https://nodejs.org/dist/${node_version}/SHASUMS256.txt"; \

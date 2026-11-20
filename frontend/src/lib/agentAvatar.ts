@@ -1,0 +1,115 @@
+/**
+ * 智能体头像的统一取值逻辑（两端共用）。
+ *
+ * 一个智能体的头像有三个来源，显示优先级从高到低：
+ *
+ * 1. `avatar_file` —— 自定义上传（`/api/agents/{id}/avatar`，需带令牌取 blob）；
+ * 2. `avatar_preset` —— 内置头像包（`/avatars/pack-NNN.webp`，随前端构建发布的静态图）；
+ * 3. `avatar` —— emoji（最老的字段，所有地方都能渲染）。
+ *
+ * 头像包清单由 `scripts/gen_avatar_pack.py` 生成（`lib/avatarPack.ts`），图片与清单
+ * 必须同步，所以随机生成只会抽到真实存在的图。
+ */
+import { useEffect, useState } from 'react'
+import { getAccessToken } from './auth'
+import { AVATAR_PRESETS } from './avatarPack'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+/** 是不是内置头像包编号（`pack-001` ~）；后端按同一规则校验（`app/avatars.py`）。 */
+export function isAvatarPreset(value: string | null | undefined): value is string {
+  return /^pack-\d{3}$/.test(value ?? '')
+}
+
+/** 内置头像包图片地址（public 目录，随构建发布，无需鉴权）。 */
+export function avatarPresetUrl(preset: string): string {
+  return `${BASE}/avatars/${preset}.webp`
+}
+
+/** 随机抽一个内置头像包编号；排除当前正在用的那张，让「随机生成」次次都有新面孔。 */
+export function randomAvatarPreset(exclude?: string | null): string {
+  const pool = AVATAR_PRESETS.filter((item) => item !== exclude)
+  const source = pool.length > 0 ? pool : [...AVATAR_PRESETS]
+  return source[Math.floor(Math.random() * source.length)]
+}
+
+/** 内置头像包的编号列表（画廊挑选用）。 */
+export const ALL_AVATAR_PRESETS: readonly string[] = AVATAR_PRESETS
+
+/* ------------------------------------------------------------------ */
+/* 自定义上传头像（avatar_file）：带令牌取 blob，与用户头像同一条路（见 lib/avatar.ts） */
+
+/** 已取到的智能体头像 object URL：`<id>:<avatar_file>` → URL。 */
+const cache = new Map<string, string>()
+/** 正在取的请求：同一张头像被多个组件同时要时只发一次。 */
+const inflight = new Map<string, Promise<string | null>>()
+
+function cacheKey(agentId: string, file: string): string {
+  return `${agentId}:${file}`
+}
+
+async function loadAgentAvatar(agentId: string, file: string): Promise<string | null> {
+  const key = cacheKey(agentId, file)
+  const cached = cache.get(key)
+  if (cached) return cached
+  const pending = inflight.get(key)
+  if (pending) return pending
+
+  const task = (async () => {
+    const token = getAccessToken()
+    const response = await fetch(
+      `${BASE}/api/agents/${encodeURIComponent(agentId)}/avatar?v=${encodeURIComponent(file)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    )
+    if (!response.ok) return null
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    // 换头像后旧标识的图不会再被用到：顺手回收，别让缓存无限长大。
+    const prefix = `${agentId}:`
+    for (const [staleKey, staleUrl] of cache) {
+      if (staleKey.startsWith(prefix) && staleKey !== key) {
+        URL.revokeObjectURL(staleUrl)
+        cache.delete(staleKey)
+      }
+    }
+    cache.set(key, url)
+    return url
+  })()
+
+  inflight.set(key, task)
+  try {
+    return await task
+  } finally {
+    inflight.delete(key)
+  }
+}
+
+/**
+ * 智能体自定义头像的 blob 地址；没有自定义图 / 取图失败时为 `null`（调用方回退）。
+ *
+ * 头像接口要鉴权，`<img src>` 带不了 Authorization 头，所以这里先 fetch 成 blob
+ * 再渲染 —— 与用户头像（`lib/avatar.ts`）同一个原因。
+ */
+export function useAgentAvatarFileUrl(
+  agentId: string | null | undefined,
+  file: string | null | undefined,
+): string | null {
+  const key = agentId && file ? cacheKey(agentId, file) : ''
+  const [url, setUrl] = useState<string | null>(() => (key ? cache.get(key) ?? null : null))
+
+  useEffect(() => {
+    if (!agentId || !file) {
+      setUrl(null)
+      return
+    }
+    let alive = true
+    void loadAgentAvatar(agentId, file).then((next) => {
+      if (alive) setUrl(next)
+    })
+    return () => {
+      alive = false
+    }
+  }, [agentId, file])
+
+  return url
+}

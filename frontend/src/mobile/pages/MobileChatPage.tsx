@@ -5,7 +5,7 @@ import { applyAgentEvent, emptyAgentStream, type AgentStreamState } from '../../
 import { api, ApiError, conversationFileUrl, isNetworkError, streamGet, streamPost } from '../../lib/api'
 import { useComposerDraft } from '../../lib/composerDraft'
 import { formatListTime } from '../../lib/datetime'
-import { MediaUrlProvider, composeWithAttachments } from '../../lib/media'
+import { MediaUrlProvider, composeWithAttachments, splitAttachmentBlock } from '../../lib/media'
 import { shortPath } from '../../lib/paths'
 import { useMarkConversationRead } from '../../lib/readReceipts'
 import { shareConversationImage } from '../../lib/shareImage'
@@ -26,6 +26,7 @@ import { sameMessageList, useAutoRefresh } from '../../lib/useAutoRefresh'
 import { summarizeUsage } from '../../lib/usage'
 import { AgentIcon, FolderIcon, ModelIcon, PencilIcon, PlusIcon, ShareIcon, SpeakerIcon } from '../../components/Icons'
 import { useAuth } from '../../components/AuthGate'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import { Composer } from '../../components/Composer'
 import { MobileMenuButton, useMobileMenu } from '../components/MobileMenuButton'
 import { MobileSheet } from '../components/MobileSheet'
@@ -38,6 +39,12 @@ interface LiveTurn extends AgentStreamState {
   userAttachments: string[]
   /** @ 召唤轮：正在回答的智能体名（气泡上亮「✦ 某某正在回答」） */
   summonName?: string
+  /** @ 召唤轮：被召唤者的 emoji 头像（气泡左侧也跟着换人） */
+  summonAvatar?: string
+  /** @ 召唤轮：被召唤者的内置头像包编号 / 自定义头像文件 / 智能体 id */
+  summonAvatarPreset?: string | null
+  summonAvatarFile?: string | null
+  summonAgentId?: string | null
 }
 
 /** 待发送消息：AI 回复期间先攒着，本轮结束后按顺序自动发出。 */
@@ -189,6 +196,14 @@ export function MobileChatPage() {
         // 连续切换时旧请求可能后到：只把结果写给当前路由指向的那条对话。
         if (openedConversationRef.current !== id) return null
         applyDetail(detail, true)
+        // 消息里可能有 @ 召唤的回复（agent_profile_id 非空）：拉一份智能体名单用于
+        // 显示作答者的头像与名字。只拉一次，之后 @ 浮层 / 换智能体面板都复用这份数据。
+        if (scopeAgents.length === 0) {
+          void api
+            .listAgents()
+            .then(setScopeAgents)
+            .catch(() => undefined)
+        }
         return detail
       } catch (e) {
         // 过期请求的失败也不该在当前这条对话上报错。
@@ -196,7 +211,7 @@ export function MobileChatPage() {
         return null
       }
     },
-    [applyDetail, reportError],
+    [applyDetail, reportError, scopeAgents.length],
   )
 
   /** 后台同步（每 3 秒）：只更新数据，不覆盖用户主动操作产生的提示。 */
@@ -327,11 +342,21 @@ export function MobileChatPage() {
     attachRef.current = controller
     attachedRunIdRef.current = runId
     attachedLiveRef.current = true
+    // 运行快照里带的是**本轮作答者**：@ 召唤轮是被召唤者，不能想当然用对话归属者。
+    const runIsSummon = Boolean(
+      activeRun.agent_profile_id &&
+        active &&
+        activeRun.agent_profile_id !== active.agent_profile_id,
+    )
     setLive({
       ...emptyAgentStream(),
       // 用户消息已经在数据库里（详情会拉到），这里只渲染正在生成的助手回复。
       userText: '',
       userAttachments: [],
+      summonName: runIsSummon ? activeRun.agent_name : undefined,
+      summonAvatar: runIsSummon ? activeRun.agent_avatar ?? undefined : undefined,
+      summonAvatarPreset: runIsSummon ? activeRun.agent_avatar_preset ?? undefined : undefined,
+      summonAgentId: runIsSummon ? activeRun.agent_profile_id ?? undefined : undefined,
     })
 
     let cancelled = false
@@ -422,6 +447,10 @@ export function MobileChatPage() {
       userText: regenerate ? '' : content,
       userAttachments: regenerate ? [] : pending.map((item) => item.rel_path),
       summonName: summonAgent?.name,
+      summonAvatar: summonAgent?.avatar,
+      summonAvatarPreset: summonAgent?.avatar_preset,
+      summonAvatarFile: summonAgent?.avatar_file,
+      summonAgentId: summonAgent?.id,
     })
 
     const controller = new AbortController()
@@ -618,7 +647,8 @@ export function MobileChatPage() {
         theme,
         messages: messages.map((message) => ({
           role: message.role,
-          content: message.content,
+          // 分享图也只画用户说的话：附件清单是提示词里给智能体读的，不该出现在分享图上。
+          content: splitAttachmentBlock(message.content).text,
           createdAt: formatListTime(message.created_at),
         })),
       })
@@ -789,6 +819,8 @@ export function MobileChatPage() {
       status: message.status,
       error: message.error,
       usage: message.usage,
+      // 不能在这里丢掉：@ 召唤轮的回复靠它区分作答者，头像 / 名字都从这里查
+      agent_profile_id: message.agent_profile_id,
     }))
 
   const liveMessage: RenderMessage | null = live
@@ -886,27 +918,46 @@ export function MobileChatPage() {
 
         {chatMessages.length === 0 && !liveMessage && active && (
           <div className="m-empty">
-            <div className="m-empty-icon">{active.agent_avatar ?? '🤖'}</div>
+            <div className="m-empty-icon">
+              <AgentAvatar
+                avatar={active.agent_avatar}
+                avatarPreset={active.agent_avatar_preset}
+                avatarFile={active.agent_avatar_file}
+                agentId={active.agent_profile_id}
+                size={56}
+              />
+            </div>
             <p>与「{active.agent_name}」的对话已就绪</p>
             <p className="dim small">所有输出都会写回工作目录 {short(active.workspace_dir ?? '默认', 40)}</p>
           </div>
         )}
 
-        {chatMessages.map((message) => (
-          <MessageView
-            key={message.id}
-            message={message}
-            avatar={active?.agent_avatar ?? undefined}
-            // @ 召唤轮的回复：名字一行亮出被召唤者，一眼分清不是主场智能体说的
-            label={
-              message.role === 'assistant' && message.agent_profile_id
-                ? `✦ ${scopeAgents.find((a) => a.id === message.agent_profile_id)?.name ?? '被召唤智能体'}（@ 召唤）`
-                : (active?.agent_name ?? undefined)
-            }
-            finalOnly={!showTools}
-            user={user}
-          />
-        ))}
+        {chatMessages.map((message) => {
+          // 作答者是谁就显示谁：@ 召唤轮的头像 / 名字都取被召唤者，
+          // 不能一律用对话归属的智能体（否则被召唤者顶着主场的大脑门说话）。
+          const summoned = Boolean(message.role === 'assistant' && message.agent_profile_id)
+          const summoner = summoned
+            ? scopeAgents.find((agent) => agent.id === message.agent_profile_id)
+            : undefined
+          return (
+            <MessageView
+              key={message.id}
+              message={message}
+              avatar={summoned ? (summoner?.avatar ?? '🤖') : (active?.agent_avatar ?? undefined)}
+              avatarPreset={summoned ? summoner?.avatar_preset : active?.agent_avatar_preset}
+              avatarFile={summoned ? summoner?.avatar_file : active?.agent_avatar_file}
+              agentId={summoned ? summoner?.id : active?.agent_profile_id}
+              // @ 召唤轮的回复：名字一行亮出被召唤者，一眼分清不是主场智能体说的
+              label={
+                summoned
+                  ? `✦ ${summoner?.name ?? '被召唤智能体'}（@ 召唤）`
+                  : (active?.agent_name ?? undefined)
+              }
+              finalOnly={!showTools}
+              user={user}
+            />
+          )
+        })}
 
         {live && (live.userText || live.userAttachments.length > 0) && (
           <MessageView
@@ -925,7 +976,10 @@ export function MobileChatPage() {
         {liveMessage && (
           <MessageView
             message={liveMessage}
-            avatar={active?.agent_avatar ?? undefined}
+            avatar={live?.summonAvatar ?? active?.agent_avatar ?? undefined}
+            avatarPreset={live?.summonAvatarPreset ?? active?.agent_avatar_preset}
+            avatarFile={live?.summonAvatarFile ?? active?.agent_avatar_file}
+            agentId={live?.summonAgentId ?? active?.agent_profile_id}
             label={live?.summonName ? `✦ ${live.summonName} 正在回答（@ 召唤）` : (active?.agent_name ?? undefined)}
             finalOnly={!showTools}
           />
@@ -986,9 +1040,13 @@ export function MobileChatPage() {
                       onClick={() => pickMention(agent)}
                       title={`让「${agent.name}」回答这一轮（共享对话记忆，不影响本对话的智能体）`}
                     >
-                      <span className="avatar" style={{ width: 26, height: 26, fontSize: 14 }}>
-                        {agent.avatar}
-                      </span>
+                      <AgentAvatar
+                        avatar={agent.avatar}
+                        avatarPreset={agent.avatar_preset}
+                        avatarFile={agent.avatar_file}
+                        agentId={agent.id}
+                        size={26}
+                      />
                       <span className="agent-pick-main">
                         <span className="agent-pick-name">{agent.name}</span>
                         <span className="card-sub">{agent.type_name ?? agent.type_id}</span>
@@ -1185,7 +1243,13 @@ export function MobileChatPage() {
                   disabled={scopeSaving || !agent.enabled}
                   onClick={() => void applyScope({ agent_profile_id: agent.id })}
                 >
-                  <span className="avatar">{agent.avatar}</span>
+                  <AgentAvatar
+                    avatar={agent.avatar}
+                    avatarPreset={agent.avatar_preset}
+                    avatarFile={agent.avatar_file}
+                    agentId={agent.id}
+                    size={30}
+                  />
                   <span className="agent-pick-main">
                     <span className="agent-pick-name">
                       {agent.name}

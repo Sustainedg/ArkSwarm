@@ -244,8 +244,8 @@ async def test_market_install_is_per_user(
     )
     assert installed[bob["user"]["id"]] == f"claude-code:lib:{bob['user']['id']}:market-skill"
     library = skill_service.get_settings().skill_libraries_root
-    assert (library / alice["user"]["id"] / "claude-code" / "market-skill" / "SKILL.md").is_file()
-    assert (library / bob["user"]["id"] / "claude-code" / "market-skill" / "SKILL.md").is_file()
+    assert (library / alice["user"]["id"] / "market-skill" / "SKILL.md").is_file()
+    assert (library / bob["user"]["id"] / "market-skill" / "SKILL.md").is_file()
 
     # 乙卸载不了甲的，甲的安装不受影响。
     denied = await client.post(

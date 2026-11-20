@@ -3,6 +3,7 @@ import type { AuthUser, MessagePart } from '../lib/types'
 import { extractImagePaths, isImagePath, splitAttachmentBlock, useMediaUrl } from '../lib/media'
 import { MarkdownView } from './MarkdownView'
 import { UserAvatar } from './UserAvatar'
+import { AgentAvatar } from './AgentAvatar'
 import { ZoomableImage } from './ZoomableImage'
 
 export interface RenderMessage {
@@ -27,9 +28,13 @@ export interface RenderMessage {
   agent_profile_id?: string | null
 }
 
-export function MessageView({ message, avatar, label, finalOnly = false, user }: {
+export function MessageView({ message, avatar, avatarPreset, avatarFile, agentId, label, finalOnly = false, user }: {
   message: RenderMessage
   avatar?: string
+  /** 智能体的内置头像包编号 / 自定义头像文件：AI 侧气泡画真头像用（见 AgentAvatar） */
+  avatarPreset?: string | null
+  avatarFile?: string | null
+  agentId?: string | null
   label?: string
   /** 当前登录用户（自己发的消息画真头像，不再用 🙋 emoji）；不传退回 🙋 */
   user?: Pick<AuthUser, 'id' | 'avatar' | 'display_name' | 'username'> | null
@@ -87,8 +92,13 @@ export function MessageView({ message, avatar, label, finalOnly = false, user }:
   return (
     <div className={`bubble-row${isUser ? ' user' : ''}`}>
       <div className={`avatar${isUser ? ' user' : ''}`}>
-        {/* 自己的消息画真头像（有图显示图，没图自动退回显示名首字母）；AI 侧仍是智能体 emoji */}
-        {isUser ? (user ? <UserAvatar user={user} className="avatar-user" /> : '🙋') : (avatar ?? '🤖')}
+        {/* 自己的消息画真头像（有图显示图，没图自动退回显示名首字母）；
+            AI 侧优先画真头像图（头像包 / 自定义上传），没有才回退到 emoji */}
+        {isUser
+          ? (user ? <UserAvatar user={user} className="avatar-user" /> : '🙋')
+          : (avatarPreset || avatarFile
+            ? <AgentAvatar avatar={avatar} avatarPreset={avatarPreset} avatarFile={avatarFile} agentId={agentId} />
+            : (avatar ?? '🤖'))}
       </div>
       <div className="bubble">
         <div className="bubble-head">
@@ -328,34 +338,37 @@ function ToolCard({ part }: { part: MessagePart }) {
 }
 
 /**
- * 一条消息带过的附件：与正文里「📎 附件（已存入工作目录，可直接读取）：」清单同构 ——
- * 一行说明头 + 每个附件一行**完整相对路径**（路径是「智能体能直接读」的关键信息，
- * 只给文件名的话用户没法把它与工作目录里的文件对上号）。
- * 图片附件在路径旁配可点开放大的缩略图；非图片（文档等）就是纯路径行。
- * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）；拿不到解析器时只显示路径，不至于空白。
+ * 一条消息带过的附件：图片画成可点开放大的缩略图，文档等给一个文件名胶囊。
+ *
+ * 不在气泡里复述「📎 附件（已存入工作目录，可直接读取）：」这行提示，也不铺完整相对路径 ——
+ * 那是写给智能体看的提示词，用户只需要一眼认出「带了什么」。完整路径留在 `title` 里备查；
+ * 图片取不到（或页面没提供解析器）时退化成文件名胶囊，不至于留一块空白。
+ * 取图走页面的 `MediaUrlResolver`（见 `lib/media.tsx`）。
  */
 function AttachmentGallery({ paths }: { paths: string[] }) {
   const mediaUrl = useMediaUrl()
   const [failed, setFailed] = useState<string[]>([])
   return (
     <div className="bubble-attachments">
-      <div className="bubble-attachments-head">📎 附件（已存入工作目录，可直接读取）：</div>
       {paths.map((relPath) => {
         const name = relPath.split('/').pop() ?? relPath
         const url = mediaUrl?.(relPath) ?? null
         const thumb = url && isImagePath(relPath) && !failed.includes(relPath)
+        if (thumb) {
+          return (
+            <ZoomableImage
+              key={relPath}
+              className="bubble-attachment-thumb"
+              src={url ?? undefined}
+              alt={name}
+              onError={() => setFailed((current) => (current.includes(relPath) ? current : [...current, relPath]))}
+            />
+          )
+        }
         return (
-          <div className="bubble-attachment-row" key={relPath}>
-            <span className="bubble-attachment-path" title={relPath}>- {relPath}</span>
-            {thumb ? (
-              <ZoomableImage
-                className="bubble-attachment-thumb"
-                src={url ?? undefined}
-                alt={name}
-                onError={() => setFailed((current) => (current.includes(relPath) ? current : [...current, relPath]))}
-              />
-            ) : null}
-          </div>
+          <span className="bubble-attachment-name" key={relPath} title={relPath}>
+            {name}
+          </span>
         )
       })}
     </div>

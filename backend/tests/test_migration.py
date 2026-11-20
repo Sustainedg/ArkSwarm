@@ -50,6 +50,21 @@ async def test_additive_columns_are_applied_to_an_existing_table(old_db):
     assert tuple(row) == ("历史智能体", None), "补列不能改动旧行"
 
 
+async def test_avatar_preset_column_is_added_to_an_existing_table(old_db):
+    """内置头像包编号也是后加的列：旧库补上后，老智能体一律留空（回退 emoji）。"""
+    from app.models import ADDITIVE_COLUMNS
+
+    async with old_db.begin() as conn:
+        await conn.run_sync(db._add_missing_columns, ADDITIVE_COLUMNS)
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT name, avatar_preset FROM agent_profiles WHERE id = '老智能体'"
+            )
+        ).one()
+
+    assert tuple(row) == ("历史智能体", None)
+
+
 async def test_additive_columns_are_idempotent(old_db):
     """重复启动（补列跑多次）不能报错、也不能重复加列。"""
     mapping = {"agent_profiles": {"deleted_at": "DATETIME"}}

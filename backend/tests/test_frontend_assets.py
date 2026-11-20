@@ -273,3 +273,22 @@ def test_avatar_styles_exist_on_both_ends():
         for selector in (".user-avatar", ".avatar-editor", ".avatar-editor-pic"):
             assert selector in text, f"{css.name} 缺少 {selector}"
         assert "--avatar-size" in text, f"{css.name} 的头像尺寸要走 --avatar-size 变量"
+
+
+AVATAR_DIR = FRONTEND / "public" / "avatars"
+AVATAR_MANIFEST = FRONTEND / "src" / "lib" / "avatarPack.ts"
+
+
+@needs_frontend
+def test_avatar_pack_manifest_matches_files():
+    """内置头像包：清单与图片必须一一对应。
+
+    「随机生成」直接按清单抽编号拼 `/avatars/<编号>.webp`，清单多一条少一条都会让抽到
+    的头像 404。清单由 `scripts/gen_avatar_pack.py` 生成，两边只允许来自同一次运行。
+    """
+    assert AVATAR_MANIFEST.is_file(), "缺少 frontend/src/lib/avatarPack.ts（跑 scripts/gen_avatar_pack.py）"
+    manifest_ids = re.findall(r"'(pack-\d{3})'", AVATAR_MANIFEST.read_text(encoding="utf-8"))
+    file_ids = sorted(path.stem for path in AVATAR_DIR.glob("pack-*.webp"))
+    assert manifest_ids == file_ids, "头像包清单与 public/avatars/ 下的图片不一致，请重跑生成脚本"
+    # 太少就失去「随机」的意义：至少两排才有抽卡感。
+    assert len(manifest_ids) >= 20

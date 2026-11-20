@@ -1,3 +1,4 @@
+import { AgentAvatar } from './AgentAvatar'
 import { AgentIcon, KeyIcon, LinkIcon, PlugIcon } from './Icons'
 import { transportLabel } from './McpPicker'
 import { hasMissingBuiltinParams } from '../lib/mcp'
@@ -199,7 +200,7 @@ export function McpDetailBody({
           <div className="mcp-agents">
             {server.agents.map((agent) => (
               <span className="mcp-agent" key={agent.id}>
-                <span className="mcp-agent-avatar">{agent.avatar}</span>
+                <AgentAvatar avatar={agent.avatar} avatarPreset={agent.avatar_preset} agentId={agent.id} size={22} className="mcp-agent-avatar" />
                 {agent.name}
               </span>
             ))}

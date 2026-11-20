@@ -76,7 +76,7 @@ cd ArkSwarm
 <details>
 <summary><b>🐳 用 Docker 跑（点开看完整步骤）</b></summary>
 
-镜像里封装好 Python 3.11 / Node 22 / git，后端与前端都在构建时打进镜像
+镜像里封装好 Python 3.11 / Node 24 / git，后端与前端都在构建时打进镜像
 （「构建什么就运行什么」；前端由镜像内的 node 阶段现构建，不需要本地先打包）：
 
 ```bash
@@ -151,7 +151,7 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 ## 🧭 上手只要五步
 
-0. **设置 → 内核管理** —— 按需安装内核（Claude Code / Codex / Gemini CLI / Hermes）。镜像与首次启动都**不预装**内核，不装就没有可用的智能体类型（为什么？见 [FAQ](#-常见问题)）
+0. **设置 → 内核管理** —— 按需安装内核（Claude Code / Codex / Gemini CLI / Hermes / DeepSeek Harness）。镜像与首次启动都**不预装**内核，不装就没有可用的智能体类型（为什么？见 [FAQ](#-常见问题)）
 1. **设置 → 自定义网关** —— 新建网关（名称、地址、协议、鉴权、API 密钥），点「获取模型」拿到可选模型并勾选
 2. **智能体 → 新建** —— 选内核类型、选网关、定默认模型，写头像与系统提示词，按需勾选技能 / MCP，点「连通性测试」确认一次通过
 3. **对话 → 新建对话** —— 选择智能体开始聊天；工具调用、推理过程、token 用量实时展开
@@ -170,8 +170,15 @@ HOST_PROJECT_DIR=/path/to/projects \
 | `claude-code` | CLI `claude` | ✅ `--session-id` / `--resume` | ✅ | 权限模式、MCP、工具白名单全支持 |
 | `codex` | CLI `codex` | ✅ `exec resume` | ➖ 注入到 prompt | `-c model_providers.*` 指向自定义网关 |
 | `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ | 人格自动写入运行期临时文件 |
-| `openai-harness` | 进程内 API | ✅ | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama… |
-| `custom-cli` | 任意 CLI 命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体 |
+| `deepseek-harness` | CLI `dsh` | ✅ `--session-id` | ✅ 写入 `AGENTS.md` | DeepSeek Harness headless：JSON 事件、沙箱权限、技能与 MCP |
+| `openai-harness` | 进程内 API | ✅ | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama…（不再出现在新建入口） |
+| `custom-cli` | 任意 CLI 命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体（不再出现在新建入口） |
+
+> `openai-harness` 与 `custom-cli` 是逃生舱模板：存量智能体照旧可编辑、可运行，
+> 但「新建智能体」的内核下拉只列正式内核，不再推荐这两个模板。
+>
+> DeepSeek Harness（`dsh`）要求 **Node.js ≥ 24.9**：Docker 镜像与桌面版已内置 Node 24，
+> 源码直接运行时请先确认本机 Node 版本。
 
 ### IM 平台（只用长连接 / 长轮询，不开公网端口）
 
@@ -404,6 +411,15 @@ docs/
 | IM 平台、配对与消息路由 | [`docs/im.md`](./docs/im.md) |
 | 系统管理 MCP 与个人访问令牌 | [`docs/admin-mcp.md`](./docs/admin-mcp.md) |
 | 编码规范与工程铁律 | [`AGENTS.md`](./AGENTS.md) · [`docs/ai-coding-standard.md`](./docs/ai-coding-standard.md) |
+
+---
+
+## 📄 开源协议
+
+本项目采用 [MIT License](./LICENSE) 开源 —— 可以自由使用、修改、分发与商用，保留版权声明即可。
+
+> 第三方组件（Electron、Python、Node.js、各 AI 内核的 CLI 等）遵循各自的许可，见其发行包内的 LICENSE。
+> Windows 安装向导里的「许可协议」页展示的就是根目录这份 `LICENSE`。
 
 ---
 

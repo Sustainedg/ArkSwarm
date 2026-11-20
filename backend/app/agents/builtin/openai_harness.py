@@ -332,3 +332,5 @@ class OpenAICompatibleHarness(OpenAIHarnessBase):
     default_auth_style = "bearer"
     default_models = ["gpt-4o-mini"]
     logo = "/icons/kernels/openai.svg"
+    #: 通用兼容模板：不在「新建智能体」的内核下拉里推荐，存量智能体照旧可用。
+    selectable = False

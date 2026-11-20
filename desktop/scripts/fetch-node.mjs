@@ -9,7 +9,8 @@
  *   `npm i -g` / 内核自己的 update 命令。经调研，桌面端最稳的是**内嵌 Node + npm**，
  *   让既有 provisioner 声明原样工作（见 docs/desktop.md「内核安装通道」一节）。
  *
- * 版本与 docker/Dockerfile 对齐（Node 22 LTS：Claude Code 要求 >= 22，Gemini >= 20）。
+ * 版本与 docker/Dockerfile 对齐（Node 24 LTS：DeepSeek Harness 要求 >= 24.9，
+ * Claude Code 要求 >= 22，Gemini >= 20）。
  * 同时校验官方 SHASUMS256.txt，不拿未经校验的二进制进安装包。
  *
  * 用法：node scripts/fetch-node.mjs            # 按当前平台
@@ -22,7 +23,7 @@ import { pipeline } from 'node:stream/promises';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 
-const VERSION = 'v22.23.5'; // 与 docker/Dockerfile 的 node_version 保持一致
+const VERSION = 'v24.22.3'; // 与 docker/Dockerfile 的 node_version 保持一致
 const DIST = `https://nodejs.org/dist/${VERSION}`;
 
 const PLATFORMS = {

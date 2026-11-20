@@ -3,9 +3,10 @@ import { api, ApiError } from '../lib/api'
 import type { MarketKernel, SkillDetail, SkillTransferResult } from '../lib/types'
 
 /**
- * 「复制技能到别的内核」表单（两端共用）：选择目标内核并提交。
+ * 「把技能挂载到别的内核」表单（两端共用）：选择目标内核并提交。
  *
- * 只复制技能文件，不复制智能体分配；目标内核里已有同名技能时由后端拒绝。
+ * 技能库按 slug 只存一份文件，这里只是给目标内核登记一条引用；不复制智能体分配。
+ * 目标内核里已有同 slug 的共享技能时由后端拒绝。
  */
 export function SkillCopyForm({
   skill,
@@ -25,7 +26,10 @@ export function SkillCopyForm({
     api
       .marketKernels()
       .then((items) => {
-        const candidates = items.filter((item) => item.type_id !== skill.type_id)
+        const mounted = new Set(skill.mounted_kernels ?? [])
+        const candidates = items.filter(
+          (item) => item.type_id !== skill.type_id && !mounted.has(item.type_id),
+        )
         setKernels(candidates)
         setTarget((current) => current || candidates[0]?.type_id || '')
       })
@@ -52,8 +56,9 @@ export function SkillCopyForm({
   return (
     <div className="stack" style={{ gap: 14 }}>
       <p className="dim small">
-        把「{skill.name}」的文件复制到另一个内核的技能目录。只复制技能本体，不复制智能体分配；
-        目标内核里已有同名技能时不会覆盖。
+        把「{skill.name}」挂载到另一个内核。技能文件在技能库里按 slug 只存一份，
+        多个内核共用同一份：市场更新（或重新导入覆盖）后，所有挂载它的内核同时生效。
+        只登记引用，不复制智能体分配；目标内核里已有同 slug 的共享技能时不会覆盖。
       </p>
       <label className="field">
         <span className="field-label">目标内核</span>
@@ -63,7 +68,7 @@ export function SkillCopyForm({
           disabled={busy || kernels.length === 0}
           onChange={(event) => setTarget(event.target.value)}
         >
-          {kernels.length === 0 && <option value="">（没有其它可写入技能的内核）</option>}
+          {kernels.length === 0 && <option value="">（没有其它可挂载技能的内核）</option>}
           {kernels.map((item) => (
             <option key={item.type_id} value={item.type_id}>
               {item.name}
@@ -83,7 +88,7 @@ export function SkillCopyForm({
           onClick={() => void submit()}
           disabled={busy || kernels.length === 0}
         >
-          {busy ? '复制中…' : '开始复制'}
+          {busy ? '挂载中…' : '开始挂载'}
         </button>
       </div>
     </div>

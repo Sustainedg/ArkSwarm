@@ -352,7 +352,14 @@ async def prepare_run(session: AsyncSession, conversation_id: str, payload: Any)
     await session.refresh(user_message)
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, profile.name, conversation.owner_id)
+    run = registry.register(
+        conversation.id,
+        profile.name,
+        conversation.owner_id,
+        agent_profile_id=profile.id,
+        agent_avatar=profile.avatar,
+        agent_avatar_preset=profile.avatar_preset,
+    )
     run.user_message_id = user_message.id
     run.assistant_message_id = assistant_message.id
     return PreparedRun(
@@ -588,7 +595,14 @@ async def regenerate_last(session: AsyncSession, conversation_id: str) -> Prepar
     await session.commit()
     await session.refresh(assistant_message)
 
-    run = registry.register(conversation.id, profile.name, conversation.owner_id)
+    run = registry.register(
+        conversation.id,
+        profile.name,
+        conversation.owner_id,
+        agent_profile_id=profile.id,
+        agent_avatar=profile.avatar,
+        agent_avatar_preset=profile.avatar_preset,
+    )
     run.user_message_id = last_user.id
     run.assistant_message_id = assistant_message.id
     return PreparedRun(

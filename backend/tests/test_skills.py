@@ -23,7 +23,7 @@ from app.agents.skills import (
     scan_skill_root,
 )
 from app.db import SessionLocal
-from app.models import Conversation
+from app.models import Conversation, Skill
 from app.settings import get_settings
 from helpers import make_gateway, make_profile
 
@@ -912,7 +912,7 @@ def test_seed_skills_never_raises_when_binary_missing(tmp_path: Path, monkeypatc
     assert get_agent("codex").seed_skills() == []
 
 
-# --- 导出 / 导入 / 跨内核复制 -------------------------------------------------
+# --- 导出 / 导入 / 跨内核挂载 -------------------------------------------------
 
 
 def _make_zip(files: dict[str, str], *, top: str | None = "demo") -> bytes:
@@ -1002,7 +1002,8 @@ async def test_import_skill_extracts_into_user_root(
     # 目录名取压缩包里的顶层目录，而不是上传时的文件名；落点是当前用户的技能库。
     assert body["skill_id"] == "custom-cli:lib:local:imported-skill"
     assert body["slug"] == "imported-skill"
-    library = skill_service.get_settings().skill_libraries_root / "local" / "custom-cli"
+    # 技能库按 slug 只存一份：路径里不再有内核子目录。
+    library = skill_service.get_settings().skill_libraries_root / "local"
     assert (library / "imported-skill" / "SKILL.md").is_file()
 
     items = (await client.get("/api/skills")).json()["items"]
@@ -1028,7 +1029,7 @@ async def test_import_flat_archive_uses_filename_as_slug(
     )
     assert response.status_code == 200, response.text
     assert response.json()["slug"] == "flat-skill"
-    library = skill_service.get_settings().skill_libraries_root / "local" / "custom-cli"
+    library = skill_service.get_settings().skill_libraries_root / "local"
     assert (library / "flat-skill" / "SKILL.md").is_file()
 
 
@@ -1084,8 +1085,10 @@ async def test_import_refuses_same_name_without_overwriting(
     ) == original
 
 
-async def test_copy_skill_to_another_kernel(client: httpx.AsyncClient, transfer_home: Path):
-    """复制只搬文件：源技能还在，目标内核多出一条同 slug 的技能。"""
+async def test_copy_skill_to_another_kernel_mounts_the_same_copy(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """挂载到另一个内核：只收一份文件、登记一条引用，两个内核共用同一个实体目录。"""
     write_skill(transfer_home / "custom" / "skills", "alpha")
     await client.post("/api/skills/rescan")
 
@@ -1095,12 +1098,92 @@ async def test_copy_skill_to_another_kernel(client: httpx.AsyncClient, transfer_
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["skill_id"] == "claude-code:lib:local:alpha"
-    library = skill_service.get_settings().skill_libraries_root / "local" / "claude-code"
+    library = skill_service.get_settings().skill_libraries_root / "local"
     assert (library / "alpha" / "SKILL.md").is_file()
+    # 只有一份实体：原来按内核分的子目录不再产生。
+    assert not (library / "claude-code").exists()
+    assert not (library / "custom-cli").exists()
     assert (transfer_home / "custom" / "skills" / "alpha" / "SKILL.md").is_file()
 
-    slugs = {item["id"] for item in (await client.get("/api/skills")).json()["items"]}
+    items = (await client.get("/api/skills")).json()["items"]
+    shared = next(item for item in items if item["id"] == "claude-code:lib:local:alpha")
+    assert shared["mounted_kernels"] == ["claude-code"]
+    assert shared["slug"] == "alpha"
+    # 两行的 path 指向同一个技能实体。
+    detail = (await client.get("/api/skills/claude-code:lib:local:alpha")).json()
+    assert detail["path"] == str(library / "alpha")
+
+    slugs = {item["id"] for item in items}
     assert {"custom-cli:alpha", "claude-code:lib:local:alpha"} <= slugs
+
+    # 再从库里的那一行挂到原内核会报「同名」（同一个内核不能重复引用）。
+    again = await client.post(
+        "/api/skills/claude-code:lib:local:alpha/copy", json={"type_id": "custom-cli"}
+    )
+    assert again.status_code == 422
+    assert "同名技能" in again.json()["detail"]
+
+    # 再次从共享行挂到同一内核：目标实体内容一致，应幂等成功，不能被当成「同名」拒绝。
+    repeat = await client.post(
+        "/api/skills/custom-cli:alpha/copy", json={"type_id": "claude-code"}
+    )
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json()["skill_id"] == "claude-code:lib:local:alpha"
+
+
+async def test_copy_shared_skill_refuses_existing_personal_with_same_slug(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """库里有同名个人技能时，复制共享技能不能悄悄把个人那份当成挂载点。
+
+    回归：`copy_skill_to_kernel` 只判断目标目录「有没有 SKILL.md」，不看内容，
+    导致接口回 200，但返回的是用户自己的同名技能（共享版根本没被复制）。
+    """
+    library = skill_service.get_settings().skill_libraries_root / "local"
+    archive = _make_zip(
+        {"SKILL.md": SKILL_MD.format(name="个人版", description="个人技能", extra="")},
+        top="alpha",
+    )
+    imported = await client.post(
+        "/api/skills/import",
+        json={"type_id": "custom-cli", "content_base64": base64.b64encode(archive).decode()},
+    )
+    assert imported.status_code == 200, imported.text
+
+    # 共享技能里也有一个 alpha，但内容与个人版不同。
+    write_skill(transfer_home / "claude" / "skills", "alpha", name="共享版")
+    await client.post("/api/skills/rescan")
+
+    conflict = await client.post(
+        "/api/skills/claude-code:alpha/copy", json={"type_id": "custom-cli"}
+    )
+    assert conflict.status_code == 422, conflict.text
+    assert "同名技能" in conflict.json()["detail"]
+
+    # 个人技能的原文件没有被共享版顶替。
+    text = (library / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+    assert "个人版" in text
+    detail = (await client.get("/api/skills/custom-cli:lib:local:alpha")).json()
+    assert detail["name"] == "个人版"
+
+
+def test_uninstall_legacy_native_market_skill_does_not_write_mounts(tmp_path: Path):
+    """旧布局原生目录里的市场技能（目录已消失）卸载时，不能写幽灵引用登记。
+
+    回归：`_remove_installed_skill` 对非库行也走了 `mounts_for_row()` 的默认挂载分支，
+    会把一个根本不存在的实体的 slug 写进 `.mounts.json`，污染后续同名技能的挂载。
+    """
+    row = Skill(
+        id="claude-code:ghost",
+        type_id="claude-code",
+        slug="ghost",
+        name="幽灵技能",
+        source_kind=skill_service.MARKET_SOURCE,
+        path=str(tmp_path / "gone"),
+    )
+    assert skill_service._remove_installed_skill("claude-code", row) == []
+    library = skill_service.get_settings().skill_libraries_root / "local"
+    assert "ghost" not in skill_service.read_library_mounts(library)
 
 
 async def test_copy_rejects_same_kernel_and_existing_target(
@@ -1160,3 +1243,64 @@ async def test_export_and_copy_refuse_paths_outside_declared_roots(
     )
     assert copied.status_code == 422
     assert "不在它所属的技能目录内" in copied.json()["detail"]
+
+
+async def test_rescan_migrates_legacy_per_kernel_library(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """旧的「每内核一份」布局自动迁成「按 slug 一份 + 引用登记」。"""
+    library = skill_service.get_settings().skill_libraries_root / "local"
+    write_skill(library / "claude-code", "alpha")
+    write_skill(library / "custom-cli", "alpha")  # 内容一致：应合并成一份
+    write_skill(library / "claude-code", "beta")
+
+    await client.post("/api/skills/rescan")
+
+    assert (library / "alpha" / "SKILL.md").is_file()
+    assert (library / "beta" / "SKILL.md").is_file()
+    assert not (library / "claude-code").exists()
+    assert not (library / "custom-cli").exists()
+    mounts = skill_service.read_library_mounts(library)
+    assert set(mounts["alpha"]) == {"claude-code", "custom-cli"}
+    assert mounts["beta"] == ["claude-code"]
+
+    items = (await client.get("/api/skills")).json()["items"]
+    assert {
+        "claude-code:lib:local:alpha",
+        "custom-cli:lib:local:alpha",
+        "claude-code:lib:local:beta",
+    } <= {item["id"] for item in items}
+    detail = (await client.get("/api/skills/custom-cli:lib:local:alpha")).json()
+    assert detail["path"] == str(library / "alpha")
+
+
+async def test_delete_shared_library_skill_unmounts_one_kernel(
+    client: httpx.AsyncClient, transfer_home: Path
+):
+    """删除只摘本内核引用；最后一个引用消失才删实体目录。"""
+    archive = _make_zip(
+        {"SKILL.md": SKILL_MD.format(name="共享版", description="共享", extra="")}, top="alpha"
+    )
+    imported = await client.post(
+        "/api/skills/import",
+        json={"type_id": "custom-cli", "content_base64": base64.b64encode(archive).decode()},
+    )
+    assert imported.status_code == 200, imported.text
+    mounted = await client.post(
+        "/api/skills/custom-cli:lib:local:alpha/copy", json={"type_id": "claude-code"}
+    )
+    assert mounted.status_code == 200, mounted.text
+    library = skill_service.get_settings().skill_libraries_root / "local"
+    assert (library / "alpha" / "SKILL.md").is_file()
+
+    removed = await client.delete("/api/skills/claude-code:lib:local:alpha")
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["remaining_kernels"] == ["custom-cli"]
+    assert (library / "alpha" / "SKILL.md").is_file()
+    left = (await client.get("/api/skills")).json()["items"]
+    assert [item["id"] for item in left] == ["custom-cli:lib:local:alpha"]
+
+    final = await client.delete("/api/skills/custom-cli:lib:local:alpha")
+    assert final.status_code == 200, final.text
+    assert final.json()["remaining_kernels"] == []
+    assert not (library / "alpha").exists()

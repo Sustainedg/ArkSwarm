@@ -39,6 +39,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
+#: 少数静态资源的 MIME 需要显式指定：宿主机不一定装了完整的 mime 表（Python 3.11 的
+#: ``mimetypes`` 在部分发行版上查不到 WebP），否则会按 ``text/plain`` 下发，浏览器开了
+#: ``nosniff`` 就画不出图。内置头像包全是 WebP。
+STATIC_MEDIA_TYPES = {".webp": "image/webp"}
+
 
 async def _start_im() -> None:
     """启动时把已启用的 IM 连接接上；单条连不上只记状态，不拦服务启动。"""
@@ -181,7 +186,9 @@ if FRONTEND_DIST.exists():
         # 外壳（入口 HTML / sw.js / manifest）每次都回源校验：PWA 装到主屏后不会手动刷新，
         # 让浏览器或中间代理直接命中旧外壳，新构建就永远「看起来没生效」。
         # 带哈希的构建产物走 /assets 的静态挂载，不在这里，可以继续长缓存。
+        target = resolve_spa_target(FRONTEND_DIST, full_path)
         return FileResponse(
-            resolve_spa_target(FRONTEND_DIST, full_path),
+            target,
+            media_type=STATIC_MEDIA_TYPES.get(target.suffix.lower()),
             headers={"Cache-Control": "no-cache"},
         )

@@ -1,8 +1,9 @@
 """技能：统一编目与智能体分配。
 
 内核自带 / 宿主机上的技能由适配器只读扫描，全平台共享；用户自己的技能库
-（导入、市场安装、跨内核复制）存放在平台数据目录里，按 ``owner_id`` 隔离，
-接口只回当前用户可见的部分。智能体能用的技能仍只能通过分配关系获得。
+（导入、市场安装、挂载到其它内核）存放在平台数据目录里，按 ``owner_id`` 隔离，
+一份技能按 slug 只存一份、多个内核引用共用；接口只回当前用户可见的部分。
+智能体能用的技能仍只能通过分配关系获得。
 """
 from __future__ import annotations
 
@@ -61,8 +62,25 @@ def _source_label(row: Skill) -> str:
 
 
 def _describe(
-    row: Skill, counts: dict[str, int], user: User, owner_names: dict[str, str]
+    row: Skill,
+    counts: dict[str, int],
+    user: User,
+    owner_names: dict[str, str],
+    mounts_cache: dict[str | None, dict[str, list[str]]] | None = None,
 ) -> SkillRead:
+    mounted: list[str] = []
+    if skill_service.is_library_row(row):
+        if mounts_cache is None:
+            mounted = skill_service.mounts_for_row(row)
+        else:
+            # 列表里同一 owner 的多行共用一个缓存：`.mounts.json` 只读一次。
+            if row.owner_id not in mounts_cache:
+                mounts_cache[row.owner_id] = skill_service.read_library_mounts(
+                    skill_service.library_root(row.owner_id)
+                )
+            mounted = skill_service.mounts_for_row(
+                row, mounts=mounts_cache[row.owner_id]
+            )
     return SkillRead(
         id=row.id,
         type_id=row.type_id,
@@ -86,6 +104,7 @@ def _describe(
         owner_id=row.owner_id,
         owner_name=owner_names.get(row.owner_id or ""),
         is_own=_is_own(row, user),
+        mounted_kernels=mounted,
     )
 
 
@@ -125,8 +144,12 @@ async def list_skills(
         session, None if is_admin else owner_id_for(user)
     )
     names = await _owner_names(session, rows)
+    mounts_cache: dict[str | None, dict[str, list[str]]] = {}
     return {
-        "items": [_describe(row, counts, user, names).model_dump() for row in rows],
+        "items": [
+            _describe(row, counts, user, names, mounts_cache).model_dump()
+            for row in rows
+        ],
         "source_labels": skill_service.SOURCE_LABELS,
     }
 
@@ -199,7 +222,7 @@ async def get_skill(
         body=body,
         body_truncated=truncated,
         agents=[
-            {"id": profile.id, "name": profile.name, "avatar": profile.avatar}
+            {"id": profile.id, "name": profile.name, "avatar": profile.avatar, "avatar_preset": profile.avatar_preset}
             for profile in await skill_service.agents_using(
                 session, skill_id, None if user.role == "admin" else owner_id_for(user)
             )
@@ -243,9 +266,10 @@ async def copy_skill(
     session: AsyncSession = Depends(get_session),
     user: Annotated[User, Depends(current_user)] = None,
 ) -> dict:
-    """把一个技能复制到当前用户另一个内核的技能库（同名技能不覆盖）。
+    """把一份技能挂载到当前用户的另一个内核（技能库按 slug 只存一份，不复制文件）。
 
-    源可以是共享技能（复制后会成为自己的个人技能），也可以是自己库里的技能。
+    源可以是共享技能（第一次挂载时收进自己的技能库），也可以是自己库里的技能；
+    目标内核里已有同 slug 的共享技能时拒绝（物化会撞名）。
     """
     row = await skill_service.get_row(session, skill_id)
     if row is None or not _visible(row, user):
@@ -272,7 +296,9 @@ async def delete_skill(
 ) -> dict:
     """删除技能：只能删自己技能库里的技能；管理员可删共享 / 他人的技能。
 
-    内核自带（system）与已安装插件（plugin）里的技能只读；删除会同时断开智能体分配。
+    内核自带（system）与已安装插件（plugin）里的技能只读。用户技能库里的一份实体
+    可能被多个内核引用：删除先摘本内核引用并断开本内核分配，还有别的内核在用时保留实体；
+    最后一个引用消失才删目录与全部编目行（响应里的 ``remaining_kernels`` 说明保留情况）。
     """
     row = await skill_service.get_row(session, skill_id)
     if row is None or not _visible(row, user):
@@ -280,9 +306,9 @@ async def delete_skill(
     if not _can_manage(row, user):
         raise HTTPException(status_code=403, detail="只能删除自己技能库里的技能")
     try:
-        name = await skill_service.delete_skill(session, skill_id)
+        result = await skill_service.delete_skill(session, skill_id)
     except skill_service.SkillNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except skill_service.SkillError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    return {"ok": True, "name": name}
+    return {"ok": True, **result}

@@ -36,6 +36,16 @@ _SIGNATURES: tuple[tuple[bytes, str], ...] = (
 #: 库里的文件名只允许这一种形状（``<32位hex>-<12位hex>.<ext>``）
 _FILENAME = re.compile(r"^[0-9a-f]{32}-[0-9a-f]{12}\.(?:png|jpg|webp)$")
 
+#: 内置头像包编号（``pack-001`` ~ ``pack-999``）。图片本体在前端静态目录
+#: ``frontend/public/avatars/``（由 ``scripts/gen_avatar_pack.py`` 生成），后端只校验
+#: 编号形状 —— 字符串要落库，放任任意串进来等于给昵称字段开了个口子。
+PRESET_PATTERN = re.compile(r"^pack-\d{3}$")
+
+
+def is_valid_preset(value: str | None) -> bool:
+    """是不是一个形状合法的内置头像包编号（图是否存在由前端清单负责）。"""
+    return bool(value) and PRESET_PATTERN.match(value) is not None
+
 
 class AvatarError(ValueError):
     """头像不合法（不是图片 / 太大 / 空内容）。消息面向用户，可直接展示。"""

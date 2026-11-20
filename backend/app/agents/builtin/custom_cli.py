@@ -38,6 +38,7 @@ class CustomCliAgent(AgentDefinition):
     logo = "/icons/kernels/cli.svg"
     executable = None  # 由实例上的「可执行命令」决定
     auto_provision = False  # 这是模板：未填写命令前不参与播种
+    selectable = False  # 逃生舱模板：不在「新建智能体」的内核下拉里推荐
     api_key_env = None
     base_url_env = None
     capabilities = Capabilities(

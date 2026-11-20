@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { AgentProfile, McpServer } from '../lib/types'
+import { AgentAvatar } from './AgentAvatar'
 
 /**
  * 「把这个 MCP 服务器分配给哪些智能体」的勾选面板（两端共用）。
@@ -68,7 +69,14 @@ export function McpAssignPanel({
               />
               <span className="skill-option-body">
                 <span className="skill-option-name">
-                  {agent.avatar} {agent.name}
+                  <AgentAvatar
+                      avatar={agent.avatar}
+                      avatarPreset={agent.avatar_preset}
+                      avatarFile={agent.avatar_file}
+                      agentId={agent.id}
+                      size={16}
+                      className="agent-avatar-inline"
+                    /> {agent.name}
                   <span className="pill mono-sm">{agent.type_name ?? agent.type_id}</span>
                 </span>
                 <span className="dim small">{agent.tagline || '（无备注）'}</span>

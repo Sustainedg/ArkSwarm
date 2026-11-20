@@ -10,6 +10,7 @@ import {
 } from '../components/CredentialEditor'
 import { DynamicForm } from '../components/DynamicForm'
 import { AgentAvatarPicker } from '../components/AgentAvatarPicker'
+import { AgentAvatar } from '../components/AgentAvatar'
 import { Modal } from '../components/Modal'
 import { StarIcon } from '../components/Icons'
 import { McpPicker } from '../components/McpPicker'
@@ -217,9 +218,13 @@ export function AgentsPage() {
     return (
       <article className="card" key={agent.id}>
         <div className="card-head">
-          <div className="avatar" style={{ width: 40, height: 40, fontSize: 19 }}>
-            {agent.avatar}
-          </div>
+          <AgentAvatar
+            avatar={agent.avatar}
+            avatarPreset={agent.avatar_preset}
+            avatarFile={agent.avatar_file}
+            agentId={agent.id}
+            size={40}
+          />
           <div style={{ minWidth: 0 }}>
             <div className="card-title">{agent.name}</div>
             <div className="card-sub">{agent.tagline ?? '无备注'}</div>
@@ -590,11 +595,27 @@ function AgentModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [typeId, setTypeId] = useState<string>(agent?.type_id ?? types[0]?.id ?? '')
+  // 「新建智能体」只列可选的内核模板（逃生舱型模板太技术化，不放在推荐入口）；
+  // 编辑存量智能体时，即使它的内核已不再作为新选项，也要把当前内核留在下拉里，
+  // 否则一打开表单就会显示成另一个内核。
+  const selectableTypes = useMemo(() => {
+    const usable = types.filter((type) => type.selectable !== false)
+    if (agent && !usable.some((type) => type.id === agent.type_id)) {
+      const current = types.find((type) => type.id === agent.type_id)
+      if (current) return [...usable, current]
+    }
+    return usable
+  }, [types, agent])
+
+  const [typeId, setTypeId] = useState<string>(
+    agent?.type_id ?? selectableTypes[0]?.id ?? types[0]?.id ?? '',
+  )
   const selected = types.find((t) => t.id === typeId) ?? null
 
   const [name, setName] = useState(agent?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '🛠️')
+  /** 内置头像包编号：随机生成 / 画廊挑选写这里，随表单一并保存 */
+  const [avatarPreset, setAvatarPreset] = useState<string | null>(agent?.avatar_preset ?? null)
   /** 自定义头像文件标识：上传接口直接落库，这里只是镜像（保存 payload 不带它） */
   const [avatarFileId, setAvatarFileId] = useState<string | null>(agent?.avatar_file ?? null)
   const [groupName, setGroupName] = useState(agent?.group_name ?? '')
@@ -620,7 +641,7 @@ function AgentModal({
   // 新建时按当前内核补齐适配器选项的默认值（换内核走 chooseType）。
   useEffect(() => {
     if (agent) return
-    const initial = types.find((type) => type.id === typeId) ?? types[0]
+    const initial = selectableTypes.find((type) => type.id === typeId) ?? selectableTypes[0]
     if (!initial) return
     if (!typeId) setTypeId(initial.id)
     setOptions((prev) =>
@@ -628,7 +649,7 @@ function AgentModal({
         ? prev
         : Object.fromEntries(initial.config_fields.map((field) => [field.key, field.default])),
     )
-  }, [agent, typeId, types])
+  }, [agent, typeId, selectableTypes])
 
   const gatewayChoices = useMemo(() => gatewaysFor(selected, gateways), [selected, gateways])
   const gateway = gateways.find((g) => g.id === gatewayId) ?? null
@@ -688,6 +709,7 @@ function AgentModal({
         group_name: groupName.trim(),
         type_id: selected.id,
         avatar,
+        avatar_preset: avatarPreset,
         tagline: tagline.trim() || null,
         description: description.trim() || null,
         system_prompt: systemPrompt,
@@ -734,6 +756,8 @@ function AgentModal({
         agentId={agent?.id ?? null}
         emoji={avatar}
         onEmojiChange={setAvatar}
+        preset={avatarPreset}
+        onPresetChange={setAvatarPreset}
         avatarFileId={avatarFileId}
         onUploaded={(next: { avatar_file?: string | null }) => setAvatarFileId(next.avatar_file ?? null)}
       />
@@ -754,7 +778,7 @@ function AgentModal({
               if (next) chooseType(next)
             }}
           >
-            {types.map((type) => (
+            {selectableTypes.map((type) => (
               <option key={type.id} value={type.id}>
                 {type.name} · {type.vendor}
                 {type.availability.installed ? '' : '（未安装）'}
