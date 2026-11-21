@@ -210,8 +210,12 @@ npm run compile && npx electron-builder --publish never
 `CSC_KEY_PASSWORD`。electron-builder 自动签 `Coda-<版本>-win-x64.exe`。
 Azure Trusted Signing 属于另一条路（`win.azureSignOptions`），本文不展开。
 
-> NSIS 保持 `perMachine: false`：electron-updater 的静默更新要求安装目录对当前用户可写，
-> 装到 `Program Files`（machine 级）会需要提权、静默更新直接失败。
+> NSIS 固定为「仅当前用户」安装：`perMachine: false` + `allowElevation: false`，
+> 并由 `installer-branding.nsh` 的 `customInstallMode` 跳过「安装范围」页。
+> 原因有两条：① electron-updater 的静默更新要求安装目录对当前用户可写，
+> 装到 `Program Files`（machine 级）会需要提权、静默更新直接失败；
+> ② 向导里若允许再选「所有用户」，会触发 UAC 二次启动 —— 第一个安装窗口关闭、
+> 提权后的新窗口从头再走一遍欢迎页与许可协议页，用户会误以为安装器重开了。
 
 ### 4.4 macOS
 

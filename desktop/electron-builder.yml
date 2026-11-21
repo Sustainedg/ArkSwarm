@@ -60,7 +60,13 @@ win:
   # electron-builder 自动签名；未配置时照常产出未签名安装包（MVP 可用，仅 SmartScreen 提示）
 nsis:
   oneClick: false
+  # 固定「仅当前用户」安装：向导里若允许再选安装范围，选择「所有用户」会触发 UAC
+  # 二次启动 —— 第一个安装窗口关闭、提权后的新窗口从头再走一遍欢迎页与许可协议页，
+  # 用户会误以为安装器重开了。这里用 installer-branding.nsh 的 customInstallMode
+  # 直接强制当前用户（安装范围页被跳过），既避免重开，也保证安装目录对当前用户可写
+  # —— 后者是 electron-updater 静默更新的前提（装到 Program Files 会需要提权、更新失败）。
   perMachine: false
+  allowElevation: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   shortcutName: Coda

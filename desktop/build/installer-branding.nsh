@@ -16,3 +16,12 @@
   !insertmacro skipPageIfUpdated
   !insertmacro MUI_PAGE_WELCOME
 !macroend
+
+; 固定「仅当前用户」安装。
+; 由 multiUserUi.nsh 在「安装范围」页的 PRE 里插入：把 $isForceCurrentInstall 置 1 后，
+; 该页会设置 per-user 模式并 Abort（整页跳过）。这样不会出现「选所有用户 → UAC 二次启动
+; → 安装器窗口重开、重看欢迎/许可页」的流程；安装目录留在当前用户可写的位置，
+; electron-updater 的静默更新也才成立（见 electron-builder.yml 的 nsis 注释）。
+!macro customInstallMode
+  StrCpy $isForceCurrentInstall "1"
+!macroend
