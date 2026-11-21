@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./frontend/public/icons/icon.svg" width="128" alt="Coda Logo" />
+<img src="./frontend/public/icons/icon-512.png" width="128" alt="Coda Logo" />
 
 # Coda
 
