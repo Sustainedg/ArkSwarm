@@ -44,7 +44,7 @@ def test_invocation_uses_headless_json_and_isolated_home(tmp_path):
     assert invocation.env["DSH_AGENTS_HOME"] == str(tmp_path / "dsh-home" / "agents")
 
     home = tmp_path / "dsh-home"
-    overlay = (home / "arkswarm.patch.yml").read_text(encoding="utf-8")
+    overlay = (home / "coda.patch.yml").read_text(encoding="utf-8")
     assert "agent-default-model" in overlay
     assert "deepseek-v4-pro" in overlay
     assert "includeDefaultRoots: false" in overlay
@@ -168,7 +168,7 @@ def test_mcp_mount_renders_client_rows(tmp_path):
         ],
     )
     mount = definition.mcp_mount(context)
-    content = mount.files["arkswarm-mcp.patch.yml"]
+    content = mount.files["coda-mcp.patch.yml"]
     assert "- insert:" in content
     assert "@deepseek-ai/dsh-mcp-client" in content
     assert 'serverName: "GitHub"' in content
@@ -186,7 +186,7 @@ def test_mcp_mount_without_servers_writes_an_empty_patch(tmp_path):
     definition = get_agent("deepseek-harness")
     mount = definition.mcp_mount(make_ctx(tmp_path, mcp_servers=[]))
     # 必须覆盖旧文件，否则取消分配后上一轮的服务器会继续生效
-    assert mount.files["arkswarm-mcp.patch.yml"].strip() == "[]"
+    assert mount.files["coda-mcp.patch.yml"].strip() == "[]"
 
 
 def test_discovers_host_mcp_servers(tmp_path, monkeypatch):

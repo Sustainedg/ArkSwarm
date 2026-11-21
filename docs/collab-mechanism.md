@@ -2,7 +2,7 @@
 
 > 适用对象：想搞清楚「协作到底怎么跑、能做什么、不能做什么」的使用者，以及要改协作代码的工程师。
 >
-> 事实基线：ArkSwarm `V0.1`（`backend/app/__init__.py`），提交 `7c6c54c` + 当前工作区未提交改动。
+> 事实基线：Coda `V0.1`（`backend/app/__init__.py`），提交 `7c6c54c` + 当前工作区未提交改动。
 > **代码是唯一事实来源**；本文与旧设计文档冲突时，以本文标注的「代码实际行为」为准，偏差清单见 §15。
 >
 > 相关文档：`docs/collaboration-design.md`（设计与里程碑）、`docs/collab-parallel.md`（波次并行专题）、
@@ -666,7 +666,7 @@ open ──(被领取)──▶ working ──submit(有审查者)──▶ revi
 
 ## 13. 多用户、鉴权与归属
 
-- `ARKSWARM_AUTH_ENABLED` 默认开启；鉴权关闭时 `current_user` 返回虚拟管理员，所有归属检查跳过。
+- `CODA_AUTH_ENABLED` 默认开启；鉴权关闭时 `current_user` 返回虚拟管理员，所有归属检查跳过。
 - 协作组、运行按 `owner_id` 隔离；工单/步骤经运行间接归属。
 - 非管理员：
   - 列表只返回自己的协作组/运行；

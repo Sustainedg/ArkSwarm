@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./frontend/public/icons/icon.svg" width="128" alt="ArkSwarm Logo" />
+<img src="./frontend/public/icons/icon.svg" width="128" alt="Coda Logo" />
 
-# ArkSwarm
+# Coda
 
 **把 AI 编程内核，变成你的聊天同事。** 🐝
 
@@ -12,10 +12,10 @@ Claude Code · Codex · Gemini CLI · 任意 OpenAI 兼容端点 ——
 
 [🚀 快速开始](#-快速开始) · [✨ 核心特性](#-核心特性) · [🔌 都能接什么](#-都能接什么) · [🔐 安全](#-你的密钥安全吗) · [❓ 常见问题](#-常见问题) · [⭐ Star 曲线](#-star-曲线)
 
-![Release](https://img.shields.io/github/v/release/Sustainedg/ArkSwarm?style=for-the-badge&color=6b4cf0)
-![Stars](https://img.shields.io/github/stars/Sustainedg/ArkSwarm?style=for-the-badge&color=e053d6&label=%E2%AD%90%20Stars)
-![Forks](https://img.shields.io/github/forks/Sustainedg/ArkSwarm?style=for-the-badge&color=9d7bff)
-![Issues](https://img.shields.io/github/issues/Sustainedg/ArkSwarm?style=for-the-badge&color=ffd980)
+![Release](https://img.shields.io/github/v/release/Sustainedg/Coda?style=for-the-badge&color=6b4cf0)
+![Stars](https://img.shields.io/github/stars/Sustainedg/Coda?style=for-the-badge&color=e053d6&label=%E2%AD%90%20Stars)
+![Forks](https://img.shields.io/github/forks/Sustainedg/Coda?style=for-the-badge&color=9d7bff)
+![Issues](https://img.shields.io/github/issues/Sustainedg/Coda?style=for-the-badge&color=ffd980)
 
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -29,7 +29,7 @@ Claude Code · Codex · Gemini CLI · 任意 OpenAI 兼容端点 ——
 
 ## 🤔 这是为谁准备的
 
-| 你是不是也这样？ | ArkSwarm 的回答 |
+| 你是不是也这样？ | Coda 的回答 |
 | --- | --- |
 | 😩 **内核很强，但终端很烦** —— Claude Code 每次都要开终端、敲命令、记参数 | 在浏览器里像发消息一样用它，流式回复、工具调用、推理过程实时展开 |
 | 🔑 **手里一把 API Key** —— 散落在各处 `.bashrc`，谁都能看 | 网关统一加密保管，智能体只拿得到掩码，日志自动脱敏 |
@@ -52,7 +52,7 @@ Claude Code · Codex · Gemini CLI · 任意 OpenAI 兼容端点 ——
 
 <div align="center">
 
-<img src="./frontend/public/office/iso-office.svg" width="800" alt="ArkSwarm 办公室实况底图" />
+<img src="./frontend/public/office/iso-office.svg" width="800" alt="Coda 办公室实况底图" />
 
 </div>
 
@@ -63,8 +63,8 @@ Claude Code · Codex · Gemini CLI · 任意 OpenAI 兼容端点 ——
 **最快的一条路**（源码运行，一条命令起服务）：
 
 ```bash
-git clone https://github.com/Sustainedg/ArkSwarm.git
-cd ArkSwarm
+git clone https://github.com/Sustainedg/Coda.git
+cd Coda
 
 ./scripts/serve.sh            # → http://<本机IP>:8010
 ```
@@ -80,32 +80,32 @@ cd ArkSwarm
 （「构建什么就运行什么」；前端由镜像内的 node 阶段现构建，不需要本地先打包）：
 
 ```bash
-git clone https://github.com/Sustainedg/ArkSwarm.git
-cd ArkSwarm
+git clone https://github.com/Sustainedg/Coda.git
+cd Coda
 
 docker compose -f docker/docker-compose.yml up -d --build
 # → http://<本机IP>:8010
 ```
 
-改端口：`ARKSWARM_HTTP_PORT=8080 docker compose -f docker/docker-compose.yml up -d`
+改端口：`CODA_HTTP_PORT=8080 docker compose -f docker/docker-compose.yml up -d`
 
 **两个卷各管什么**（数据安全必读）：
 
 | 卷 | 挂载点 | 内容 | 删了会怎样 |
 | --- | --- | --- | --- |
-| `arkswarm-app` | `/app` | 版本目录 `releases/` + Python venv | 下次启动从镜像自动重建（**离线秒级**），对话数据不受影响 |
-| `arkswarm-data` | `/app/data` | SQLite、工作区、`secret.key`、内核 HOME | ⚠️ **数据全丢**（对话、智能体、凭据、登录态），无法恢复 |
+| `coda-app` | `/app` | 版本目录 `releases/` + Python venv | 下次启动从镜像自动重建（**离线秒级**），对话数据不受影响 |
+| `coda-data` | `/app/data` | SQLite、工作区、`secret.key`、内核 HOME | ⚠️ **数据全丢**（对话、智能体、凭据、登录态），无法恢复 |
 
-💡 只清理应用代码时删 `arkswarm-app` 就好，**千万别连 `arkswarm-data` 一起删**。
+💡 只清理应用代码时删 `coda-app` 就好，**千万别连 `coda-data` 一起删**。
 
 **国内网络加速**（首启空卷要装 Python 依赖，直连 PyPI 实测只有 ~15KB/s，二十多分钟）：
 
 ```yaml
 environment:
   # 方式一：国内镜像源（不需要代理，实测 17–24 秒装完）
-  ARKSWARM_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+  CODA_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
   # 方式二：安装期代理（pip 也会用）
-  ARKSWARM_INSTALL_PROXY: "http://<proxy-host>:<port>"
+  CODA_INSTALL_PROXY: "http://<proxy-host>:<port>"
 ```
 
 两个都配也行（代理优先）。**真实地址请写在你自己的部署 compose 里，不要提交进仓库。**
@@ -125,23 +125,23 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 - 为本机**已安装**的智能体类型各自动创建一条官方网关，并配套一个起始智能体；
 - 数据全部落在 `backend/data/`（SQLite + 每个对话独立的工作目录），不碰别的任何地方；
-- 默认开启多用户鉴权与注册；`ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD` 可指定首任管理员，不填则**第一个注册的账号自动成为管理员**。
+- 默认开启多用户鉴权与注册；`CODA_ADMIN_USERNAME` / `CODA_ADMIN_PASSWORD` 可指定首任管理员，不填则**第一个注册的账号自动成为管理员**。
 
 <details>
 <summary><b>全部环境变量一览（都可选）</b></summary>
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `ARKSWARM_HOST` | `0.0.0.0` | 监听地址 |
-| `ARKSWARM_PORT` | `8010` | 监听端口 |
-| `ARKSWARM_PUBLIC_BASE_URL` | 按端口推导 | 平台对外地址（系统管理 MCP 自动填写）；反向代理后面请填实际可访问地址 |
-| `ARKSWARM_DATA_DIR` | `backend/data` | 数据目录 |
-| `ARKSWARM_AUTH_ENABLED` | `true` | 多用户鉴权 |
-| `ARKSWARM_REGISTRATION_OPEN` | `true` | 开放注册 |
-| `ARKSWARM_ADMIN_USERNAME` | — | 首任管理员用户名（首启有效）|
-| `ARKSWARM_ADMIN_PASSWORD` | — | 首任管理员密码（首启有效）|
-| `ARKSWARM_RUN_TIMEOUT_SECONDS` | 不限时 | 运行超时护栏（普通对话默认不限时，可随时中断）|
-| `ARKSWARM_SECRET_KEY` | 自动生成 | 密钥加密密钥；未设置时自动生成 `data/secret.key`（0600）|
+| `CODA_HOST` | `0.0.0.0` | 监听地址 |
+| `CODA_PORT` | `8010` | 监听端口 |
+| `CODA_PUBLIC_BASE_URL` | 按端口推导 | 平台对外地址（系统管理 MCP 自动填写）；反向代理后面请填实际可访问地址 |
+| `CODA_DATA_DIR` | `backend/data` | 数据目录 |
+| `CODA_AUTH_ENABLED` | `true` | 多用户鉴权 |
+| `CODA_REGISTRATION_OPEN` | `true` | 开放注册 |
+| `CODA_ADMIN_USERNAME` | — | 首任管理员用户名（首启有效）|
+| `CODA_ADMIN_PASSWORD` | — | 首任管理员密码（首启有效）|
+| `CODA_RUN_TIMEOUT_SECONDS` | 不限时 | 运行超时护栏（普通对话默认不限时，可随时中断）|
+| `CODA_SECRET_KEY` | 自动生成 | 密钥加密密钥；未设置时自动生成 `data/secret.key`（0600）|
 
 完整清单见 [`backend/.env.example`](./backend/.env.example) 与 [`docker/docker-compose.yml`](./docker/docker-compose.yml)。
 
@@ -151,7 +151,7 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 ## 🧭 上手只要五步
 
-0. **设置 → 内核管理** —— 按需安装内核（Claude Code / Codex / Gemini CLI / Hermes / DeepSeek Harness）。镜像与首次启动都**不预装**内核，不装就没有可用的智能体类型（为什么？见 [FAQ](#-常见问题)）
+0. **设置 → 内核管理** —— 按需安装内核（Claude Code / Codex / Gemini CLI / Hermes / DeepSeek Harness / 豆包 CLI）。镜像与首次启动都**不预装**内核，不装就没有可用的智能体类型（为什么？见 [FAQ](#-常见问题)）；豆包这类账号型内核在详情里点「登录」扫码即可。
 1. **设置 → 自定义网关** —— 新建网关（名称、地址、协议、鉴权、API 密钥），点「获取模型」拿到可选模型并勾选
 2. **智能体 → 新建** —— 选内核类型、选网关、定默认模型，写头像与系统提示词，按需勾选技能 / MCP，点「连通性测试」确认一次通过
 3. **对话 → 新建对话** —— 选择智能体开始聊天；工具调用、推理过程、token 用量实时展开
@@ -170,6 +170,8 @@ HOST_PROJECT_DIR=/path/to/projects \
 | `claude-code` | CLI `claude` | ✅ `--session-id` / `--resume` | ✅ | 权限模式、MCP、工具白名单全支持 |
 | `codex` | CLI `codex` | ✅ `exec resume` | ➖ 注入到 prompt | `-c model_providers.*` 指向自定义网关 |
 | `gemini-cli` | CLI `gemini` | ✅ `--resume` | ✅ | 人格自动写入运行期临时文件 |
+| `codebuddy-cli` | CLI `codebuddy` | ✅ `--resume` | ✅ | 腾讯 CodeBuddy Code：自定义网关走 `models.json`（仅 OpenAI 兼容） |
+| `doubao-cli` | CLI `doubao` | ✅ `--resume` | ➖ 注入到 prompt | 豆包 CLI：扫码登录（无 API Key），内核详情里直接出二维码 |
 | `deepseek-harness` | CLI `dsh` | ✅ `--session-id` | ✅ 写入 `AGENTS.md` | DeepSeek Harness headless：JSON 事件、沙箱权限、技能与 MCP |
 | `openai-harness` | 进程内 API | ✅ | ✅ | 任意 OpenAI 兼容端点：OpenRouter、vLLM、Ollama…（不再出现在新建入口） |
 | `custom-cli` | 任意 CLI 命令 | 可声明 | ➖ | **零代码**接入私有 CLI 智能体（不再出现在新建入口） |
@@ -179,6 +181,10 @@ HOST_PROJECT_DIR=/path/to/projects \
 >
 > DeepSeek Harness（`dsh`）要求 **Node.js ≥ 24.9**：Docker 镜像与桌面版已内置 Node 24，
 > 源码直接运行时请先确认本机 Node 版本。
+>
+> CodeBuddy CLI（`codebuddy`）要求 **Node.js ≥ 18.20.8**（官网建议 22+）：Docker 镜像与
+> 桌面版已满足；源码直接运行时请先确认版本。它的自定义网关只支持 OpenAI 兼容接口，
+> 会写成隔离目录里的 `models.json`。
 
 ### IM 平台（只用长连接 / 长轮询，不开公网端口）
 
@@ -193,13 +199,13 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 ## 🔐 你的密钥安全吗
 
-这是 ArkSwarm 最认真的一块，逐条说清楚：
+这是 Coda 最认真的一块，逐条说清楚：
 
-- **密钥加密落库**：API 密钥与凭据用 Fernet 加密存储，接口只回掩码（`sk-a…9f2c`）；加密密钥来自 `ARKSWARM_SECRET_KEY`，未设置时自动生成 `data/secret.key`（权限 0600）
+- **密钥加密落库**：API 密钥与凭据用 Fernet 加密存储，接口只回掩码（`sk-a…9f2c`）；加密密钥来自 `CODA_SECRET_KEY`，未设置时自动生成 `data/secret.key`（权限 0600）
 - **凭据只以环境变量注入**：模型只知道变量名（如 `$GITHUB_TOKEN`），值不进提示词、日志与接口响应；运行层逐条事件擦除凭据值
 - **日志自动脱敏**所有出现在 env 中的凭据
 - **路径护栏**：API 型智能体的工具被限制在工作目录内，`../` 逃逸会被拒绝
-- **超时与取消**：普通对话默认不限时，可随时中断（消息标记 `interrupted`）；需要护栏的部署可设 `ARKSWARM_RUN_TIMEOUT_SECONDS`
+- **超时与取消**：普通对话默认不限时，可随时中断（消息标记 `interrupted`）；需要护栏的部署可设 `CODA_RUN_TIMEOUT_SECONDS`
 
 > ⚠️ `bypassPermissions` / `danger-full-access` 等无人值守模式，请只在沙箱里使用。
 
@@ -207,7 +213,7 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 ## 📦 数据与升级
 
-**数据主权在你手里**：所有数据（对话、智能体、凭据、用量）都落在本地 SQLite —— `backend/data/`（Docker 里是 `arkswarm-data` 卷）。没有云端，没有遥测，备份这一个目录就等于备份了全部。
+**数据主权在你手里**：所有数据（对话、智能体、凭据、用量）都落在本地 SQLite —— `backend/data/`（Docker 里是 `coda-data` 卷）。没有云端，没有遥测，备份这一个目录就等于备份了全部。
 
 | 部署方式 | 升级动作 |
 | --- | --- |
@@ -223,15 +229,15 @@ HOST_PROJECT_DIR=/path/to/projects \
 
 刻意的设计，三个理由：内核更新频繁，烘进镜像等于每次都要重建；内核要装进 `$HOME`（即 `/app/data/home`）才能**保住登录态**，容器重建后不用重新登录；不预装还能让镜像保持小巧。
 
-**部署完成后**：打开「设置 → 内核管理」按需点「安装」（需要管理员账号）。装好的内核落在 `/app/data/home/.local`，跟着 `arkswarm-data` 卷走，容器重建不丢。
+**部署完成后**：打开「设置 → 内核管理」按需点「安装」（需要管理员账号）。装好的内核落在 `/app/data/home/.local`，跟着 `coda-data` 卷走，容器重建不丢。
 
-想让容器启动时自动补装缺失内核？把 `ARKSWARM_SKIP_KERNEL_INSTALL` 改成 `"0"`（网络差时会拖慢启动，默认跳过保持快速可预测）。
+想让容器启动时自动补装缺失内核？把 `CODA_SKIP_KERNEL_INSTALL` 改成 `"0"`（网络差时会拖慢启动，默认跳过保持快速可预测）。
 </details>
 
 <details>
 <summary><b>Docker 首次启动装依赖特别慢？</b></summary>
 
-直连 PyPI 实测只有 ~15KB/s。给 compose 配上 `ARKSWARM_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"`（实测 17–24 秒装完）或 `ARKSWARM_INSTALL_PROXY` 安装期代理。内核安装（npm / curl 脚本）同理建议配好出口。
+直连 PyPI 实测只有 ~15KB/s。给 compose 配上 `CODA_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"`（实测 17–24 秒装完）或 `CODA_INSTALL_PROXY` 安装期代理。内核安装（npm / curl 脚本）同理建议配好出口。
 </details>
 
 <details>
@@ -243,13 +249,13 @@ HOST_PROJECT_DIR=/path/to/projects \
 <details>
 <summary><b>升级会丢数据吗？</b></summary>
 
-不会。Docker 升级走界面「检测更新」，数据在 `arkswarm-data` 卷里纹丝不动；源码升级只要不动 `backend/data/` 目录就没影响。**唯一会丢数据的操作**是把 `arkswarm-data` 卷删了 —— 那是唯一存放业务数据的地方。
+不会。Docker 升级走界面「检测更新」，数据在 `coda-data` 卷里纹丝不动；源码升级只要不动 `backend/data/` 目录就没影响。**唯一会丢数据的操作**是把 `coda-data` 卷删了 —— 那是唯一存放业务数据的地方。
 </details>
 
 <details>
 <summary><b>忘记管理员密码 / 谁是管理员？</b></summary>
 
-不设 `ARKSWARM_ADMIN_USERNAME` 时，**第一个注册的账号自动成为管理员**。多用户鉴权与开放注册默认开启，可以在环境变量里调整。
+不设 `CODA_ADMIN_USERNAME` 时，**第一个注册的账号自动成为管理员**。多用户鉴权与开放注册默认开启，可以在环境变量里调整。
 </details>
 
 ---
@@ -397,7 +403,7 @@ docs/
 ./scripts/test.sh     # pytest（含架构守卫）+ 前端 typecheck
 ```
 
-**自己发版**：改 `backend/app/__init__.py` 的 `__version__` → 提交 → `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
+**自己发版**：改 `backend/app/__init__.py` 的 `__version__` → 提交 → `bash scripts/release.sh`（构建前端、打 `coda.tar.gz` + `.sha256`、`gh release create`）。tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
 </details>
 
 ---
@@ -426,11 +432,11 @@ docs/
 ## ⭐ Star 曲线
 
 <p align="center">
-  <a href="https://star-history.com/#Sustainedg/ArkSwarm&Date">
-    <img src="https://api.star-history.com/svg?repos=Sustainedg/ArkSwarm&type=Date" alt="Star History Chart" width="720" />
+  <a href="https://star-history.com/#Sustainedg/Coda&Date">
+    <img src="https://api.star-history.com/svg?repos=Sustainedg/Coda&type=Date" alt="Star History Chart" width="720" />
   </a>
 </p>
 
 > 这条曲线每往上拐一次，就有一个人把智能体们安顿进了同一个家 🏠
 >
-> 如果 ArkSwarm 也帮到了你，欢迎[点个 Star](https://github.com/Sustainedg/ArkSwarm/stargazers) —— 让这条线有理由继续上扬 ✨
+> 如果 Coda 也帮到了你，欢迎[点个 Star](https://github.com/Sustainedg/Coda/stargazers) —— 让这条线有理由继续上扬 ✨

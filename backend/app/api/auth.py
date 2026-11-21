@@ -9,7 +9,7 @@
 
 * **无状态会话**：令牌是 JWT（见 :mod:`app.auth`），服务端不存 session，水平扩展无需共享会话存储。
 * **鉴权开关**：默认开启；由 :func:`current_user` 校验令牌，未登录返回 401。
-  ``ARKSWARM_AUTH_ENABLED=false`` 时返回虚拟管理员，所有接口照旧可用 —— 给单用户部署
+  ``CODA_AUTH_ENABLED=false`` 时返回虚拟管理员，所有接口照旧可用 —— 给单用户部署
   保留开箱即用的形态。
 * **归属过滤**：资产接口拿到 ``current_user`` 后，在查询里加 ``owner_id == user.id``（管理员
   可看全部）。过滤逻辑在各路由里写，不在这里藏魔法。
@@ -144,7 +144,7 @@ async def login(payload: LoginRequest) -> LoginResponse:
 async def register(payload: RegisterRequest) -> LoginResponse:
     """注册：创建普通用户并直接登录。
 
-    可由 ``ARKSWARM_REGISTRATION_OPEN=false`` 关闭；关闭后只能由管理员建用户。
+    可由 ``CODA_REGISTRATION_OPEN=false`` 关闭；关闭后只能由管理员建用户。
     """
     settings = get_settings()
     if not settings.registration_open:
@@ -171,7 +171,7 @@ async def register(payload: RegisterRequest) -> LoginResponse:
         await session.commit()
         await session.refresh(user)
         if not has_any:
-            # 老库升级上来、又没配 ARKSWARM_ADMIN_* 时：第一个注册的人就是管理员，
+            # 老库升级上来、又没配 CODA_ADMIN_* 时：第一个注册的人就是管理员，
             # 把原本无归属的存量数据交给他（幂等，已有标记则直接返回）。
             from ..bootstrap import backfill_ownership
 

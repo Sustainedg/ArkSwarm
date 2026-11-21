@@ -208,8 +208,8 @@ class GeminiCliAgent(AgentDefinition):
             if (options.get("system_prompt_mode") or "system_file") == "prepend":
                 prompt = f"{ctx.system_prompt}\n\n---\n\n{prompt}"
             else:
-                files[".arkswarm/system.md"] = ctx.system_prompt
-                env["GEMINI_SYSTEM_MD"] = "{{RUN_DIR}}/.arkswarm/system.md"
+                files[".coda/system.md"] = ctx.system_prompt
+                env["GEMINI_SYSTEM_MD"] = "{{RUN_DIR}}/.coda/system.md"
 
         # 用 -p 让提示词走 stdin，避免长上下文把参数长度撑爆。
         argv += ["-p", ""]

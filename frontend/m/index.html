@@ -5,8 +5,8 @@
     <!-- 移动端是「固定外壳」的应用形态（顶栏 + 左侧抽屉 + 内部滚动），不随手指缩放：
          maximum-scale / user-scalable 管住 Android 系；iOS 会忽略它们，另有 touch-action 兜底（见 mobile.css）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>ArkSwarm · 移动端</title>
-    <meta name="description" content="ArkSwarm 移动端：在手机上查看智能体、网关与对话。" />
+    <title>Coda · 移动端</title>
+    <meta name="description" content="Coda 移动端：在手机上查看智能体、网关与对话。" />
     <!-- theme-color 取顶栏背景叠在页面底色上的实际色（深色 #11101b），
          让 Android standalone 状态栏那一条和顶栏无缝衔接，不会出现色差断层。
          浅色由下面防闪脚本改成 #fefeff（浅色顶栏实际色）。 -->
@@ -17,14 +17,14 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="ArkSwarm" />
+    <meta name="apple-mobile-web-app-title" content="Coda" />
     <meta name="format-detection" content="telephone=no" />
     <!-- 首屏防闪：样式生效前先把主题定下来（与 src/lib/theme.ts 同一套规则，保持极简、无依赖）。
          放在 head 末尾：它要读的 meta（theme-color、状态栏样式）都在前面，又早于任何样式与脚本。 -->
     <script>
       ;(function () {
         try {
-          var mode = localStorage.getItem('arkswarm.theme')
+          var mode = localStorage.getItem('coda.theme')
           var light =
             mode === 'light' ||
             (mode === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches)

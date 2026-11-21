@@ -3,7 +3,7 @@
  *
  * 为什么壳更新要单开一条通道、不能复用后端自更新：
  *   - 壳与后端是**两条独立版本线**（package.json 的版本 vs 后端 `__version__`）；
- *   - 同一个 GitHub 仓库里，后端发的是 `arkswarm.tar.gz`，壳发的是 NSIS / DMG / zip
+ *   - 同一个 GitHub 仓库里，后端发的是 `coda.tar.gz`，壳发的是 NSIS / DMG / zip
  *     + `latest*.yml`。electron-updater 的 GitHub Provider 认的是仓库「最新 Release」——
  *     后端一发版，它就会去那个 Release 里找 `latest.yml`，然后一头撞上 404。
  *
@@ -24,10 +24,10 @@ import { autoUpdater } from 'electron-updater';
 
 /** 滚动发布地址：每次桌面构建把安装包与 latest*.yml 覆盖上传到这个 tag。 */
 const DEFAULT_UPDATE_URL =
-  'https://github.com/Sustainedg/ArkSwarm/releases/download/desktop-latest';
+  'https://github.com/Sustainedg/Coda/releases/download/desktop-latest';
 
 /** 手动下载的兜底发布页（未签名 macOS 构建、自动更新失败时引导用户去这里）。 */
-export const RELEASE_PAGE = 'https://github.com/Sustainedg/ArkSwarm/releases';
+export const RELEASE_PAGE = 'https://github.com/Sustainedg/Coda/releases';
 
 /** 自动检查的延迟与周期：启动 20 秒后一次，之后每 6 小时一次。 */
 const FIRST_CHECK_DELAY_MS = 20_000;
@@ -85,7 +85,7 @@ function log(message: string): void {
 
 /** 更新源地址（fork / 私有部署可用环境变量覆盖）。 */
 export function updateFeedUrl(): string {
-  const override = process.env.ARKSWARM_DESKTOP_UPDATE_URL?.trim();
+  const override = process.env.CODA_DESKTOP_UPDATE_URL?.trim();
   return override || DEFAULT_UPDATE_URL;
 }
 
@@ -167,7 +167,7 @@ async function promptInstall(version: string): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'info',
     title: '发现新版本',
-    message: `ArkSwarm 桌面端 ${version} 已下载完成`,
+    message: `Coda 桌面端 ${version} 已下载完成`,
     detail: '重启应用即可完成更新。选择「稍后」也没关系：退出应用时同样会自动安装。',
     buttons: ['立即重启安装', '稍后'],
     defaultId: 0,

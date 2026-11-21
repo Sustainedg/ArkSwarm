@@ -99,11 +99,11 @@ export default function App() {
       <aside className="sidebar" id="app-sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <BrandMark size={17} />
+            <BrandMark />
           </div>
           <div className="brand-text">
             <div className="brand-name">
-              ArkSwarm
+              Coda
               {version && <span className="brand-version">{version}</span>}
             </div>
             <div className="brand-sub">多智能体控制台</div>

@@ -5,7 +5,7 @@ MCP 网关（如 MCPHub 的图床）生成的图片，链接只适合当传输�
 里匹配配置前缀的图片下载到 ``<工作目录>/generated-images/``，并把 URL 改写为相对路径
 ——前端本来就会把工作目录里的相对路径解析成对话文件出口。
 
-只处理显式配置的前缀（``ARKSWARM_IMAGE_INGEST_PREFIXES``），不会去抓任意外链。
+只处理显式配置的前缀（``CODA_IMAGE_INGEST_PREFIXES``），不会去抓任意外链。
 """
 from __future__ import annotations
 

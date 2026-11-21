@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ArkSwarm 系统管理 MCP 服务器（stdio 传输）。
+"""Coda 系统管理 MCP 服务器（stdio 传输）。
 
 一个随平台分发的「平台通用」MCP 服务器：把平台的 REST API（智能体 / 协作组 /
 技能 / MCP 编目）包成一组管理工具。分配到它的智能体就能在对话里**以主人身份**
@@ -8,11 +8,11 @@
 配置全部来自环境变量（在「MCP」页新建 / 编辑服务器时填写；值经平台加密落库，
 运行时由内核注入本进程，绝不会出现在日志或对话里）：
 
-* ``ARKSWARM_BASE_URL``   平台地址（如 ``http://127.0.0.1:8010`` 或 ``…:8010/api``）
-* ``ARKSWARM_TOKEN``      个人访问令牌（PAT，在「设置 → 账号」生成；也可用登录 JWT，
+* ``CODA_BASE_URL``   平台地址（如 ``http://127.0.0.1:8010`` 或 ``…:8010/api``）
+* ``CODA_TOKEN``      个人访问令牌（PAT，在「设置 → 账号」生成；也可用登录 JWT，
                            但会过期，推荐 PAT）
-* ``ARKSWARM_MODE``       权限模式：``ro``（默认，只读，写操作直接拒绝）/ ``rw``（可读写）
-* ``ARKSWARM_TIMEOUT``    单次请求超时秒数（默认 60）
+* ``CODA_MODE``       权限模式：``ro``（默认，只读，写操作直接拒绝）/ ``rw``（可读写）
+* ``CODA_TIMEOUT``    单次请求超时秒数（默认 60）
 
 设计要点（与 image_mcp_server.py 同一套纪律）：
 
@@ -41,15 +41,15 @@ import urllib.parse
 import urllib.request
 from typing import Any, Sequence
 
-SERVER_NAME = "arkswarm-admin"
+SERVER_NAME = "coda-admin"
 SERVER_VERSION = "1.0.0"
 #: MCP 协议版本；initialize 时优先回显客户端请求的版本
 PROTOCOL_VERSION = "2024-11-05"
 
-ENV_BASE_URL = "ARKSWARM_BASE_URL"
-ENV_TOKEN = "ARKSWARM_TOKEN"
-ENV_MODE = "ARKSWARM_MODE"
-ENV_TIMEOUT = "ARKSWARM_TIMEOUT"
+ENV_BASE_URL = "CODA_BASE_URL"
+ENV_TOKEN = "CODA_TOKEN"
+ENV_MODE = "CODA_MODE"
+ENV_TIMEOUT = "CODA_TIMEOUT"
 
 DEFAULT_TIMEOUT = 60.0
 MODE_RW = "rw"

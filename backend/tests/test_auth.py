@@ -1,7 +1,7 @@
 """鉴权与多用户归属的端到端测试。
 
 这里在「鉴权开启」形态下跑（用独立客户端、显式登录），与既有业务测试（鉴权关闭、
-``ARKSWARM_AUTH_ENABLED=false``）互补：既有测试验 CRUD / 流式 / 协作逻辑，这里验
+``CODA_AUTH_ENABLED=false``）互补：既有测试验 CRUD / 流式 / 协作逻辑，这里验
 「登录 / 注册 / 令牌 / 归属隔离 / 管理员越权」。
 """
 from __future__ import annotations
@@ -217,6 +217,25 @@ async def test_member_cannot_list_users(auth_client):
     bob = await _register(auth_client, "bob")  # member
     resp = await auth_client.get("/api/auth/users", headers=_auth(bob["access_token"]))
     assert resp.status_code == 403
+
+
+async def test_member_cannot_read_provision_jobs(auth_client):
+    """任务输出可能带登录二维码等短期凭据：列表 / 重连 / 清除只对管理员开放。"""
+    alice = await _register(auth_client, "alice")  # admin
+    bob = await _register(auth_client, "bob")  # member
+    member = _auth(bob["access_token"])
+
+    for method, url in (
+        ("GET", "/api/runtimes/provision/jobs"),
+        ("GET", "/api/runtimes/claude-code/provision/stream"),
+        ("DELETE", "/api/runtimes/claude-code/provision"),
+    ):
+        resp = await auth_client.request(method, url, headers=member)
+        assert resp.status_code == 403, f"{method} {url} 不该对普通成员开放"
+
+    # 管理员仍可读任务列表
+    admin = _auth(alice["access_token"])
+    assert (await auth_client.get("/api/runtimes/provision/jobs", headers=admin)).status_code == 200
 
 
 async def test_registration_can_be_closed(auth_client, monkeypatch):

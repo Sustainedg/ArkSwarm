@@ -76,7 +76,7 @@ def test_version_compare_treats_missing_patch_as_zero():
 # ---------- Release JSON 解析 ----------
 
 
-def _release_json(tag: str = "v0.44", *, with_asset: bool = True, asset_name: str = "arkswarm.tar.gz") -> dict:
+def _release_json(tag: str = "v0.44", *, with_asset: bool = True, asset_name: str = "coda.tar.gz") -> dict:
     assets = []
     if with_asset:
         assets.append({"name": asset_name, "browser_download_url": f"https://x/{asset_name}", "size": 12345})
@@ -95,7 +95,7 @@ def test_parse_release_ok():
     assert release.version == "V0.44"
     assert release.tag == "v0.44"
     assert release.asset_size == 12345
-    assert release.asset_url.endswith("arkswarm.tar.gz")
+    assert release.asset_url.endswith("coda.tar.gz")
 
 
 @pytest.mark.parametrize(

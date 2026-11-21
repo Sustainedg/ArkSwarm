@@ -232,7 +232,7 @@ async def stream_cli_run(
         yield run_finished("error")
         return
 
-    run_dir = Path(tempfile.mkdtemp(prefix=f"arkswarm-{run.id}-"))
+    run_dir = Path(tempfile.mkdtemp(prefix=f"coda-{run.id}-"))
     for relative, content in (invocation.files or {}).items():
         target = run_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)

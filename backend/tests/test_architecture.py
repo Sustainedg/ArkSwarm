@@ -55,6 +55,8 @@ BUILTIN_IDS = {
     "custom-cli",
     "hermes-agent",
     "deepseek-harness",
+    "codebuddy-cli",
+    "doubao-cli",
 }
 
 CJK = re.compile(r"[\u4e00-\u9fff]")

@@ -5,14 +5,14 @@
  * 界面偏好）。与 `lib/tts.ts`、`lib/theme.ts` 同属「这台设备的个人偏好」：不上传、
  * 不落库，换台设备各管各的。
  *
- * 存储：键 `arkswarm.auto-check-updates` 存检查时刻（`'9'` = 每日 9 点；没这个键
+ * 存储：键 `coda.auto-check-updates` 存检查时刻（`'9'` = 每日 9 点；没这个键
  * 就是关闭）。时刻与开关合成一个真值 —— 「设了时刻」=「开着」，「删键」=「关了」，
  * 不存在「开着但没时刻」的中间态。
  */
 import { useCallback, useState } from 'react'
 
 /** 存储键（值是检查时刻的小时数；没这个键就是关闭）。 */
-export const AUTO_CHECK_UPDATES_KEY = 'arkswarm.auto-check-updates'
+export const AUTO_CHECK_UPDATES_KEY = 'coda.auto-check-updates'
 
 /** 默认检查时刻：早上 9 点（上班开机后不久，还没开始忙）。 */
 export const DEFAULT_CHECK_HOUR = 9

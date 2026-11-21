@@ -1,6 +1,6 @@
 """测试自身的数据隔离：继承正式库路径时也必须落到临时目录。
 
-真实事故：容器里 ``ARKSWARM_DATA_DIR=/app/data`` 被 pytest 继承，旧引导用
+真实事故：容器里 ``CODA_DATA_DIR=/app/data`` 被 pytest 继承，旧引导用
 ``setdefault`` 没有覆盖它，测试夹具的 ``drop_all`` 直接清空了 Docker 正式库。
 这里用子进程复现「从容器继承路径」的场景，确保引导层会强制改写且不碰哨兵文件。
 """
@@ -19,14 +19,14 @@ BACKEND = Path(__file__).resolve().parent.parent
 
 
 def test_conftest_overrides_inherited_production_paths(tmp_path: Path) -> None:
-    sentinel = tmp_path / "arkswarm.db"
+    sentinel = tmp_path / "coda.db"
     sentinel.write_bytes(b"must-not-be-touched")
     env = os.environ.copy()
     env.update(
         {
-            "ARKSWARM_DATA_DIR": str(tmp_path),
-            "ARKSWARM_DATABASE_URL": f"sqlite+aiosqlite:///{sentinel}",
-            "ARKSWARM_WORKSPACE_DIR": str(tmp_path / "workspaces"),
+            "CODA_DATA_DIR": str(tmp_path),
+            "CODA_DATABASE_URL": f"sqlite+aiosqlite:///{sentinel}",
+            "CODA_WORKSPACE_DIR": str(tmp_path / "workspaces"),
         }
     )
     code = """
@@ -61,19 +61,19 @@ print(json.dumps({
 
 
 def test_assert_isolated_rejects_non_temporary_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    spec = importlib.util.spec_from_file_location("arkswarm_root_conftest", BACKEND / "conftest.py")
+    spec = importlib.util.spec_from_file_location("coda_root_conftest", BACKEND / "conftest.py")
     assert spec and spec.loader
     conftest = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(conftest)
 
-    monkeypatch.setenv("ARKSWARM_DATA_DIR", "/app/data")
-    monkeypatch.setenv("ARKSWARM_DATABASE_URL", "sqlite+aiosqlite:////app/data/arkswarm.db")
+    monkeypatch.setenv("CODA_DATA_DIR", "/app/data")
+    monkeypatch.setenv("CODA_DATABASE_URL", "sqlite+aiosqlite:////app/data/coda.db")
     with pytest.raises(RuntimeError, match="拒绝启动 pytest"):
         conftest._assert_isolated()
 
 
 def test_setdefault_would_have_kept_production_path() -> None:
     """把事故机制钉住：``setdefault`` 在变量已存在时不会改写。"""
-    inherited = {"ARKSWARM_DATA_DIR": "/app/data"}
-    inherited.setdefault("ARKSWARM_DATA_DIR", "/tmp/isolated")
-    assert inherited["ARKSWARM_DATA_DIR"] == "/app/data"
+    inherited = {"CODA_DATA_DIR": "/app/data"}
+    inherited.setdefault("CODA_DATA_DIR", "/tmp/isolated")
+    assert inherited["CODA_DATA_DIR"] == "/app/data"

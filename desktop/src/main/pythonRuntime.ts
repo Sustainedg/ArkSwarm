@@ -20,12 +20,12 @@ import { ensureDir, installLogPath, pythonRuntimeDir, venvPython } from './paths
 /**
  * 安装期网络配置（与 Docker entrypoint 同名同义，部署侧 / 高级用户按需设置）：
  *
- * - `ARKSWARM_PIP_INDEX_URL`：改用镜像源（国内直连 PyPI 实测只有 ~15KB/s）；
- * - `ARKSWARM_INSTALL_PROXY`：本次装依赖专用的代理（不会写进进程环境，也不影响
+ * - `CODA_PIP_INDEX_URL`：改用镜像源（国内直连 PyPI 实测只有 ~15KB/s）；
+ * - `CODA_INSTALL_PROXY`：本次装依赖专用的代理（不会写进进程环境，也不影响
  *   之后智能体运行时的出口）。
  */
-const PIP_INDEX_ENV = 'ARKSWARM_PIP_INDEX_URL';
-const INSTALL_PROXY_ENV = 'ARKSWARM_INSTALL_PROXY';
+const PIP_INDEX_ENV = 'CODA_PIP_INDEX_URL';
+const INSTALL_PROXY_ENV = 'CODA_INSTALL_PROXY';
 /**
  * embedded 解释器来源。打包时随 resources/ 分发（scripts/fetch-python.mjs 放进包），
  * 开发模式用系统 python3（要求 ≥ 3.11，与主项目一致）。版本与主项目 Dockerfile 对齐（python:3.11）。
@@ -174,7 +174,7 @@ export async function ensurePythonRuntime(
  * `ProxyError('Cannot connect to proxy.', ConnectionAbortedError(10053, ...))`。
  * 这时候直连（或镜像）反而是通的，没必要让用户先学会改注册表。
  *
- * 显式配了 `ARKSWARM_INSTALL_PROXY` 时不自动绕过：那说明用户确实需要代理，
+ * 显式配了 `CODA_INSTALL_PROXY` 时不自动绕过：那说明用户确实需要代理，
  * 失败就按真实原因报，避免把「公司代理暂时不通」误判成代理配置错误。
  */
 async function installDependencies(
@@ -258,7 +258,7 @@ function indexHost(index: string): string {
  *
  * - 强制 Python 子进程用 UTF-8 输出：Windows 控制台默认 GBK，中文报错经 Node 按
  *   UTF-8 解出来就是一片 `@eeee…` 乱码，用户根本看不懂；
- * - `ARKSWARM_INSTALL_PROXY` 只注入给 pip 这一个子进程（不污染后端与智能体出口）。
+ * - `CODA_INSTALL_PROXY` 只注入给 pip 这一个子进程（不污染后端与智能体出口）。
  */
 function pipEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {

@@ -1,5 +1,5 @@
 /* ============================================================
-   ArkSwarm —— 设计变量与基础原语
+   Coda —— 设计变量与基础原语
    ============================================================ */
 :root {
   /* 外观：深色是默认（浅色看下面的 [data-theme='light']）。color-scheme 决定原生控件、
@@ -257,13 +257,11 @@ code, pre, .mono { font-family: var(--mono); }
 .brand { display: flex; align-items: center; gap: calc(10px * var(--sbs)); padding: calc(4px * var(--sbs)) calc(8px * var(--sbs)) calc(16px * var(--sbs)); }
 .brand-mark {
   width: calc(30px * var(--sbs)); height: calc(30px * var(--sbs)); border-radius: calc(9px * var(--sbs)); flex: none;
-  background: linear-gradient(135deg, var(--brand), #7b5cff);
-  box-shadow: 0 6px 18px rgba(217, 79, 208, 0.4);
-  display: grid; place-items: center; color: #fff;
+  display: grid; place-items: center; overflow: hidden;
 }
-/* 品牌标是内联 SVG（components/BrandMark.tsx）：图形随 currentColor 走，
-   深浅两套外观都不用换图。 */
-.brand-mark-glyph { display: block; }
+/* 品牌标是用户提供的品牌图（components/BrandMark.tsx，位图自带品牌色）：
+   容器不再画渐变底，避免与 logo 自带的底色叠在一起。 */
+.brand-mark-glyph { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand-name { font-weight: 650; font-size: calc(15px * var(--sbs)); letter-spacing: -0.02em; display: flex; align-items: center; gap: calc(6px * var(--sbs)); }
 .brand-version {
   font-size: calc(9.5px * var(--sbs)); font-weight: 600; letter-spacing: 0.02em;
@@ -1369,6 +1367,14 @@ code, pre, .mono { font-family: var(--mono); }
   -webkit-mask-size: contain;
   mask-size: contain;
 }
+/* 真彩色位图 Logo：按原色显示，不能沿用遮罩的 currentColor 底色 */
+.kernel-logo-image {
+  object-fit: contain;
+  background: transparent;
+  -webkit-mask: none;
+  mask: none;
+  border-radius: 6px;
+}
 .runtime-head { display: flex; align-items: center; gap: 10px; }
 /* 版本号那一行：后面可以挂一个「已是最新」，所以是一行能换行的 flex */
 .runtime-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -1379,6 +1385,15 @@ code, pre, .mono { font-family: var(--mono); }
   white-space: pre-wrap; word-break: break-word;
 }
 .runtime-log-warn { color: var(--warn); }
+
+/* 登录二维码：白底保证任何主题下都扫得出来 */
+.login-qr {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px; border-radius: var(--radius-sm);
+  background: #fff; border: 1px solid var(--border-strong);
+}
+.login-qr img { display: block; width: 220px; height: 220px; image-rendering: pixelated; }
+.login-qr span { color: #444; font-size: 12px; }
 
 .banner { padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12.5px; border: 1px solid; }
 .banner.err { background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.35); color: #fca5a5; }
@@ -2672,8 +2687,7 @@ code, pre, .mono { font-family: var(--mono); }
 .auth-brand { display: flex; align-items: center; gap: 12px; }
 .auth-mark {
   width: 42px; height: 42px; display: grid; place-items: center;
-  border-radius: 13px; background: linear-gradient(135deg, var(--brand), #7b5cff); color: #fff;
-  box-shadow: 0 8px 22px rgba(217, 79, 208, 0.34);
+  border-radius: 13px; overflow: hidden;
 }
 .auth-title { font-size: 19px; font-weight: 700; letter-spacing: 0.3px; }
 .auth-sub { font-size: 12px; color: var(--text-dim); }

@@ -1,7 +1,7 @@
 /**
  * preload：桌面版对渲染层暴露的极小 API 面。
  *
- * 渲染层（ArkSwarm 前端本身）不需要任何 Node 能力；这里只给三类白名单能力：
+ * 渲染层（Coda 前端本身）不需要任何 Node 能力；这里只给三类白名单能力：
  *   1. 「自绘标题栏」的三个窗口动作（最小化 / 最大化切换 / 关闭）；
  *   2. 桌面壳自身的更新（与托盘菜单同一套 electron-updater 状态机）；
  *   3. 桌面版标记。
@@ -21,7 +21,7 @@ interface DesktopUpdateState {
   error: string | null;
 }
 
-contextBridge.exposeInMainWorld('arkswarmDesktop', {
+contextBridge.exposeInMainWorld('codaDesktop', {
   /** 桌面版标记（前端可据此切到桌面专属的更新面板）。 */
   isDesktop: true,
   window: {

@@ -1,6 +1,6 @@
 """平台内置 MCP 服务器的声明。
 
-与「从内核配置扫描出来的服务器」不同，内置服务器是 ArkSwarm **随包分发**的一份预设：
+与「从内核配置扫描出来的服务器」不同，内置服务器是 Coda **随包分发**的一份预设：
 启动时由 runtime 自动为每个用户播种成一条可编辑的平台通用服务器。用户不用自己找
 脚本、拼启动命令；能由平台推导的参数（系统管理 MCP 的平台地址与令牌）会自动填好，
 只有部署相关的业务参数（生图网关地址、模型名…）才需要用户填写。
@@ -27,7 +27,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 
 #: 内置服务器脚本；release.sh / Dockerfile 负责把它们一起打包。
 IMAGE_GEN_SCRIPT = _ROOT / "scripts" / "mcp" / "image_mcp_server.py"
-ADMIN_SCRIPT = _ROOT / "scripts" / "mcp" / "arkswarm_admin_mcp_server.py"
+ADMIN_SCRIPT = _ROOT / "scripts" / "mcp" / "coda_admin_mcp_server.py"
 
 
 #: 平台托管参数的取值来源。runtime 只按这两个声明值执行，不认识具体服务器，
@@ -159,9 +159,9 @@ IMAGE_GEN = BuiltinServer(
 
 
 ADMIN = BuiltinServer(
-    key="arkswarm-admin",
+    key="coda-admin",
     name="系统管理",
-    slug="arkswarm-admin",
+    slug="coda-admin",
     description=(
         "平台内置的系统管理工具：在对话里查看 / 创建 / 编辑智能体与协作组，"
         "管理技能与 MCP 服务器。默认只读；需要写操作时把权限模式改为 rw。"
@@ -169,9 +169,9 @@ ADMIN = BuiltinServer(
     script=ADMIN_SCRIPT,
     params=(
         BuiltinParam(
-            key="ARKSWARM_BASE_URL",
+            key="CODA_BASE_URL",
             label="平台地址",
-            help="由平台自动填写（可用 ARKSWARM_PUBLIC_BASE_URL 覆盖）；带不带 /api 都可以。",
+            help="由平台自动填写（可用 CODA_PUBLIC_BASE_URL 覆盖）；带不带 /api 都可以。",
             placeholder="http://127.0.0.1:8010",
             required=True,
             default="http://127.0.0.1:8010",
@@ -179,7 +179,7 @@ ADMIN = BuiltinServer(
             managed_source=MANAGED_PUBLIC_BASE_URL,
         ),
         BuiltinParam(
-            key="ARKSWARM_TOKEN",
+            key="CODA_TOKEN",
             label="平台访问令牌",
             help="由平台自动生成并注入，无需填写；与「账号」页的个人访问令牌互不影响。",
             placeholder="pat_…",
@@ -189,14 +189,14 @@ ADMIN = BuiltinServer(
             managed_source=MANAGED_PLATFORM_TOKEN,
         ),
         BuiltinParam(
-            key="ARKSWARM_MODE",
+            key="CODA_MODE",
             label="权限模式",
             help="ro＝只读（推荐，写操作直接拒绝）；rw＝可读写。",
             placeholder="ro",
             default="ro",
         ),
         BuiltinParam(
-            key="ARKSWARM_TIMEOUT",
+            key="CODA_TIMEOUT",
             label="超时秒数",
             help="单次平台请求最长等待时间；留空按 60 秒。",
             placeholder="60",

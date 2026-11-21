@@ -7,9 +7,9 @@
  */
 
 /** 存储键（值 `collapsed` / `open`，与 `lib/theme.ts` 一样是本机偏好）。 */
-const SIDEBAR_KEY = 'arkswarm.sidebar'
+const SIDEBAR_KEY = 'coda.sidebar'
 /** 同页通知用的事件名（附带的 detail 是最新值）。 */
-const SIDEBAR_EVENT = 'arkswarm:sidebar-toggle'
+const SIDEBAR_EVENT = 'coda:sidebar-toggle'
 
 export function readSidebarCollapsed(): boolean {
   try {

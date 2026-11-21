@@ -10,9 +10,9 @@ import type { DesktopUpdateBridge, DesktopUpdateState, UpdateStatus } from '../l
 /**
  * 「设置 → 关于」的版本更新面板。按运行形态分成两套：
  *
- * - **桌面端**（`window.arkswarmDesktop.updates` 存在）：与托盘「检查桌面端更新…」
+ * - **桌面端**（`window.codaDesktop.updates` 存在）：与托盘「检查桌面端更新…」
  *   共用 electron-updater，下载的是**完整安装包**，下载完点「重启安装」。
- * - **网页 / Docker 部署**：走后端 GitHub Release 通道（`arkswarm.tar.gz`）。
+ * - **网页 / Docker 部署**：走后端 GitHub Release 通道（`coda.tar.gz`）。
  *
  * 后端通道的流程（安装 / 回滚是 SSE 长动作，最后进程会原地重启）：
  *   1. `POST /api/update/install` 逐条收 `update.*` 事件；
@@ -25,7 +25,7 @@ import type { DesktopUpdateBridge, DesktopUpdateState, UpdateStatus } from '../l
  */
 export function UpdatePanel({ currentVersion }: { currentVersion: string }) {
   // 桌面端只有一条更新通道：下载**完整安装包**（与托盘菜单同一个 electron-updater）。
-  // 浏览器 / Docker 部署仍走后端 `/api/update/*`（`arkswarm.tar.gz` 一键更新）。
+  // 浏览器 / Docker 部署仍走后端 `/api/update/*`（`coda.tar.gz` 一键更新）。
   return desktopUpdates() ? (
     <DesktopUpdatePanel />
   ) : (

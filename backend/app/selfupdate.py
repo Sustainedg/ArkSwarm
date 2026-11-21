@@ -46,12 +46,12 @@ import httpx
 from . import __version__
 from .settings import get_settings
 
-logger = logging.getLogger("arkswarm.selfupdate")
+logger = logging.getLogger("coda.selfupdate")
 
-#: 默认仓库。私有部署可用 ``ARKSWARM_UPDATE_REPO`` 指到自己的 fork（owner/repo）。
-DEFAULT_REPO = "Sustainedg/ArkSwarm"
+#: 默认仓库。私有部署可用 ``CODA_UPDATE_REPO`` 指到自己的 fork（owner/repo）。
+DEFAULT_REPO = "Sustainedg/Coda"
 
-#: GitHub API 基址。自建 GitHub Enterprise 可换 ``ARKSWARM_UPDATE_GITHUB_API``。
+#: GitHub API 基址。自建 GitHub Enterprise 可换 ``CODA_UPDATE_GITHUB_API``。
 DEFAULT_API_BASE = "https://api.github.com"
 
 #: 一次检测 / 下载请求的预算。检测是小请求，下载的读超时放宽（大包在慢链路上要跑几分钟）。
@@ -69,7 +69,7 @@ MAX_ARCHIVE_FILES = 20_000
 _PAYLOAD_MARKERS = ("backend/app/__init__.py", "backend/app/main.py", "frontend/dist/index.html")
 
 #: 下载产物包时优先选的文件名（release.sh 打包固定的名字），找不到再按扩展名兜底。
-_ASSET_NAME = "arkswarm.tar.gz"
+_ASSET_NAME = "coda.tar.gz"
 
 #: 版本号里允许的字符（tag 形如 v0.44 / V0.44，目录名要拿它拼，不能放任任意串）。
 _VERSION_RE = re.compile(r"^[vV]\d+(?:\.\d+)*$")
@@ -153,7 +153,7 @@ def _fetch_dict(data: dict[str, Any], key: str) -> str:
 def parse_release(data: dict[str, Any]) -> Release | None:
     """把 GitHub Release JSON 翻成 :class:`Release`；不是版本 tag 或没有产物包则 None。
 
-    SHA256 从两个地方找：资产名 ``arkswarm.tar.gz.sha256`` 的内容，或 Release 正文里
+    SHA256 从两个地方找：资产名 ``coda.tar.gz.sha256`` 的内容，或 Release 正文里
     ``sha256: <hex>`` 行 —— ``release.sh`` 两处都会写，先到先得。
     """
     tag = _fetch_dict(data, "tag_name")

@@ -1,11 +1,11 @@
-# ArkSwarm 的 Docker 部署编排。
+# Coda 的 Docker 部署编排。
 #
 # 构建并启动（首次或改了 Dockerfile 时需要 --build；版本级更新不需要重建镜像）：
 #   docker compose -f docker/docker-compose.yml up -d --build
 #
 # 两个数据卷：
-#   arkswarm-app   /app        应用版本目录 + venv（容器重建不丢）
-#   arkswarm-data  /app/data   SQLite / 工作区 / 密钥 / 内核 HOME（容器重建不丢）
+#   coda-app   /app        应用版本目录 + venv（容器重建不丢）
+#   coda-data  /app/data   SQLite / 工作区 / 密钥 / 内核 HOME（容器重建不丢）
 #
 # 如需让容器里的智能体直接读写宿主机项目，取消 volumes 里被注释的那一行并设置
 # HOST_PROJECT_DIR（容器内外使用同一路径，避免工作目录对不上）：
@@ -13,11 +13,11 @@
 #
 # 内核（Claude Code / Codex / Gemini / Hermes）**不预装**：部署后在界面「设置 → 内核管理」
 # 里按需点击安装，装进 /app/data/home 并跟着数据卷走（容器重建不用重装 / 重新登录）。
-# 想让容器启动时自动补装缺失的内核，把下面的 ARKSWARM_SKIP_KERNEL_INSTALL 改成 "0"。
-name: arkswarm
+# 想让容器启动时自动补装缺失的内核，把下面的 CODA_SKIP_KERNEL_INSTALL 改成 "0"。
+name: coda
 
 services:
-  arkswarm:
+  coda:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -27,46 +27,46 @@ services:
         PIP_TRUSTED_HOST: "${PIP_TRUSTED_HOST:-}"
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
-    image: arkswarm:latest
-    container_name: arkswarm
+    image: coda:latest
+    container_name: coda
     restart: unless-stopped
     ports:
-      - "${ARKSWARM_HTTP_PORT:-8010}:8010"
+      - "${CODA_HTTP_PORT:-8010}:8010"
     volumes:
-      - arkswarm-app:/app
-      - arkswarm-data:/app/data
+      - coda-app:/app
+      - coda-data:/app/data
       # 让容器里的智能体直接读写宿主机项目：两侧必须用**同一个路径**，
       # 否则对话里记录的工作目录在容器内不存在。用法：
       #   HOST_PROJECT_DIR=/path/to/projects docker compose up -d
       # - ${HOST_PROJECT_DIR:?请设置 HOST_PROJECT_DIR}:${HOST_PROJECT_DIR}
     environment:
-      ARKSWARM_HOST: "0.0.0.0"
-      ARKSWARM_PORT: "8010"
-      ARKSWARM_UPDATE_REPO: "Sustainedg/ArkSwarm"
+      CODA_HOST: "0.0.0.0"
+      CODA_PORT: "8010"
+      CODA_UPDATE_REPO: "Sustainedg/Coda"
       # 多用户部署：开启鉴权并配置首任管理员，或关闭自助注册。
-      ARKSWARM_AUTH_ENABLED: "${ARKSWARM_AUTH_ENABLED:-true}"
-      ARKSWARM_REGISTRATION_OPEN: "${ARKSWARM_REGISTRATION_OPEN:-true}"
-      # ARKSWARM_ADMIN_USERNAME: "admin"
-      # ARKSWARM_ADMIN_PASSWORD: "change-me-please"
+      CODA_AUTH_ENABLED: "${CODA_AUTH_ENABLED:-true}"
+      CODA_REGISTRATION_OPEN: "${CODA_REGISTRATION_OPEN:-true}"
+      # CODA_ADMIN_USERNAME: "admin"
+      # CODA_ADMIN_PASSWORD: "change-me-please"
       # HOME 跟着数据卷走：npm 全局包、~/.claude、~/.codex、~/.hermes、~/.gemini
       # 都落在 /app/data/home，容器重建后不需要重新安装 / 登录。
       HOME: "/app/data/home"
       NPM_CONFIG_PREFIX: "/app/data/home/.local"
       # 内核**不预装**：部署后到「设置 → 内核管理」自己点安装（装进 HOME，跟着数据卷走）。
       # 设为 "0" 则容器启动时自动补装缺失的内核 —— 网络差时会明显拖慢启动，故默认跳过。
-      ARKSWARM_SKIP_KERNEL_INSTALL: "1"
+      CODA_SKIP_KERNEL_INSTALL: "1"
       # 安装期代理：作用于「装 Python 依赖 / 补装内核」这些一次性动作，
       # 不影响智能体运行时（它们要直连网关）。pip 也认它（entrypoint 会转成 HTTP(S)_PROXY）。
       # 内网部署建议在**部署侧的 compose override** 里填真实地址，不要写进仓库。
-      # ARKSWARM_INSTALL_PROXY: "http://<proxy-host>:<port>"
+      # CODA_INSTALL_PROXY: "http://<proxy-host>:<port>"
       # 备选：不配代理时改用国内 PyPI 镜像（不走代理也能秒级装完）。
-      # ARKSWARM_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
+      # CODA_PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
       # 空卷首启默认用**镜像里构建进去的源码**；想沿用「空卷先联网拉最新 Release」
       # 的旧行为时设为 "1"。
-      # ARKSWARM_FETCH_RELEASE_ON_EMPTY: "0"
+      # CODA_FETCH_RELEASE_ON_EMPTY: "0"
 
 volumes:
-  arkswarm-app:
-    name: arkswarm-app
-  arkswarm-data:
-    name: arkswarm-data
+  coda-app:
+    name: coda-app
+  coda-data:
+    name: coda-data

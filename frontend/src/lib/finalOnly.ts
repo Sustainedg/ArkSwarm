@@ -7,12 +7,12 @@
  * 存的是「关掉」这个动作（值 `'off'`），删掉键 = 回到默认的完整视图。
  *
  * 与 `lib/tts.ts`、`lib/theme.ts` 同属「这台设备的个人偏好」：不上传、不落库，
- * 换台设备各管各的。存储键带 `arkswarm` 前缀。
+ * 换台设备各管各的。存储键带 `coda` 前缀。
  */
 import { useCallback, useState } from 'react'
 
 /** 存储键（值只写 `'off'`；没这个键 = 默认显示工具调用）。 */
-export const TOOLS_VISIBILITY_STORAGE_KEY = 'arkswarm.tools-hidden'
+export const TOOLS_VISIBILITY_STORAGE_KEY = 'coda.tools-hidden'
 
 /** 读开关；没设置过就是显示（默认完整视图）。 */
 export function readShowTools(): boolean {

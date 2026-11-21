@@ -97,10 +97,10 @@ export function spawnBackend(opts: SpawnOptions): BackendHandle {
         // 内置 Node / npm 全局前缀 / PATH 前置（M4：内核安装与运行不依赖系统 Node）。
         // 后端进程继承这份环境，`runtime/provisioning` 起 npm、执行层 spawn 内核时都用它。
         ...desktopRuntimeEnv(),
-        ARKSWARM_PORT: String(opts.port),
-        ARKSWARM_DATA_DIR: dataDir(),
+        CODA_PORT: String(opts.port),
+        CODA_DATA_DIR: dataDir(),
         // 桌面单机形态：后端只听本机，绝不对局域网暴露
-        ARKSWARM_PUBLIC_BASE_URL: `http://127.0.0.1:${opts.port}`,
+        CODA_PUBLIC_BASE_URL: `http://127.0.0.1:${opts.port}`,
         PYTHONUNBUFFERED: '1',
         // 继承用户 PATH：内核（claude / codex / gemini）与 node 要能被 provisioning 找到
       },

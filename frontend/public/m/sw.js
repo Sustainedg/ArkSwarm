@@ -1,4 +1,4 @@
-/* ArkSwarm 移动端 Service Worker。
+/* Coda 移动端 Service Worker。
  *
  * 目标：把 /m/ 这条链接变成可安装、可离线的应用外壳（app shell）。
  * 只接管本作用域（/m/）下的页面，且**永不缓存 /api/**：对话走 SSE 长连接，
@@ -6,8 +6,8 @@
  */
 /* 缓存名带版本号：改了外壳（入口 HTML / 样式表 / 构建产物）就把它 +1 —— 老客户端下次
  * 打开会装上新版 SW，activate 时清掉旧缓存；用户也可以在设置页「更新到最新版本」自助清。 */
-const SHELL_CACHE = 'arkswarm-m-shell-v127'
-const ASSET_CACHE = 'arkswarm-m-assets-v126'
+const SHELL_CACHE = 'coda-m-shell-v128'
+const ASSET_CACHE = 'coda-m-assets-v127'
 const ENTRY = '/m/'
 const STATIC_SHELL = ['/m/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png']
 
@@ -87,7 +87,7 @@ async function networkFirstNavigation() {
     const cache = await caches.open(SHELL_CACHE)
     const cached = await cache.match(ENTRY)
     if (cached) return cached
-    return new Response('离线：请连上网络后再打开 ArkSwarm。', {
+    return new Response('离线：请连上网络后再打开 Coda。', {
       status: 503,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     })

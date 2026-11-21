@@ -2,12 +2,12 @@
 # 生产单端口入口：构建前端（如缺失）→ 由后端统一托管 UI + API，监听 0.0.0.0。
 #
 # 环境变量：
-#   ARKSWARM_HOST  监听地址，默认 0.0.0.0
-#   ARKSWARM_PORT  监听端口，默认 8010
+#   CODA_HOST  监听地址，默认 0.0.0.0
+#   CODA_PORT  监听端口，默认 8010
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOST="${ARKSWARM_HOST:-0.0.0.0}"
-PORT="${ARKSWARM_PORT:-8010}"
+HOST="${CODA_HOST:-0.0.0.0}"
+PORT="${CODA_PORT:-8010}"
 
 venv_python="$ROOT/backend/.venv/bin/python"
 if [ ! -x "$venv_python" ] || ! "$venv_python" -c '' >/dev/null 2>&1; then
@@ -35,6 +35,6 @@ if [ ! -f "$ROOT/frontend/dist/index.html" ]; then
   fi
 fi
 
-echo "→ ArkSwarm 监听 http://$HOST:$PORT"
+echo "→ Coda 监听 http://$HOST:$PORT"
 exec "$venv_python" -m uvicorn app.main:app \
   --app-dir "$ROOT/backend" --host "$HOST" --port "$PORT"

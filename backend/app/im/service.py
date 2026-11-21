@@ -647,7 +647,7 @@ async def _ask_pairing(
         await _manager._safe_send(  # 同模块
             connection.id,
             message.chat,
-            "已向 ArkSwarm 发出连接请求，请在电脑上的「设置 → IM」里允许。"
+            "已向 Coda 发出连接请求，请在电脑上的「设置 → IM」里允许。"
             if platform is not None
             else "已发出连接请求，请先在设置里允许。",
         )

@@ -52,7 +52,7 @@ export function AccountPanel() {
       <section className="card account-card">
         <div className="card-title">单用户模式</div>
         <p className="dim small">
-          当前部署关闭了鉴权（<span className="mono-sm">ARKSWARM_AUTH_ENABLED=false</span>），
+          当前部署关闭了鉴权（<span className="mono-sm">CODA_AUTH_ENABLED=false</span>），
           所有请求都按管理员处理，没有需要维护的账号。
         </p>
       </section>

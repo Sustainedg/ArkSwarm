@@ -106,7 +106,7 @@ async def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
 def owner_id_for(user: User) -> str | None:
     """写入资产时该记的 ``owner_id``：鉴权关闭时记空（老库语义），不要写虚拟管理员 id。
 
-    这样之后把 ``ARKSWARM_AUTH_ENABLED`` 打开，存量行仍能被 ``backfill_ownership``
+    这样之后把 ``CODA_AUTH_ENABLED`` 打开，存量行仍能被 ``backfill_ownership``
     回填给首任管理员，而不是留在一个永远登录不了的 ``__system__`` 名下。
     """
     return None if user.id == _SYSTEM_USER.id else user.id

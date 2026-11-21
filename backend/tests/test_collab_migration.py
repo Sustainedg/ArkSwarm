@@ -1,6 +1,6 @@
 """数据库向后兼容：协作域后来新增的列必须能补到**已存在**的旧库上（铁律 9，不得删库重建）。
 
-背景：SQLite 的 ``create_all`` 只建新表、不会给旧表加列，而本地库 ``backend/data/arkswarm.db``
+背景：SQLite 的 ``create_all`` 只建新表、不会给旧表加列，而本地库 ``backend/data/coda.db``
 含真实数据。于是"后加的可选列"登记在 ``collab.tables.ADDITIVE_COLUMNS``，由 ``db.init_db`` 幂等补齐。
 """
 from __future__ import annotations

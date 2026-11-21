@@ -111,7 +111,7 @@ class DingTalkConnection(ConnectionBase):
                 json={
                     "clientId": self.client_id,
                     "clientSecret": self.client_secret,
-                    "ua": "arkswarm",
+                    "ua": "coda",
                     "subscriptions": [{"type": "CALLBACK", "topic": "/v1.0/im/bot/messages/get"}],
                 },
             )

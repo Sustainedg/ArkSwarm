@@ -83,12 +83,13 @@ for (const ext of names) {
     ours = false;
   }
   if (ours) continue;
-  const bak = path.join(bin, '.' + name + ext + '.arkswarm-bak');
+  const bak = path.join(bin, '.' + name + ext + '.coda-bak');
   fs.renameSync(link, bak);
   moved.push([link, bak]);
   console.log('已把本机既有的 ' + link + ' 挪到 ' + bak + '：它不属于平台的这份安装，npm 不肯直接覆盖');
 }
-const result = spawnSync(NPM, ['install', '-g', spec], { stdio: 'inherit', shell: WIN });
+const registryArgs = __REGISTRY_ARGS__;
+const result = spawnSync(NPM, ['install', '-g', spec, ...registryArgs], { stdio: 'inherit', shell: WIN });
 if (result.status !== 0 && moved.length) {
   for (const [link, bak] of moved) {
     try { fs.renameSync(bak, link); } catch (e) {}
@@ -159,7 +160,13 @@ def npm_prepare_argv(*packages: str) -> list[str]:
     return ["node", "-e", script]
 
 
-def npm_install_argv(package: str, *, bin_name: str, latest: bool = False) -> list[str]:
+def npm_install_argv(
+    package: str,
+    *,
+    bin_name: str,
+    latest: bool = False,
+    registry: str | None = None,
+) -> list[str]:
     """构造「npm 全局安装 / 更新」的命令，顺带处理本机既有的 bin 占位。
 
     本机的 ``<npm 前缀>/bin/<bin_name>`` 可能已经被别的安装占着（例如系统里另一个
@@ -173,11 +180,16 @@ def npm_install_argv(package: str, *, bin_name: str, latest: bool = False) -> li
     Windows 上不挪占位：桌面版把 npm 全局前缀钉在 App 私有的 userData 目录里，
     那里的 ``.cmd`` / ``.ps1`` 垫片都是本前缀自己的（不是链接），npm 直接覆盖即可；
     也就不存在「另一个 node 占着同名命令」的冲突场景。
+
+    ``registry`` 用于官方文档明确要求指定源的包（镜像站可能没有）：只影响这一次安装，
+    不改用户本机的 npm 配置。
     """
     spec = f"{package}@latest" if latest else package
+    registry_args = ["--registry", registry] if registry else []
     script = (
         _NPM_INSTALL_JS.replace("__BIN_NAME__", json.dumps(bin_name))
         .replace("__SPEC__", json.dumps(spec))
+        .replace("__REGISTRY_ARGS__", json.dumps(registry_args))
     )
     return ["node", "-e", script]
 

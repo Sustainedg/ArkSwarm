@@ -187,7 +187,7 @@ class DoubaoCliAgent(AgentDefinition):
     runtime = Runtime.CLI
     executable = "doubao"
     docs_url = "https://www.doubao.com/work/docs/zh-cn/doubao-cli"
-    logo = "/icons/kernels/doubao.webp"      # 真彩色位图（见 §4）
+    logo = "/icons/kernels/doubao.png"       # 真彩色位图（见 §5）
     logo_style = "image"
     api_key_env = None                        # 账号登录，没有 API Key
     base_url_env = None
@@ -376,7 +376,7 @@ def skill_mount(self, ctx):
 - 「连通性测试」检查 `doubao auth status`，未登录给明确中文提示。
 - 这是与 CodeBuddy / Claude Code 等账号型内核一致的做法，改动最小。
 
-### P2（可选）：内核管理里「一键登录」
+### P2（已随首版实现）：内核管理里「一键登录」
 
 复用安装日志那套 SSE：
 
@@ -464,11 +464,13 @@ CSS（桌面 `index.css` 与移动端 `mobile.css` 各一份）：
 1. 每个内核一张**真彩色、透明底、正方形**的源图（≥ 256×256，PNG/WebP）。
 2. 用脚本归一化（Pillow 已是仓库既有工具链）：
    - 裁掉透明边距，居中补成正方形；
-   - 缩放到 128×128，导出 WebP（质量 90）；
-   - 输出到 `frontend/public/icons/kernels/<id>.webp`。
-   新增 `scripts/normalize_kernel_icons.py`，与 `gen_avatar_pack.py` 同风格。
+   - 缩放到 128×128，导出 PNG（透明底）；
+   - 输出到 `frontend/public/icons/kernels/<id>.png`。
+   本张图按同流程人工处理；后续要批量做，再补 `scripts/normalize_kernel_icons.py`
+   （与 `gen_avatar_pack.py` 同风格）。
 3. 同目录新增 `SOURCES.md`：记录每张图的来源 URL、抓取日期、授权/商标说明。
-4. 旧单色 SVG 保留，作为 `image` 加载失败时的降级资源。
+4. 位图加载失败时界面**直接隐藏**该内核的 Logo（不拿旧单色 SVG 兜底，
+   避免显示一个与品牌不符的图形）；品牌图形用 `logo_style` 声明，不做隐式猜测。
 
 豆包这一张已经拿到官方素材：`豆包工作` 头图（349×93 PNG）左侧的品牌标记，
 裁成 93×93 后归一化即可，不需要手绘、也不需要 AI 生成。
@@ -494,16 +496,17 @@ CSS（桌面 `index.css` 与移动端 `mobile.css` 各一份）：
 | --- | --- |
 | `backend/app/agents/builtin/doubao_cli.py` | **新增**适配器 |
 | `backend/app/agents/builtin/util.py` | `npm_install_argv(..., registry=None)` |
-| `backend/app/agents/base.py` | 新增 `logo_style` ClassVar + `descriptor()` 下发 |
-| `backend/app/api/runtimes.py` | `_describe()` 加 `logo_style` |
-| `frontend/src/lib/types.ts` | `AgentRuntime` 加 `logo_style?: 'mask' \| 'image'` |
+| `backend/app/agents/base.py` | `AuthStatus`、`logo_style`、`auth_status()`、`RuntimeProvisioner.login_argv` |
+| `backend/app/runtime/provisioning.py` | `login` 动作、`QR_IMAGE=` 解析、`provision.qr` 事件 |
+| `backend/app/api/runtimes.py` | `logo_style` 下发、`GET /auth`、`POST /login` |
+| `frontend/src/lib/types.ts` / `api.ts` | `RuntimeAction` 加 `login`、登录状态与二维码事件 |
 | `frontend/src/components/KernelLogo.tsx` | 双形态（mask / img） |
-| `frontend/src/index.css`、`frontend/src/mobile/mobile.css` | `.kernel-logo-image` |
-| `frontend/public/icons/kernels/doubao.webp` + `SOURCES.md` | **新增**真实品牌图 |
-| `scripts/normalize_kernel_icons.py` | **新增**图标归一化脚本 |
-| `backend/tests/test_adapters.py` | 注册表、invocation、parse（用真实事件形状） |
-| `backend/tests/test_architecture.py` | `BUILTIN_IDS` 加 `"doubao-cli"` |
-| `backend/tests/test_frontend_assets.py` | 放宽为 SVG / 位图双形态 |
+| `frontend/src/components/KernelManager.tsx` | 登录按钮、登录状态、二维码弹层 |
+| `frontend/src/mobile/pages/MobileRuntimesPage.tsx` | 移动端同上 |
+| `frontend/src/index.css`、`frontend/src/mobile/mobile.css` | `.kernel-logo-image`、`.login-qr` |
+| `frontend/public/icons/kernels/doubao.png` + `SOURCES.md` | **新增**真实品牌图 |
+| `backend/tests/test_doubao_cli.py` | 启动参数、事件解析、登录态、登录二维码 |
+| `backend/tests/test_architecture.py` / `test_frontend_assets.py` / `test_api.py` | 注册表、图标双形态、内置内核计数 |
 | `docker/Dockerfile` | 补 `libgcrypt20 libgnutls30` |
 | `README.md` / `AGENTS.md` / `docs/architecture.md` / `docs/ai-coding-standard.md` | 内核表与图标约定 |
 | `docs/doubao-cli.md` | 本文（调研依据） |
@@ -516,7 +519,8 @@ CSS（桌面 `index.css` 与移动端 `mobile.css` 各一份）：
 
 1. **登录态是设备级、不是用户级**：平台多用户共享同一份豆包登录。
    文档要写清楚；需要按用户隔离时只能一机一账号，成本另算。
-2. **登录无法在 CI / 无网环境完成**：P0 必须人工扫码；P2 才有界面化登录。
+2. **登录无法在 CI / 无网环境完成**：必须人工扫码；平台已在内核详情弹层提供二维码登录，
+   但扫码这一步只能在有真实账号与网络的环境里完成。
 3. **并发未知**：`doubao-cli-instance.lock` 与 `/tmp/dcli-<uid>` 控制通道是否允许
    并行 `-p` 进程尚未实测。协作域会并行跑多个智能体，**这是 P0 验收项**；
    如果互斥，需要加进程内/文件级串行锁，并在文档里写明并发上限。

@@ -26,7 +26,7 @@ from ..skillhub import get_skill as fetch_skill_detail
 from ..skillhub import list_skills as fetch_skill_list
 from .auth import current_user, owner_id_for
 
-logger = logging.getLogger("arkswarm")
+logger = logging.getLogger("coda")
 
 #: 整个路由器都要求登录：浏览市场、安装到自己的技能库都需要当前用户。
 router = APIRouter(prefix="/skillhub", tags=["skillhub"], dependencies=[Depends(current_user)])

@@ -1,4 +1,4 @@
-# ArkSwarm 桌面版（desktop/）
+# Coda 桌面版（desktop/）
 
 > 🖥️ Windows / macOS 桌面壳：方案 C —— Electron 薄壳 + Embedded Python + Embedded Node +
 > 复用主项目自更新机制。
@@ -31,7 +31,7 @@ Electron 主进程（薄壳，TypeScript）
 
 | 目录 | 内容 | 删了会怎样 |
 | --- | --- | --- |
-| `userData/data/` | `ARKSWARM_DATA_DIR`：SQLite、工作区、`secret.key`、内核 HOME | ⚠️ 数据全丢（与 Docker 的 `arkswarm-data` 卷同级） |
+| `userData/data/` | `CODA_DATA_DIR`：SQLite、工作区、`secret.key`、内核 HOME | ⚠️ 数据全丢（与 Docker 的 `coda-data` 卷同级） |
 | `userData/python/` | **仅兜底路径**：解释器副本 + venv（正常安装直接用内置运行时） | 下次启动自动重建（离线，优先用 wheelhouse） |
 | `userData/node/` | npm 全局安装前缀（内核 CLI 装在这）+ 缓存 | 内核需要重装，对话数据不受影响 |
 | `userData/releases/` | 后端版本目录（预留，接主项目自更新） | 回滚历史丢失，不影响运行 |
@@ -71,7 +71,7 @@ npx electron-builder --publish never # 产物在 release/
 `.github/workflows/desktop.yml`：
 
 - PR / push 改动 `desktop/**`、`backend/**`、`frontend/**` → Windows + macOS 双平台构建，
-  并对**打包产物**跑冒烟启动（`ARKSWARM_DESKTOP_SMOKE=1`：内置运行时（依赖已预装）→
+  并对**打包产物**跑冒烟启动（`CODA_DESKTOP_SMOKE=1`：内置运行时（依赖已预装）→
   起后端 → 健康检查 → 退出 0）；
 - 打后端版本 tag `v*` → 构建产物与 `latest*.yml` **追加到同一个 `v<版本>` Release**
   （与网页/后端源码一起发布），同时刷新滚动 Release `desktop-latest`（**prerelease**，
@@ -110,7 +110,7 @@ prerelease。细节与设计原因见 `docs/desktop.md` §2。
 | --- | --- |
 | `npm run typecheck`（strict）+ `npm run compile` | 通过（M3/M4 后复跑） |
 | venv 构建链路（python 3.11 + requirements.txt） | ✅ 真实执行通过，fastapi/uvicorn/cryptography 全可导入 |
-| 后端桌面形态启动（`ARKSWARM_DATA_DIR` + 127.0.0.1 + `--app-dir`） | ✅ `/api/health` 200，数据目录布局与 Docker 卷一致 |
+| 后端桌面形态启动（`CODA_DATA_DIR` + 127.0.0.1 + `--app-dir`） | ✅ `/api/health` 200，数据目录布局与 Docker 卷一致 |
 | 优雅停止（SIGTERM → 端口释放） | ✅ 杀掉后端口无响应，无孤儿进程 |
 | electron-builder `--dir` 打包 | ✅ 资源布局正确（app-backend 同构 tar.gz） |
 | 内置 Node 链路（M4） | ✅ 下载校验 sha256 → node v24.22.3 / npm 11.x → 私有 prefix `npm install -g` → 垫片在 PATH 可执行 |

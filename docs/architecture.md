@@ -141,7 +141,7 @@ class AgentDefinition(ABC):
     def discover_mcp_servers() -> list[McpServerSpec]  # MCP：只读扫描本机已有的 MCP 配置
     def mcp_mount(ctx) -> McpMount | None              # MCP：把分配到的服务器写到哪里
 
-    logo                                          # 官方 Logo（/icons/kernels/*.svg，前端当遮罩染色）
+    logo / logo_style                             # 官方 Logo；mask=单色 SVG 遮罩染色，image=真彩色位图原色显示
     provisioner                                   # 运行时：如何安装 / 更新 / 卸载本内核
 ```
 
@@ -173,16 +173,21 @@ class AgentDefinition(ABC):
 **官方 Logo + 内核名 + 所属公司 + 当前版本 + 状态**，**点卡片进详情**（安装 / 更新 / 卸载 /
 检查更新与安装日志都在详情里）：
 
-- **Logo 由适配器声明**（`AgentDefinition.logo` 指向 `/icons/kernels/*.svg`），前端用
-  `components/KernelLogo.tsx` 把它当遮罩染成当前文字色 —— 深浅两套外观共用一份单色图形，
-  不必为每个内核准备两张图。前端**不**按 `type_id` 写映射（铁律 1）。
+- **Logo 由适配器声明**（`AgentDefinition.logo` 指向 `/icons/kernels/*`）。默认
+  `logo_style="mask"`：前端用 `components/KernelLogo.tsx` 把单色 SVG 当遮罩染成当前文字色，
+  深浅两套外观共用一份图形；`logo_style="image"` 时按原色渲染真彩色位图（PNG/WebP，透明底），
+  品牌图标不再被染成剪影。前端**不**按 `type_id` 写映射（铁律 1）。
+- **账号型内核可以登录**：适配器声明 `RuntimeProvisioner.login_argv` 与
+  `AgentDefinition.auth_status()`，详情弹层据此显示「已登录 / 未登录」和「登录」按钮。
+  登录命令按通用约定输出 `QR_IMAGE=<图片路径>`，框架读出图片（校验 PNG/JPEG/WebP 与大小）
+  后以 `provision.qr` 事件推给前端；登录结束后重新调一次 `auth_status()` 收尾。
 - **已经是最新版就不给「更新」按钮**：界面先查一次最新版本，只有确实更高才显示
   「更新到 <版本>」；查不到（该适配器没声明 `latest_argv`、查询失败或还没查）时保留普通
   「更新」，免得用户失去升级手段。
 
 和技能一样，**「用哪个包管理器、包名叫什么、装到哪儿」是适配器的知识**：适配器声明
 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…, update_argv=…,
-uninstall_argv=…, latest_argv=…, prepare_argv=…)`，框架（`runtime/provisioning.py`）只负责按声明执行：
+uninstall_argv=…, latest_argv=…, prepare_argv=…, login_argv=…)`，框架（`runtime/provisioning.py`）只负责按声明执行：
 
 ```
 适配器声明命令 ──▶ runtime/provisioning.stream_provision() ──▶ 受控子进程
@@ -206,7 +211,7 @@ uninstall_argv=…, latest_argv=…, prepare_argv=…)`，框架（`runtime/prov
   **指向自己安装目录**的链接，否则整个动作直接失败在 `EEXIST`（连包都不装）。所以 npm 内核的
   `install_argv` / `update_argv` 由 `builtin/util.py:npm_install_argv()` 生成：先判断那个占位
   是不是自己的（解析后落在 npm 全局目录里就不动它），不是就挪到一个隐藏备份名
-  （`.<命令>.arkswarm-bak`）让出位置，npm 失败再把备份放回原位 —— 不留「命令没了、包也没装上」
+  （`.<命令>.coda-bak`）让出位置，npm 失败再把备份放回原位 —— 不留「命令没了、包也没装上」
   的半截状态。包装命令顺带负责调用 npm，所以它天然只挂在安装 / 更新上；卸载不建链接，
   `uninstall_argv` 保持原样，确认框里显示的就是它。
 
@@ -231,8 +236,9 @@ runtime/availability.scheduler()（lifespan 启动，随服务关闭取消）
 - 界面卡片据此显示「检测于 …」；可用性只是展示元数据，一次运行并不依赖它
   （`runtime/service.prepare_run` 不读它），所以缓存过期最多是版本号晚几小时。
 - `provision.*` 是安装器**自有的信封**（`provision.started / provision.output /
-  provision.finished`），与协作域的 `collab.*` 同理，**不是**适配器事件协议，
-  因此不参与铁律 5 的四处同步。
+  provision.qr / provision.finished`），与协作域的 `collab.*` 同理，**不是**适配器事件协议，
+  因此不参与铁律 5 的四处同步。其中 `provision.qr` 只在「登录」动作里出现，
+  带的是短期登录二维码，只对管理员订阅可见。
 - 未声明 `provisioner` 的适配器（进程内 API 内核、`custom-cli`）卡片副标题写明
   「进程内运行」/「自备可执行文件」，平台不代管它们的环境。卸载属于破坏性操作，接口要求显式 `confirm`。
 
@@ -268,8 +274,8 @@ custom-cli、OpenAI 兼容内核）原则上能读到注入的凭据值。平台
 
 **网络出口过滤**（新增）：
 
-- 设置项 `ARKSWARM_EGRESS_MODE`（`off` / `block` / `allowlist`，默认 `off`）与
-  `ARKSWARM_EGRESS_ALLOWED_HOSTS`（逗号分隔域名白名单）。
+- 设置项 `CODA_EGRESS_MODE`（`off` / `block` / `allowlist`，默认 `off`）与
+  `CODA_EGRESS_ALLOWED_HOSTS`（逗号分隔域名白名单）。
 - `off`：不限制（默认，保持向后兼容）。
 - `block`：禁止所有出站网络——子进程注入 blackhole 代理环境变量
   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 指向不可达端口；API 内核的 httpx 客户端用
@@ -434,7 +440,7 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
   `app/builtin_mcp.py` 的声明为每个用户幂等播种：连接方式由平台维护，且不能删除
   （不需要时停用）；内置项**只对所属用户可见与可分配**，管理员也不跨用户查看别人的副本
   （系统管理 MCP 的 PAT 不能串用）。系统管理的平台地址与专用令牌由平台自动填写
-  （`ARKSWARM_PUBLIC_BASE_URL` 可覆盖地址），用户只需关心权限模式；生图等部署相关参数仍需用户填写。
+  （`CODA_PUBLIC_BASE_URL` 可覆盖地址），用户只需关心权限模式；生图等部署相关参数仍需用户填写。
   `builtin_key` 为空的则是用户在「MCP」页新建的，可编辑 / 停用 / 删除。
   `type_id` 非空（`source_kind=user`）是从某个内核自己的配置里只读扫出来的，**只能分配给同内核**
   的智能体，平台不接管它的内容（改 / 删返回 403）。
@@ -502,8 +508,8 @@ HTTP / SSE 端点。与技能完全对称，平台把它们**统一编目**，�
 * 运行配置：宿主机 `/vol1/1000/docker/image-mcp/`（`docker-compose.yml` + `.env` + `data/`），
   端口 `3070`；`.env` 里的 `IMAGE_MCP_TOKEN` 同时是 `/mcp` 的 Bearer 令牌；
 * `IMAGE_PUBLIC_BASE_URL` 指向本容器自己的 `/images/`（如 `http://<宿主机IP>:3070/images`），
-  因此工具结果直接是可访问 URL，配合 `ARKSWARM_IMAGE_INGEST_PREFIXES` 落库前取回；
-* 图生图参考图：把 ArkSwarm 的 `workspaces/` 只读挂到容器里，用 `IMAGE_GEN_INPUT_ROOTS` 指过去；
+  因此工具结果直接是可访问 URL，配合 `CODA_IMAGE_INGEST_PREFIXES` 落库前取回；
+* 图生图参考图：把 Coda 的 `workspaces/` 只读挂到容器里，用 `IMAGE_GEN_INPUT_ROOTS` 指过去；
 * Magpie（`/library`）用 `library mcp add image-gen http://image-mcp:8000/mcp
   header=Authorization="Bearer <IMAGE_MCP_TOKEN>"` 登记，就能在它的 MCP hub 里集中路由；
   对外暴露的工具名是 `image-gen__generate_image`（MCPHub 那份是 `generate_image`）。
@@ -520,7 +526,7 @@ http(s) 图片地址。本地文件由服务器读成 base64 data URL 再发给�
 * **网关代跑**（配了 `IMAGE_PUBLIC_BASE_URL`）：回**绝对 URL**（图片由图床托管，跨进程 /
   跨容器可访问）。这种形态下图片只在 MCP 侧有一份，所以平台在助手消息落库前会把它取回
   对话工作目录并改写成相对路径，保证对话历史自包含（`app/image_ingest.py`，前缀由
-  `ARKSWARM_IMAGE_INGEST_PREFIXES` 显式配置）。
+  `CODA_IMAGE_INGEST_PREFIXES` 显式配置）。
 
 **纯文本图片路径也要能显示**：模型/工具不一定按约定写 Markdown 图片，常见形态是
 「文件：xxx.jpg」+「位置：/app/data/workspaces/<id>/」或直接贴工作目录绝对路径。
@@ -623,14 +629,14 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
   登记在 `models.py` 的 `ADDITIVE_COLUMNS`（对话域）、`collab/tables.py` 的
   `ADDITIVE_COLUMNS`（协作域）与 `im/tables.py` 的 `ADDITIVE_COLUMNS`（IM 域），
   由 `db.init_db` 用 `ALTER TABLE ... ADD COLUMN`（带默认值）
-  幂等补齐：现有 `arkswarm.db` 启动后自动对齐，不重建、不丢数据。
+  幂等补齐：现有 `coda.db` 启动后自动对齐，不重建、不丢数据。
 - **外键用 `ON DELETE RESTRICT`**：仍被**未删除**的智能体引用的网关不能删（409，避免历史断裂）；
   删除对话时显式清理消息（SQLite 已开启 `PRAGMA foreign_keys`）。
 
 ### 7.1 多用户与鉴权
 
 - **会话**：登录 / 注册返回无状态 JWT（HS256，7 天），签名密钥由 `security._load_key()`
-  再派生一层（密钥来自 `ARKSWARM_SECRET_KEY`，未配置时用 `data/secret.key`）。前端存
+  再派生一层（密钥来自 `CODA_SECRET_KEY`，未配置时用 `data/secret.key`）。前端存
   localStorage，`lib/api.ts` 统一附加 `Authorization: Bearer`；`<img src>` 这类不能带请求头
   的资源允许 `?access_token=`（只有 `app/auth_deps.py` 在没有 Bearer 头时才读它）。
   令牌带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令会 +1，旧令牌立即失效。
@@ -658,9 +664,9 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
   用量与运行表也按归属过滤。
 - **管理员**：可看全部用户资产、管理用户（改角色 / 禁用 / 重置口令）；不能降级或禁用
   当前登录的自己，系统至少保留一名启用中的管理员。
-- **开关**：`ARKSWARM_AUTH_ENABLED` 默认开启（多用户形态），单用户部署可显式设为 `false`；
-  开启后 `current_user` 校验令牌，未登录返回 401。`ARKSWARM_REGISTRATION_OPEN=false` 关闭自助注册，
-  只能由管理员建用户。首任管理员可由 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD`
+- **开关**：`CODA_AUTH_ENABLED` 默认开启（多用户形态），单用户部署可显式设为 `false`；
+  开启后 `current_user` 校验令牌，未登录返回 401。`CODA_REGISTRATION_OPEN=false` 关闭自助注册，
+  只能由管理员建用户。首任管理员可由 `CODA_ADMIN_USERNAME` / `CODA_ADMIN_PASSWORD`
   在空库首启时创建；老库的存量行由 `bootstrap.backfill_ownership` 回填给管理员
   （`.ownership_backfilled` 防重）。
 - **前端**：`components/AuthGate.tsx` 是唯一入口 —— 未登录显示 `LoginScreen`，登录后
@@ -693,7 +699,7 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
 一次更新，日常 commit 不算。两种部署形态：
 
 - **托管模式**（Docker / 任意进程管理器）：`releases/` 下按版本各占一个子目录，
-  `current` 软链指向正在运行的版本。更新 = 下载 Release 产物包（`arkswarm.tar.gz`，
+  `current` 软链指向正在运行的版本。更新 = 下载 Release 产物包（`coda.tar.gz`，
   含预构建 `frontend/dist`）→ 校验 SHA256 → 安全解压成新子目录 → 原子切指针 →
   `os.execv` 原地重启进程。**同 PID 自替换**：容器里 uvicorn 是 PID 1，容器不退出、
   不需要 docker.sock；进程管理器（PyPanel 等）完全无感知。回滚 = 指针切回旧目录 +
@@ -704,7 +710,7 @@ im_chats(id, connection_id→im_connections, chat_key, kind(direct|group), title
 ```
 GitHub Release ──/releases/latest──▶ app/selfupdate.check_latest()   （代理走 platform_settings.proxy_url）
         │
-        └─/arkswarm.tar.gz（+.sha256）─▶ install_release()：下载 → 校验 → 安全解压（防穿越/跳链接）
+        └─/coda.tar.gz（+.sha256）─▶ install_release()：下载 → 校验 → 安全解压（防穿越/跳链接）
                                             → releases/<版本>/ → 原子切 current → os.execv 重启
 界面（关于页 UpdatePanel）：SSE 收 update.* 事件 → 轮询 /api/health 等版本号变化 → 整页重载
 ```
@@ -713,11 +719,11 @@ GitHub Release ──/releases/latest──▶ app/selfupdate.check_latest()   �
 路由在 `api/update.py`（`update.*` SSE 信封是本模块自有的，不属于适配器事件协议）。
 发布侧 `scripts/release.sh`；Docker 形态 `docker/Dockerfile` + `docker/entrypoint.sh`。
 **源码在构建时打进镜像**（`/image-app`），`/app` 卷只存版本目录与 venv：空卷首启直接用
-镜像自带代码落一个版本，即「构建什么就运行什么」；`ARKSWARM_FETCH_RELEASE_ON_EMPTY=1`
+镜像自带代码落一个版本，即「构建什么就运行什么」；`CODA_FETCH_RELEASE_ON_EMPTY=1`
 才恢复「空卷先联网拉最新 Release」的旧行为。后续升级统一走上面的更新机制。
 entrypoint 的依赖安装**必须**走 `run_with_install_proxy`：pip 只认 `HTTP(S)_PROXY`，
-不认 `ARKSWARM_INSTALL_PROXY`，漏了就是直连 PyPI（国内网络会卡二十多分钟）；
-`ARKSWARM_PIP_INDEX_URL` 可改走国内镜像，二者取其一即可把首启压到几十秒。
+不认 `CODA_INSTALL_PROXY`，漏了就是直连 PyPI（国内网络会卡二十多分钟）；
+`CODA_PIP_INDEX_URL` 可改走国内镜像，二者取其一即可把首启压到几十秒。
 真实内网地址只写在部署侧 compose（不入 git），仓库模板用占位符。
 
 ## 9. 已知边界
@@ -726,7 +732,7 @@ entrypoint 的依赖安装**必须**走 `run_with_install_proxy`：pip 只认 `H
   平台会退化为 transcript 回放。
 - `codex exec` 与 `codex exec resume` 认的旗标不一样：`-s/--sandbox`、`-C/--cd` 只挂在 `exec` 上，新版 `exec` 也去掉了 `--full-auto`。适配器按子命令分别表达 —— 沙箱在 `exec` 上用 `-s`、恢复会话时走 `-c sandbox_mode=…`；全自动走 `-c approval_policy=never`。`resume` 这一子命令形式在不同 Codex 版本间也有差异，所以做成了可选策略（app-server 模式下对应 `thread/resume`）。
 - 新版 Codex 不再读 `OPENAI_BASE_URL`（内置 provider 拿着它也会直奔 api.openai.com），所以自定义网关
-  一律经一个具名 `model_provider` 注入（名字取「自定义供应商名称」，留空用内置名 `arkswarm`）；
+  一律经一个具名 `model_provider` 注入（名字取「自定义供应商名称」，留空用内置名 `coda`）；
   没走网关时（官方默认 / 本机登录态）不注入任何 provider。`wire_api` 也不再由平台下发 ——
   0.4x 起只剩 `responses`、更早的版本默认 `chat`，写死任何一边都会在另一边直接报错。
 - Codex 默认走「接口模式 = app-server」：`codex app-server --listen stdio://` 是 Codex 自己的
@@ -770,7 +776,7 @@ frontend/
 ├── m/index.html            # 移动端入口 → /m/
 ├── public/m/               # 移动端 PWA 资产（manifest + Service Worker）
 ├── public/icons/           # 两端口共用的应用图标（由 scripts/gen_icons.py 生成；
-│                           #   界面品牌标 components/BrandMark.tsx 与它同一组几何）
+│                           #   界面品牌标 components/BrandMark.tsx 直接用这张品牌图）
 └── src/
     ├── App.tsx · pages/ · index.css                  # 桌面端
     ├── components/                                   # 两端共用的纯展示组件（Composer · Icons · MessageView…）
@@ -796,10 +802,10 @@ frontend/
   `public/m/sw.js`（安装期预缓存入口 HTML 与其引用的构建产物；导航网络优先、离线回落外壳）。
   Service Worker 的作用域只在 `/m/`，且 `/api/`（含 SSE 长连接）永不缓存、一律直连后端——
   离线只保证「界面能打开」，对话仍需联网。
-- **改了外壳就要 bump 缓存版本**：`sw.js` 的缓存名带版本号（`arkswarm-m-shell-v2`…），
+- **改了外壳就要 bump 缓存版本**：`sw.js` 的缓存名带版本号（`coda-m-shell-v2`…），
   动过入口 HTML / 样式表 / 构建产物就 +1 —— 已安装的独立应用才会在下次打开时换掉旧外壳。
   独立应用没有地址栏也没有刷新按钮，因此设置页提供了「更新到最新版本」（`pwa.ts:refreshShell()`：
-  注销 SW、清掉 `arkswarm-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
+  注销 SW、清掉 `coda-m-*` 缓存再重载），作为卡在旧外壳时的自助出口。
 - **移动端没有底部 Tab，只有左侧抽屉**：打开就是聊天界面（`/chat` 自动进入最近一次对话，
   一条都没有时给空状态引导），点顶栏左上角的 logo 弹出左侧抽屉
   （`components/MobileDrawer.tsx`）—— **上半部分是主导航**（对话 / 智能体 / 协作组 / 技能 / MCP /
@@ -820,7 +826,7 @@ frontend/
   `/clear` 命令（提交时拦截，调 `resetSession` 后提示，不发送消息）。
 - **朗读（语音合成）**：开关在对话页顶栏右上角（原有「⋯ 更多操作」的位置），**默认关闭**，
   开启后新回复会被念出来（`lib/tts.ts`：Markdown 先转纯文本，长文按句读切段排队，新输出打断旧的
-  一条；开关存 `localStorage['arkswarm.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
+  一条；开关存 `localStorage['coda.tts']`，只影响这台设备）。判定「新回复」放在聊天页观察
   `messages` 的效果里，所以另一台设备写入、由 `useAutoRefresh` 拉回来的回复同样会念；iOS 两个坑
   一起处理：首次发声在点开关的手势里 `unlockSpeech()` 解锁，打断旧的一条时 `cancel()` 与 `speak()`
   分开两轮执行。
@@ -889,7 +895,7 @@ frontend/
   流程图沿用编排画布的视觉语言（点阵底纹 + 正交折线 + 箭头），配色走 `--canvas-*` 主题变量，
   浅色下整张图一起变浅。
 - **外观（深色 / 浅色 / 跟随系统）**：两端共用 `lib/theme.ts` —— 模式存在 localStorage 的
-  `arkswarm.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
+  `coda.theme`，解析结果写在 `<html data-theme>`，`applyTheme()` 同时更新
   `meta[name=theme-color]`（状态栏 / Android 系统导航条这些「原生外壳」跟着换色）与 iOS 独立应用的
   状态栏样式。两个入口 HTML 各有一段等价的内联脚本，在首屏渲染前就把主题定下来（否则浅色用户每次
   打开都会先闪一下深色外壳）。两份样式表各自的 `:root` 仍是深色默认，浅色只是

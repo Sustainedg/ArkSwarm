@@ -4,7 +4,7 @@
  * 目录布局（userData 即系统标准应用数据目录）：
  *
  *   userData/
- *   ├── data/          ← ARKSWARM_DATA_DIR：SQLite、工作区、secret.key、内核 HOME
+ *   ├── data/          ← CODA_DATA_DIR：SQLite、工作区、secret.key、内核 HOME
  *   │                     （对话数据全在这，卸载应用不清空，升级原样保留）
  *   ├── python/        ← embedded 解释器 + venv（首启联网装依赖，可随时删掉重建）
  *   ├── node/          ← npm 全局安装前缀 + 缓存（内核 CLI 装在这里，不碰系统 Node）
@@ -19,7 +19,7 @@ export function userDataRoot(): string {
   return app.getPath('userData');
 }
 
-/** 数据目录（ARKSWARM_DATA_DIR）：对话、密钥、工作区都在这。 */
+/** 数据目录（CODA_DATA_DIR）：对话、密钥、工作区都在这。 */
 export function dataDir(): string {
   return path.join(userDataRoot(), 'data');
 }

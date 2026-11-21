@@ -49,8 +49,8 @@ from ..skills import SkillMount, SkillRoot, SkillSpec, scan_skill_roots
 from .util import as_list, flatten_content, npm_cli, npm_install_argv, npm_prepare_argv
 
 #: 隔离目录里的两个 patch 文件：模型/技能配置由适配器自己写，MCP 由框架物化。
-_OVERLAY_FILE = "arkswarm.patch.yml"
-_MCP_FILE = "arkswarm-mcp.patch.yml"
+_OVERLAY_FILE = "coda.patch.yml"
+_MCP_FILE = "coda-mcp.patch.yml"
 
 #: 技能目录名；dsh 的 ``skill-filesystem`` 从这里读技能。
 _SKILLS_SUBDIR = "skills"
@@ -299,7 +299,7 @@ class DeepSeekHarnessAgent(AgentDefinition):
                 continue
             name = _server_name(server.slug, index, used)
             rows += [
-                f"    - id: {_scalar(f'arkswarm-mcp-{name}')}",
+                f"    - id: {_scalar(f'coda-mcp-{name}')}",
                 "      name: '@deepseek-ai/dsh-mcp-client'",
                 "      config:",
                 f"        serverName: {_scalar(name)}",

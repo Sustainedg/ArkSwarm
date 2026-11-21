@@ -5,7 +5,7 @@ import type {
   CollabRun,
   CollabRunDetail, CollabTeam, CollabTeamUpdate, CollabTeamValidateIn, CollabValidation, CollabBudgetPatch, Conversation,
   ConversationDetail, ConversationListSnapshot, ConversationModelOptions, Credential, Gateway, GatewayList, GatewayProbeResult, McpRescanResult, McpServer,
-  McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeLatest, Skill, UpdateEvent, UpdateStatus,
+  McpServerDetail, McpServerPayload, Overview, ProvisionEvent, RuntimeAuth, RuntimeLatest, Skill, UpdateEvent, UpdateStatus,
   ProvisionJobInfo,
   MarketInstallInput,
   MarketInstallResult,
@@ -261,6 +261,9 @@ export const api = {
     request<Availability>(`/api/runtimes/${typeId}/refresh`, { method: 'POST' }),
   checkRuntimeLatest: (typeId: string) =>
     request<RuntimeLatest>(`/api/runtimes/${typeId}/check`, { method: 'POST' }),
+  /** 账号型内核的登录状态（打开详情弹层 / 登录结束后调用）。 */
+  getRuntimeAuth: (typeId: string) =>
+    request<RuntimeAuth>(`/api/runtimes/${typeId}/auth`),
   /** 安装 / 更新不改动已有配置，直接发起；卸载是破坏性操作，必须带 confirm（服务端会再校验一次）。 */
   installRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
     streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/install`, {}, onEvent, signal),
@@ -268,6 +271,9 @@ export const api = {
     streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/update`, {}, onEvent, signal),
   uninstallRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
     streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/uninstall`, { confirm: true }, onEvent, signal),
+  /** 账号型内核扫码登录：二维码通过 provision.qr 事件推回来。 */
+  loginRuntime: (typeId: string, onEvent: (event: ProvisionEvent) => void, signal?: AbortSignal) =>
+    streamPost<ProvisionEvent>(`/api/runtimes/${typeId}/login`, {}, onEvent, signal),
   /** 列出所有进行中 / 刚完成的安装任务（刷新页面后恢复状态用）。 */
   listProvisionJobs: () =>
     request<{ items: ProvisionJobInfo[] }>('/api/runtimes/provision/jobs').then((r) => r.items),

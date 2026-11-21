@@ -1,4 +1,4 @@
-# AGENTS.md · ArkSwarm 工程约定
+# AGENTS.md · Coda 工程约定
 
 本文件对**所有在本仓库工作的 AI 编码代理**具有约束力。只要在这个仓库里改代码，就必须遵守。
 动手之前请先读完本文件；需要背景与理由，再读 `docs/ai-coding-standard.md` 与 `docs/architecture.md`。
@@ -12,7 +12,7 @@
 
 | 项 | 事实 |
 | --- | --- |
-| 产品 | ArkSwarm —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体，为它们配置网关、模型与人格 |
+| 产品 | Coda —— 多智能体对话控制台，管理 Claude Code / Codex / Gemini CLI 等智能体，为它们配置网关、模型与人格 |
 | 后端 | Python 3.11 · FastAPI 0.115 · SQLModel + SQLite(aiosqlite) · Pydantic v2 · httpx（依赖见 `backend/requirements.txt`） |
 | 前端 | React 18 + TypeScript + Vite 6 · react-router · **无 UI 框架，手写 CSS**（`frontend/src/index.css`） |
 | 后端入口 | `backend/app/main.py`（`uvicorn app.main:app --app-dir backend`） |
@@ -23,7 +23,7 @@
 | 测试 | `bash scripts/test.sh` → pytest（`backend/tests/`：适配器 · API · 架构守卫）+ 前端 `tsc --noEmit` |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（前端从 `/api/system/overview` 读取展示） |
 | 真实数据 | `backend/data/`（SQLite + 工作目录 + 内核隔离配置目录）**含用户真实对话**，受 `.gitignore` 忽略 |
-| 多用户 | `users` 表 + 资产表 `owner_id`；`ARKSWARM_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希；长效程序化凭据是 PAT（`pat_` 前缀，库里只存 sha256） |
+| 多用户 | `users` 表 + 资产表 `owner_id`；`CODA_AUTH_ENABLED` 默认开启，按 `owner_id` 隔离，口令只存 PBKDF2 哈希；长效程序化凭据是 PAT（`pat_` 前缀，库里只存 sha256） |
 | 技能 | 各内核自带技能（`SKILL.md` 目录）由适配器只读扫描，统一编目进 `skills` 表，**只能通过智能体分配生效**（`agent_skills`） |
 | MCP | MCP 服务器（stdio/http/sse）统一编目进 `mcp_servers` 表：平台可新建「通用」服务器，各内核配置里的只读收录；**只能通过智能体分配生效**（`agent_mcp_servers`）。平台内置服务器（`builtin_key` 非空，声明在 `app/builtin_mcp.py`：图片生成 / 系统管理）启动时逐用户播种，连接方式由平台维护 |
 | 协作域 | `backend/app/collab/` —— 多智能体「工单」协作（可视化编排 + 波次并行引擎，默认串行），独立于对话域，见 `docs/collaboration-design.md` |
@@ -162,8 +162,10 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 常用可选：`description`、`vendor`、`capabilities`、`config_fields`、`api_key_env`、`base_url_env`、
 `default_gateway`、`default_model`、`protocol`（openai / anthropic / gemini）、`default_auth_style`、
 `default_models`（官方链路预置模型）、`docs_url`、`logo`（官方 Logo 的前端静态资源路径，如
-`/icons/kernels/claude.svg`）、`executable`、`auto_provision`、
-`availability()`、`probe()`/`probe_api()`、`resume_supported(ctx)`（可选钩子）。
+`/icons/kernels/claude.svg`）、`logo_style`（`mask` = 单色 SVG 遮罩染色；`image` = 真彩色位图
+按原色显示）、`executable`、`auto_provision`、
+`availability()`、`probe()`/`probe_api()`、`auth_status()`（账号型内核的登录态探测，可选）、
+`resume_supported(ctx)`（可选钩子）。
 - `parse_line(line, run)` 里**不要吞异常**：解析不了就 `yield log(...)` 或忽略该行，别让整个运行崩掉。
 - 需要"运行结束时补发事件"的适配器，请覆盖 **`AgentRun.finish()`**（基类钩子）。
   ⚠️ 注意：不要自创 `finalize()` 之类的方法名，运行层的唯一结尾钩子是 `AgentRun.finish()`。
@@ -303,7 +305,9 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 ### 4.1 接入新的 CLI 智能体（例：Aider）
 1. 新建 `backend/app/agents/builtin/aider.py`，`@register_agent` 装饰 `AiderAgent(AgentDefinition)`。
 2. 声明 `id/name/vendor/logo/runtime=Runtime.CLI/executable/capabilities/config_fields` 与凭据/网关环境变量；
-   `logo` 指向 `frontend/public/icons/kernels/` 下的 24×24 单色 SVG（只画形状，染色由界面遮罩完成）。
+   `logo` 指向 `frontend/public/icons/kernels/` 下的静态资源：默认 `logo_style="mask"` 用 24×24
+   单色 SVG（只画形状，染色由界面遮罩完成）；有真彩色品牌图的用 `logo_style="image"` +
+   PNG/WebP（透明底、≤512×512，随仓库发布，不运行时外链）。
 3. 实现 `build_invocation(ctx) -> Invocation`（`argv/env/cwd/stdin/files`）与 `parse_line(line, run)`。
 4. 用 `builtin/util.py` 的 `as_list/truthy/flatten_content/dig`，不要重复造轮子。
 5. 加测试：解析用真实样本；在 `backend/tests/` 参照 `test_adapters.py` 的写法。
@@ -397,7 +401,7 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 - **附件能力下沉在 `backend/app/attachments.py`**：校验 / 落盘 / 拼提示词只有一份，对话
   （`POST /api/conversations/{id}/attachments`）与协作（`POST /api/collab/runs/{id}/attachments`）
   都调用它，别再各写一份 base64 解码与目录穿越校验。
-- **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `arkswarm.tts`，
+- **朗读（语音合成）只有一份实现**：`src/lib/tts.ts`（开关存在 localStorage 的 `coda.tts`，
   **默认关闭**；开启后新回复会被念出来，Markdown 先转成纯文本）。两个 iOS 坑必须一起处理：
   ① 首次发声要在**用户手势里**解锁（点开关时 `unlockSpeech()`）；② 打断上一条时 `cancel()` 与
   `speak()` 不能在同一轮里（iOS 会吞掉），要丢到下一个任务。对话页顶栏右上角只有「分享 + 朗读」
@@ -446,15 +450,19 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
 4. 加测试：参考 `tests/test_im.py`（用假适配器验证框架行为）与 `tests/test_im_architecture.py`。
 5. 平台只支持「客户端往外连」（WebSocket / 长轮询）：需要公网回调地址的接口不做。
 
-### 4.10 让运行时可由平台安装 / 更新 / 卸载
+### 4.10 让运行时可由平台安装 / 更新 / 卸载 / 登录
 1. 在适配器声明 `provisioner = RuntimeProvisioner(manager=…, package=…, install_argv=…,
-   update_argv=…, uninstall_argv=…, latest_argv=…, prepare_argv=…)` —— 命令（用哪个包管理器、包名、装到哪、
+   update_argv=…, uninstall_argv=…, latest_argv=…, prepare_argv=…, login_argv=…)` —— 命令（用哪个包管理器、包名、装到哪、
    动作前要清掉什么残留）是**适配器的知识**，框架只负责按声明在受控子进程里执行、流式回显、超时与脱敏。
    `prepare_argv` 是动作前的清扫命令（清掉上一次被中断的动作留下的残留），失败只回一行告警、不中断动作。
    npm 系内核的安装 / 更新命令由 `builtin/util.py:npm_install_argv()` 生成：它会先让出被别的安装
    占着的同名可执行文件（否则 npm 直接失败在 `EEXIST`），失败时再把对方放回去。
-2. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
-3. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
+2. 账号型内核（扫码 / OAuth，没有 API Key）额外声明 `login_argv`（如 `doubao login --qr=png`）与
+   `AgentDefinition.auth_status()`。登录命令按通用约定输出 `QR_IMAGE=<图片路径>`，框架读成
+   `data:` URL 经 `provision.qr` 事件推给界面；登录任务的任务列表 / 重连接口**只对管理员开放**
+   （输出里带的是短期凭据，见 §7）。
+3. 不要把「怎么装」写进 `api/` 或 `runtime/`（框架层不得硬编码包管理器或内核 id）。
+4. 不支持由平台代管的适配器（进程内 API 内核、用户自备的 `custom-cli`）保持 `provisioner = None`，
    卡片副标题会写明「进程内运行」/「自备可执行文件」。
 
 ### 4.11 让某个适配器支持 MCP
@@ -529,9 +537,9 @@ from ..models import AgentProfile   # in agents/builtin/foo.py
   是只读共享目录），按 id 读取别人的行返回 404；跨用户引用（网关 / 凭据 / 平台通用 MCP /
   协作图节点上的智能体）必须在写入或启动运行前拒绝。管理员可看全部，但凭据仍只能以
   环境变量注入、事件仍要脱敏。
-- **鉴权开关**：`ARKSWARM_AUTH_ENABLED` 默认开启（多用户形态）；单用户开箱即用可显式设为
-  `false`。空库首启配置 `ARKSWARM_ADMIN_USERNAME` / `ARKSWARM_ADMIN_PASSWORD`，不配置时
-  第一个注册的账号成为管理员；`ARKSWARM_REGISTRATION_OPEN` 控制自助注册。
+- **鉴权开关**：`CODA_AUTH_ENABLED` 默认开启（多用户形态）；单用户开箱即用可显式设为
+  `false`。空库首启配置 `CODA_ADMIN_USERNAME` / `CODA_ADMIN_PASSWORD`，不配置时
+  第一个注册的账号成为管理员；`CODA_REGISTRATION_OPEN` 控制自助注册。
   口令只用 `auth.hash_password()` / `verify_password()`，不得存明文。
 - **令牌吊销**：JWT 带 `ver`，与 `users.token_version` 比对；改口令 / 管理员重置口令必须
   把 `token_version` +1，让旧令牌立即失效。新增会改口令的入口时不要漏掉这一步。
@@ -577,7 +585,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 前端任意改动 | `tsc --noEmit` + `npm run build` + **重启服务**后自测页面 |
 | 移动端 / PWA 改动 | 同上，并额外自测 `/m/` 深链可刷新、断网后外壳仍能打开（`pytest tests/test_mobile_web.py`） |
 | 事件协议/持久化 | 端到端跑一次真实对话（SSE 事件齐全、消息落库正确） |
-| 数据库结构 | 用**现有** `backend/data/arkswarm.db` 启动验证旧数据可读，不得重置 |
+| 数据库结构 | 用**现有** `backend/data/coda.db` 启动验证旧数据可读，不得重置 |
 | 新增适配器 | `/api/agent-types` 能看到、表单可渲染、连通性测试可用 |
 | 技能（编目/分配/物化） | `pytest` 覆盖解析与物化；端到端跑一次真实对话确认技能生效、未分配的不出现 |
 | MCP（编目/分配/物化） | `pytest` 覆盖解析、物化、密钥只回掩码；端到端跑一次真实对话确认分配到的服务器写进隔离配置、未分配的不出现 |
@@ -603,7 +611,7 @@ curl -s http://127.0.0.1:8010/api/health
 | `app/avatars.py` / `api/auth.py` 的头像接口 | `models.ADDITIVE_COLUMNS` 的 `users.avatar_file`、`schemas` / `types.ts` 的 `AuthUser.avatar`、前端 `lib/avatar.ts` + `UserAvatar` / `AvatarUploader`（两端共用）、`tests/test_auth.py` 的头像用例 |
 | 任一资产表新增 `owner_id` 或新的共享目录 | 对应 `ADDITIVE_COLUMNS`、`bootstrap.backfill_ownership`、列表/详情/写入三处的归属过滤、成员端应隐藏的管理员按钮 |
 | `runtime/runner.py` | CLI 与 API 两条路径、取消/超时、脱敏 |
-| `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封、超时、取消、脱敏 |
+| `runtime/provisioning.py` | 运行时维护动作：命令来自适配器、SSE 事件信封（含登录的 `provision.qr`）、超时、取消、脱敏；任务列表 / 重连接口收紧为管理员 |
 | 新增「运行时可由平台安装 / 更新」 | 适配器的 `provisioner`（`RuntimeProvisioner`）+ `docs/architecture.md` §4.1 |
 | 新增 `ConfigField` | 无需改前端；但要在 `bootstrap.py` 播种默认值里确认不影响首次启动 |
 | `AgentProfile` 新增字段 | `schemas.py` 读写、`ADDITIVE_COLUMNS` 登记、前端 `types.ts` 与智能体弹窗、旧数据兼容 |
@@ -612,7 +620,7 @@ curl -s http://127.0.0.1:8010/api/health
 | 新增适配器模块 | `registry` 自动加载（确认 import 无副作用/无网络请求）、`/api/agent-types`、文档表格 |
 | 前端新增页面 | `App.tsx` 的 `NAV` + `Routes`、`index.css` |
 | `frontend/src/mobile/*` · `frontend/m/index.html` | `MobileApp.tsx` 路由、`mobile.css`、`vite.config.ts` 的多入口、`tests/test_mobile_web.py` |
-| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对）；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管；**改了图标要同步 `components/BrandMark.tsx`**（界面品牌标与图标是同一组几何，内联 SVG 用 `currentColor` 跟随主题） |
+| `frontend/public/m/*`（manifest / Service Worker）· `public/icons/*` | `main.py:resolve_spa_target` 的前缀分派；应用图标由 `scripts/gen_icons.py` 重新生成（`tests/test_frontend_assets.py` 会核对），母版位图在 `assets/brand/`；`public/icons/kernels/*.svg` 是各内核的品牌图，属于适配器声明，不归生成脚本管；**改了图标要同步 `components/BrandMark.tsx`**（界面品牌标直接用同一张品牌图，位图自带品牌色） |
 | `im/*`（IM 域） | `pytest tests/test_im.py` + `tests/test_im_architecture.py`（分层 / 平台元数据 / 归属）；新增平台只加 `base.PLATFORMS` 一条 + `platforms/` 一个模块；IM 表加列登记 `im/tables.py` 的 `ADDITIVE_COLUMNS`；碰运行层只能改 `bridge.py`；同步 `docs/im.md` |
 | `collab/*`（协作域） | `pytest tests/test_collab_architecture.py`（分层守卫）；新增表要在 `db.init_db` 注册；给协作表**加列**必须登记 `collab/tables.py` 的 `ADDITIVE_COLUMNS`（旧库不会被 `create_all` 补列）；碰执行层只能改 `execution.py`；节点级技能 / MCP 覆盖走 `NodeSpec.skill_ids` / `mcp_ids` + `runtime` 各查询函数的 `override_ids`（不写回智能体配置）；同步 `docs/collaboration-design.md` |
 | 版本号 | 只改 `backend/app/__init__.py`（唯一版本源） |
@@ -650,11 +658,11 @@ curl -s http://127.0.0.1:8010/api/health
 ## 11. 部署速查
 
 - 生产：`bash scripts/serve.sh`（首次会自动建 venv、缺 `frontend/dist` 时自动构建），监听 `0.0.0.0:8010`。
-- 环境变量：`ARKSWARM_HOST`（默认 `0.0.0.0`）、`ARKSWARM_PORT`（默认 `8010`）；
+- 环境变量：`CODA_HOST`（默认 `0.0.0.0`）、`CODA_PORT`（默认 `8010`）；
   注意：某些进程管理器给子进程注入自己的 `HOME`，会导致 `claude` 报 "Not logged in"，
   此时在服务环境里显式设 `HOME` 为真实用户家目录。
 - 前后端分离开发：`bash scripts/dev.sh` → API `:8000` + Web `:5173`。
-- 数据目录：`backend/data/`（SQLite `arkswarm.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。
+- 数据目录：`backend/data/`（SQLite `coda.db`、`workspaces/`、`secret.key`）；**不要在未备份时动它**。
 
 ### 版本发布与更新（版本级 · GitHub Release）
 
@@ -662,19 +670,19 @@ curl -s http://127.0.0.1:8010/api/health
   （旧的“每次提交 bump 一版”会让版本号通胀，V0.01–V0.43 就是这么堆出来的）。
   V0.1 是首个公开版本，此前的内部迭代编号不再单列。
 - 发版：改 `backend/app/__init__.py` 的 `__version__`（唯一版本源）→ 提交 →
-  `bash scripts/release.sh`（构建前端、打 `arkswarm.tar.gz` + `.sha256`、`gh release create`）。
+  `bash scripts/release.sh`（构建前端、打 `coda.tar.gz` + `.sha256`、`gh release create`）。
   tag 必须与 `__version__` 一致（`v0.2` ↔ `V0.2`），脚本会校验。
 - Docker：`docker/Dockerfile` 把**源码构建进镜像**（`/image-app`），`/app` 卷只存版本目录
   与 venv。空卷首启直接用镜像自带代码落一个版本（「构建什么就运行什么」）；
-  设 `ARKSWARM_FETCH_RELEASE_ON_EMPTY=1` 才恢复「空卷先联网拉最新 Release」的旧行为。
+  设 `CODA_FETCH_RELEASE_ON_EMPTY=1` 才恢复「空卷先联网拉最新 Release」的旧行为。
   版本级更新走「设置 → 关于」：下载 Release → `releases/<版本>/` → 原子切 `current` →
   `os.execv` 原地重启（uvicorn 是 PID 1，容器不退出）。
 - 部署配置与仓库分离：真实内网地址（代理、图床、网关）只写在部署侧 compose（不入 git），
   仓库模板一律用 `<placeholder>`。镜像源/代理都用环境变量注入，不改代码。
 - 首启装依赖的坑：`/app` 卷为空且镜像 venv 的 stamp 与 requirements 对不上时会走在线
-  `pip install`。pip **不认** `ARKSWARM_INSTALL_PROXY`（那是给 curl/npm/uv 的），必须由
+  `pip install`。pip **不认** `CODA_INSTALL_PROXY`（那是给 curl/npm/uv 的），必须由
   entrypoint 转成 `HTTP(S)_PROXY` —— 否则就是直连 PyPI，国内网络实测只有 ~15KB/s，
   装完要二十多分钟。entrypoint 已把 pip 包进 `run_with_install_proxy`，并支持
-  `ARKSWARM_PIP_INDEX_URL` 指向国内镜像（清华 / 阿里，实测 17–24 秒装完全套）。
+  `CODA_PIP_INDEX_URL` 指向国内镜像（清华 / 阿里，实测 17–24 秒装完全套）。
 - 源码模式（仓库里直接跑）：关于页只提示新版本，不给一键更新按钮 —— 升级走 git。
-- 仓库与 API 可用 `ARKSWARM_UPDATE_REPO` / `ARKSWARM_UPDATE_GITHUB_API` 覆盖（fork / GHE 部署）。
+- 仓库与 API 可用 `CODA_UPDATE_REPO` / `CODA_UPDATE_GITHUB_API` 覆盖（fork / GHE 部署）。

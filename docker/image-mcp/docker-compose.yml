@@ -1,6 +1,6 @@
 # 独立图片 MCP 容器（仓库内模板；宿主机运行配置见 /vol1/1000/docker/image-mcp/docker-compose.yml）。
 #
-# 代码与镜像定义在 ArkSwarm 仓库里：
+# 代码与镜像定义在 Coda 仓库里：
 #   /vol1/1000/同步库/python/项目/Bot/docker/image-mcp/
 # 这里只保留运行配置与数据：
 #   /vol1/1000/docker/image-mcp/
@@ -15,8 +15,8 @@ services:
     build:
       context: ../..
       dockerfile: docker/image-mcp/Dockerfile
-    image: arkswarm-image-mcp:latest
-    container_name: arkswarm-image-mcp
+    image: coda-image-mcp:latest
+    container_name: coda-image-mcp
     restart: unless-stopped
     ports:
       - "3070:8000"
@@ -26,18 +26,18 @@ services:
       IMAGE_MCP_HOST: "0.0.0.0"
       IMAGE_MCP_PORT: "8000"
       IMAGE_MCP_DATA_DIR: "/data"
-      # 同时接受容器网络名与宿主机地址：Magpie 走前者，ArkSwarm / 浏览器走后者。
+      # 同时接受容器网络名与宿主机地址：Magpie 走前者，Coda / 浏览器走后者。
       # 宿主机地址在部署侧 override 里按实际填写，仓库模板只放占位符。
       IMAGE_MCP_ALLOWED_HOSTS: "${IMAGE_MCP_ALLOWED_HOSTS:-image-mcp,image-mcp:8000,127.0.0.1,127.0.0.1:3070,127.0.0.1:8000,localhost,localhost:3070,localhost:8000}"
       # 生图脚本返回的图片 URL：由本容器自己的 /images/ 提供。
       IMAGE_PUBLIC_BASE_URL: "${IMAGE_PUBLIC_BASE_URL:-http://<host>:3070/images}"
-      # 图生图参考图：ArkSwarm 的工作区以只读方式挂进来。
+      # 图生图参考图：Coda 的工作区以只读方式挂进来。
       IMAGE_GEN_INPUT_ROOTS: "/workspaces"
       IMAGE_RETENTION_MINUTES: "60"
       TZ: "Asia/Shanghai"
     volumes:
       - ./data:/data
-      - /vol1/1000/docker/arkswarm/data/workspaces:/workspaces:ro
+      - /vol1/1000/docker/coda/data/workspaces:/workspaces:ro
     networks:
       - magpie
     healthcheck:

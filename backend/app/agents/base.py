@@ -114,6 +114,32 @@ class Availability:
 
 
 @dataclass(slots=True)
+class AuthStatus:
+    """账号型内核的登录状态（扫码 / OAuth 这类没有 API Key 的内核）。
+
+    有些内核靠「本机登录态」工作（豆包 CLI、CodeBuddy 官方链路…），平台没有可注入的
+    密钥。适配器用 :meth:`AgentDefinition.auth_status` 现探一次，内核详情页据此显示
+    「已登录 / 未登录」并给出登录入口。
+    """
+
+    #: 是否真的需要登录（``False`` 时 ``logged_in`` 没有意义）
+    required: bool = True
+    #: ``True`` / ``False``；``None`` 表示探测失败，原因写在 ``detail``
+    logged_in: bool | None = None
+    detail: str | None = None
+    #: 可选的账号标识（邮箱 / 昵称），没有就不展示
+    account: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "required": self.required,
+            "logged_in": self.logged_in,
+            "detail": self.detail,
+            "account": self.account,
+        }
+
+
+@dataclass(slots=True)
 class RuntimeProvisioner:
     """声明「平台如何安装 / 更新 / 卸载这个内核的运行时」。
 
@@ -134,7 +160,11 @@ class RuntimeProvisioner:
     update_argv: list[str] = field(default_factory=list)
     uninstall_argv: list[str] = field(default_factory=list)
     latest_argv: list[str] = field(default_factory=list)
-    #: 执行上面三条命令**之前**先跑的「清扫」命令，用来清掉上一次被中断的动作留下的
+    #: 账号型内核的登录命令（例如 ``doubao login --qr=png``）。它不改变安装状态，
+    #: 只把登录态写进内核自己的配置目录；登录命令输出 ``QR_IMAGE=<图片路径>`` 时，
+    #: 框架会把图片读出来转成 data URL 推给界面（见 ``runtime/provisioning.py``）。
+    login_argv: list[str] = field(default_factory=list)
+    #: 执行上面各动作命令**之前**先跑的「清扫」命令，用来清掉上一次被中断的动作留下的
     #: 残留（例如 npm 的 rename 中转目录）。空列表表示无需清扫；框架照常执行、逐行回显，
     #: 但它失败**不**中断动作 —— 动作的成败只由动作自己的退出码决定。
     prepare_argv: list[str] = field(default_factory=list)
@@ -147,6 +177,7 @@ class RuntimeProvisioner:
             "install": self.install_argv,
             "update": self.update_argv,
             "uninstall": self.uninstall_argv,
+            "login": self.login_argv,
         }.get(action, [])
 
     def supports(self, action: str) -> bool:
@@ -163,6 +194,7 @@ class RuntimeProvisioner:
                 "update": list(self.update_argv),
                 "uninstall": list(self.uninstall_argv),
                 "latest": list(self.latest_argv),
+                "login": list(self.login_argv),
             },
         }
 
@@ -247,6 +279,10 @@ class AgentDefinition(ABC):
     #: 该内核的官方 Logo（前端静态资源路径，如 ``/icons/kernels/claude.svg``）；
     #: ``None`` 表示界面退回只用文字名。它只是「一张图」，不参与任何运行行为。
     logo: ClassVar[str | None] = None
+    #: Logo 的渲染方式：
+    #: * ``mask`` —— 单色 SVG 当遮罩，染成当前文字色（深浅外观自适应，旧内核默认）；
+    #: * ``image`` —— 真彩色位图（PNG / WebP）或彩色 SVG，按原色显示。
+    logo_style: ClassVar[str] = "mask"
     #: 必须存在于 PATH 中的可执行文件（仅 CLI 适配器）
     executable: ClassVar[str | None] = None
     #: 该内核的运行时如何安装 / 更新 / 卸载；``None`` 表示不由平台管理
@@ -286,6 +322,7 @@ class AgentDefinition(ABC):
             "default_models": list(self.default_models),
             "docs_url": self.docs_url,
             "logo": self.logo,
+            "logo_style": self.logo_style,
             "executable": self.executable,
             "selectable": self.selectable,
             "availability": availability.to_dict(),
@@ -314,6 +351,15 @@ class AgentDefinition(ABC):
         if self.provisioner is not None:
             data.update(self.provisioner.to_dict())
         return data
+
+    def auth_status(self) -> AuthStatus | None:
+        """账号型内核的登录状态；``None`` 表示该内核不需要登录（默认）。
+
+        实现必须是**尽力而为**的：起子进程探测、超时、解析失败都不能抛异常，
+        失败时返回 ``logged_in=None`` 并把原因写进 ``detail``。
+        框架既用它渲染内核详情，也在一次「登录」动作结束后重新取结论。
+        """
+        return None
 
     def availability(self) -> Availability:
         if not self.executable:

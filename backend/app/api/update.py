@@ -24,7 +24,7 @@ from .. import __version__, selfupdate
 from ..selfupdate import SelfUpdateError
 from .auth import require_admin
 
-logger = logging.getLogger("arkswarm.selfupdate")
+logger = logging.getLogger("coda.selfupdate")
 
 #: 整个路由器都要求登录：自更新是平台级操作。
 router = APIRouter(prefix="/update", tags=["update"], dependencies=[Depends(require_admin)])

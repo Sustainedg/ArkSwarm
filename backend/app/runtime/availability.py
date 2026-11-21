@@ -35,7 +35,7 @@ from ..agents.base import Availability
 from ..db import SessionLocal
 from ..models import RuntimeStatus
 
-logger = logging.getLogger("arkswarm")
+logger = logging.getLogger("coda")
 
 #: 检测结果的有效期：读表时超过它就在后台补测（本次请求仍返回旧值，绝不阻塞）。
 CHECK_INTERVAL = timedelta(hours=24)

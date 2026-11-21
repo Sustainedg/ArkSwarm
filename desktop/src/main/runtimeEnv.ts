@@ -76,7 +76,7 @@ export function desktopRuntimeEnv(): Record<string, string> {
   const pathDirs = [nodeGlobalBinDir()];
   if (nodeDir) {
     pathDirs.unshift(nodeDir);
-    env.ARKSWARM_NODE_HOME = nodeDir;
+    env.CODA_NODE_HOME = nodeDir;
   }
   env.PATH = prependPath(pathDirs);
   return env;

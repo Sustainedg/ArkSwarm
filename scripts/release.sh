@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 打包发布：构建前端 → 打 backend 源码 + 预构建 dist 的 tar.gz → 用 gh 创建 GitHub Release。
 #
-# 产物名固定 arkswarm.tar.gz，随 Release 附 arkswarm.tar.gz.sha256；
+# 产物名固定 coda.tar.gz，随 Release 附 coda.tar.gz.sha256；
 # 「设置 → 关于 → 检测更新」就吃这两个文件。
 #
 # 用法：
@@ -61,7 +61,7 @@ echo "→ 构建前端"
 # ---- 打包（backend 源码 + 预构建 dist + requirements；不带 .venv / data / node_modules）----
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-OUT="$STAGE/arkswarm.tar.gz"
+OUT="$STAGE/coda.tar.gz"
 echo "→ 打包 → $OUT"
 tar -czf "$OUT" \
   --exclude='backend/.venv' \
@@ -82,7 +82,7 @@ echo "→ sha256: $SHA256"
 echo "→ 创建 GitHub Release $TAG"
 NOTES="$(mktemp)"
 {
-  echo "ArkSwarm $APP_VERSION"
+  echo "Coda $APP_VERSION"
   echo ""
   echo "sha256: $SHA256"
   echo ""

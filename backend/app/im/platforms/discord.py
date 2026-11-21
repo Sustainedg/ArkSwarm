@@ -182,8 +182,8 @@ class DiscordConnection(ConnectionBase):
                             "intents": INTENTS,
                             "properties": {
                                 "os": "linux",
-                                "browser": "arkswarm",
-                                "device": "arkswarm",
+                                "browser": "coda",
+                                "device": "coda",
                             },
                         },
                     }

@@ -1,11 +1,31 @@
 from __future__ import annotations
 
-__version__ = "V0.1.3"
+__version__ = "V0.1.4"
 
 #: 版本记录（最新在前）。版本号只在公开发版时递增，日常提交不动版本号。
 #: 版本号采用「V主.次.修订」三段式：V0.1 是首个公开版本，后续修订顺延。
 #: 此前的 V0.01–V0.43 为内部迭代编号，不再逐条单列。
 VERSION_HISTORY: tuple[dict[str, object], ...] = (
+    {
+        "version": "V0.1.4",
+        "date": "2026-11-21",
+        "title": "更名 Coda · 新品牌图 · CodeBuddy / 豆包 CLI",
+        "highlights": (
+            "项目更名为 Coda：界面品牌、文档、环境变量前缀（CODA_*）、数据库"
+            "（coda.db）、Docker 服务/卷名与发布资产（coda.tar.gz）全部切换；"
+            "GitHub 仓库同步更名为 Sustainedg/Coda",
+            "品牌图换成用户提供的图标：网站左上品牌标、应用图标、桌面窗口/安装包/"
+            "托盘图标同源（母版位图在 assets/brand/logo.png）",
+            "新增 CodeBuddy CLI 适配器：stream-json 输出、会话续接、技能与 MCP，"
+            "自定义网关写入隔离目录的 models.json",
+            "新增豆包 CLI 适配器：账号型内核，扫码登录；详情页直接显示二维码，"
+            "登录态探测与连通性测试可用",
+            "账号型内核登录：适配器声明 login_argv 与 auth_status()，框架按通用"
+            " QR_IMAGE 约定推送二维码；任务列表与重连接口只对管理员开放",
+            "修复：豆包 Windows PATH 分隔符、安装向导资源脚本、数据库文件迁移与"
+            " PWA 外壳缓存版本（shell v128 / assets v127）",
+        ),
+    },
     {
         "version": "V0.1.3",
         "date": "2026-11-19",
@@ -53,8 +73,8 @@ VERSION_HISTORY: tuple[dict[str, object], ...] = (
             "Service Worker 外壳缓存版本 v87 → v88，老客户端下次打开自动更新",
             "版本号改为三段式 V主.次.修订（V0.11 → V0.1.1），此前的两位次版本号不再使用",
             "Docker 空卷首启改用镜像里构建进去的源码，做到「构建什么就运行什么」，"
-            "不再用线上旧包覆盖新代码（需要旧行为可设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1）",
-            "首启装 Python 依赖时 pip 也走安装期代理，并支持 ARKSWARM_PIP_INDEX_URL "
+            "不再用线上旧包覆盖新代码（需要旧行为可设 CODA_FETCH_RELEASE_ON_EMPTY=1）",
+            "首启装 Python 依赖时 pip 也走安装期代理，并支持 CODA_PIP_INDEX_URL "
             "指向国内镜像；直连 PyPI 装完要二十多分钟，现在压到十几秒",
             "entrypoint 收紧 pip 重试与超时，网络不通时快速失败并给出可执行的提示，"
             "不再静默卡住启动",

@@ -493,7 +493,7 @@ async def test_builtin_mcp_servers_are_seeded_editable_and_parameterized(
                 await session.execute(select(McpServer).where(McpServer.builtin_key.is_not(None)))
             ).scalars().all()
         }
-        assert set(rows) == {"image-gen", "arkswarm-admin"}
+        assert set(rows) == {"image-gen", "coda-admin"}
         for row in rows.values():
             assert row.source_kind == "manual"
             assert row.command and row.args
@@ -514,24 +514,24 @@ async def test_builtin_mcp_servers_are_seeded_editable_and_parameterized(
         assert labels["IMAGE_GEN_MODEL"] == "模型名称"
         assert all(item["masked"] is None for item in image["builtin_params"])
 
-        admin = mcp_service.read_view(rows["arkswarm-admin"])
+        admin = mcp_service.read_view(rows["coda-admin"])
         admin_labels = {item["key"]: item["label"] for item in admin["builtin_params"]}
-        assert admin_labels["ARKSWARM_BASE_URL"] == "平台地址"
-        assert admin_labels["ARKSWARM_TOKEN"] == "平台访问令牌"
-        assert admin["env_preview"]["ARKSWARM_MODE"]
+        assert admin_labels["CODA_BASE_URL"] == "平台地址"
+        assert admin_labels["CODA_TOKEN"] == "平台访问令牌"
+        assert admin["env_preview"]["CODA_MODE"]
         # 系统管理 MCP 的平台地址由平台自动填写；鉴权关闭时没有用户可归属令牌。
-        assert admin["env_preview"]["ARKSWARM_BASE_URL"]
+        assert admin["env_preview"]["CODA_BASE_URL"]
         assert {item["key"]: item["managed"] for item in admin["builtin_params"]}[
-            "ARKSWARM_BASE_URL"
+            "CODA_BASE_URL"
         ] is True
         assert {item["key"]: item["managed"] for item in admin["builtin_params"]}[
-            "ARKSWARM_TOKEN"
+            "CODA_TOKEN"
         ] is True
 
     # 列表接口同样带上参数说明；内置服务器开箱即出现在目录里。
     items = (await client.get("/api/mcp-servers")).json()["items"]
     builtins = {item["builtin_key"] for item in items if item["builtin_key"]}
-    assert builtins == {"image-gen", "arkswarm-admin"}
+    assert builtins == {"image-gen", "coda-admin"}
     image_item = next(item for item in items if item["builtin_key"] == "image-gen")
     assert image_item["env_preview"]["IMAGE_GEN_GATEWAY"] is None
     assert image_item["builtin_params"][0]["required"] is True

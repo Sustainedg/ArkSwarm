@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger("arkswarm")
+logger = logging.getLogger("coda")
 
 #: 支持的网关协议
 PROTOCOLS = ("openai", "anthropic", "gemini")

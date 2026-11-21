@@ -1,10 +1,10 @@
-appId: io.github.sustainedg.arkswarm
-productName: ArkSwarm
+appId: io.github.sustainedg.coda
+productName: Coda
 directories:
   output: release
   buildResources: build
 # 产物名固定、无空格（electron-updater 按 latest*.yml 里的文件名下载，空格要额外转义）
-# 例：ArkSwarm-0.2.0-win-x64.exe / ArkSwarm-0.2.0-mac-arm64.zip
+# 例：Coda-0.2.0-win-x64.exe / Coda-0.2.0-mac-arm64.zip
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   # 壳本身：编译产物 + 静态资源 + 依赖（不含 src / 不带 devDependencies）
@@ -20,7 +20,7 @@ extraResources:
   - from: ../LICENSE
     to: LICENSE.txt
   # 后端源码包：构建时由 scripts/prepare-backend.mjs 组装（backend/ + frontend/dist/），
-  # 安装后落在 resources/app-backend/，与主项目 arkswarm.tar.gz 同构。
+  # 安装后落在 resources/app-backend/，与主项目 coda.tar.gz 同构。
   # 排除清单与 scripts/release.sh 对齐：真实数据、venv、缓存、测试一律不进安装包
   - from: ../backend
     to: app-backend/backend
@@ -63,7 +63,7 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
-  shortcutName: ArkSwarm
+  shortcutName: Coda
   # 卸载保留 userData：对话数据 / 内核安装都在那里，不能因为卸载应用就丢
   deleteAppDataOnUninstall: false
   # 差分更新（electron-updater 用 .blockmap 只下变化块）
@@ -83,8 +83,8 @@ nsis:
   # 注意路径从 buildResources 解析不到时会回退到 projectDir（desktop/），
   # 所以 ../LICENSE 指向仓库根；纯 ASCII 文本，NSIS 的 Unicode 构建直接可读。
   license: ../LICENSE
-  # 控制面板「应用和功能」里的显示名（默认是「ArkSwarm 0.1.3」带版本号）
-  uninstallDisplayName: ArkSwarm
+  # 控制面板「应用和功能」里的显示名（默认是「Coda 0.1.3」带版本号）
+  uninstallDisplayName: Coda
 mac:
   icon: build/icon.icns
   target:
@@ -108,7 +108,7 @@ mac:
     - Contents/Resources/python-runtime
     - Contents/Resources/node-runtime
 # 不要自定义 dmg.title：electron-builder 的默认卷名带架构后缀
-# （ArkSwarm <版本>-arm64 / -x64）。自定义成 `ArkSwarm ${version}` 会让两个架构
+# （Coda <版本>-arm64 / -x64）。自定义成 `Coda ${version}` 会让两个架构
 # 抢同一个 /Volumes 卷名，第二个 DMG 构建挂载时 hdiutil detach 反复失败。
 linux:
   # 桌面版只承诺 Win/macOS；linux 目标只是给服务器侧顺带构建，不作支持承诺
@@ -120,7 +120,7 @@ linux:
 # 发布时由 CI 把安装包 + latest*.yml 上传到 tag `desktop-latest`（必须标记 prerelease）。
 publish:
   provider: generic
-  url: https://github.com/Sustainedg/ArkSwarm/releases/download/desktop-latest
+  url: https://github.com/Sustainedg/Coda/releases/download/desktop-latest
 # 打包后先给内嵌 Python / Node 里的 Mach-O 逐个签名（electron-builder 不扫 extraResources），
 # 再走正常签名流程，最后由 afterSign 提交公证。两个钩子在无证书环境下都会跳过。
 afterPack: scripts/sign-runtimes.cjs

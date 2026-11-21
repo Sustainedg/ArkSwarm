@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const backend = process.env.ARKSWARM_BACKEND ?? 'http://127.0.0.1:8000'
+const backend = process.env.CODA_BACKEND ?? 'http://127.0.0.1:8000'
 const entry = (relative: string) => fileURLToPath(new URL(relative, import.meta.url))
 
 export default defineConfig({

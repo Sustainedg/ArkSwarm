@@ -153,11 +153,11 @@ export function MobileDrawer({ open, onClose, version }: Props) {
       <aside className="m-drawer" role="dialog" aria-modal="true" aria-label="导航与对话列表">
         <div className="m-drawer-head">
           <span className="m-brand-mark">
-            <BrandMark size={17} />
+            <BrandMark />
           </span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div className="m-drawer-title">
-              ArkSwarm
+              Coda
               {version && <span className="m-badge">{version}</span>}
             </div>
             <div className="m-drawer-sub">多智能体控制台</div>

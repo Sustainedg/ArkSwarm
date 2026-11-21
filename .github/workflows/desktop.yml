@@ -10,10 +10,10 @@ name: desktop
 # backend/app/__init__.py 的 V0.1.3），发布时 CI 会双向校验，不一致直接失败。
 #
 # 为什么壳更新用滚动 prerelease、而不是每个版本一个 Release：
-#   壳与后端共用 Sustainedg/ArkSwarm 这个仓库。后端发版走 release.sh（tag v0.1.x，
-#   资产是 arkswarm.tar.gz），后端更新器读 `/releases/latest`；electron-updater 的
+#   壳与后端共用 Sustainedg/Coda 这个仓库。后端发版走 release.sh（tag v0.1.x，
+#   资产是 coda.tar.gz），后端更新器读 `/releases/latest`；electron-updater 的
 #   GitHub Provider 也认「最新 Release」，若壳的版本 Release 成了 latest，后端更新器
-#   会去里面找 arkswarm.tar.gz 落空，壳更新器也会去后端 Release 里找 latest.yml 落空。
+#   会去里面找 coda.tar.gz 落空，壳更新器也会去后端 Release 里找 latest.yml 落空。
 #   所以壳这边统一上传到一个**滚动 tag**（desktop-latest，覆盖上传），且发布为
 #   prerelease —— GitHub 的 `/releases/latest` 会跳过 prerelease，两边互不打扰。
 #   壳的 Generic Provider 直接拼下载地址，与「latest」语义无关。
@@ -160,8 +160,8 @@ jobs:
         shell: pwsh
         timeout-minutes: 20
         run: |
-          $env:ARKSWARM_DESKTOP_SMOKE = '1'
-          $exe = Join-Path $PWD 'release/win-unpacked/ArkSwarm.exe'
+          $env:CODA_DESKTOP_SMOKE = '1'
+          $exe = Join-Path $PWD 'release/win-unpacked/Coda.exe'
           Write-Host "→ $exe"
           $p = Start-Process -FilePath $exe -PassThru -Wait `
             -RedirectStandardOutput smoke-out.txt -RedirectStandardError smoke-err.txt
@@ -175,9 +175,9 @@ jobs:
         shell: bash
         timeout-minutes: 20
         run: |
-          APP="release/mac-arm64/ArkSwarm.app/Contents/MacOS/ArkSwarm"
+          APP="release/mac-arm64/Coda.app/Contents/MacOS/Coda"
           ls -l "$APP"
-          ARKSWARM_DESKTOP_SMOKE=1 "$APP" 2>&1 | tee smoke.log
+          CODA_DESKTOP_SMOKE=1 "$APP" 2>&1 | tee smoke.log
           test ${PIPESTATUS[0]} -eq 0
 
       - name: 上传构建产物
@@ -235,7 +235,7 @@ jobs:
           VTAG="v${{ steps.version.outputs.version }}"
 
           # 桌面安装包与网页/后端源码**同一个 Release**。Release 必须已由
-          # scripts/release.sh 创建（里面才有 arkswarm.tar.gz），这里只追加资产。
+          # scripts/release.sh 创建（里面才有 coda.tar.gz），这里只追加资产。
           if ! gh release view "$VTAG" >/dev/null 2>&1; then
             echo "✗ Release $VTAG 不存在：请先用 scripts/release.sh 发布后端/网页源码，再发桌面端" >&2
             exit 1

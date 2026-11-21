@@ -45,7 +45,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Sequence
 
-SERVER_NAME = "arkswarm-image-gen"
+SERVER_NAME = "coda-image-gen"
 SERVER_VERSION = "1.0.0"
 #: MCP 协议版本；initialize 时优先回显客户端请求的版本
 PROTOCOL_VERSION = "2024-11-05"

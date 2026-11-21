@@ -1,6 +1,6 @@
 # 独立图片生成 MCP：把 scripts/mcp/image_mcp_server.py 以 Streamable HTTP 暴露。
 # 构建上下文必须是仓库根目录：
-#   docker build -f docker/image-mcp/Dockerfile -t arkswarm-image-mcp .
+#   docker build -f docker/image-mcp/Dockerfile -t coda-image-mcp .
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

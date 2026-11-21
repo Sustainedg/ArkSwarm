@@ -30,7 +30,7 @@ from .runtime import skills as skill_service
 from .settings import get_settings
 from .transport.gzip import SSEExemptGZipMiddleware
 
-logger = logging.getLogger("arkswarm")
+logger = logging.getLogger("coda")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 # httpx 在 INFO 级别会把**完整请求 URL** 打进日志。Telegram 的 bot token 在路径里
 # （``/bot<id>:<token>/``）、钉钉 / 飞书的凭据曾以 query 形式出现，因此把它的日志压到
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ArkSwarm 多智能体控制台",
+    title="Coda 多智能体控制台",
     version=__version__,
     description="多智能体对话控制台：把 Claude Code、Codex、Gemini CLI 等 "
                 "内核配成智能体，给它们挑选网关、模型与人格后进行对话。",

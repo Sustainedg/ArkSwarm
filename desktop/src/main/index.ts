@@ -28,7 +28,7 @@ import {
  * 就绪后打印一行标记并按退出码收工。npm 侧（Windows/macOS runner）用它验证安装包，
  * 因此这里刻意不碰任何 GUI 设施，避免无头环境里卡在窗口初始化上。
  */
-const smokeMode = process.env.ARKSWARM_DESKTOP_SMOKE === '1';
+const smokeMode = process.env.CODA_DESKTOP_SMOKE === '1';
 
 /** 冒烟模式的总看门狗：卡住也要以非零退出，绝不让 CI 任务挂到超时。 */
 const SMOKE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -63,40 +63,40 @@ function trayIconPath(): string {
  */
 function desktopChromeCss(): string {
   return `
-body.arkswarm-desktop { overflow: hidden; }
+body.coda-desktop { overflow: hidden; }
 /* 内容**直接铺到窗口边缘**：顶部 36px 靠侧栏 / 主区各自的内边距让出来，
    背景（侧栏渐变、主区径向渐变）一路延伸到顶，不会出现一条横向色带。
    控制按钮浮在这块背景上，看起来就是应用自带的顶栏。 */
-body.arkswarm-desktop .sidebar {
+body.coda-desktop .sidebar {
   padding-top: calc(18px * var(--sbs) + ${TITLEBAR_HEIGHT}px);
 }
-body.arkswarm-desktop .main { padding-top: ${TITLEBAR_HEIGHT}px; }
-#arkswarm-titlebar {
+body.coda-desktop .main { padding-top: ${TITLEBAR_HEIGHT}px; }
+#coda-titlebar {
   position: fixed; top: 0; left: 0; right: 0; height: ${TITLEBAR_HEIGHT}px;
   -webkit-app-region: drag; z-index: 20; background: transparent;
   display: flex; align-items: stretch; justify-content: flex-end;
 }
 /* Windows 自绘窗口按钮：颜色跟随页面主题变量，不再有系统浅色条 */
-.arkswarm-win-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
-.arkswarm-win-controls button {
+.coda-win-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
+.coda-win-controls button {
   width: 46px; height: 100%; border: 0; padding: 0; background: transparent;
   color: var(--text-dim, #9aa0b0); display: grid; place-items: center; cursor: default;
 }
-.arkswarm-win-controls button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text, #e8eaf0); }
-.arkswarm-win-controls button.arkswarm-close:hover { background: #e81123; color: #fff; }
-.arkswarm-win-controls svg { pointer-events: none; }
-#arkswarm-titlebar.is-maximized .arkswarm-max-icon { display: none; }
-#arkswarm-titlebar:not(.is-maximized) .arkswarm-restore-icon { display: none; }
+.coda-win-controls button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text, #e8eaf0); }
+.coda-win-controls button.coda-close:hover { background: #e81123; color: #fff; }
+.coda-win-controls svg { pointer-events: none; }
+#coda-titlebar.is-maximized .coda-max-icon { display: none; }
+#coda-titlebar:not(.is-maximized) .coda-restore-icon { display: none; }
 
 /* macOS 折叠态：红绿灯由系统画在窗口左上角（x=14 起，三个按钮约 52px 宽），
    而折叠栏只有 68px —— 按钮正好顶到右边缘，看起来像溢出了侧栏。
    这里只给 macOS 壳的窄栏补 16px（68 → 84），让红绿灯完整落在侧栏里、右侧还留点余量。
    网页端和 Windows 壳没有系统红绿灯，不受影响。 */
-body.arkswarm-mac .app-shell.collapsed { grid-template-columns: 84px 1fr; }
+body.coda-mac .app-shell.collapsed { grid-template-columns: 84px 1fr; }
 /* 同上，兜住 index.css 里 < 980px 的 CSS 断点：JS 还没把 collapsed 类挂上时，
    窄窗依旧按 68px 渲染，这里同步放宽，避免首屏闪一下红绿灯被压住。 */
 @media (max-width: 980px) {
-  body.arkswarm-mac .app-shell { grid-template-columns: 84px 1fr; }
+  body.coda-mac .app-shell { grid-template-columns: 84px 1fr; }
 }
 `;
 }
@@ -104,31 +104,31 @@ body.arkswarm-mac .app-shell.collapsed { grid-template-columns: 84px 1fr; }
 function desktopChromeScript(): string {
   const controls = process.platform === 'win32';
   // 平台标记：macOS 的系统红绿灯嵌在窗口左上角，样式要据此给折叠栏留出宽度。
-  const platformClass = process.platform === 'darwin' ? ' arkswarm-mac' : '';
+  const platformClass = process.platform === 'darwin' ? ' coda-mac' : '';
   return `(() => {
-  document.body.classList.add('arkswarm-desktop${platformClass}');
-  if (document.getElementById('arkswarm-titlebar')) return;
+  document.body.classList.add('coda-desktop${platformClass}');
+  if (document.getElementById('coda-titlebar')) return;
   const bar = document.createElement('div');
-  bar.id = 'arkswarm-titlebar';
+  bar.id = 'coda-titlebar';
   bar.setAttribute('aria-hidden', 'true');
   ${controls ? `
   const icons = {
     minimize: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" stroke="currentColor" stroke-width="1"/></svg>',
-    maximize: '<svg class="arkswarm-max-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg><svg class="arkswarm-restore-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="3.5" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1"/><path d="M3 3.5V1.5h5.5V7" fill="none" stroke="currentColor" stroke-width="1"/></svg>',
+    maximize: '<svg class="coda-max-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg><svg class="coda-restore-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="3.5" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1"/><path d="M3 3.5V1.5h5.5V7" fill="none" stroke="currentColor" stroke-width="1"/></svg>',
     close: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1"/></svg>',
   };
   const box = document.createElement('div');
-  box.className = 'arkswarm-win-controls';
+  box.className = 'coda-win-controls';
   for (const action of ['minimize', 'toggle-maximize', 'close']) {
     const button = document.createElement('button');
     button.type = 'button';
-    if (action === 'close') button.className = 'arkswarm-close';
+    if (action === 'close') button.className = 'coda-close';
     button.innerHTML = icons[action === 'toggle-maximize' ? 'maximize' : action];
-    button.addEventListener('click', () => window.arkswarmDesktop?.window?.run?.(action));
+    button.addEventListener('click', () => window.codaDesktop?.window?.run?.(action));
     box.appendChild(button);
   }
   bar.appendChild(box);
-  window.arkswarmDesktop?.window?.onMaximized?.((maximized) => {
+  window.codaDesktop?.window?.onMaximized?.((maximized) => {
     bar.classList.toggle('is-maximized', Boolean(maximized));
   });
   ` : ''}
@@ -278,7 +278,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     backgroundColor: '#0f1117',
-    title: 'ArkSwarm',
+    title: 'Coda',
     icon: process.platform === 'darwin' ? undefined : path.join(iconsDir(), 'icon.png'),
     autoHideMenuBar: true,
     // 深色自绘标题栏：Windows 用 titleBarOverlay 保留系统的最小化/最大化/关闭，
@@ -373,7 +373,7 @@ async function loadSplash(): Promise<void> {
   </style></head><body>
     <div class="wrap">
       <div class="logo-ring"><img class="logo" src="${icon}" alt="" /></div>
-      <div class="name">ArkSwarm</div>
+      <div class="name">Coda</div>
       <div class="sub">多智能体控制台</div>
       <div class="spinner"></div>
       <div id="msg">正在初始化…</div>
@@ -404,7 +404,7 @@ function showMainWindow(): void {
 function showFatal(message: string): void {
   void dialog.showMessageBox({
     type: 'error',
-    title: 'ArkSwarm 启动失败',
+    title: 'Coda 启动失败',
     message,
     detail: [
       `数据目录：${dataDir()}`,
@@ -417,7 +417,7 @@ function showFatal(message: string): void {
 
 // ---- 托盘 ----
 function createTray(): void {
-  // 与网页同源的品牌星座：macOS 模板图 / Windows·Linux 品牌色
+  // 与网页同源的品牌图：macOS 模板图 / Windows·Linux 品牌色
   const iconPath = trayIconPath();
   if (!fs.existsSync(iconPath)) {
     // 图标缺失时宁可不出托盘也不能崩（后面还有 Dock/任务栏兜底）；但必须留下日志线索
@@ -425,10 +425,10 @@ function createTray(): void {
     return;
   }
   tray = new Tray(iconPath);
-  tray.setToolTip(`ArkSwarm 正在运行（桌面端 ${app.getVersion()}）`);
+  tray.setToolTip(`Coda 正在运行（桌面端 ${app.getVersion()}）`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: `ArkSwarm ${app.getVersion()}`, enabled: false },
+      { label: `Coda ${app.getVersion()}`, enabled: false },
       { label: '打开主界面', click: () => showMainWindow() },
       { type: 'separator' },
       { label: '检查桌面端更新…', click: () => void checkForUpdatesManually() },

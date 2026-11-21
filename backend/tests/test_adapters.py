@@ -30,6 +30,8 @@ def test_registry_exposes_first_party_adapters():
         "custom-cli",
         "hermes-agent",
         "deepseek-harness",
+        "codebuddy-cli",
+        "doubao-cli",
     ):
         assert expected in known_ids()
 
@@ -94,7 +96,7 @@ def test_codex_gateway_goes_through_a_named_provider():
     """自定义网关必须落到具名 model_provider 上 —— 新版 Codex 已不再读 ``OPENAI_BASE_URL``。
 
     同时不下发 ``wire_api``：新版只剩 responses、旧版默认 chat，写死任何一边都会在另一边
-    直接报错；``provider_name`` 留空时用内置名 ``arkswarm``。
+    直接报错；``provider_name`` 留空时用内置名 ``coda``。
     """
     definition = get_agent("codex")
     # 存量智能体里由旧默认值写下的 wire_api=chat 必须被忽略，否则新版 Codex 会拒绝启动。
@@ -102,9 +104,9 @@ def test_codex_gateway_goes_through_a_named_provider():
         ctx(options={"transport": "exec", "wire_api": "chat"})
     )
     joined = " ".join(invocation.argv)
-    assert "model_provider=arkswarm" in joined
-    assert 'model_providers.arkswarm.base_url="https://gateway.example/v1"' in joined
-    assert 'model_providers.arkswarm.env_key="OPENAI_API_KEY"' in joined
+    assert "model_provider=coda" in joined
+    assert 'model_providers.coda.base_url="https://gateway.example/v1"' in joined
+    assert 'model_providers.coda.env_key="OPENAI_API_KEY"' in joined
     assert "wire_api" not in joined
 
     # 没走网关（官方默认 / 本机登录态）时不注入任何 provider，交给 Codex 自己的配置。
@@ -167,8 +169,8 @@ def test_gemini_invocation_writes_system_file():
     definition = get_agent("gemini-cli")
     invocation = definition.build_invocation(ctx(session_id="sess-9"))
     assert "--resume" in invocation.argv and "sess-9" in invocation.argv
-    assert invocation.files[".arkswarm/system.md"] == "You are a tester."
-    assert invocation.env["GEMINI_SYSTEM_MD"] == "{{RUN_DIR}}/.arkswarm/system.md"
+    assert invocation.files[".coda/system.md"] == "You are a tester."
+    assert invocation.env["GEMINI_SYSTEM_MD"] == "{{RUN_DIR}}/.coda/system.md"
     assert invocation.env["GEMINI_API_KEY"] == "sk-secret"
 
 
@@ -319,7 +321,7 @@ def test_codex_app_server_invocation_speaks_json_rpc_over_stdio():
     assert "--json" not in invocation.argv
     frame = json.loads(invocation.stdin)
     assert frame["method"] == "initialize" and frame["id"] == 1
-    assert frame["params"]["clientInfo"]["name"] == "arkswarm"
+    assert frame["params"]["clientInfo"]["name"] == "coda"
 
     # 逐字流式来自 app-server；exec 仍是可选的老路径（写完 stdin 就关）。
     legacy = definition.build_invocation(ctx(options={"transport": "exec"}))
@@ -848,3 +850,230 @@ def test_gemini_unrestricted_skips_sandbox_flag():
     definition = get_agent("gemini-cli")
     argv = definition.build_invocation(ctx()).argv
     assert "--sandbox" not in argv
+
+
+# --- CodeBuddy CLI --------------------------------------------------------
+
+
+def _isolate_codebuddy_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key in (
+        "CODEBUDDY_CONFIG_DIR",
+        "CODEBUDDY_MODEL",
+        "CODEBUDDY_API_KEY",
+        "CODEBUDDY_IS_SANDBOX",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_codebuddy_invocation_uses_stream_json_and_bypass():
+    definition = get_agent("codebuddy-cli")
+    invocation = definition.build_invocation(ctx())
+    assert invocation.argv[:5] == [
+        "codebuddy",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
+    assert "--include-partial-messages" in invocation.argv
+    mode_at = invocation.argv.index("--permission-mode")
+    assert invocation.argv[mode_at + 1] == "bypassPermissions"
+    assert "--dangerously-skip-permissions" in invocation.argv
+    assert "--append-system-prompt" in invocation.argv
+    assert invocation.argv[invocation.argv.index("--model") + 1] == "some-model"
+    assert invocation.stdin == "hello world"
+    # 网关密钥按适配器声明的变量名注入；网关地址绝不能塞进 CODEBUDDY_BASE_URL
+    # （内核会把它拼成 <base>/v2/chat/completions，那是它自家协议）。
+    assert invocation.env["CODEBUDDY_API_KEY"] == "sk-secret"
+    assert "CODEBUDDY_BASE_URL" not in invocation.env
+    assert invocation.env["DISABLE_TELEMETRY"] == "1"
+    assert invocation.env["CI"] == "1"
+
+
+def test_codebuddy_permission_mode_and_system_prompt_variants():
+    definition = get_agent("codebuddy-cli")
+
+    # 非 bypass 模式不带跳过审批的旗标
+    plain = definition.build_invocation(ctx(options={"permission_mode": "acceptEdits"}))
+    assert "--dangerously-skip-permissions" not in plain.argv
+    assert plain.argv[plain.argv.index("--permission-mode") + 1] == "acceptEdits"
+
+    replaced = definition.build_invocation(ctx(options={"system_prompt_mode": "replace"}))
+    assert "--system-prompt" in replaced.argv
+    assert "--append-system-prompt" not in replaced.argv
+
+
+def test_codebuddy_resume_and_tool_lists():
+    definition = get_agent("codebuddy-cli")
+    invocation = definition.build_invocation(
+        ctx(session_id="s-1", options={"allowed_tools": "Bash,Read"})
+    )
+    assert invocation.argv[invocation.argv.index("--resume") + 1] == "s-1"
+    assert invocation.argv[invocation.argv.index("--allowedTools") + 1] == "Bash"
+    assert "Read" in invocation.argv
+
+
+def test_codebuddy_writes_models_json_for_custom_gateway(tmp_path):
+    """自定义网关只能走 models.json：完整 /chat/completions 路径 + 环境变量引用密钥。"""
+    definition = get_agent("codebuddy-cli")
+    home = tmp_path / "home"
+    definition.build_invocation(ctx(home_dir=str(home)))
+
+    payload = json.loads((home / "models.json").read_text(encoding="utf-8"))
+    model = payload["models"][0]
+    assert model["id"] == "some-model"
+    assert model["url"] == "https://gateway.example/v1/chat/completions"
+    assert model["apiKey"] == "${CODEBUDDY_API_KEY}"
+    assert payload["availableModels"] == ["some-model"]
+
+
+def test_codebuddy_clears_stale_models_json_without_gateway(tmp_path):
+    """切回官方链路时必须删掉上一次的 models.json，否则会继续打到旧网关上。"""
+    definition = get_agent("codebuddy-cli")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "models.json").write_text("{}", encoding="utf-8")
+
+    definition.build_invocation(ctx(gateway_url=None, api_key=None, home_dir=str(home)))
+    assert not (home / "models.json").exists()
+
+
+def test_codebuddy_isolates_config_dir_and_enforces_strict_mcp(tmp_path):
+    definition = get_agent("codebuddy-cli")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
+
+    invocation = definition.build_invocation(ctx(home_dir=str(home)))
+    assert invocation.env["CODEBUDDY_CONFIG_DIR"] == str(home)
+    assert "--strict-mcp-config" in invocation.argv
+    assert invocation.argv[invocation.argv.index("--mcp-config") + 1] == str(home / "mcp.json")
+
+
+def test_codebuddy_root_bypass_sets_sandbox_env(monkeypatch):
+    """root + bypassPermissions 要声明 CODEBUDDY_IS_SANDBOX，否则危险命令会再弹确认。"""
+    from app.agents.builtin import codebuddy_cli
+
+    definition = get_agent("codebuddy-cli")
+    options = {"permission_mode": "bypassPermissions"}
+
+    monkeypatch.setattr(codebuddy_cli, "_is_root", lambda: True)
+    invocation = definition.build_invocation(ctx(options=options))
+    assert invocation.env["CODEBUDDY_IS_SANDBOX"] == "1"
+
+    run = definition.create_run(ctx(options=options))
+    notes = [
+        e
+        for e in run.feed("")
+        if e.type.value == "log" and "CODEBUDDY_IS_SANDBOX" in (e.text or "")
+    ]
+    assert len(notes) == 1
+
+    plain = definition.build_invocation(ctx(options={"permission_mode": "acceptEdits"}))
+    assert "CODEBUDDY_IS_SANDBOX" not in plain.env
+
+    monkeypatch.setattr(codebuddy_cli, "_is_root", lambda: False)
+    assert "CODEBUDDY_IS_SANDBOX" not in definition.build_invocation(ctx(options=options)).env
+
+    # 用户自己显式配了就听用户的
+    monkeypatch.setattr(codebuddy_cli, "_is_root", lambda: True)
+    custom = definition.build_invocation(ctx(options={**options, "env": {"CODEBUDDY_IS_SANDBOX": "0"}}))
+    assert custom.env["CODEBUDDY_IS_SANDBOX"] == "0"
+
+
+def test_codebuddy_stream_parsing_matches_claude_shape():
+    definition = get_agent("codebuddy-cli")
+    run = definition.create_run(ctx())
+    lines = [
+        {"type": "system", "subtype": "init", "session_id": "cb1", "model": "default-model", "tools": ["Bash"], "mcp_servers": []},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "想一下"}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hel"}}},
+        {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "lo"}}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Hello"},
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+        ]}},
+        {"type": "system", "subtype": "usage_update", "usage": {"input_tokens": 1}},
+        {"type": "result", "subtype": "success", "session_id": "cb1", "usage": {"input_tokens": 3, "output_tokens": 4}, "total_cost_usd": 0},
+    ]
+    events = [e for line in lines for e in run.feed(json.dumps(line))]
+    kinds = [e.type.value for e in events]
+    assert kinds.count("session") == 1
+    assert run.emitted_text == "Hello"  # 已有逐字增量时不重复输出整段
+    assert run.thinking == "想一下"
+    assert "tool.call" in kinds and "tool.result" in kinds and "usage" in kinds
+    assert run.session_id == "cb1"
+    # 内核特有的 usage_update 不产生错误事件
+    assert "error" not in kinds
+
+
+def test_codebuddy_skill_roots_discovery_and_mount(monkeypatch, tmp_path):
+    _isolate_codebuddy_env(monkeypatch, tmp_path)
+    cfg = tmp_path / ".codebuddy"
+    (cfg / "skills" / "demo").mkdir(parents=True)
+    (cfg / "skills" / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: 演示技能\n---\n", encoding="utf-8"
+    )
+    (cfg / "skills" / ".skillhub" / "bought").mkdir(parents=True)
+    (cfg / "skills" / ".skillhub" / "bought" / "SKILL.md").write_text(
+        "---\nname: bought\ndescription: 市场技能\n---\n", encoding="utf-8"
+    )
+    (cfg / ".credentials.json").write_text("{}", encoding="utf-8")
+
+    definition = get_agent("codebuddy-cli")
+    specs = definition.discover_skills()
+    by_slug = {spec.slug: spec for spec in specs}
+    assert {"demo", "bought"} <= set(by_slug)
+    assert by_slug["bought"].source_kind == "market"
+
+    mount = definition.skill_mount(ctx())
+    assert mount.home_name == "codebuddy-home"
+    carried = {dest for _src, dest in mount.carry}
+    # 隔离家目录必须带上登录态，否则官方链路会变成「未登录」
+    assert {".credentials.json", "settings.json", "settings.local.json"} <= carried
+
+    assert definition.skill_invocation("Skill", {"skill": "demo"}) == "demo"
+    assert definition.skill_invocation("Bash", {"command": "ls"}) is None
+
+
+def test_codebuddy_mcp_discovery_and_mount(monkeypatch, tmp_path):
+    _isolate_codebuddy_env(monkeypatch, tmp_path)
+    cfg = tmp_path / ".codebuddy"
+    cfg.mkdir(parents=True)
+    (cfg / ".mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"fs": {"command": "npx", "args": ["-y", "server-fs"]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    definition = get_agent("codebuddy-cli")
+    assert [spec.slug for spec in definition.discover_mcp_servers()] == ["fs"]
+
+    # 工作目录自带 .mcp.json 时要提示它不会生效（本次运行只认平台分配的那份）
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / ".mcp.json").write_text("{}", encoding="utf-8")
+    mount = definition.mcp_mount(ctx(workspace_dir=str(workspace)))
+    assert mount.home_name == "codebuddy-home"
+    assert "mcpServers" in mount.files["mcp.json"]
+    assert any(".mcp.json" in note for note in mount.notes)
+
+
+def test_codebuddy_system_defaults_reads_local_settings(monkeypatch, tmp_path):
+    _isolate_codebuddy_env(monkeypatch, tmp_path)
+    cfg = tmp_path / ".codebuddy"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(
+        json.dumps({"model": "hy3", "env": {"CODEBUDDY_BASE_URL": "http://ignored.example"}}),
+        encoding="utf-8",
+    )
+
+    defaults = get_agent("codebuddy-cli").system_defaults()
+    assert defaults["model"] == "hy3"
+    # 本机 CODEBUDDY_BASE_URL 不能当成平台网关地址回填
+    assert "gateway_url" not in defaults

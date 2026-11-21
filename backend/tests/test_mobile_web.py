@@ -517,7 +517,7 @@ def test_mobile_shell_has_a_self_service_refresh():
     设置页的「更新到最新版本」是兜底出口。
     """
     sw = (FRONTEND / "public" / "m" / "sw.js").read_text(encoding="utf-8")
-    for name in ("arkswarm-m-shell-v", "arkswarm-m-assets-v"):
+    for name in ("coda-m-shell-v", "coda-m-assets-v"):
         assert name in sw, f"sw.js 的缓存名要带版本号（{name}<n>）"
 
     pwa = (MOBILE_SRC / "pwa.ts").read_text(encoding="utf-8")
@@ -603,7 +603,7 @@ def test_mobile_chat_keeps_a_bare_composer_and_speaks_replies():
     # 朗读只有一份实现，且开关默认关闭（关闭时把键删掉，不靠写 'off'）。
     tts = (FRONTEND / "src" / "lib" / "tts.ts").read_text(encoding="utf-8")
     for symbol in (
-        "SPEECH_STORAGE_KEY", "arkswarm.tts", "readSpeechEnabled", "storeSpeechEnabled",
+        "SPEECH_STORAGE_KEY", "coda.tts", "readSpeechEnabled", "storeSpeechEnabled",
         "toSpeechText", "useSpeechOutput",
     ):
         assert symbol in tts, f"lib/tts.ts 缺少 {symbol}"
@@ -771,7 +771,7 @@ def test_final_only_view_is_one_switch_on_both_ends():
     """
     lib = (FRONTEND / "src" / "lib" / "finalOnly.ts").read_text(encoding="utf-8")
     for symbol in (
-        "TOOLS_VISIBILITY_STORAGE_KEY", "arkswarm.tools-hidden", "readShowTools",
+        "TOOLS_VISIBILITY_STORAGE_KEY", "coda.tools-hidden", "readShowTools",
         "storeShowTools", "useShowTools",
     ):
         assert symbol in lib, f"lib/finalOnly.ts 缺少 {symbol}"

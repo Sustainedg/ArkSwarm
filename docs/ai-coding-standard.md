@@ -219,7 +219,7 @@ POST /api/conversations/{id}/messages
 **schema 变更规则**（本地库有真实数据）：
 1. 只做**加列/加表**这类向后兼容变更，新列必须有默认值或可空。
 2. 不允许"删库重建"；如需数据迁移，写一次性脚本并说明如何回滚。
-3. 变更后在**现有** `backend/data/arkswarm.db` 上启动一次，确认历史对话仍可读、可继续对话。
+3. 变更后在**现有** `backend/data/coda.db` 上启动一次，确认历史对话仍可读、可继续对话。
 4. 生产环境当前用 `create_all`（无迁移框架）。若将来要频繁演进 schema，**先引入 Alembic**，
    而不是在 `init_db` 里堆手写 DDL。
 
@@ -285,7 +285,8 @@ class AcmeAgent(AgentDefinition):
     base_url_env = "ACME_BASE_URL"
     default_gateway = "https://api.acme.dev/v1"
     default_model = "acme-pro"
-    logo = "/icons/kernels/acme.svg"  # 官方 Logo（单色 SVG，前端当遮罩染色）
+    logo = "/icons/kernels/acme.svg"  # 官方 Logo；默认单色 SVG 当遮罩染色
+    # logo_style = "image"            # 有真彩色品牌图时：PNG/WebP 按原色显示
     capabilities = Capabilities(sessions=True, native_system_prompt=True, tools=True,
                                working_directory=True)
     config_fields = (
@@ -300,8 +301,10 @@ class AcmeAgent(AgentDefinition):
 
 要求：`parse_line` 必须容忍脏行（解析失败 → `log(...)` 或忽略，不得抛出导致整轮失败）；
 需要的解析状态放 `run.state`；结束时要补发事件就覆盖 `AgentRun.finish()`。
-Logo 是**适配器声明的静态资源**（`frontend/public/icons/kernels/*.svg`，24×24 单色、只画形状）：
-界面把它当遮罩染成当前文字色，深色 / 浅色共用一份；没有官方图形的自备内核用中性线条图形。
+Logo 是**适配器声明的静态资源**（`frontend/public/icons/kernels/*`）：
+默认 `logo_style="mask"`，24×24 单色 SVG、只画形状，界面当遮罩染成当前文字色，
+深色 / 浅色共用一份；有真彩色品牌图的用 `logo_style="image"`，PNG/WebP（透明底、
+≤512×512）按原色显示。没有官方图形的自备内核用中性线条图形。
 **不要**在前端按 `type_id` 写 Logo 映射（铁律 1）。
 
 ### 6.2 新增 API 型供应商

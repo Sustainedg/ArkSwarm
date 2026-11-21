@@ -28,15 +28,15 @@ Electron 主进程（薄壳）
 
 | 目录 | 内容 | 删了会怎样 |
 | --- | --- | --- |
-| `data/` | `ARKSWARM_DATA_DIR`：SQLite、工作区、`secret.key`、内核隔离配置 | ⚠️ 数据全丢 |
+| `data/` | `CODA_DATA_DIR`：SQLite、工作区、`secret.key`、内核隔离配置 | ⚠️ 数据全丢 |
 | `python/` | **仅兜底路径**：内嵌解释器副本 + venv（正常安装走内置运行时，这里可能不存在） | 下次启动自动重建（离线 wheelhouse 装着；实在没有才联网） |
 | `node/global/` | npm 全局安装前缀（内核 CLI 装在这里）+ `node/cache/` | 内核需要重装，不影响对话数据 |
 | `releases/` | 后端版本目录 + `current` 指针（复用主项目自更新机制） | 回滚历史丢失，不影响运行 |
 
-> 应用图标与托盘图标由 `desktop/scripts/gen-icons.py` 生成，几何直接复用网页
-> `scripts/gen_icons.py`（三节点星座 + 轨道弧）—— 桌面端与网页的图标是同一张图。
+> 应用图标与托盘图标由 `desktop/scripts/gen-icons.py` 生成，渲染直接复用网页
+> `scripts/gen_icons.py`（母版是用户提供的品牌图 `assets/brand/logo.png`）—— 桌面端与网页的图标是同一张图。
 > 改了品牌图形后跑 `npm run gen:icons` 重新生成；macOS 托盘是模板图（纯黑 + alpha），
-> Windows/Linux 用品牌色。
+> Windows/Linux 用品牌色。母版位图在 `assets/brand/`。
 
 > 安装包卸载时 `deleteAppDataOnUninstall: false`：对话数据与内核安装都在 userData，卸载应用不该带走。
 
@@ -52,8 +52,8 @@ NSIS 的向导界面不是「配个主题」就能换皮肤的（MUI2 固定用�
 | `build/installer-branding.nsh` | — | 补一页 `MUI_PAGE_WELCOME` | `nsis.include` |
 | 仓库根 `LICENSE` | — | 许可协议页（可滚动全文） | `nsis.license: ../LICENSE` |
 
-三张资源由 `desktop/scripts/gen-installer-assets.py` 生成（**纯标准库**，几何复用
-`scripts/gen_icons.py` 的星座渲染器），产物已入库，CI 不跑该脚本。改了品牌色 / 品牌图形时：
+三张资源由 `desktop/scripts/gen-installer-assets.py` 生成（复用
+`scripts/gen_icons.py` 的品牌母版渲染，母版位图 + Pillow），产物已入库，CI 不跑该脚本。改了品牌色 / 品牌图形时：
 
 ```bash
 cd desktop && npm run gen:installer   # 与 npm run gen:icons 一起跑
@@ -87,16 +87,16 @@ cd desktop && npm run gen:installer   # 与 npm run gen:icons 一起跑
 | | 后端 | 桌面壳 |
 | --- | --- | --- |
 | 版本源 | `backend/app/__init__.py` 的 `__version__`（V0.1.x） | `desktop/package.json` 的 `version`（0.1.x，**与后端同号**，发布时 CI 双向校验） |
-| 产物 | `arkswarm.tar.gz` + `.sha256` | NSIS / DMG / zip + `latest*.yml` |
+| 产物 | `coda.tar.gz` + `.sha256` | NSIS / DMG / zip + `latest*.yml` |
 | 发布 tag | `v0.1.3`（普通 Release，含网页/后端源码） | 安装包**追加到同一个 `v0.1.3` Release**；另有 `desktop-latest`（**滚动**，prerelease，壳自更新读它） |
 | 更新器 | `backend/app/selfupdate.py`，读 `/releases/latest` | `electron-updater`，Generic Provider 直读滚动 tag 下的 `latest*.yml` |
 | 生效方式 | 下载 → `releases/<版本>/` → 切 current → `os.execv` 同 PID 重启 | 下载**完整安装包** → 重启 App（NSIS / Squirrel.Mac）；启动时把新安装包里的后端物化并切 current |
 | 界面入口 | Docker / 网页部署：「设置 → 关于」 | 桌面端：「设置 → 关于」**与托盘菜单共用** electron-updater（不再走后端 tar.gz 通道） |
 
-**为什么必须隔离**：两条通道都跑在 `Sustainedg/ArkSwarm`，而 GitHub 的 `/releases/latest`
+**为什么必须隔离**：两条通道都跑在 `Sustainedg/Coda`，而 GitHub 的 `/releases/latest`
 是「全仓库最新一个非 prerelease 非 draft 的 Release」。如果壳的版本 Release 成了 latest：
 
-- 后端更新器会去那个 Release 里找 `arkswarm.tar.gz` → 落空（「没有可安装的版本」）；
+- 后端更新器会去那个 Release 里找 `coda.tar.gz` → 落空（「没有可安装的版本」）；
 - 壳更新器（GitHub Provider 模式）会去后端 Release 里找 `latest.yml` → 404。
 
 因此约定：
@@ -104,16 +104,16 @@ cd desktop && npm run gen:installer   # 与 npm run gen:icons 一起跑
 1. **壳的所有 Release 都是 prerelease**（`gh release create --prerelease`），GitHub 的
    `/releases/latest` 永远指向最后发的后端版本；
 2. 壳更新用 **Generic Provider**（`electron-builder.yml` 的 `publish`），地址固定为
-   `https://github.com/Sustainedg/ArkSwarm/releases/download/desktop-latest/`，与 latest 语义无关；
+   `https://github.com/Sustainedg/Coda/releases/download/desktop-latest/`，与 latest 语义无关；
 3. 滚动 tag `desktop-latest` 的资产由 CI **覆盖上传**（`gh release upload --clobber`）；
-4. fork / 私有部署可用 `ARKSWARM_DESKTOP_UPDATE_URL` 覆盖更新源。
+4. fork / 私有部署可用 `CODA_DESKTOP_UPDATE_URL` 覆盖更新源。
 
 **桌面端只有一条更新通道**：托盘「检查桌面端更新…」与「设置 → 关于 → 检测更新」共用
 `updater.ts` 的同一套状态机，下载的都是**完整安装包**（Windows 走 `.blockmap` 差分，
 只传变化的数据块，但拼出来的仍是完整安装包）。新安装包自带的后端代码由 `bootstrap.ts`
 在下次启动时物化成 `releases/<新版本>` 并切 `current`；若 `requirements.txt` 内容变了
 （sha256 指纹不同），`pythonRuntime.ts` 会重装 venv 依赖。后端的「一键更新」
-（`arkswarm.tar.gz` + `os.execv`）只服务 Docker / 网页部署，桌面端界面不再暴露。
+（`coda.tar.gz` + `os.execv`）只服务 Docker / 网页部署，桌面端界面不再暴露。
 
 **macOS 前提**：Squirrel.Mac 只接受已签名应用。未签名构建里 `updater.ts` 会识别
 （优先 `app.getCodeSigningInfo()`，Electron 33 没有该 API 时用 `codesign -dv` 探测
@@ -152,7 +152,7 @@ git push origin v0.1.3
 
 ### 冒烟（smoke）
 
-打包产物以 `ARKSWARM_DESKTOP_SMOKE=1` 启动：主进程只跑「运行时 → 后端 → `/api/health`」，
+打包产物以 `CODA_DESKTOP_SMOKE=1` 启动：主进程只跑「运行时 → 后端 → `/api/health`」，
 不建窗口 / 托盘，就绪后打印 `[desktop] smoke ok version=… port=…` 并退出 0；失败退出 1，
 10 分钟总看门狗退出 2。它验证的是**真实安装包**里的整条链路（内置运行时直接起 uvicorn，
 依赖已预装、不联网），而不是源码模式 —— 首启慢 / 依赖缺失会在这一步暴露。
@@ -207,7 +207,7 @@ npm run compile && npx electron-builder --publish never
 ### 4.3 Windows
 
 拿到代码签名证书（OV/EV）→ 导出 `.pfx` → base64 后放进 `CSC_LINK`，密码进
-`CSC_KEY_PASSWORD`。electron-builder 自动签 `ArkSwarm-<版本>-win-x64.exe`。
+`CSC_KEY_PASSWORD`。electron-builder 自动签 `Coda-<版本>-win-x64.exe`。
 Azure Trusted Signing 属于另一条路（`win.azureSignOptions`），本文不展开。
 
 > NSIS 保持 `perMachine: false`：electron-updater 的静默更新要求安装目录对当前用户可写，
@@ -231,9 +231,9 @@ Azure Trusted Signing 属于另一条路（`win.azureSignOptions`），本文不
 4. 验证：
 
 ```bash
-codesign --verify --deep --strict --verbose=2 "ArkSwarm.app"
-spctl --assess --type execute --verbose "ArkSwarm.app"   # 应显示 accepted / notarized
-xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
+codesign --verify --deep --strict --verbose=2 "Coda.app"
+spctl --assess --type execute --verbose "Coda.app"   # 应显示 accepted / notarized
+xcrun stapler validate "Coda.app"                    # 确认已装订
 ```
 
 签名生效后，macOS 自动更新随之可用（`updater.ts` 会自动识别签名状态）。
@@ -310,15 +310,15 @@ xcrun stapler validate "ArkSwarm.app"                    # 确认已装订
 
 正常安装**首启不联网**：依赖在构建期已装进内嵌解释器（方案 A），指纹对不上才回退到
 离线 wheelhouse（方案 C），最后才是在线 pip。真走到在线这一步时，桌面版也认
-`ARKSWARM_PIP_INDEX_URL`（镜像源）与 `ARKSWARM_INSTALL_PROXY`（安装期代理），
+`CODA_PIP_INDEX_URL`（镜像源）与 `CODA_INSTALL_PROXY`（安装期代理），
 语义与 Docker 一致、只作用于 pip 子进程。
 
 | 症状 | 先看 |
 | --- | --- |
-| 启动报 `EPERM: operation not permitted, symlink 'V…' -> …\current` | **旧壳的 bug**（v0.1.3 及以前用 `fs.symlinkSync(..., 'dir')`，Windows 普通用户没权限）：升级到改用 junction 的修复版即可。旧包自救：开启「开发者模式」或以管理员启动一次，也可手动<br>`mklink /J "%APPDATA%\ArkSwarm\releases\current" "%APPDATA%\ArkSwarm\releases\V0.1.3"` |
-| 首启仍停在「安装后端依赖」（正常应秒开）/ 报 `ProxyError ... Cannot connect to proxy`（10053/10060） | 先看启动日志里的 `Python 运行时：bundled` 还是 `venv`：`venv` 说明内置依赖指纹没对上（开发模式 / resources 被改），走了兜底。若在在线安装阶段失败：Windows 系统代理残留（代理软件退出后注册表设置还在），关闭「设置 → 网络和 Internet → 代理」或启动代理软件；应用会自动绕过连不上的系统代理重试一次。仍失败看 `%APPDATA%\ArkSwarm\install.log`，按上面两个环境变量配镜像 / 代理。`userData/python/venv` 可整目录删掉重建（对话数据不受影响） |
+| 启动报 `EPERM: operation not permitted, symlink 'V…' -> …\current` | **旧壳的 bug**（v0.1.3 及以前用 `fs.symlinkSync(..., 'dir')`，Windows 普通用户没权限）：升级到改用 junction 的修复版即可。旧包自救：开启「开发者模式」或以管理员启动一次，也可手动<br>`mklink /J "%APPDATA%\Coda\releases\current" "%APPDATA%\Coda\releases\V0.1.3"` |
+| 首启仍停在「安装后端依赖」（正常应秒开）/ 报 `ProxyError ... Cannot connect to proxy`（10053/10060） | 先看启动日志里的 `Python 运行时：bundled` 还是 `venv`：`venv` 说明内置依赖指纹没对上（开发模式 / resources 被改），走了兜底。若在在线安装阶段失败：Windows 系统代理残留（代理软件退出后注册表设置还在），关闭「设置 → 网络和 Internet → 代理」或启动代理软件；应用会自动绕过连不上的系统代理重试一次。仍失败看 `%APPDATA%\Coda\install.log`，按上面两个环境变量配镜像 / 代理。`userData/python/venv` 可整目录删掉重建（对话数据不受影响） |
 | 启动日志出现 `无法创建 current 目录链接` | 文件系统不支持重解析点（FAT/exFAT、部分网络盘）或被安全软件拦截：应用会降级为直接从版本目录运行（后端一键更新不可用，桌面端本来走整包更新），不影响使用 |
 | 内核装了但启动报「未安装或不在 PATH」 | 是否用的是打包版（`resources/node-runtime` 是否存在）；`userData/node/global/bin` 是否在 PATH |
-| 壳更新提示 404 / 找不到 latest.yml | 滚动 Release `desktop-latest` 是否还在、是否被误设成非 prerelease；`ARKSWARM_DESKTOP_UPDATE_URL` 是否被覆盖 |
+| 壳更新提示 404 / 找不到 latest.yml | 滚动 Release `desktop-latest` 是否还在、是否被误设成非 prerelease；`CODA_DESKTOP_UPDATE_URL` 是否被覆盖 |
 | macOS 公证失败 | 日志里搜 `sign-runtimes`；确认内嵌运行时里没有漏签的 Mach-O；检查 entitlements |
-| macOS 打开报「已损坏」 | 先看构建日志有没有 `[sign-runtimes] ad-hoc 签名完成`。旧包自救：<br>`sudo xattr -rd com.apple.quarantine /Applications/ArkSwarm.app`<br>仍报损坏再 `sudo codesign --force --deep --sign - /Applications/ArkSwarm.app` |
+| macOS 打开报「已损坏」 | 先看构建日志有没有 `[sign-runtimes] ad-hoc 签名完成`。旧包自救：<br>`sudo xattr -rd com.apple.quarantine /Applications/Coda.app`<br>仍报损坏再 `sudo codesign --force --deep --sign - /Applications/Coda.app` |

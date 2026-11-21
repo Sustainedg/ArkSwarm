@@ -11,23 +11,81 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
 from ..agents.base import AgentDefinition, RuntimeProvisioner
 from ..settings import get_settings
 from . import availability as availability_service
 from .processes import kill_tree_async
-from .runner import _StreamLines, _redact
+from .runner import _StreamLines, _redact, _spawn_argv
 
-Action = Literal["install", "update", "uninstall"]
+Action = Literal["install", "update", "uninstall", "login"]
 
 #: 动作的中文名，用于产出面向用户的提示。
-ACTION_LABELS: dict[str, str] = {"install": "安装", "update": "更新", "uninstall": "卸载"}
+ACTION_LABELS: dict[str, str] = {
+    "install": "安装",
+    "update": "更新",
+    "uninstall": "卸载",
+    "login": "登录",
+}
+
+#: 登录命令输出二维码的约定：``QR_IMAGE=<图片路径>``（豆包 CLI 的 ``login --qr=png``）。
+#: 这是账号型内核的**通用**登录协议，框架不认识具体内核。等号两侧允许空白。
+_QR_LINE = re.compile(r"^QR_IMAGE\s*=\s*(.+)$")
+
+#: 二维码图片上限：一张登录二维码远小于这个值，超过就按异常处理，避免把大文件塞进 SSE。
+_QR_MAX_BYTES = 2 * 1024 * 1024
+
+#: 允许的二维码图片格式（魔数 → MIME）。不做 SVG：SVG 可以内嵌脚本。
+_QR_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+)
+
+
+def _qr_data_url(raw_path: str, base_dir: str | None = None) -> tuple[str | None, str | None]:
+    """把登录命令写出的二维码图片读成 ``data:`` URL。
+
+    返回 ``(data_url, error)``。只认 PNG / JPEG / WebP（按魔数），限制大小；
+    路径来自内核输出，属于受信任的本地命令，但仍不把原始路径回显给浏览器。
+    相对路径按登录命令的工作目录解析。
+    """
+    path = (raw_path or "").strip().strip('"').strip("'")
+    if path.startswith("file://"):
+        path = path[len("file://"):]
+    if not path:
+        return None, "登录命令没有给出二维码路径"
+    target = Path(path).expanduser()
+    if not target.is_absolute() and base_dir:
+        target = Path(base_dir) / target
+    try:
+        # 先量大小再读，避免把超大文件整块读进内存；错误提示不带路径，不回显本机路径。
+        if target.stat().st_size > _QR_MAX_BYTES:
+            return None, f"二维码图片超过 {_QR_MAX_BYTES // 1024 // 1024} MB"
+        blob = target.read_bytes()
+    except OSError:
+        return None, "读取二维码失败（文件不存在或不可读）"
+    if not blob:
+        return None, "二维码文件为空"
+    mime = None
+    for signature, kind in _QR_SIGNATURES:
+        if blob.startswith(signature):
+            mime = kind
+            break
+    if mime is None and blob.startswith(b"RIFF") and blob[8:12] == b"WEBP":
+        mime = "image/webp"
+    if mime is None:
+        return None, "二维码文件不是受支持的图片格式（PNG / JPEG / WebP）"
+    encoded = base64.b64encode(blob).decode("ascii")
+    return f"data:{mime};base64,{encoded}", None
 
 #: 「查询最新可用版本」是很轻的元数据请求，给它一个单独的短超时。
 _LATEST_TIMEOUT_SECONDS = 30.0
@@ -150,6 +208,8 @@ async def _run_command(
     runtime_id: str,
     label: str,
     outcome: _CommandOutcome,
+    *,
+    qr: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """在受控子进程里跑一条命令，逐行产出 ``provision.output``。
 
@@ -159,7 +219,8 @@ async def _run_command(
     """
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            # Windows 上 npm 分发的内核是 .cmd 垫片，CreateProcess 不能直接执行。
+            *_spawn_argv(argv),
             cwd=_workdir(),
             env=env,
             stdin=asyncio.subprocess.DEVNULL,
@@ -195,7 +256,26 @@ async def _run_command(
                 yield _event("output", runtime_id=runtime_id, text="单行输出过长，已丢弃该行", level="warn")
             if line is None:
                 break
-            yield _event("output", runtime_id=runtime_id, text=line.decode("utf-8", "replace"))
+            text = line.decode("utf-8", "replace")
+            match = _QR_LINE.match(text.strip()) if qr else None
+            if match:
+                data_url, qr_error = _qr_data_url(match.group(1), _workdir())
+                if data_url:
+                    yield _event("qr", runtime_id=runtime_id, data_url=data_url)
+                    yield _event(
+                        "output",
+                        runtime_id=runtime_id,
+                        text="已生成登录二维码，请用手机扫码；扫码完成后会自动结束。",
+                    )
+                else:
+                    yield _event(
+                        "output",
+                        runtime_id=runtime_id,
+                        text=f"登录二维码不可用：{qr_error}",
+                        level="warn",
+                    )
+                continue
+            yield _event("output", runtime_id=runtime_id, text=text)
         await process.wait()
     finally:
         if process.returncode is None:
@@ -258,7 +338,7 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
     # 动作之前先跑适配器声明的「清扫」命令：上一次动作被中断（超时、服务重启）可能留下
     # 让包管理器再也无法覆写安装目录的残留（见 `RuntimeProvisioner.prepare_argv`）。
     # 它只是清场，失败了也照常往下走 —— 成败只由动作自己的退出码决定。
-    if provisioner.prepare_argv:
+    if provisioner.prepare_argv and action != "login":
         prepare_display = _display(_redact(provisioner.prepare_argv, env))
         yield _event("output", runtime_id=definition.id, text=f"清扫命令：{prepare_display}")
         prepare = _CommandOutcome()
@@ -280,7 +360,10 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
 
     outcome = _CommandOutcome()
     async with contextlib.aclosing(
-        _run_command(argv, env, deadline, definition.id, label, outcome)
+        _run_command(
+            argv, env, deadline, definition.id, label, outcome,
+            qr=(action == "login"),
+        )
     ) as command_stream:
         async for event in command_stream:
             yield event
@@ -302,6 +385,42 @@ async def stream_provision(definition: AgentDefinition, action: Action) -> Async
             text=f"已超过 {int(timeout)} 秒上限，被强制终止",
             level="warn",
         )
+
+    if action == "login":
+        # 登录不改安装状态：直接重新探测一次账号登录态，把结论跟 finished 一起回给界面，
+        # 前端不用再多打一次接口就能把「未登录」翻成「已登录」。
+        auth = await asyncio.to_thread(definition.auth_status)
+        # 登录进程刚退出时登录态可能还没落盘：最多再看两次，别把「刚扫完」判成未登录。
+        for _ in range(2):
+            if auth is None or auth.logged_in is not False:
+                break
+            await asyncio.sleep(1)
+            auth = await asyncio.to_thread(definition.auth_status)
+        ok = outcome.returncode == 0 and not outcome.timed_out
+        if ok and auth is not None and auth.logged_in is False:
+            ok = False
+        error = None
+        if not ok:
+            if outcome.timed_out:
+                error = f"已超过 {int(timeout)} 秒上限，被强制终止"
+            elif auth is not None and auth.logged_in is False:
+                error = auth.detail or "扫码未完成（超时或已取消）"
+            else:
+                error = f"`{_hint(display)}` 退出码 {outcome.returncode}"
+        # 与 `GET /runtimes/{id}/auth` 的响应同构：前端把 `supported` 当必填字段，
+        # 登录结束时也要一起回，否则类型契约对不上。
+        auth_payload = {"supported": True, **auth.to_dict()} if auth is not None else None
+        yield _event(
+            "finished",
+            runtime_id=definition.id,
+            action="login",
+            ok=ok,
+            status="ok" if ok else "error",
+            exit_code=outcome.returncode,
+            auth=auth_payload,
+            error=error,
+        )
+        return
 
     # 安装 / 更新 / 卸载都会动本机那份可执行文件，所以这里顺手重测一遍缓存
     # （探测在后台线程里跑，不占用事件循环），并用新结论收尾。
@@ -355,7 +474,8 @@ async def latest_version(definition: AgentDefinition) -> dict[str, Any]:
     command = _display(_redact(argv, env))
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            # Windows 上 npm 分发的内核是 .cmd 垫片，CreateProcess 不能直接执行。
+            *_spawn_argv(argv),
             cwd=_workdir(),
             env=env,
             stdin=asyncio.subprocess.DEVNULL,
@@ -400,6 +520,17 @@ class _ProvisionLogLine:
     level: str | None = None
 
 
+@dataclass(slots=True)
+class _ProvisionQr:
+    """一次登录动作产出的二维码（data URL）。
+
+    和日志行放在同一条订阅队列里，重连时能把二维码补发回去；
+    不落日志、不落库 —— 二维码是短期凭据，扫完就没用了。
+    """
+
+    data_url: str
+
+
 class ProvisionJob:
     """一次安装 / 更新 / 卸载任务的状态，支持断线重连。
 
@@ -414,7 +545,9 @@ class ProvisionJob:
         self.started_at = time.time()
         self.status: str = "running"
         self.error: str | None = None
-        self.lines: list[_ProvisionLogLine] = []
+        #: 登录动作结束时的登录态（``AuthStatus.to_dict()``）；其它动作恒为 None。
+        self.auth: dict[str, Any] | None = None
+        self.lines: list[_ProvisionLogLine | _ProvisionQr] = []
         self._subscribers: list[asyncio.Queue] = []
         self._done = asyncio.Event()
 
@@ -424,14 +557,27 @@ class ProvisionJob:
         for queue in self._subscribers:
             queue.put_nowait(line)
 
-    def finish(self, status: str, error: str | None = None) -> None:
+    def add_qr(self, data_url: str) -> None:
+        item = _ProvisionQr(data_url=data_url)
+        self.lines.append(item)
+        for queue in self._subscribers:
+            queue.put_nowait(item)
+
+    def finish(
+        self,
+        status: str,
+        error: str | None = None,
+        auth: dict[str, Any] | None = None,
+    ) -> None:
         self.status = status
         self.error = error
+        if auth is not None:
+            self.auth = auth
         self._done.set()
         for queue in self._subscribers:
             queue.put_nowait(None)
 
-    async def subscribe(self) -> AsyncIterator[_ProvisionLogLine | None]:
+    async def subscribe(self) -> AsyncIterator[_ProvisionLogLine | _ProvisionQr | None]:
         """订阅输出行：先发已有行，再实时发新行，最后发 None 表示结束。"""
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers.append(queue)
@@ -510,10 +656,15 @@ async def _execute_provision(
                     job.add_line(f"执行命令：{command}")
             elif event_type == "provision.output":
                 job.add_line(event.get("text", ""), event.get("level"))
+            elif event_type == "provision.qr":
+                data_url = event.get("data_url")
+                if data_url:
+                    job.add_qr(str(data_url))
             elif event_type == "provision.finished":
                 job.finish(
                     "ok" if event.get("ok") else "error",
                     event.get("error"),
+                    event.get("auth"),
                 )
     except Exception as exc:
         job.finish("error", str(exc))
@@ -522,10 +673,13 @@ async def _execute_provision(
 async def stream_job(job: ProvisionJob) -> AsyncIterator[dict[str, Any]]:
     """订阅一个任务的输出，产出 SSE 事件（用于断线重连）。"""
     yield _event("started", runtime_id=job.runtime_id, action=job.action, command=None)
-    async for line in job.subscribe():
-        if line is None:
+    async for item in job.subscribe():
+        if item is None:
             break
-        yield _event("output", runtime_id=job.runtime_id, text=line.text, level=line.level)
+        if isinstance(item, _ProvisionQr):
+            yield _event("qr", runtime_id=job.runtime_id, data_url=item.data_url)
+        else:
+            yield _event("output", runtime_id=job.runtime_id, text=item.text, level=item.level)
     yield _event(
         "finished",
         runtime_id=job.runtime_id,
@@ -533,4 +687,5 @@ async def stream_job(job: ProvisionJob) -> AsyncIterator[dict[str, Any]]:
         ok=job.status == "ok",
         status=job.status,
         error=job.error,
+        auth=job.auth,
     )

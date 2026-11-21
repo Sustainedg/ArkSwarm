@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
@@ -36,6 +38,7 @@ def _describe(definition: AgentDefinition, agents: int, availability: Availabili
         "runtime": definition.runtime.value,
         "docs_url": definition.docs_url,
         "logo": definition.logo,
+        "logo_style": definition.logo_style,
         "executable": definition.executable,
         #: 有多少个未删除的智能体在用这个内核（卸载前提示影响面）
         "agents": agents,
@@ -116,6 +119,29 @@ async def uninstall_runtime(type_id: str, payload: RuntimeAction) -> StreamingRe
     return await _provision_stream(type_id, "uninstall")
 
 
+@router.get("/{type_id}/auth")
+async def runtime_auth(type_id: str) -> dict:
+    """账号型内核的登录状态（二维码登录 / OAuth）。
+
+    这是用户主动打开详情弹层时才调的接口，探测在后台线程里跑，最多等一个内部超时，
+    不影响内核列表的缓存探测策略。
+    """
+    try:
+        definition = get_agent(type_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    status = await asyncio.to_thread(definition.auth_status)
+    if status is None:
+        return {"supported": False, "required": False, "logged_in": None, "detail": None, "account": None}
+    return {"supported": True, **status.to_dict()}
+
+
+@router.post("/{type_id}/login", dependencies=[Depends(require_admin)])
+async def login_runtime(type_id: str) -> StreamingResponse:
+    """启动一次内核登录（二维码走 SSE 的 ``provision.qr`` 事件推给前端）。"""
+    return await _provision_stream(type_id, "login")
+
+
 @router.post("/{type_id}/check", dependencies=[Depends(require_admin)])
 async def check_runtime(type_id: str) -> dict:
     """查询该运行时的最新可用版本（给界面「检查更新」按钮用）。"""
@@ -126,15 +152,21 @@ async def check_runtime(type_id: str) -> dict:
     return await provisioning.latest_version(definition)
 
 
-@router.get("/provision/jobs")
+@router.get("/provision/jobs", dependencies=[Depends(require_admin)])
 async def list_provision_jobs() -> dict:
-    """列出所有进行中 / 刚完成的安装任务（给前端刷新后恢复状态用）。"""
+    """列出所有进行中 / 刚完成的安装任务（给前端刷新后恢复状态用）。
+
+    任务的输出里可能带登录二维码这类短期凭据，只允许管理员查看/订阅（AGENTS.md §7）。
+    """
     return {"items": provisioning.job_registry.list()}
 
 
-@router.get("/{type_id}/provision/stream")
+@router.get("/{type_id}/provision/stream", dependencies=[Depends(require_admin)])
 async def stream_provision_job(type_id: str) -> StreamingResponse:
-    """重连到一个进行中任务的输出流（刷新页面后查看实时进度）。"""
+    """重连到一个进行中任务的输出流（刷新页面后查看实时进度）。
+
+    重连会重放日志，其中登录动作的二维码是短期凭据，因此只对管理员开放。
+    """
     job = provisioning.job_registry.get(type_id)
     if job is None:
         raise HTTPException(status_code=404, detail="没有进行中的任务")
@@ -145,7 +177,7 @@ async def stream_provision_job(type_id: str) -> StreamingResponse:
     )
 
 
-@router.delete("/{type_id}/provision")
+@router.delete("/{type_id}/provision", dependencies=[Depends(require_admin)])
 async def clear_provision_job(type_id: str) -> dict:
     """清除一个已完成的任务记录（用户关掉结果弹窗时调用）。"""
     job = provisioning.job_registry.get(type_id)

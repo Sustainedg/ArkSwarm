@@ -17,6 +17,6 @@ console.log('→ 启动 Electron（开发模式）');
 const child = spawn('npx', ['electron', '.'], {
   cwd: dir,
   stdio: 'inherit',
-  env: { ...process.env, ARKSWARM_DESKTOP_DEV: '1' },
+  env: { ...process.env, CODA_DESKTOP_DEV: '1' },
 });
 child.on('exit', (code) => process.exit(code ?? 0));

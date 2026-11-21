@@ -13,6 +13,7 @@ import type {
   ProvisionEvent,
   ProvisionJobInfo,
   RuntimeAction,
+  RuntimeAuth,
   RuntimeLatest,
 } from '../lib/types'
 
@@ -20,6 +21,7 @@ const ACTION_LABELS: Record<RuntimeAction, string> = {
   install: '安装',
   update: '更新',
   uninstall: '卸载',
+  login: '登录',
 }
 
 /**
@@ -40,6 +42,8 @@ interface Job {
   name: string
   action: RuntimeAction
   lines: LogLine[]
+  /** 登录动作产出的二维码（data URL）；其它动作恒为 null */
+  qr?: string | null
   status: 'running' | 'ok' | 'error'
   error?: string | null
 }
@@ -64,6 +68,9 @@ export function KernelManager() {
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [provisionJobs, setProvisionJobs] = useState<Record<string, ProvisionJobInfo>>({})
+  /** 账号型内核的登录状态（按内核 id 缓存；打开详情时才探测） */
+  const [auth, setAuth] = useState<Record<string, RuntimeAuth | null>>({})
+  const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({})
   /** 正在看详情的内核 id（点卡片打开） */
   const [openId, setOpenId] = useState<string | null>(null)
   /** 「正在运行」：对话域的运行表（overview.active_runs）+ 协作域的运行表（另一张表）一起列出 */
@@ -118,6 +125,27 @@ export function KernelManager() {
     }
   }
 
+  /** 读取账号型内核的登录状态（打开详情弹层、登录结束后调用）。 */
+  const loadAuth = async (runtime: AgentRuntime) => {
+    setAuthLoading((prev) => ({ ...prev, [runtime.id]: true }))
+    try {
+      const status = await api.getRuntimeAuth(runtime.id)
+      setAuth((prev) => ({ ...prev, [runtime.id]: status }))
+    } catch (e) {
+      setAuth((prev) => ({
+        ...prev,
+        [runtime.id]: {
+          supported: false,
+          required: false,
+          logged_in: null,
+          detail: describe(e),
+        },
+      }))
+    } finally {
+      setAuthLoading((prev) => ({ ...prev, [runtime.id]: false }))
+    }
+  }
+
   const reload = async () => {
     try {
       // 无实体的内核（自定义 CLI / OpenAI 兼容）不进列表 —— 见 HIDDEN_RUNTIME_IDS 的说明。
@@ -130,11 +158,14 @@ export function KernelManager() {
       if (isAdmin) {
         await Promise.all(items.map((item) => checkLatest(item)))
       }
-      try {
-        const jobs = await api.listProvisionJobs()
-        setProvisionJobs(Object.fromEntries(jobs.map((j) => [j.runtime_id, j])))
-      } catch {
-        /* 忽略 */
+      // 任务日志可能带登录二维码等短期凭据，接口只对管理员开放：成员不要自动调用。
+      if (isAdmin) {
+        try {
+          const jobs = await api.listProvisionJobs()
+          setProvisionJobs(Object.fromEntries(jobs.map((j) => [j.runtime_id, j])))
+        } catch {
+          /* 忽略 */
+        }
       }
     } catch (e) {
       setError(describe(e))
@@ -177,7 +208,7 @@ export function KernelManager() {
     }
     const controller = new AbortController()
     abortRef.current = controller
-    setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], status: 'running' })
+    setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], qr: null, status: 'running' })
     setProvisionJobs((prev) => ({
       ...prev,
       [runtime.id]: {
@@ -198,8 +229,13 @@ export function KernelManager() {
         setJob((prev) =>
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
+      } else if (event.type === 'provision.qr') {
+        setJob((prev) => (prev ? { ...prev, qr: event.data_url ?? null } : prev))
       } else if (event.type === 'provision.finished') {
         setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        if (event.auth) {
+          setAuth((prev) => ({ ...prev, [runtime.id]: event.auth ?? null }))
+        }
         setProvisionJobs((prev) =>
           prev[runtime.id]
             ? {
@@ -216,7 +252,13 @@ export function KernelManager() {
     }
 
     const call =
-      action === 'install' ? api.installRuntime : action === 'update' ? api.updateRuntime : api.uninstallRuntime
+      action === 'install'
+        ? api.installRuntime
+        : action === 'update'
+          ? api.updateRuntime
+          : action === 'login'
+            ? api.loginRuntime
+            : api.uninstallRuntime
     try {
       await call(runtime.id, onEvent, controller.signal)
     } catch (e) {
@@ -226,6 +268,7 @@ export function KernelManager() {
     } finally {
       abortRef.current = null
       void reload()
+      if (action === 'login') void loadAuth(runtime)
     }
   }
 
@@ -240,7 +283,7 @@ export function KernelManager() {
     if (!info) return
     // 本次会话已经拿过它的日志了，直接展示
     if (job && job.runtimeId === runtimeId && job.lines.length > 0) return
-    setJob({ runtimeId, name: info.name, action: info.action, lines: [], status: info.status })
+    setJob({ runtimeId, name: info.name, action: info.action, lines: [], qr: null, status: info.status })
     const controller = new AbortController()
     abortRef.current = controller
     const onEvent = (event: ProvisionEvent) => {
@@ -252,8 +295,13 @@ export function KernelManager() {
         setJob((prev) =>
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
+      } else if (event.type === 'provision.qr') {
+        setJob((prev) => (prev ? { ...prev, qr: event.data_url ?? null } : prev))
       } else if (event.type === 'provision.finished') {
         setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        if (event.auth) {
+          setAuth((prev) => ({ ...prev, [runtimeId]: event.auth ?? null }))
+        }
         setProvisionJobs((prev) =>
           prev[runtimeId]
             ? { ...prev, [runtimeId]: { ...prev[runtimeId], status: event.ok ? 'ok' : 'error', error: event.error } }
@@ -273,6 +321,8 @@ export function KernelManager() {
 
   const openDetail = (runtime: AgentRuntime) => {
     setOpenId(runtime.id)
+    // 账号型内核：打开详情时探一次登录状态（用户主动触发，不拖慢列表）。
+    if (runtime.provisioning.commands?.login?.length) void loadAuth(runtime)
     // 这个内核还有没看完的任务：一进来就把日志接上（进度页与安装动作在同一个窗口里）。
     if (provisionJobs[runtime.id] && job?.runtimeId !== runtime.id) void viewProgress(runtime.id)
   }
@@ -395,6 +445,8 @@ export function KernelManager() {
             checking={Boolean(checking[openRuntime.id])}
             refreshing={Boolean(refreshing[openRuntime.id])}
             job={openJob}
+            auth={auth[openRuntime.id] ?? null}
+            authLoading={Boolean(authLoading[openRuntime.id])}
             logRef={logRef}
             onRefresh={() => void refreshStatus(openRuntime)}
             onCheck={() => void checkLatest(openRuntime)}
@@ -433,7 +485,7 @@ function KernelCard({
       aria-label={`查看内核「${runtime.name}」的详情`}
     >
       <span className="runtime-head">
-        <KernelLogo logo={runtime.logo} />
+        <KernelLogo logo={runtime.logo} style={runtime.logo_style} />
         <span className="runtime-card-text">
           <span className="card-title">{runtime.name}</span>
           <span className="card-sub runtime-sub">
@@ -460,6 +512,8 @@ function KernelDetail({
   checking,
   refreshing,
   job,
+  auth,
+  authLoading,
   logRef,
   onRefresh,
   onCheck,
@@ -471,6 +525,8 @@ function KernelDetail({
   checking: boolean
   refreshing: boolean
   job: Job | null
+  auth: RuntimeAuth | null
+  authLoading: boolean
   logRef: RefObject<HTMLPreElement>
   onRefresh: () => void
   onCheck: () => void
@@ -484,6 +540,16 @@ function KernelDetail({
   const canCheck = isAdmin && Boolean(provisioning.commands?.latest?.length)
   const current = provisioning.version ? versionCore(provisioning.version) : null
   const busy = job?.status === 'running'
+  // 账号型内核：支持登录命令的才显示登录入口；登录态由 /auth 接口现探。
+  const loginSupported = Boolean(provisioning.commands?.login?.length)
+  const loggedIn = auth?.logged_in === true
+  const authLabel = authLoading
+    ? '检查中…'
+    : loggedIn
+      ? `已登录${auth?.account ? ` · ${auth.account}` : ''}`
+      : auth?.logged_in === false
+        ? '未登录'
+        : auth?.detail ?? '未知'
   // 查到比本机更高的版本才提示「更新到 X」；已经是最新版就不给更新入口。
   // 查不到（不支持 / 失败 / 还没查）时保留普通「更新」，免得失去升级手段。
   const updateTarget = remote && current && versionCore(remote) !== current ? remote : null
@@ -498,7 +564,7 @@ function KernelDetail({
   return (
     <div className="stack">
       <div className="runtime-head">
-        <KernelLogo logo={runtime.logo} />
+        <KernelLogo logo={runtime.logo} style={runtime.logo_style} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="card-title">{runtime.name}</div>
           <div className="card-sub">
@@ -517,6 +583,12 @@ function KernelDetail({
         <dd>{managed ? '平台代管（可安装 / 更新 / 卸载）' : runtime.runtime === 'api' ? '进程内运行' : '自备可执行文件'}</dd>
         <dt>当前版本</dt>
         <dd>{current ?? '—'}</dd>
+        {loginSupported && (
+          <>
+            <dt>登录状态</dt>
+            <dd className={loggedIn ? undefined : 'dim'}>{authLabel}</dd>
+          </>
+        )}
         {canCheck && (
           <>
             <dt>远端最新</dt>
@@ -539,6 +611,16 @@ function KernelDetail({
         {showUpdate ? (
           <button className="btn sm primary" onClick={() => onRun('update')} disabled={busy}>
             {updateTarget ? `更新到 ${updateTarget}` : '更新'}
+          </button>
+        ) : null}
+        {isAdmin && loginSupported && provisioning.installed && !loggedIn ? (
+          <button className="btn sm primary" onClick={() => onRun('login')} disabled={busy}>
+            登录
+          </button>
+        ) : null}
+        {isAdmin && loginSupported && provisioning.installed && loggedIn ? (
+          <button className="btn sm" onClick={() => onRun('login')} disabled={busy}>
+            重新登录
           </button>
         ) : null}
         {isAdmin && managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
@@ -578,6 +660,12 @@ function KernelDetail({
             )}
           </div>
           {job.error && <div className={`banner ${job.status === 'ok' ? 'info' : 'err'}`}>{job.error}</div>}
+          {job.qr && (
+            <div className="login-qr">
+              <img src={job.qr} alt="登录二维码" />
+              <span>用手机扫描二维码完成登录；扫码成功后状态会自动更新。</span>
+            </div>
+          )}
           <pre className="runtime-log" ref={logRef}>
             {job.lines.length === 0
               ? '等待输出…'

@@ -447,7 +447,7 @@ class McpServerRead(BaseModel):
     #: 平台是否接管它的内容（平台新建的为 True；扫描来的为 False）
     editable: bool = False
     used_by_agents: int = 0
-    #: 内置服务器的稳定标识（例如 image-gen / arkswarm-admin）；普通服务器为空
+    #: 内置服务器的稳定标识（例如 image-gen / coda-admin）；普通服务器为空
     builtin_key: str | None = None
     #: 内置服务器要用户填写的参数说明；普通服务器为空数组
     builtin_params: list[McpBuiltinParamRead] = Field(default_factory=list)

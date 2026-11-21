@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "mcp" / "arkswarm_admin_mcp_server.py"
+SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "mcp" / "coda_admin_mcp_server.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("arkswarm_admin_mcp_server", SCRIPT)
+    spec = importlib.util.spec_from_file_location("coda_admin_mcp_server", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -158,7 +158,7 @@ def test_initialize_echoes_protocol(admin_mcp):
         {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}
     )
     assert reply["result"]["protocolVersion"] == "2025-06-18"
-    assert reply["result"]["serverInfo"]["name"] == "arkswarm-admin"
+    assert reply["result"]["serverInfo"]["name"] == "coda-admin"
 
 
 def test_missing_config_gives_actionable_error(admin_mcp):
@@ -173,7 +173,7 @@ def test_missing_config_gives_actionable_error(admin_mcp):
     )
     result = reply["result"]
     assert result["isError"] is True
-    assert "ARKSWARM_BASE_URL" in result["content"][0]["text"]
+    assert "CODA_BASE_URL" in result["content"][0]["text"]
 
 
 # --- 端到端：对着假平台跑 -------------------------------------------------------
@@ -242,10 +242,10 @@ def fake_platform(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
-    monkeypatch.setenv("ARKSWARM_BASE_URL", base_url)
-    monkeypatch.setenv("ARKSWARM_TOKEN", "pat-good-token")
+    monkeypatch.setenv("CODA_BASE_URL", base_url)
+    monkeypatch.setenv("CODA_TOKEN", "pat-good-token")
     # 端到端用例验证的是工具编排与 API 调用；写操作需要显式开 rw（内置默认是只读）。
-    monkeypatch.setenv("ARKSWARM_MODE", "rw")
+    monkeypatch.setenv("CODA_MODE", "rw")
     yield base_url
     server.shutdown()
     server.server_close()

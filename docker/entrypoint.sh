@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ArkSwarm 容器入口：镜像封装 Python / Node / git 环境，并内置一份当前代码与 venv
+# Coda 容器入口：镜像封装 Python / Node / git 环境，并内置一份当前代码与 venv
 # 作为离线兜底；应用版本仍由 /app 卷与更新器管理。
 #
 # 目录约定（与 app/selfupdate.py 的托管模式一致）：
@@ -19,8 +19,8 @@ set -euo pipefail
 
 APP_ROOT="/app"
 RELEASES="$APP_ROOT/releases"
-DATA_DIR="${ARKSWARM_DATA_DIR:-/app/data}"
-REPO_SLUG="${ARKSWARM_UPDATE_REPO:-Sustainedg/ArkSwarm}"
+DATA_DIR="${CODA_DATA_DIR:-/app/data}"
+REPO_SLUG="${CODA_UPDATE_REPO:-Sustainedg/Coda}"
 
 #: 一个版本目录算「完整」的标志文件（与 selfupdate.py 的 _PAYLOAD_MARKERS 一致）
 PAYLOAD_MARKERS=(backend/app/__init__.py backend/app/main.py frontend/dist/index.html)
@@ -43,13 +43,13 @@ log() { echo "[entrypoint] $*"; }
 die() { echo "[entrypoint] ✗ $*" >&2; exit 1; }
 
 #: 安装期代理：只作用于「下 Release / 装依赖 / 装内核」这些一次性动作，
-#: 不污染智能体运行时（它们要直连网关）。用法：ARKSWARM_INSTALL_PROXY=http://host:port
+#: 不污染智能体运行时（它们要直连网关）。用法：CODA_INSTALL_PROXY=http://host:port
 install_proxy() {
-  [ -n "${ARKSWARM_INSTALL_PROXY:-}" ] && printf '%s' "$ARKSWARM_INSTALL_PROXY" || true
+  [ -n "${CODA_INSTALL_PROXY:-}" ] && printf '%s' "$CODA_INSTALL_PROXY" || true
 }
 
 # 在（可选）代理环境下执行命令：curl / git / uv / npm / pip 都认这几个变量。
-#: 注意 pip **不认** ARKSWARM_INSTALL_PROXY，只认 HTTP(S)_PROXY —— 所以装依赖
+#: 注意 pip **不认** CODA_INSTALL_PROXY，只认 HTTP(S)_PROXY —— 所以装依赖
 #: 必须经由这里，否则就是一个直连 PyPI 的裸奔进程。
 run_with_install_proxy() {
   local proxy
@@ -173,7 +173,7 @@ install_latest_release() {
   # 下载 Release 元数据（走代理：容器内访问 GitHub 常需要）
   local api="https://api.github.com/repos/$REPO_SLUG/releases/latest"
   local curl_args=(--silent --show-error --fail --location)
-  # 代理优先级：显式 HTTP(S)_PROXY > ARKSWARM_INSTALL_PROXY（安装期代理）
+  # 代理优先级：显式 HTTP(S)_PROXY > CODA_INSTALL_PROXY（安装期代理）
   local proxy="${HTTPS_PROXY:-${HTTP_PROXY:-${https_proxy:-${http_proxy:-$(install_proxy)}}}}"
   if [ -n "$proxy" ]; then
     curl_args+=(--proxy "$proxy")
@@ -182,9 +182,9 @@ install_latest_release() {
   meta="$(curl "${curl_args[@]}" --max-time 60 -H 'Accept: application/vnd.github+json' "$api")" \
     || { install_bundled "GitHub 不可达（$api）"; return; }
   tag="$(printf '%s' "$meta" | grep -oP '(?<="tag_name": ")[^"]+' | head -1 || true)"
-  asset_url="$(printf '%s' "$meta" | grep -oP '(?<="browser_download_url": ")[^"]+arkswarm\.tar\.gz' | head -1 || true)"
+  asset_url="$(printf '%s' "$meta" | grep -oP '(?<="browser_download_url": ")[^"]+coda\.tar\.gz' | head -1 || true)"
   if [ -z "$tag" ] || [ -z "$asset_url" ]; then
-    install_bundled "最新 Release（${tag:-未知版本}）没有 arkswarm.tar.gz 产物"
+    install_bundled "最新 Release（${tag:-未知版本}）没有 coda.tar.gz 产物"
     return
   fi
   version="V${tag#v}"; version="V${version#V}"
@@ -194,17 +194,17 @@ install_latest_release() {
   cleanup_add "$tmp"
   log "下载 $version ← $asset_url"
   # 产物包可能几十 MB，桥接慢链路要给足时间（元数据请求才用 60 秒）
-  if ! curl "${curl_args[@]}" --max-time 600 --output "$tmp/arkswarm.tar.gz" "$asset_url"; then
+  if ! curl "${curl_args[@]}" --max-time 600 --output "$tmp/coda.tar.gz" "$asset_url"; then
     cleanup_now "$tmp"
     install_bundled "下载产物包失败"
     return
   fi
   # .sha256 资产存在就强制校验；取不到时只警告（与 selfupdate.py 的「无校验值则跳过」一致）
-  if curl "${curl_args[@]}" --max-time 60 --output "$tmp/arkswarm.tar.gz.sha256" "${asset_url}.sha256" 2>/dev/null; then
-    sha="$(grep -oE '[0-9a-fA-F]{64}' "$tmp/arkswarm.tar.gz.sha256" | head -1 || true)"
+  if curl "${curl_args[@]}" --max-time 60 --output "$tmp/coda.tar.gz.sha256" "${asset_url}.sha256" 2>/dev/null; then
+    sha="$(grep -oE '[0-9a-fA-F]{64}' "$tmp/coda.tar.gz.sha256" | head -1 || true)"
     if [ -n "$sha" ]; then
       sha="${sha,,}"
-      actual="$(sha256sum "$tmp/arkswarm.tar.gz" | cut -d' ' -f1)"
+      actual="$(sha256sum "$tmp/coda.tar.gz" | cut -d' ' -f1)"
       if [ "$actual" != "$sha" ]; then
         # 校验失败是安全信号：宁可起不来，也不悄悄退回旧代码
         die "产物包 sha256 校验失败（期望 ${sha:0:12}…，实际 ${actual:0:12}…），拒绝安装"
@@ -219,7 +219,7 @@ install_latest_release() {
   stage="$(mktemp -d "$RELEASES/.install.XXXXXX")"
   cleanup_add "$stage"
   rc=0
-  safe_extract "$tmp/arkswarm.tar.gz" "$stage" || rc=$?
+  safe_extract "$tmp/coda.tar.gz" "$stage" || rc=$?
   case "$rc" in
     0) ;;
     65|67) die "产物包未通过安全校验（见上一行），拒绝安装" ;;
@@ -271,8 +271,8 @@ if [ ! -e "$RELEASES/current" ] || [ ! -d "$RELEASES/current/" ]; then
     # 空卷：默认用镜像自带代码。镜像构建时已经把源码打进去了，
     # 再去 GitHub 拉 Release 只会把「构建进去的新代码」换成线上旧包。
     # 确实想沿用旧行为（空卷先联网拉最新 Release）时设
-    # ARKSWARM_FETCH_RELEASE_ON_EMPTY=1。
-    if [ "${ARKSWARM_FETCH_RELEASE_ON_EMPTY:-0}" = "1" ]; then
+    # CODA_FETCH_RELEASE_ON_EMPTY=1。
+    if [ "${CODA_FETCH_RELEASE_ON_EMPTY:-0}" = "1" ]; then
       install_latest_release
     else
       install_bundled
@@ -291,8 +291,8 @@ RUN_DIR="$RELEASES/current"
 # requirements 与模板不一致（Release 带了新依赖）才回退到在线安装。
 #
 # 在线安装必须**又快又不挂住启动**：
-#   * 走 ARKSWARM_INSTALL_PROXY（pip 只认 HTTP(S)_PROXY，不认那个变量名本身）；
-#   * 可用 ARKSWARM_PIP_INDEX_URL 指到国内镜像（清华 / 阿里），绕开 PyPI 直连；
+#   * 走 CODA_INSTALL_PROXY（pip 只认 HTTP(S)_PROXY，不认那个变量名本身）；
+#   * 可用 CODA_PIP_INDEX_URL 指到国内镜像（清华 / 阿里），绕开 PyPI 直连；
 #   * 收紧重试与超时 —— 网络不通时快速失败并给出可执行的提示，而不是静默卡二十分钟。
 VENV="$APP_ROOT/venv"
 MARKER="$VENV/.requirements-stamp"
@@ -301,7 +301,7 @@ STAMP="$(cat "$RUN_DIR/backend/requirements.txt" | sha256sum | cut -d' ' -f1)"
 #: pip 安装参数：镜像源可选，重试/超时写死成「快速失败」。
 pip_install_args() {
   local args=(-q --disable-pip-version-check --retries 2 --timeout 15)
-  local index="${ARKSWARM_PIP_INDEX_URL:-}"
+  local index="${CODA_PIP_INDEX_URL:-}"
   if [ -n "$index" ]; then
     args+=(-i "$index")
     # 国内镜像多是纯 https 单源，额外源反而会拖慢解析；用 host 信任即可。
@@ -323,8 +323,8 @@ if [ ! -x "$VENV/bin/python" ] || [ "$(cat "$MARKER" 2>/dev/null || true)" != "$
     log "准备虚拟环境（requirements 与镜像模板不一致，在线安装）"
     if [ -n "$(install_proxy)" ]; then
       log "pip 走安装期代理 $(install_proxy)"
-    elif [ -n "${ARKSWARM_PIP_INDEX_URL:-}" ]; then
-      log "pip 走镜像源 $ARKSWARM_PIP_INDEX_URL"
+    elif [ -n "${CODA_PIP_INDEX_URL:-}" ]; then
+      log "pip 走镜像源 $CODA_PIP_INDEX_URL"
     else
       log "⚠ 未配置安装期代理或镜像源，将直连 PyPI（国内网络可能很慢）"
     fi
@@ -340,12 +340,12 @@ fi
 # ---- 内核：镜像不预装，全部装在 HOME 数据卷（$NPM_CONFIG_PREFIX）里 ----
 # 这样 Claude Code / Codex / Gemini 的安装态跟着数据卷走，容器重建不需要重装。
 # 用户在界面里「卸载」某个内核时删的是 HOME 下 npm 全局目录里的包，重启后这里补回去；
-# 装失败不致命（界面里仍可手动装）。网络不通时可用 ARKSWARM_SKIP_KERNEL_INSTALL=1 跳过。
+# 装失败不致命（界面里仍可手动装）。网络不通时可用 CODA_SKIP_KERNEL_INSTALL=1 跳过。
 ensure_kernels() {
   # 内核已经物化在数据卷里、或运维自己管理内核时，可跳过启动期补装，
   # 避免 GitHub / npm 不通时把启动拖住（界面里仍可手动安装）。
-  if [ "${ARKSWARM_SKIP_KERNEL_INSTALL:-0}" = "1" ]; then
-    log "跳过启动期内核补装（ARKSWARM_SKIP_KERNEL_INSTALL=1）"
+  if [ "${CODA_SKIP_KERNEL_INSTALL:-0}" = "1" ]; then
+    log "跳过启动期内核补装（CODA_SKIP_KERNEL_INSTALL=1）"
     return 0
   fi
   command -v npm >/dev/null 2>&1 || return 0
@@ -364,10 +364,10 @@ ensure_kernels() {
     fi
   done
   # Hermes：curl 脚本安装（不是 npm 包）。它要 clone 仓库 + 下 uv / Python / Node +
-  # 装依赖，慢网络下 5 分钟远远不够；默认给 20 分钟，可用 ARKSWARM_KERNEL_INSTALL_TIMEOUT 覆盖。
+  # 装依赖，慢网络下 5 分钟远远不够；默认给 20 分钟，可用 CODA_KERNEL_INSTALL_TIMEOUT 覆盖。
   if ! command -v hermes >/dev/null 2>&1; then
-    log "补装内核 hermes（最多 ${ARKSWARM_KERNEL_INSTALL_TIMEOUT:-1200} 秒，超时跳过）"
-    timeout "${ARKSWARM_KERNEL_INSTALL_TIMEOUT:-1200}" \
+    log "补装内核 hermes（最多 ${CODA_KERNEL_INSTALL_TIMEOUT:-1200} 秒，超时跳过）"
+    timeout "${CODA_KERNEL_INSTALL_TIMEOUT:-1200}" \
       run_with_install_proxy bash -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash' \
       >/dev/null 2>&1 \
       || log "⚠ 补装 hermes 失败或超时，可在界面里手动安装"
@@ -381,12 +381,12 @@ ensure_kernels() {
 #   Claude → ~/.claude/skills（用户技能，随用户自己的配置走；镜像不代建）
 # 只做**幂等补齐**：已有技能就跳过，绝不覆盖用户改过的内容。
 #
-# 注意：这里**不受 ARKSWARM_SKIP_KERNEL_INSTALL 影响**。那个开关管的是「装内核」，
+# 注意：这里**不受 CODA_SKIP_KERNEL_INSTALL 影响**。那个开关管的是「装内核」，
 # 而播种只对**已经装好的内核**做补齐 —— 用户自己点安装的内核同样需要它的内置技能，
 # 否则「技能」页永远只有市场技能、看不到内核自带的那些。
-# 需要连播种也跳过时，单独设 ARKSWARM_SKIP_KERNEL_SKILLS=1。
+# 需要连播种也跳过时，单独设 CODA_SKIP_KERNEL_SKILLS=1。
 seed_kernel_skills() {
-  [ "${ARKSWARM_SKIP_KERNEL_SKILLS:-0}" = "1" ] && return 0
+  [ "${CODA_SKIP_KERNEL_SKILLS:-0}" = "1" ] && return 0
 
   if command -v codex >/dev/null 2>&1 && [ ! -d "$HOME/.codex/skills/.system" ]; then
     log "播种 Codex 系统技能"
@@ -414,8 +414,8 @@ ensure_kernels
 seed_kernel_skills
 
 # ---- 启动（exec：uvicorn 接管 PID 1，界面更新时 os.execv 原地替换的就是它）----
-export ARKSWARM_DATA_DIR="$DATA_DIR"
-log "启动 ArkSwarm（$(basename "$RUN_DIR")）→ :${ARKSWARM_PORT:-8010}"
+export CODA_DATA_DIR="$DATA_DIR"
+log "启动 Coda（$(basename "$RUN_DIR")）→ :${CODA_PORT:-8010}"
 cd "$RUN_DIR/backend"
 exec "$VENV/bin/python" -m uvicorn app.main:app \
-  --host "${ARKSWARM_HOST:-0.0.0.0}" --port "${ARKSWARM_PORT:-8010}"
+  --host "${CODA_HOST:-0.0.0.0}" --port "${CODA_PORT:-8010}"

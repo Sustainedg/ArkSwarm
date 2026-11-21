@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """生成 Windows 安装向导的品牌位图（NSIS MUI 资源）。
 
-与 ``gen-icons.py`` 同款思路：**纯标准库、不引入任何依赖**，几何直接复用主项目
-``scripts/gen_icons.py`` 的渲染器（圆角渐变方块 + 三节点星座 + 轨道弧），
-所以安装向导上的徽标、应用图标、网页图标是**同一张图**，改品牌图形时一起变。
+与 ``gen-icons.py`` 同款思路：图标直接复用主项目 ``scripts/gen_icons.py`` 的渲染器
+（母版位图 ``assets/brand/logo.png`` + Pillow），所以安装向导上的徽标、应用图标、
+网页图标是**同一张图**，改品牌图形时一起变。
 
 产物（全部提交进 git，CI 不跑本脚本）：
   build/installerSidebar.bmp  164×314  「完成」页左侧竖图（MUI_WELCOMEFINISHPAGE_BITMAP）
@@ -29,7 +29,7 @@ DESKTOP = ROOT / "desktop"
 BUILD = DESKTOP / "build"
 
 #: 复用网页图标生成器的几何与抗锯齿工具（与 gen-icons.py 用的是同一个模块）
-_spec = importlib.util.spec_from_file_location("arkswarm_icons", ROOT / "scripts" / "gen_icons.py")
+_spec = importlib.util.spec_from_file_location("coda_icons", ROOT / "scripts" / "gen_icons.py")
 icons = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(icons)
@@ -64,18 +64,8 @@ def _mix(start: tuple[int, int, int], end: tuple[int, int, int], t: float) -> tu
 
 
 def _render_app_rgba(size: int) -> bytes:
-    """应用图标（圆角渐变方块 + 星座）的纯 RGBA 字节流。
-
-    ``gen_icons._render_rgba`` 返回的是**带 PNG 行过滤器字节**的扫描线（每行开头多一个 0），
-    那是给 zlib 压缩用的；这里剥掉行首字节，换成可直接合成的紧密 RGBA。
-    """
-    raw = icons._render_rgba(size, rounded=True, mark_scale=1.0)
-    stride = size * 4 + 1
-    out = bytearray(size * size * 4)
-    for row in range(size):
-        start = row * stride + 1
-        out[row * size * 4:(row + 1) * size * 4] = raw[start:start + size * 4]
-    return bytes(out)
+    """应用图标（品牌母版缩放）的紧密 RGBA 字节流，可直接参与合成。"""
+    return icons.render_icon(size)
 
 
 class Canvas:

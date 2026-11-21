@@ -7,7 +7,7 @@
  *
  * 存储读写失败（隐私模式、配额用尽）一律降级为「没有记忆」，不影响界面本身。
  */
-const STORAGE_KEY = 'arkswarm.collab.advance.consumed'
+const STORAGE_KEY = 'coda.collab.advance.consumed'
 /** 最多记住多少条运行：超出的按最旧淘汰，避免本地存储无限膨胀。 */
 const MAX_RUNS = 20
 /** 单个运行最多记多少张卡。 */

@@ -98,7 +98,7 @@ def verify_password(password: str, stored: str | None) -> bool:
 
 def _signing_key() -> bytes:
     """从 Fernet 密钥再派生一层 HMAC 签名密钥（同源、不引入新密钥文件）。"""
-    return hashlib.sha256(b"arkswarm-jwt:" + _load_key()).digest()
+    return hashlib.sha256(b"coda-jwt:" + _load_key()).digest()
 
 
 def _b64json(obj: Any) -> str:

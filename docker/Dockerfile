@@ -1,11 +1,11 @@
-# ArkSwarm 镜像：封装 Python / Node / git 环境，并内置一份当前代码 + venv 兜底；
+# Coda 镜像：封装 Python / Node / git 环境，并内置一份当前代码 + venv 兜底；
 # 应用版本仍放 /app 卷由更新器管理。
 #
 # 版本级更新永远不需要重建镜像：界面「设置 → 关于 → 检测更新」下载 Release 落进
 # /app/releases 并 os.execv 原地重启（uvicorn 是 PID 1，容器不退出）。
 # 只有换 python 大版本、加系统依赖时才需要重建本镜像。
 #
-# 构建：docker build -t arkswarm -f docker/Dockerfile .
+# 构建：docker build -t coda -f docker/Dockerfile .
 # 运行：见 docker/docker-compose.yml（或手动挂载 /app 与 /app/data 两个卷）。
 # 内核安装态、用户配置与会话都在 HOME 下；这里把 HOME 指进数据卷，
 # 让 Claude Code / Codex / Hermes / Gemini 的安装与 ~/.gemini 等不再随容器重建丢失。
@@ -24,9 +24,18 @@ RUN npm run build
 FROM python:3.11-slim
 
 # curl：entrypoint 首启下载 Release 与 Node.js；git：Hermes / 部分内核的安装脚本要用；
-# ca-certificates：上面两者走 HTTPS 都要。
+# ca-certificates：上面两者走 HTTPS 都要；libgcrypt20 / libgnutls30：
+# 豆包 CLI 的原生二进制动态链接它们（缺失时连 --version 都起不来）。
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates git \
+  && apt-get install -y --no-install-recommends \
+    curl ca-certificates git libgcrypt20 \
+  && rm -rf /var/lib/apt/lists/*
+
+# gnutls 的包名随发行版变化：Debian 12（bookworm）叫 libgnutls30，
+# Debian 13（trixie / time_t 转换）叫 libgnutls30t64。按发行版装其一。
+RUN apt-get update \
+  && (apt-get install -y --no-install-recommends libgnutls30 \
+      || apt-get install -y --no-install-recommends libgnutls30t64) \
   && rm -rf /var/lib/apt/lists/*
 
 # Node.js 24 LTS：DeepSeek Harness 要求 Node >= 24.9，Claude Code 要求 >= 22，
@@ -55,7 +64,7 @@ RUN set -eux; \
 # 应用代码：**构建时就打进去**，空卷首启直接用它跑（「构建什么就运行什么」）。
 # 之后版本升级统一走界面「设置 → 关于」的更新机制：下载 Release → releases/<版本>/
 # → 原子切 current → execv 原地重启，不需要重建镜像。
-# 设 ARKSWARM_FETCH_RELEASE_ON_EMPTY=1 可恢复「空卷先联网拉最新 Release」的旧行为。
+# 设 CODA_FETCH_RELEASE_ON_EMPTY=1 可恢复「空卷先联网拉最新 Release」的旧行为。
 COPY backend/app /image-app/backend/app
 COPY backend/requirements.txt /image-app/backend/requirements.txt
 COPY backend/.env.example /image-app/backend/.env.example
@@ -84,17 +93,17 @@ RUN chmod +x /entrypoint.sh
 # 因此都会写进 /app/data/home，容器重建后仍可继续使用，不必重新安装 / 登录。
 VOLUME ["/app"]
 
-ENV ARKSWARM_HOST=0.0.0.0 \
-    ARKSWARM_PORT=8010 \
-    ARKSWARM_DATA_DIR=/app/data \
+ENV CODA_HOST=0.0.0.0 \
+    CODA_PORT=8010 \
+    CODA_DATA_DIR=/app/data \
     HOME=/app/data/home \
     NPM_CONFIG_PREFIX=/app/data/home/.local \
     PATH=/app/data/home/.local/bin:$PATH
 
 EXPOSE 8010
 
-# 健康检查：容器内探 /api/health，端口跟随 ARKSWARM_PORT（默认 8010）。
+# 健康检查：容器内探 /api/health，端口跟随 CODA_PORT（默认 8010）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD curl -fsS "http://127.0.0.1:${ARKSWARM_PORT:-8010}/api/health" || exit 1
+  CMD curl -fsS "http://127.0.0.1:${CODA_PORT:-8010}/api/health" || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

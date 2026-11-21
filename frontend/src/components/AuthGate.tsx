@@ -35,7 +35,7 @@ export function useAuth(): AuthState {
 /**
  * 登录门：首屏先问后端「我是谁」，未登录就显示登录 / 注册页。
  *
- * 鉴权关闭的部署（`ARKSWARM_AUTH_ENABLED=false`）也能正常进入：后端会把每个请求
+ * 鉴权关闭的部署（`CODA_AUTH_ENABLED=false`）也能正常进入：后端会把每个请求
  * 当虚拟管理员，这里拿到的 `user.id === '__system__'`，只是不显示账号相关入口。
  */
 export function AuthGate({ children, mobile }: { children: ReactNode; mobile?: boolean }) {
@@ -120,7 +120,7 @@ export function AuthGate({ children, mobile }: { children: ReactNode; mobile?: b
   if (status === 'loading') {
     return (
       <div className={`auth-screen${mobile ? ' auth-mobile' : ''}`}>
-        <div className="auth-loading">正在连接 ArkSwarm…</div>
+        <div className="auth-loading">正在连接 Coda…</div>
       </div>
     )
   }

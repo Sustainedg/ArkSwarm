@@ -11,22 +11,22 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ARKSWARM_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="CODA_", env_file=".env", extra="ignore")
 
-    app_name: str = "ArkSwarm"
+    app_name: str = "Coda"
     data_dir: Path = BACKEND_ROOT / "data"
     database_url: str | None = None
     secret_key: str | None = None
-    #: 服务监听端口（scripts/serve.sh 也读 ARKSWARM_PORT）。系统管理 MCP 在没显式配置
+    #: 服务监听端口（scripts/serve.sh 也读 CODA_PORT）。系统管理 MCP 在没显式配置
     #: ``public_base_url`` 时用它拼本机地址。
     port: int = 8010
-    #: 平台对外的访问地址（例如 ``https://arkswarm.example.com``）。留空时按
+    #: 平台对外的访问地址（例如 ``https://coda.example.com``）。留空时按
     #: ``http://127.0.0.1:<port>`` 处理，适合直接跑在本机 / 容器内的 MCP 子进程。
     public_base_url: str | None = None
     workspace_dir: Path | None = None
     cors_origins: str = "*"
     #: 对话域（普通对话）单轮运行的时限（秒）：``None`` 表示**不限时**。
-    #: 需要给对话加护栏的部署才显式配置 ``ARKSWARM_RUN_TIMEOUT_SECONDS=<秒数>``。
+    #: 需要给对话加护栏的部署才显式配置 ``CODA_RUN_TIMEOUT_SECONDS=<秒数>``。
     #: 协作域**不读这个值**：它的每一步都带自己的单步限时（``budget.step_timeout_seconds``，
     #: 默认 36000 秒，0 = 不限），由 ``collab.execution.stream_step()`` 落到 ``ActiveRun`` 上。
     run_timeout_seconds: int | None = None
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     #: ``generated-images/`` 并改写为相对路径，让对话历史自包含。
     image_ingest_prefixes: str = ""
     # ---- 多用户系统 -------------------------------------------------------
-    #: 是否开启鉴权。默认开启（多用户形态）；空库首启可用 ARKSWARM_ADMIN_* 建管理员，
+    #: 是否开启鉴权。默认开启（多用户形态）；空库首启可用 CODA_ADMIN_* 建管理员，
     #: 不配置时第一个注册的账号自动成为管理员。想要单用户开箱即用可显式设为 false。
     #: 关闭时所有接口视为「管理员」调用，不校验令牌。
     auth_enabled: bool = True
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     @field_validator("run_timeout_seconds", mode="before")
     @classmethod
     def _empty_timeout_means_unlimited(cls, value: object) -> object:
-        """``ARKSWARM_RUN_TIMEOUT_SECONDS=``（留空）按「不配置」处理。
+        """``CODA_RUN_TIMEOUT_SECONDS=``（留空）按「不配置」处理。
 
         默认不限时以后，「把它留空」是运维最自然的写法；而空串对 ``int`` 是解析错误，
         会让服务直接起不来。空值一律折成 ``None``（= 不限时），别把一个空字符串变成启动故障。
@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     def sqlalchemy_url(self) -> str:
         if self.database_url:
             return self.database_url
-        return f"sqlite+aiosqlite:///{self.data_dir / 'arkswarm.db'}"
+        return f"sqlite+aiosqlite:///{self.data_dir / 'coda.db'}"
 
     @property
     def workspaces_root(self) -> Path:

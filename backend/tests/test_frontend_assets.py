@@ -1,7 +1,8 @@
 """前端静态资源的守卫测试：应用图标 / 内核 Logo / 头像包。
 
-内核 Logo（`frontend/public/icons/kernels/*.svg`）的约定：图形是手工/厂商产物（不生成），
-但**必须由适配器声明**（`AgentDefinition.logo`），且两张运行时页都只留「Logo · 内核名 · 公司 · 版本」。
+内核 Logo（`frontend/public/icons/kernels/*`）的约定：图形是手工/厂商产物（不生成），
+但**必须由适配器声明**（`AgentDefinition.logo`，`logo_style` 决定遮罩还是原色），
+且两张运行时页都只留「Logo · 内核名 · 公司 · 版本」。
 """
 from __future__ import annotations
 
@@ -25,22 +26,52 @@ needs_frontend = pytest.mark.skipif(not FRONTEND.is_dir(), reason="未检出前�
 KERNEL_LOGO_DIR = REPO / "frontend" / "public" / "icons" / "kernels"
 
 
+SVG_SUFFIX = ".svg"
+RASTER_SUFFIXES = (".png", ".webp", ".jpg", ".jpeg")
+MAX_RASTER_BYTES = 256 * 1024
+MAX_RASTER_SIDE = 512
+
+
 @needs_frontend
 def test_every_kernel_declares_a_logo_that_is_committed():
-    """每个内核都要有官方 Logo，且声明的图形文件真的在仓库里（界面按路径直接取）。"""
+    """每个内核都要有官方 Logo，且声明的图形文件真的在仓库里（界面按路径直接取）。
+
+    两种形态：
+    * ``logo_style = "mask"``（默认）—— 24×24 单色 SVG，界面当遮罩染色；
+    * ``logo_style = "image"`` —— 真彩色位图（PNG/WebP），按原色显示。
+    """
     from app.agents import all_agents
 
     for definition in all_agents():
         logo = definition.logo
         assert logo, f"{definition.id} 未声明 logo"
-        assert logo.startswith("/icons/kernels/") and logo.endswith(".svg"), (
-            f"{definition.id} 的 logo 应指向 /icons/kernels/*.svg，实际是 {logo}"
+        assert logo.startswith("/icons/kernels/"), (
+            f"{definition.id} 的 logo 应指向 /icons/kernels/*，实际是 {logo}"
         )
         path = KERNEL_LOGO_DIR / logo.rsplit("/", 1)[-1]
         assert path.is_file(), f"{definition.id} 声明的 Logo 文件不存在：{path}"
-        text = path.read_text(encoding="utf-8")
-        assert 'viewBox="0 0 24 24"' in text, f"{path.name} 缺少统一画布（24×24）"
-        assert "<path" in text, f"{path.name} 里没有图形"
+        assert definition.logo_style in ("mask", "image"), (
+            f"{definition.id} 的 logo_style 只能是 mask 或 image"
+        )
+        if path.suffix == SVG_SUFFIX:
+            text = path.read_text(encoding="utf-8")
+            assert 'viewBox="0 0 24 24"' in text, f"{path.name} 缺少统一画布（24×24）"
+            assert "<path" in text, f"{path.name} 里没有图形"
+            continue
+
+        assert path.suffix in RASTER_SUFFIXES, f"{path.name} 不是受支持的图片格式"
+        assert definition.logo_style == "image", (
+            f"{definition.id} 用的是位图 Logo，必须声明 logo_style = \"image\""
+        )
+        blob = path.read_bytes()
+        assert blob[:8] == b"\x89PNG\r\n\x1a\n", f"{path.name} 不是 PNG（当前只校验 PNG 位图）"
+        width, height = struct.unpack(">II", blob[16:24])
+        assert width == height and width <= MAX_RASTER_SIDE, (
+            f"{path.name} 应为正方形且不超过 {MAX_RASTER_SIDE}px，实际 {width}×{height}"
+        )
+        assert len(blob) <= MAX_RASTER_BYTES, (
+            f"{path.name} 超过 {MAX_RASTER_BYTES // 1024} KB，请压缩后再提交"
+        )
 
 
 @needs_frontend
@@ -64,9 +95,12 @@ def test_runtime_cards_use_the_shared_logo_and_trimmed_copy():
             assert dropped not in text, f"{path.name} 的卡片文案已精简，不该再渲染 {dropped}"
 
     logo = (FRONTEND / "src" / "components" / "KernelLogo.tsx").read_text(encoding="utf-8")
-    assert "maskImage" in logo, "Logo 用遮罩染色，深浅两套外观才能共用一份图形"
+    assert "maskImage" in logo, "单色 Logo 用遮罩染色，深浅两套外观才能共用一份图形"
+    assert "<img" in logo, "真彩色位图 Logo 要用 <img> 原色显示"
     for css in (FRONTEND / "src" / "index.css", MOBILE_SRC / "mobile.css"):
-        assert ".kernel-logo" in css.read_text(encoding="utf-8"), f"{css.name} 缺少 .kernel-logo 规则"
+        text = css.read_text(encoding="utf-8")
+        assert ".kernel-logo" in text, f"{css.name} 缺少 .kernel-logo 规则"
+        assert ".kernel-logo-image" in text, f"{css.name} 缺少位图 Logo 的样式"
 
 
 # --- 应用图标与品牌标 ---------------------------------------------------------
@@ -95,7 +129,7 @@ def test_committed_app_icons_are_up_to_date():
     # PNG 只比 192 这一张（生成最快），其余几张同一趟脚本一起产出。
     png_file = ICON_DIR / "icon-192.png"
     assert png_file.is_file(), "缺少 frontend/public/icons/icon-192.png"
-    assert png_file.read_bytes() == _png_bytes(module, 192, rounded=True, mark_scale=1.0), (
+    assert png_file.read_bytes() == _png_bytes(module, 192), (
         "icon-192.png 与生成脚本的产物不一致，请重新执行 python3 scripts/gen_icons.py"
     )
     for name, size in (
@@ -108,23 +142,23 @@ def test_committed_app_icons_are_up_to_date():
         assert struct.unpack(">II", blob[16:24]) == (size, size), f"{name} 尺寸不对"
 
 
-def _png_bytes(module: ModuleType, size: int, *, rounded: bool, mark_scale: float) -> bytes:
+def _png_bytes(module: ModuleType, size: int) -> bytes:
     """把生成器的渲染结果写成 PNG 字节（走临时目录，避免覆盖仓库里的文件）。"""
     import tempfile
     from pathlib import Path as _Path
 
     with tempfile.TemporaryDirectory() as tmp:
         target = _Path(tmp) / "x.png"
-        module._write_png(target, size, module._render_rgba(size, rounded=rounded, mark_scale=mark_scale))
+        module._write_png(target, size, module.render_icon(size))
         return target.read_bytes()
 
 
 @needs_frontend
-def test_brand_mark_is_one_inline_svg_on_both_ends():
-    """界面里的品牌标只有一份实现，且是内联 SVG（跟随主题换色，不用两张图）。"""
+def test_brand_mark_is_one_shared_logo_on_both_ends():
+    """界面里的品牌标只有一份实现，且直接用用户提供的品牌图（与应用图标同一张）。"""
     mark = (FRONTEND / "src" / "components" / "BrandMark.tsx").read_text(encoding="utf-8")
-    assert "currentColor" in mark, "品牌标要用 currentColor，深浅两套外观才能共用"
-    assert "circle" in mark and "path" in mark, "品牌标应当是「节点 + 连线」的星座图形"
+    assert "<img" in mark, "品牌标用 <img> 显示用户提供的品牌位图"
+    assert "icon-512.png" in mark, "品牌标要引用与应用图标同源的品牌图"
 
     users = [
         FRONTEND / "src" / "App.tsx",

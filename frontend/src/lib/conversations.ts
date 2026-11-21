@@ -8,7 +8,7 @@ import { useEffect } from 'react'
 import { draftOwnerIds } from './composerDraft'
 import type { Conversation } from './types'
 
-const EVENT = 'arkswarm:conversations-changed'
+const EVENT = 'coda:conversations-changed'
 
 /** 兜底标题（与后端 `DEFAULT_TITLE` 同值）：标题还是它 = 用户从没发过第一条消息。 */
 export const NEW_CONVERSATION_TITLE = '新对话'

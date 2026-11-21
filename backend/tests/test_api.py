@@ -496,7 +496,7 @@ async def test_soft_deleted_agent_frees_its_gateway(client: httpx.AsyncClient):
 
 async def test_system_overview_counts_builtin_types(client: httpx.AsyncClient):
     overview = (await client.get("/api/system/overview")).json()
-    assert overview["agent_types"] == 7  # Hermes Agent 与 DeepSeek Harness 之后共 7 个内置适配器
+    assert overview["agent_types"] == 9  # 豆包 CLI 之后共 9 个内置适配器
     assert overview["installed_types"] >= 1  # 当前环境中已安装 claude-code
     assert overview["version"] == __version__
     assert overview["version_history"][0]["version"] == overview["version"]

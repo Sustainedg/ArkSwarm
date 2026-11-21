@@ -62,7 +62,7 @@ _MCP_TABLE = "mcp_servers"
 #: 给自定义网关生成的 ``model_provider`` 的默认名（用户可用「自定义供应商名称」覆盖）。
 #: 新版 Codex 不再读 ``OPENAI_BASE_URL``（内置 provider 会直奔 api.openai.com），
 #: 自定义网关只有落到一个具名 provider 上才会真正生效。
-_DEFAULT_PROVIDER_NAME = "arkswarm"
+_DEFAULT_PROVIDER_NAME = "coda"
 
 #: 两种接口模式：``app-server`` 走 Codex 自己的 JSON-RPC（能逐字流式），
 #: ``exec`` 走 ``codex exec --json``（整条消息完成才给一次事件，仅用于兼容旧版）。
@@ -373,8 +373,8 @@ class CodexAgent(AgentDefinition):
             "method": "initialize",
             "params": {
                 "clientInfo": {
-                    "name": "arkswarm",
-                    "title": "ArkSwarm",
+                    "name": "coda",
+                    "title": "Coda",
                     "version": _CLIENT_VERSION,
                 }
             },
@@ -705,7 +705,7 @@ class CodexAgent(AgentDefinition):
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "error": {"code": -32601, "message": f"ArkSwarm 不支持 {method}"},
+                    "error": {"code": -32601, "message": f"Coda 不支持 {method}"},
                 },
             )
         else:

@@ -169,7 +169,7 @@ async def test_builtin_mcp_servers_are_scoped_to_their_owner(client):
     bob_items = await builtin_items(bob["access_token"])
     for items in (root_items, alice_items, bob_items):
         assert len(items) == 2
-        assert {item["builtin_key"] for item in items} == {"image-gen", "arkswarm-admin"}
+        assert {item["builtin_key"] for item in items} == {"image-gen", "coda-admin"}
 
     root_ids = {item["id"] for item in root_items}
     alice_ids = {item["id"] for item in alice_items}
@@ -215,12 +215,12 @@ async def test_admin_mcp_is_zero_config_and_uses_dedicated_token(client):
 
     async def admin_item(token: str) -> dict:
         items = (await client.get("/api/mcp-servers", headers=_auth(token))).json()["items"]
-        return next(item for item in items if item["builtin_key"] == "arkswarm-admin")
+        return next(item for item in items if item["builtin_key"] == "coda-admin")
 
     item = await admin_item(alice["access_token"])
     # 地址与令牌都自动填好：界面不再显示「待填参数」。
-    assert item["env_preview"]["ARKSWARM_BASE_URL"]
-    assert item["env_preview"]["ARKSWARM_TOKEN"]
+    assert item["env_preview"]["CODA_BASE_URL"]
+    assert item["env_preview"]["CODA_TOKEN"]
     assert all(
         not param["required"] or param["managed"] or item["env_preview"].get(param["key"])
         for param in item["builtin_params"]
@@ -241,14 +241,14 @@ async def test_admin_mcp_is_zero_config_and_uses_dedicated_token(client):
                 await session.execute(
                     select(McpServer).where(
                         McpServer.owner_id == alice["user"]["id"],
-                        McpServer.builtin_key == "arkswarm-admin",
+                        McpServer.builtin_key == "coda-admin",
                     )
                 )
             ).scalars().all()
         )
         from app.security import decrypt
 
-        auto_token = decrypt(admin_mcp.env_encrypted["ARKSWARM_TOKEN"])
+        auto_token = decrypt(admin_mcp.env_encrypted["CODA_TOKEN"])
     assert auto_token and auto_token.startswith("pat_")
     me = await client.get("/api/auth/me", headers=_auth(auto_token))
     assert me.status_code == 200 and me.json()["username"] == "alice"
@@ -262,7 +262,7 @@ async def test_admin_mcp_is_zero_config_and_uses_dedicated_token(client):
     # 管理员看自己的内置项同样自动填好，且与 alice 的不是同一份。
     root_item = await admin_item(root["access_token"])
     assert root_item["id"] != item["id"]
-    assert root_item["env_preview"]["ARKSWARM_TOKEN"]
+    assert root_item["env_preview"]["CODA_TOKEN"]
 
 
 async def test_mcp_usage_count_is_owner_scoped(client):

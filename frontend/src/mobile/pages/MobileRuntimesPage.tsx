@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAuth } from '../../components/AuthGate'
-import type { AgentRuntime, ProvisionEvent, ProvisionJobInfo, RuntimeAction, RuntimeLatest } from '../../lib/types'
+import type {
+  AgentRuntime,
+  ProvisionEvent,
+  ProvisionJobInfo,
+  RuntimeAction,
+  RuntimeAuth,
+  RuntimeLatest,
+} from '../../lib/types'
 import { RefreshIcon } from '../../components/Icons'
 import { KernelLogo } from '../../components/KernelLogo'
 import { MobileSheet } from '../components/MobileSheet'
@@ -12,6 +19,7 @@ const ACTION_LABELS: Record<RuntimeAction, string> = {
   install: '安装',
   update: '更新',
   uninstall: '卸载',
+  login: '登录',
 }
 
 /**
@@ -31,6 +39,8 @@ interface Job {
   name: string
   action: RuntimeAction
   lines: LogLine[]
+  /** 登录动作产出的二维码（data URL）；其它动作恒为 null */
+  qr?: string | null
   status: 'running' | 'ok' | 'error'
   error?: string | null
 }
@@ -54,6 +64,9 @@ export function MobileRuntimesPage() {
   const showLogRef = useRef(false)
   const [showLog, setShowLog] = useState(false)
   const [provisionJobs, setProvisionJobs] = useState<Record<string, ProvisionJobInfo>>({})
+  /** 账号型内核的登录状态（按内核 id 缓存） */
+  const [auth, setAuth] = useState<Record<string, RuntimeAuth | null>>({})
+  const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({})
 
   const logRef = useRef<HTMLPreElement>(null)
 
@@ -99,12 +112,32 @@ export function MobileRuntimesPage() {
     }
   }
 
+  /** 读取账号型内核的登录状态（刷新列表、登录结束后调用）。 */
+  const loadAuth = async (runtime: AgentRuntime) => {
+    setAuthLoading((prev) => ({ ...prev, [runtime.id]: true }))
+    try {
+      const status = await api.getRuntimeAuth(runtime.id)
+      setAuth((prev) => ({ ...prev, [runtime.id]: status }))
+    } catch (e) {
+      setAuth((prev) => ({
+        ...prev,
+        [runtime.id]: { supported: false, required: false, logged_in: null, detail: describeError(e) },
+      }))
+    } finally {
+      setAuthLoading((prev) => ({ ...prev, [runtime.id]: false }))
+    }
+  }
+
   const reload = async () => {
     try {
       // 无实体的内核（自定义 CLI / OpenAI 兼容）不进列表 —— 见 HIDDEN_RUNTIME_IDS 的说明。
       const items = (await api.listRuntimes()).filter((item) => !HIDDEN_RUNTIME_IDS.has(item.id))
       setRuntimes(items)
       setError(null)
+      // 账号型内核：列表里带登录状态的，顺手探一次（只有少数内核声明登录命令）。
+      for (const item of items) {
+        if (item.provisioning.commands?.login?.length) void loadAuth(item)
+      }
       // 「检查更新」是每个内核一次远端查询，不能挡住首屏：卡片先出来，结果到了再补。
       // 该接口仅管理员可用，成员不要自动触发。
       setLoading(false)
@@ -142,7 +175,7 @@ export function MobileRuntimesPage() {
     }
     const controller = new AbortController()
     abortRef.current = controller
-    setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], status: 'running' })
+    setJob({ runtimeId: runtime.id, name: runtime.name, action, lines: [], qr: null, status: 'running' })
     setShowLog(true)
     showLogRef.current = true
     setProvisionJobs((prev) => ({
@@ -159,8 +192,13 @@ export function MobileRuntimesPage() {
         setJob((prev) =>
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
+      } else if (event.type === 'provision.qr') {
+        setJob((prev) => (prev ? { ...prev, qr: event.data_url ?? null } : prev))
       } else if (event.type === 'provision.finished') {
         setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        if (event.auth) {
+          setAuth((prev) => ({ ...prev, [runtime.id]: event.auth ?? null }))
+        }
         setProvisionJobs((prev) =>
           prev[runtime.id]
             ? { ...prev, [runtime.id]: { ...prev[runtime.id], status: event.ok ? 'ok' : 'error', error: event.error } }
@@ -174,7 +212,13 @@ export function MobileRuntimesPage() {
     }
 
     const call =
-      action === 'install' ? api.installRuntime : action === 'update' ? api.updateRuntime : api.uninstallRuntime
+      action === 'install'
+        ? api.installRuntime
+        : action === 'update'
+          ? api.updateRuntime
+          : action === 'login'
+            ? api.loginRuntime
+            : api.uninstallRuntime
     try {
       await call(runtime.id, onEvent, controller.signal)
     } catch (e) {
@@ -188,6 +232,7 @@ export function MobileRuntimesPage() {
     } finally {
       abortRef.current = null
       void reload()
+      if (action === 'login') void loadAuth(runtime)
     }
   }
 
@@ -198,7 +243,7 @@ export function MobileRuntimesPage() {
     setShowLog(true)
     showLogRef.current = true
     if (job && job.runtimeId === runtimeId && job.lines.length > 0) return
-    setJob({ runtimeId, name: info.name, action: info.action, lines: [], status: info.status })
+    setJob({ runtimeId, name: info.name, action: info.action, lines: [], qr: null, status: info.status })
     const controller = new AbortController()
     abortRef.current = controller
     const onEvent = (event: ProvisionEvent) => {
@@ -210,8 +255,13 @@ export function MobileRuntimesPage() {
         setJob((prev) =>
           prev ? { ...prev, lines: [...prev.lines, { text: event.text ?? '', level: event.level }] } : prev,
         )
+      } else if (event.type === 'provision.qr') {
+        setJob((prev) => (prev ? { ...prev, qr: event.data_url ?? null } : prev))
       } else if (event.type === 'provision.finished') {
         setJob((prev) => (prev ? { ...prev, status: event.ok ? 'ok' : 'error', error: event.error } : prev))
+        if (event.auth) {
+          setAuth((prev) => ({ ...prev, [runtimeId]: event.auth ?? null }))
+        }
         setProvisionJobs((prev) =>
           prev[runtimeId]
             ? { ...prev, [runtimeId]: { ...prev[runtimeId], status: event.ok ? 'ok' : 'error', error: event.error } }
@@ -264,15 +314,23 @@ export function MobileRuntimesPage() {
                 Boolean(provisioning.commands?.update?.length) &&
                 (updateTarget !== null || !canCheck || !remote)
               const busy = provisionJobs[runtime.id]?.status === 'running'
+              const loginSupported = Boolean(provisioning.commands?.login?.length)
+              const authInfo = auth[runtime.id]
+              const loggedIn = authInfo?.logged_in === true
               return (
                 <div className="card runtime-card" key={runtime.id}>
                   <div className="runtime-head">
-                    <KernelLogo logo={runtime.logo} />
+                    <KernelLogo logo={runtime.logo} style={runtime.logo_style} />
                     <div className="m-item-main">
                       <div className="m-item-title">{runtime.name}</div>
                       <div className="m-item-sub runtime-sub">
                         <span>{kernelSummary(runtime, current)}</span>
                         {upToDate && <span className="pill ok">已是最新</span>}
+                        {loginSupported && provisioning.installed && (
+                          <span className={`pill ${loggedIn ? 'ok' : 'warn'}`}>
+                            {authLoading[runtime.id] ? '检查登录…' : loggedIn ? '已登录' : '未登录'}
+                          </span>
+                        )}
                       </div>
                       <div className="dim small">{detectedLabel(provisioning.checked_at)}</div>
                     </div>
@@ -321,6 +379,15 @@ export function MobileRuntimesPage() {
                     {showUpdate ? (
                       <button className="btn sm primary" onClick={() => void start(runtime, 'update')} disabled={busy}>
                         {updateTarget ? `更新到 ${updateTarget}` : '更新'}
+                      </button>
+                    ) : null}
+                    {isAdmin && loginSupported && provisioning.installed ? (
+                      <button
+                        className={`btn sm${loggedIn ? '' : ' primary'}`}
+                        onClick={() => void start(runtime, 'login')}
+                        disabled={busy}
+                      >
+                        {loggedIn ? '重新登录' : '登录'}
                       </button>
                     ) : null}
                     {isAdmin && managed && provisioning.installed && provisioning.commands?.uninstall?.length ? (
@@ -394,6 +461,12 @@ export function MobileRuntimesPage() {
               <span className="dim small">任务在服务器本地执行。</span>
             </div>
             {job.error && <div className={`banner ${job.status === 'ok' ? 'info' : 'err'}`}>{job.error}</div>}
+            {job.qr && (
+              <div className="login-qr">
+                <img src={job.qr} alt="登录二维码" />
+                <span>用手机扫描二维码完成登录；扫码成功后状态会自动更新。</span>
+              </div>
+            )}
             <pre className="runtime-log" ref={logRef}>
               {job.lines.length === 0
                 ? '等待输出…'

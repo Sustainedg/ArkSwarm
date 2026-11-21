@@ -152,7 +152,6 @@ CodeBuddyCliAgent(AgentDefinition)
 | key | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `permission_mode` | SELECT | `bypassPermissions` | default / acceptEdits / auto / dontAsk / plan / bypassPermissions。headless 下没有授权弹窗，默认给能真正干活的模式（help 里注明风险，与 claude 适配器的措辞一致） |
-| `file_access_scope` | SELECT | `unrestricted` | 与其他内核共用语义；codebuddy 侧落到 `--add-dir` 不加 + settings 权限规则（见 3.4 的已知限制） |
 | `system_prompt_mode` | SELECT | `append` | append → `--append-system-prompt`；replace → `--system-prompt` |
 | `partial_messages` | BOOLEAN | `True` | 控制 `--include-partial-messages` |
 | `allowed_tools` / `disallowed_tools` | STRING_LIST | — | → `--allowedTools` / `--disallowedTools` |
@@ -183,13 +182,12 @@ if ctx.home_dir:
 if mode == "bypassPermissions" and _is_root():
     env.setdefault("CODEBUDDY_IS_SANDBOX", "1")   # root 逃生口，只认进程 env
 env.setdefault("DISABLE_TELEMETRY", "1")
+env.setdefault("DISABLE_ERROR_REPORTING", "1")
 env.setdefault("DISABLE_AUTOUPDATER", "1")
 env.setdefault("CI", "1")
-# 自定义网关：写 models.json（OpenAI 兼容），而不是 CODEBUDDY_BASE_URL
-if ctx.gateway_url and ctx.api_key:
-    files["models.json"] = json.dumps({...})      # 见 3.3
-return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir,
-                  stdin=ctx.prompt, files=files)
+# 自定义网关：写 <home>/models.json（OpenAI 兼容），而不是 CODEBUDDY_BASE_URL
+self._sync_models_json(Path(ctx.home_dir), ctx)   # 见 3.3
+return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir, stdin=ctx.prompt)
 ```
 
 ### 3.3 网关路由：写 models.json 进隔离家目录
@@ -214,11 +212,13 @@ return Invocation(argv=argv, env=env, cwd=ctx.workspace_dir,
 - `apiKey` 用 `${CODEBUDDY_API_KEY}` 引用环境变量，明文密钥不落盘（包内文档明确支持）。
 - CLI 侧 `normalizeChatCompletionsUrl()` 会自动归一化重复的 `/chat/completions` 后缀。
 - `id` 直接取 `ctx.model`（平台模型白名单里的名字），`--model` 传同名 id。
-- 写入位置：隔离家目录（`files` 机制只支持运行目录，所以要像 claude 的 `mcp.json` 一样
-  走 `McpMount.files` / `SkillMount` 同一个 home —— 建议在 `build_invocation` 里直接用
-  `ctx.home_dir` 判断并让物化层写，或复用 `Invocation.files` + `{{RUN_DIR}}`。
-  **实现时取一**：推荐放进 home（`prepare_mcp_home` 之后的运行前写入点），
-  具体落点在编码阶段定，原则是「跟着 `CODEBUDDY_CONFIG_DIR` 走」。
+- 写入位置：隔离家目录。`Invocation.files` 只会写进**运行目录**，而 `models.json`
+  必须跟着 `CODEBUDDY_CONFIG_DIR` 走，所以适配器在 `build_invocation()` 里直接写
+  `ctx.home_dir/models.json`（0600）。没有网关时**删除**该文件，否则切回官方链路
+  还会继续打到上一次的网关上。
+- 登录态：账号凭据在 `<config>/.credentials.json`。隔离家目录默认没有它，
+  所以 `skill_mount()` 的 `carry` 会把 `.credentials.json` 与 `settings*.json`
+  一起带进隔离目录 —— 否则「官方 = 本机登录」这条链路一进隔离目录就变成未登录。
 - 网关协议不是 `openai` 时：构建阶段 `yield` 一条中文 `log`/`error`（「CodeBuddy 只支持
   OpenAI 兼容网关」），不要静默失败。
 
@@ -306,10 +306,15 @@ runner / skills / mcp 物化层、Docker 镜像（npm 内核走 provisioner；�
 4. **安装体积大**：tgz 69MB / 解压 226MB，npm 安装比其他内核慢，内核管理页的
    超时与回显沿用现有 provisioner 机制即可，但要预期「安装」这一步明显更久。
 5. **登录态不可移植**：官方链路依赖服务所在机器的 `codebuddy login`；
-   容器 / 多机部署下应引导用户绑自定义网关。
+   容器 / 多机部署下应引导用户绑自定义网关。隔离家目录是每次运行从真实配置复制
+   `.credentials.json` 的快照 —— 一次运行里刷新的 token 不会回写真实配置，
+   长期不登录的服务可能遇到「刷新了也白刷新」，重新 `codebuddy login` 即可。
 6. **`--strict-mcp-config` 的语义以实测为准**：旗标在 CLI 参数解析里确认存在，
    但「是否真的忽略 user/project 配置」要在 P1 验收时实测一次（拿一个本机配置的
    MCP 服务器验证它没被加载）。
+7. **没有「仅工作目录」档**：CodeBuddy 没有 Claude Code 的
+   `blockReadsOutsideWorkingDirectories` 一类设置，硬造一个只会给出虚假的安全承诺，
+   因此本适配器不声明 `file_access_scope` 字段。需要强隔离请在容器级做。
 
 ---
 

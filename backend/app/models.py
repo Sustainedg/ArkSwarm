@@ -324,7 +324,7 @@ class McpServer(SQLModel, table=True):
     enabled: bool = Field(default=True)
     #: 扫描来的服务器在配置里是否仍存在；平台新建的恒为 True
     available: bool = Field(default=True)
-    #: 平台内置服务器的稳定标识（例如 image-gen / arkswarm-admin）；普通服务器为空。
+    #: 平台内置服务器的稳定标识（例如 image-gen / coda-admin）；普通服务器为空。
     #: 内置服务器的启动命令 / 脚本参数由 ``app.builtin_mcp`` 声明、启动时自动维护，
     #: 用户只需要填写参数（平台地址、令牌、网关地址、模型名……）。
     builtin_key: str | None = Field(default=None, sa_column=Column(String(64), index=True))
@@ -484,7 +484,7 @@ class User(SQLModel, table=True):
     归属到某个用户。口令只存哈希（见 :mod:`app.auth`），永不存明文。
 
     首任管理员由 ``bootstrap.seed_initial_admin`` 在启动时按环境变量
-    ``ARKSWARM_ADMIN_USERNAME`` / ``ARKSWARM_ADMIN_PASSWORD`` 创建；老库（原本单用户、
+    ``CODA_ADMIN_USERNAME`` / ``CODA_ADMIN_PASSWORD`` 创建；老库（原本单用户、
     所有数据无归属）升级时，存量数据会被回填给这个首任管理员。
     """
 

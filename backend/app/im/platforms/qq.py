@@ -194,8 +194,8 @@ class QQConnection(ConnectionBase):
                             "shard": [0, 1],
                             "properties": {
                         "os": "linux",
-                        "browser": "arkswarm",
-                        "device": "arkswarm",
+                        "browser": "coda",
+                        "device": "coda",
                     },
                         },
                     }

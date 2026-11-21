@@ -45,7 +45,7 @@ from http_support import (
     tool_arguments,
 )
 
-SERVER_NAME = "arkswarm-image-gen-http"
+SERVER_NAME = "coda-image-gen-http"
 SERVER_VERSION = "1.0.0"
 SCRIPT = Path(os.environ.get("IMAGE_MCP_SCRIPT", "/app/image_mcp_server.py"))
 DATA_DIR = Path(os.environ.get("IMAGE_MCP_DATA_DIR", "/data"))
@@ -120,7 +120,7 @@ def build_server() -> FastMCP:
     server = FastMCP(
         SERVER_NAME,
         instructions=(
-            "ArkSwarm 图片生成 MCP：用 generate_image 生成或编辑图片。"
+            "Coda 图片生成 MCP：用 generate_image 生成或编辑图片。"
             "工具返回的图片地址可直接写进 Markdown 的 ![](...)。"
         ),
         host=HOST,

@@ -9,7 +9,7 @@ import pytest
 
 from app.settings import Settings
 
-ENV = "ARKSWARM_RUN_TIMEOUT_SECONDS"
+ENV = "CODA_RUN_TIMEOUT_SECONDS"
 
 
 def test_unset_run_timeout_means_unlimited(monkeypatch: pytest.MonkeyPatch):
@@ -18,7 +18,7 @@ def test_unset_run_timeout_means_unlimited(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_blank_run_timeout_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch):
-    """``ARKSWARM_RUN_TIMEOUT_SECONDS=`` 是「不限时」，不是启动故障。"""
+    """``CODA_RUN_TIMEOUT_SECONDS=`` 是「不限时」，不是启动故障。"""
     monkeypatch.setenv(ENV, "")
     assert Settings().run_timeout_seconds is None
 

@@ -55,7 +55,7 @@ from ..settings import get_settings
 from ..skillhub import MAX_ARCHIVE_BYTES, SkillHubError, extract_skill_archive
 from .isolation import ensure_home, home_for, note_fresh_home, safe_relative
 
-logger = logging.getLogger("arkswarm")
+logger = logging.getLogger("coda")
 
 #: 技能来源的中文标签
 SOURCE_LABELS = {
@@ -1323,7 +1323,7 @@ async def import_skill_archive(
     except OSError as exc:
         raise SkillError(f"无法创建技能目录 {base}：{exc}") from None
 
-    staging = Path(tempfile.mkdtemp(prefix="arkswarm-skill-import-"))
+    staging = Path(tempfile.mkdtemp(prefix="coda-skill-import-"))
     try:
         payload = staging / "payload"
         try:

@@ -59,10 +59,10 @@ export function LoginScreen({ config, onAuthed, mobile }: Props) {
       <div className="auth-card">
         <div className="auth-brand">
           <div className="auth-mark">
-            <BrandMark size={24} />
+            <BrandMark />
           </div>
           <div>
-            <div className="auth-title">ArkSwarm</div>
+            <div className="auth-title">Coda</div>
             <div className="auth-sub">多智能体控制台</div>
           </div>
         </div>

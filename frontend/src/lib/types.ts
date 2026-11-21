@@ -37,7 +37,7 @@ export interface Availability {
 }
 
 /** 运行时维护动作：安装 / 更新 / 卸载。 */
-export type RuntimeAction = 'install' | 'update' | 'uninstall'
+export type RuntimeAction = 'install' | 'update' | 'uninstall' | 'login'
 
 /** 适配器声明的维护命令（由后端原样执行，前端只负责展示与触发）。 */
 export interface RuntimeCommands {
@@ -45,6 +45,18 @@ export interface RuntimeCommands {
   update: string[]
   uninstall: string[]
   latest: string[]
+  /** 账号型内核的登录命令；空数组表示不支持登录动作。 */
+  login: string[]
+}
+
+/** 账号型内核的登录状态（二维码登录 / OAuth）。 */
+export interface RuntimeAuth {
+  /** 该内核是否由后端提供了登录状态探测 */
+  supported: boolean
+  required: boolean
+  logged_in: boolean | null
+  detail?: string | null
+  account?: string | null
 }
 
 export interface RuntimeProvisioning {
@@ -77,6 +89,8 @@ export interface AgentRuntime {
   docs_url?: string | null
   /** 官方 Logo 的静态资源路径（后端按适配器声明给出，前端只负责显示） */
   logo?: string | null
+  /** Logo 渲染方式：mask = 单色 SVG 遮罩染色；image = 真彩色位图按原色显示 */
+  logo_style?: 'mask' | 'image' | null
   executable?: string | null
   /** 有多少个智能体在用这个运行时 */
   agents: number
@@ -107,6 +121,10 @@ export interface ProvisionEvent {
   version?: string | null
   path?: string | null
   error?: string | null
+  /** 登录动作产出的二维码（data:image/...;base64,...） */
+  data_url?: string | null
+  /** 登录动作结束时的登录状态 */
+  auth?: RuntimeAuth | null
 }
 
 /** 后台安装 / 更新 / 卸载任务的摘要（刷新页面后恢复状态用）。 */
@@ -422,7 +440,7 @@ export interface McpServer {
   /** 平台是否接管它的内容（平台新建的为 true，从内核配置扫来的为 false） */
   editable: boolean
   used_by_agents: number
-  /** 内置服务器的稳定标识（例如 image-gen / arkswarm-admin）；普通服务器为空 */
+  /** 内置服务器的稳定标识（例如 image-gen / coda-admin）；普通服务器为空 */
   builtin_key?: string | null
   /** 内置服务器要用户填写的参数说明；普通服务器为空数组 */
   builtin_params?: McpBuiltinParam[]
@@ -795,7 +813,7 @@ export interface DesktopUpdateState {
   error: string | null
 }
 
-/** preload 暴露的壳更新 API（`window.arkswarmDesktop.updates`）。 */
+/** preload 暴露的壳更新 API（`window.codaDesktop.updates`）。 */
 export interface DesktopUpdateBridge {
   status: () => Promise<DesktopUpdateState>
   check: () => Promise<DesktopUpdateState>
