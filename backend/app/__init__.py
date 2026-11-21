@@ -9,21 +9,34 @@ VERSION_HISTORY: tuple[dict[str, object], ...] = (
     {
         "version": "V0.1.4",
         "date": "2026-11-21",
-        "title": "更名 Coda · 新品牌图 · CodeBuddy / 豆包 CLI",
+        "title": "更名 Coda · 新品牌图 · 协作波次并行 · CodeBuddy / 豆包 / DeepSeek 内核",
         "highlights": (
             "项目更名为 Coda：界面品牌、文档、环境变量前缀（CODA_*）、数据库"
-            "（coda.db）、Docker 服务/卷名与发布资产（coda.tar.gz）全部切换；"
+            "（coda.db）、Docker 项目/服务/卷名与发布资产（coda.tar.gz）全部切换；"
             "GitHub 仓库同步更名为 Sustainedg/Coda",
-            "品牌图换成用户提供的图标：网站左上品牌标、应用图标、桌面窗口/安装包/"
-            "托盘图标同源（母版位图在 assets/brand/logo.png）",
-            "新增 CodeBuddy CLI 适配器：stream-json 输出、会话续接、技能与 MCP，"
-            "自定义网关写入隔离目录的 models.json",
-            "新增豆包 CLI 适配器：账号型内核，扫码登录；详情页直接显示二维码，"
-            "登录态探测与连通性测试可用",
-            "账号型内核登录：适配器声明 login_argv 与 auth_status()，框架按通用"
-            " QR_IMAGE 约定推送二维码；任务列表与重连接口只对管理员开放",
-            "修复：豆包 Windows PATH 分隔符、安装向导资源脚本、数据库文件迁移与"
-            " PWA 外壳缓存版本（shell v128 / assets v127）",
+            "新品牌图：网站左上品牌标、应用图标、桌面窗口/安装包/托盘图标同源；"
+            "母版位图在 assets/brand/logo.png，适配器新增 logo_style（遮罩 / 原色）",
+            "新增 CodeBuddy CLI：stream-json、会话续接、原生系统提示词（append/replace）、"
+            "技能与 MCP、工具白/黑名单；自定义网关写入隔离目录的 models.json",
+            "新增豆包 CLI：账号型内核，扫码登录；详情页直接显示二维码，登录态探测与"
+            "连通性测试可用；HOME 隔离保证只加载分配到的技能",
+            "新增 DeepSeek Harness：headless JSON 事件、沙箱权限、技能与 MCP、"
+            "AGENTS.md 人格注入",
+            "账号型内核登录：适配器声明 login_argv 与 auth_status()，框架按通用 QR_IMAGE "
+            "约定推送二维码并在登录后复探；任务列表与重连接口只对管理员开放",
+            "协作域：波次并行（默认串行，可按父工单/岗位并行）、节点级技能/MCP 覆盖"
+            "（NodeSpec.skill_ids / mcp_ids）、split 支持一次拆多张子工单",
+            "对话域：列表/详情带参与者头像并按最近活动排序；桌面端对话行收敛为"
+            "重命名/删除，记忆清除统一走 /clear",
+            "智能体头像：60 张内置 3D 黏土风头像包 + 头像画廊，展示优先级"
+            "自定义上传 > 内置头像包 > emoji；移除旧吉祥物生成管线",
+            "协作运行页由等距办公室改为分层流程图（两端共用 CollabFlowMap）；"
+            "移动端补 --canvas-* 主题变量、修复抽屉底部安全区重复计算",
+            "桌面端：更新统一为完整安装包、整包升级后物化新后端、venv 按 requirements "
+            "指纹判断、Windows current 改 junction、构建期预装 Python 依赖、新增更新 IPC",
+            "技能库按 slug 单实体 + 多内核引用（.mounts.json），旧布局自动迁移；"
+            "修复豆包 Windows PATH、安装向导资源脚本、数据库文件迁移；"
+            "PWA 外壳缓存版本 shell v128 / assets v127",
         ),
     },
     {
